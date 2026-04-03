@@ -1,0 +1,44 @@
+[package]
+name = "carla_scenario_bridge"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "SSv2 ZMQ+Protobuf backend adapter for CARLA simulator"
+
+[[bin]]
+name = "carla_scenario_bridge"
+path = "src/main.rs"
+
+[package.metadata.ros]
+install_to_share = ["config"]
+
+[dependencies]
+# CARLA
+carla.workspace = true
+
+# ZMQ
+zmq = "0.10"
+
+# Protobuf
+prost = "0.13"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Error handling
+eyre = "0.6"
+color-eyre = "0.6"
+
+# Math (must match carla-rust)
+nalgebra = "0.34.1"
+
+# Utilities
+ctrlc = { version = "3", features = ["termination"] }
+
+[build-dependencies]
+prost-build = "0.13"

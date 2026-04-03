@@ -1,0 +1,22 @@
+# carla-scenario-bridge configuration
+
+# CARLA connection
+carla:
+  host: "localhost"
+  port: 2000
+  timeout_ms: 10000
+
+# SSv2 ZMQ server
+ssv2:
+  port: 5555
+
+# Blueprint mapping: SSv2 asset_key -> CARLA blueprint
+# Used when SSv2 sends an asset_key that doesn't match a CARLA blueprint directly
+blueprint_map:
+  # SSv2 default vehicles
+  "sample_vehicle": "vehicle.tesla.model3"
+  # Add more mappings as needed
+
+# Coordinate conversion
+# CARLA uses left-handed (Y = right), SSv2/ROS uses right-handed (Y = left)
+# The Y-flip is applied automatically to all entity poses

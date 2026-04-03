@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>carla_scenario_bridge</name>
+  <version>0.1.0</version>
+  <description>SSv2 ZMQ+Protobuf backend adapter for CARLA simulator</description>
+  <maintainer email="maintainer@example.com">Maintainer</maintainer>
+  <license>Apache-2.0</license>
+
+  <build_depend>libclang-dev</build_depend>
+
+  <export>
+    <build_type>ament_cargo</build_type>
+  </export>
+</package>

@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "src/carla_scenario_bridge",
+]
+
+[workspace.dependencies]
+carla = "0.14.0"
+
+[patch.crates-io]
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "73f5e16" }
+
+[profile.dev-release]
+inherits = "release"
+debug = true
+debug-assertions = true
