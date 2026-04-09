@@ -3,6 +3,7 @@
 ## Design
 - [Architecture](design/architecture.md) - System overview, component responsibilities, AWSIM comparison
 - [SSv2 Protocol](design/ssv2-protocol.md) - ZMQ+Protobuf message reference
+- [SSv2 Launch Configuration](design/ssv2-launch-configuration.md) - Launch parameters, process order, topic conflicts
 
 ## Roadmap
 - [Overview](roadmap/README.md)
