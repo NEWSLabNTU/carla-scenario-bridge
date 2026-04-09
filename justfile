@@ -148,5 +148,9 @@ e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc"):
         carla_port:={{carla_port}} \
         ssv2_port:={{ssv2_port}}
 
+# Download pre-converted CARLA maps for Autoware
+download-maps:
+    "{{project}}/scripts/download_maps.sh"
+
 # Proto bindings are generated automatically by prost-build in build.rs during cargo build.
 # No manual generation step needed.

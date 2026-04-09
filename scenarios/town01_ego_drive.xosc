@@ -4,7 +4,7 @@
 	<ParameterDeclarations />
 	<CatalogLocations />
 	<RoadNetwork>
-		<LogicFile filepath="/home/aeon/repos/autoware_carla_bridge/data/carla-autoware-bridge/Town01" />
+		<LogicFile filepath="$(dirname)/../data/carla-autoware-bridge/Town01" />
 	</RoadNetwork>
 	<Entities>
 		<ScenarioObject name="ego">
