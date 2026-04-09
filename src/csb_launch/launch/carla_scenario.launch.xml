@@ -1,0 +1,32 @@
+<launch>
+  <!-- User-configurable arguments -->
+  <arg name="scenario" description="Path to .xosc scenario file" />
+  <arg name="port" default="5555" description="ZMQ port for adapter connection" />
+  <arg name="global_timeout" default="600" description="Scenario timeout in seconds" />
+  <arg name="initialize_duration" default="120" description="Autoware init timeout in seconds" />
+
+  <include file="$(find-pkg-share scenario_test_runner)/launch/scenario_test_runner.launch.py">
+    <!-- CARLA-specific defaults - Autoware integration -->
+    <arg name="architecture_type" value="awf/universe/20250130" />
+    <arg name="autoware_launch_package" value="acb_launch" />
+    <arg name="autoware_launch_file" value="carla_simulator.launch.xml" />
+    <arg name="sensor_model" value="acb_sensor_kit" />
+    <arg name="vehicle_model" value="acb_vehicle" />
+
+    <!-- CARLA adapter mode - no built-in simulator, real sensors -->
+    <arg name="launch_simple_sensor_simulator" value="false" />
+    <arg name="simulate_localization" value="false" />
+    <arg name="use_sim_time" value="true" />
+
+    <!-- SSv2 orchestration -->
+    <arg name="launch_autoware" value="true" />
+    <arg name="launch_rviz" value="false" />
+    <arg name="record" value="false" />
+
+    <!-- User-configurable pass-through -->
+    <arg name="scenario" value="$(var scenario)" />
+    <arg name="port" value="$(var port)" />
+    <arg name="global_timeout" value="$(var global_timeout)" />
+    <arg name="initialize_duration" value="$(var initialize_duration)" />
+  </include>
+</launch>

@@ -54,12 +54,16 @@ just bridge
 
 # 4. Run an SSv2 scenario
 just scenario /path/to/scenario.xosc
+
+# Or run the bundled Town01 end-to-end test
+just e2e
 ```
 
 ## Documentation
 
 - [Architecture](docs/design/architecture.md)
 - [SSv2 Protocol Reference](docs/design/ssv2-protocol.md)
+- [SSv2 Launch Configuration](docs/design/ssv2-launch-configuration.md)
 - [Roadmap](docs/roadmap/README.md)
 
 ## Related

@@ -10,7 +10,7 @@ name = "carla_scenario_bridge"
 path = "src/main.rs"
 
 [package.metadata.ros]
-install_to_share = ["config"]
+install_to_share = ["config", "launch"]
 
 [dependencies]
 # CARLA

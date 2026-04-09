@@ -1,0 +1,13 @@
+<launch>
+  <arg name="carla_host" default="localhost" />
+  <arg name="carla_port" default="2000" />
+  <arg name="carla_version" default="0.9.16" />
+  <arg name="ssv2_port" default="5555" />
+
+  <node pkg="carla_scenario_bridge" exec="carla_scenario_bridge" output="screen">
+    <env name="CARLA_HOST" value="$(var carla_host)" />
+    <env name="CARLA_PORT" value="$(var carla_port)" />
+    <env name="CARLA_VERSION" value="$(var carla_version)" />
+    <env name="SSV2_PORT" value="$(var ssv2_port)" />
+  </node>
+</launch>

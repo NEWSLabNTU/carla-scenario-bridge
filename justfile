@@ -4,7 +4,10 @@ set dotenv-load
 carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 ssv2_port := env_var_or_default('SSV2_PORT', '5555')
+map_name := env_var_or_default('MAP_NAME', 'Town01')
+data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
 project := justfile_directory()
+acb_src := justfile_directory() + '/src/autoware_carla_bridge'
 
 # List available recipes
 default:
@@ -15,11 +18,13 @@ build:
     #!/usr/bin/env bash
     set -e
     export CARLA_VERSION={{carla_version}}
-    source /opt/autoware/1.5.0/setup.bash
+    source "{{project}}/install/setup.bash"
+    export CMAKE_POLICY_VERSION_MINIMUM=3.5
     colcon build \
         --base-paths src \
         --symlink-install \
-        --cargo-args --profile dev-release
+        --cargo-args --profile dev-release \
+        --cmake-args -DBUILD_TESTING=OFF
 
 # Remove build artifacts
 clean:
@@ -49,67 +54,51 @@ test:
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
 
-# Run the CARLA scenario bridge (connects to CARLA and listens for SSv2)
+# Run the CARLA scenario bridge adapter only
 run:
     #!/usr/bin/env bash
     set -e
-    source "{{project}}/install/setup.bash"
-    ros2 run carla_scenario_bridge carla_scenario_bridge \
-        --ros-args \
-        -p carla_port:={{carla_port}} \
-        -p ssv2_port:={{ssv2_port}}
+    export CARLA_VERSION={{carla_version}}
+    export CARLA_HOST="${CARLA_HOST:-localhost}"
+    export CARLA_PORT="{{carla_port}}"
+    export SSV2_PORT="{{ssv2_port}}"
+    cargo run \
+        --manifest-path "{{project}}/src/carla_scenario_bridge/Cargo.toml"
 
 # Start CARLA simulator as a background service
 carla-start:
-    #!/usr/bin/env bash
-    set -e
-    # Reuse autoware_carla_bridge's CARLA management if available
-    if [ -f "$HOME/repos/autoware_carla_bridge/scripts/carla_start.sh" ]; then
-        "$HOME/repos/autoware_carla_bridge/scripts/carla_start.sh" {{carla_port}}
-    else
-        echo "CARLA start script not found. Start CARLA manually on port {{carla_port}}."
-    fi
+    "{{acb_src}}/scripts/carla_start.sh" {{carla_port}}
 
 # Stop CARLA simulator service
 carla-stop:
-    #!/usr/bin/env bash
-    set -e
-    if [ -f "$HOME/repos/autoware_carla_bridge/scripts/carla_stop.sh" ]; then
-        "$HOME/repos/autoware_carla_bridge/scripts/carla_stop.sh" {{carla_port}}
-    else
-        systemctl --user stop "carla-run-{{carla_port}}" 2>/dev/null || true
-    fi
+    "{{acb_src}}/scripts/carla_stop.sh" {{carla_port}}
 
 # Check CARLA service status
 carla-status:
     systemctl --user status "carla-run-{{carla_port}}" || true
 
-# Run SSv2 scenario test runner with CARLA backend
+# Run SSv2 scenario (adapter + bridge must be running separately)
 # Usage: just scenario /path/to/scenario.xosc
 scenario scenario_file:
     #!/usr/bin/env bash
     set -e
-    source /opt/autoware/1.5.0/setup.bash
     source "{{project}}/install/setup.bash"
-    ros2 launch scenario_test_runner scenario_test_runner.launch.py \
-        architecture_type:=awf/universe/20250130 \
-        launch_simple_sensor_simulator:=false \
-        port:={{ssv2_port}} \
+    exec play_launch launch --web-addr 0.0.0.0:8081 \
+        csb_launch carla_scenario.launch.xml \
         scenario:="{{scenario_file}}" \
-        sensor_model:=sample_sensor_kit \
-        vehicle_model:=sample_vehicle
+        port:={{ssv2_port}}
 
-# Generate protobuf Rust bindings from SSv2 proto files
-generate-proto:
+# Run the full stack: adapter + bridge + SSv2 + Autoware (CARLA must be running)
+# Usage: just e2e [scenario_file]
+e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc"):
     #!/usr/bin/env bash
     set -e
-    echo "Generating protobuf bindings..."
-    # Proto source from SSv2 (must be cloned or symlinked)
-    PROTO_DIR="{{project}}/proto"
-    OUT_DIR="{{project}}/src/generated"
-    mkdir -p "$OUT_DIR"
-    protoc \
-        --proto_path="$PROTO_DIR" \
-        --rust_out="$OUT_DIR" \
-        "$PROTO_DIR/simulation_api_schema.proto"
-    echo "Generated to $OUT_DIR"
+    source "{{project}}/install/setup.bash"
+    exec play_launch launch --web-addr 0.0.0.0:8080 \
+        csb_launch demo.launch.xml \
+        scenario:="{{scenario_file}}" \
+        carla_port:={{carla_port}} \
+        ssv2_port:={{ssv2_port}}
+
+# Proto bindings are generated automatically by prost-build in build.rs during cargo build.
+# No manual generation step needed.

@@ -19,8 +19,6 @@ just check    # Format + clippy
 just test     # Run tests
 ```
 
-**IMPORTANT**: Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).
-
 ## Key Design Decisions
 
 - **AWSIM pattern**: SSv2 puppeteers NPCs via `set_transform()`, CARLA owns ego physics
@@ -33,12 +31,33 @@ just test     # Run tests
 
 ```
 .
-├── src/                    # Rust source (carla-rust + ZMQ + protobuf)
-├── proto/                  # SSv2 protobuf definitions (copied from SSv2)
-├── config/                 # Runtime configuration
+├── src/carla_scenario_bridge/  # Rust crate (ament_cargo package)
+│   ├── src/
+│   │   ├── main.rs             # Entry point, CARLA retry loop, shutdown
+│   │   ├── zmq_server.rs       # ZMQ REP socket, protobuf dispatch
+│   │   ├── coordinator.rs      # 14 SSv2 handlers → CARLA API calls
+│   │   ├── entity_manager.rs   # SSv2 name ↔ CARLA actor ID mapping
+│   │   ├── coordinate_conversion.rs  # ROS ↔ CARLA frame conversion
+│   │   ├── traffic_light_mapper.rs   # Lanelet signal ID ↔ CARLA actor (Phase 4)
+│   │   └── proto.rs            # Generated protobuf type re-exports
+│   ├── build.rs                # prost-build proto compilation
+│   ├── config/bridge_config.yaml
+│   ├── Cargo.toml
+│   └── package.xml
+├── proto/                  # SSv2 protobuf definitions (8 .proto files)
+├── scenarios/              # Example OpenSCENARIO test files
 ├── docs/
-│   ├── design/             # Architecture and design docs
-│   └── roadmap/            # Phase-based roadmap
+│   ├── design/             # Architecture, protocol, launch config docs
+│   └── roadmap/            # Phase 1-5 roadmap with task checklists
+├── Cargo.toml              # Workspace root
 ├── justfile                # Build and run commands
 └── CLAUDE.md               # This file
 ```
+
+## Coding Practices
+
+### Use play_launch instead of ros2 launch
+All launch commands use `play_launch launch` (with `--web-addr` for the web UI), not `ros2 launch` directly.
+
+### Use just build
+Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).

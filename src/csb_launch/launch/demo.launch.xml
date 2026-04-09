@@ -1,0 +1,26 @@
+<launch>
+  <arg name="scenario" description="Path to .xosc scenario file" />
+  <arg name="carla_host" default="localhost" />
+  <arg name="carla_port" default="2000" />
+  <arg name="carla_version" default="0.9.16" />
+  <arg name="ssv2_port" default="5555" />
+
+  <!-- 1. CARLA scenario bridge (ZMQ adapter between SSv2 and CARLA) -->
+  <include file="$(find-pkg-share carla_scenario_bridge)/launch/carla_scenario_bridge.launch.xml">
+    <arg name="carla_host" value="$(var carla_host)" />
+    <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="carla_version" value="$(var carla_version)" />
+    <arg name="ssv2_port" value="$(var ssv2_port)" />
+  </include>
+
+  <!-- 2. autoware_carla_bridge (CARLA sensors + vehicle interface to ROS 2) -->
+  <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
+    <arg name="carla_port" value="$(var carla_port)" />
+  </include>
+
+  <!-- 3. SSv2 scenario runner + Autoware (concealer launches Autoware internally) -->
+  <include file="$(find-pkg-share csb_launch)/launch/carla_scenario.launch.xml">
+    <arg name="scenario" value="$(var scenario)" />
+    <arg name="port" value="$(var ssv2_port)" />
+  </include>
+</launch>
