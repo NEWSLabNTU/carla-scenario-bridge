@@ -1,6 +1,6 @@
 [submodule "src/scenario_simulator_v2"]
 	path = src/scenario_simulator_v2
-	url = https://github.com/tier4/scenario_simulator_v2.git
+	url = https://github.com/NEWSLabNTU/scenario_simulator_v2.git
 [submodule "src/autoware_carla_bridge"]
 	path = src/autoware_carla_bridge
 	url = https://github.com/NEWSLabNTU/autoware_carla_bridge.git
