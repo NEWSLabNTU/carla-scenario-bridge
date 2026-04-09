@@ -4,7 +4,7 @@
 	<ParameterDeclarations />
 	<CatalogLocations />
 	<RoadNetwork>
-		<LogicFile filepath="$(ros2 pkg prefix csb_launch)/../../data/carla-autoware-bridge/Town01" />
+		<LogicFile filepath="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town01" />
 	</RoadNetwork>
 	<Entities>
 		<ScenarioObject name="ego">

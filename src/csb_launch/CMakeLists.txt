@@ -4,7 +4,7 @@ project(csb_launch)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY launch config
+  DIRECTORY launch config data
   DESTINATION share/${PROJECT_NAME}
 )
 
