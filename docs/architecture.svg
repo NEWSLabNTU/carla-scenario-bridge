@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 620" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#64748b"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#22c55e"/>
+    </marker>
+    <marker id="arrow-amber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#f59e0b"/>
+    </marker>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="880" height="620" rx="8" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="440" y="32" text-anchor="middle" font-size="16" font-weight="700" fill="#0f172a">System Architecture</text>
+
+  <!-- ════════════════ SSv2 ════════════════ -->
+  <g filter="url(#shadow)">
+    <rect x="240" y="52" width="400" height="72" rx="10" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+  </g>
+  <text x="440" y="76" text-anchor="middle" font-weight="700" fill="#1e40af" font-size="14">scenario_simulator_v2</text>
+  <text x="440" y="96" text-anchor="middle" fill="#475569" font-size="11.5">OpenSCENARIO interpreter &amp; traffic simulator</text>
+  <text x="440" y="112" text-anchor="middle" fill="#64748b" font-size="10.5">scenario logic · NPC behavior · Autoware lifecycle</text>
+
+  <!-- Arrow: SSv2 → Bridge -->
+  <line x1="440" y1="124" x2="440" y2="168" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)"/>
+  <rect x="362" y="133" width="156" height="20" rx="4" fill="#dbeafe"/>
+  <text x="440" y="147" text-anchor="middle" fill="#1e40af" font-size="10.5" font-weight="600">ZMQ + Protobuf (REQ/REP)</text>
+
+  <!-- ════════════════ carla-scenario-bridge ════════════════ -->
+  <g filter="url(#shadow)">
+    <rect x="160" y="172" width="560" height="108" rx="10" fill="#fefce8" stroke="#fde68a" stroke-width="1.5"/>
+  </g>
+  <text x="440" y="196" text-anchor="middle" font-weight="700" fill="#92400e" font-size="14">carla-scenario-bridge</text>
+  <text x="440" y="212" text-anchor="middle" fill="#78716c" font-size="10.5">this project — translates SSv2 protocol into CARLA API calls</text>
+
+  <!-- Sub-modules row -->
+  <rect x="180" y="224" width="124" height="40" rx="6" fill="#fef9c3" stroke="#facc15" stroke-width="1"/>
+  <text x="242" y="240" text-anchor="middle" fill="#713f12" font-size="10.5" font-weight="600">ZMQ Server</text>
+  <text x="242" y="254" text-anchor="middle" fill="#92400e" font-size="9.5">14 message handlers</text>
+
+  <rect x="316" y="224" width="124" height="40" rx="6" fill="#fef9c3" stroke="#facc15" stroke-width="1"/>
+  <text x="378" y="240" text-anchor="middle" fill="#713f12" font-size="10.5" font-weight="600">Entity Manager</text>
+  <text x="378" y="254" text-anchor="middle" fill="#92400e" font-size="9.5">name ↔ actor ID</text>
+
+  <rect x="452" y="224" width="124" height="40" rx="6" fill="#fef9c3" stroke="#facc15" stroke-width="1"/>
+  <text x="514" y="240" text-anchor="middle" fill="#713f12" font-size="10.5" font-weight="600">Coord Converter</text>
+  <text x="514" y="254" text-anchor="middle" fill="#92400e" font-size="9.5">ROS ↔ CARLA frames</text>
+
+  <rect x="588" y="224" width="118" height="40" rx="6" fill="#fef9c3" stroke="#facc15" stroke-width="1"/>
+  <text x="647" y="240" text-anchor="middle" fill="#713f12" font-size="10.5" font-weight="600">Frame Sync</text>
+  <text x="647" y="254" text-anchor="middle" fill="#92400e" font-size="9.5">drives world.tick()</text>
+
+  <!-- Arrow: Bridge → CARLA -->
+  <line x1="440" y1="280" x2="440" y2="328" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)"/>
+  <rect x="370" y="291" width="140" height="20" rx="4" fill="#fef3c7"/>
+  <text x="440" y="305" text-anchor="middle" fill="#92400e" font-size="10.5" font-weight="600">CARLA API (carla-rust)</text>
+
+  <!-- ════════════════ CARLA Server ════════════════ -->
+  <g filter="url(#shadow)">
+    <rect x="240" y="332" width="400" height="68" rx="10" fill="#fce4ec" stroke="#f48fb1" stroke-width="1.5"/>
+  </g>
+  <text x="440" y="358" text-anchor="middle" font-weight="700" fill="#880e4f" font-size="14">CARLA Simulator</text>
+  <text x="440" y="374" text-anchor="middle" fill="#6d4c5e" font-size="11.5">sync mode · PhysX ego physics · GPU-rendered sensors</text>
+  <text x="440" y="390" text-anchor="middle" fill="#8e6d7e" font-size="10.5">lidar · camera · IMU · GNSS · traffic lights</text>
+
+  <!-- Arrow: CARLA → autoware_carla_bridge -->
+  <line x1="440" y1="400" x2="440" y2="448" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <rect x="372" y="411" width="136" height="20" rx="4" fill="#dcfce7"/>
+  <text x="440" y="425" text-anchor="middle" fill="#166534" font-size="10.5" font-weight="600">sensor callbacks</text>
+
+  <!-- ════════════════ autoware_carla_bridge ════════════════ -->
+  <g filter="url(#shadow)">
+    <rect x="200" y="452" width="480" height="62" rx="10" fill="#ecfdf5" stroke="#86efac" stroke-width="1.5"/>
+  </g>
+  <text x="440" y="476" text-anchor="middle" font-weight="700" fill="#166534" font-size="14">autoware_carla_bridge</text>
+  <text x="440" y="494" text-anchor="middle" fill="#475569" font-size="11.5">sensor data → ROS 2 topics · vehicle status · control commands · clock</text>
+
+  <!-- Arrow: autoware_carla_bridge → Autoware -->
+  <line x1="440" y1="514" x2="440" y2="556" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+  <rect x="386" y="523" width="108" height="20" rx="4" fill="#dcfce7"/>
+  <text x="440" y="537" text-anchor="middle" fill="#166534" font-size="10.5" font-weight="600">ROS 2 topics</text>
+
+  <!-- ════════════════ Autoware ════════════════ -->
+  <g filter="url(#shadow)">
+    <rect x="240" y="560" width="400" height="48" rx="10" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  </g>
+  <text x="440" y="582" text-anchor="middle" font-weight="700" fill="#166534" font-size="14">Autoware</text>
+  <text x="440" y="598" text-anchor="middle" fill="#475569" font-size="11.5">full autonomous driving stack — real perception, planning, control</text>
+
+  <!-- ════════════════ Side annotations ════════════════ -->
+  <!-- Left: what carla-scenario-bridge handles -->
+  <rect x="16" y="172" width="128" height="226" rx="8" fill="#fffbeb" stroke="#fde68a" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="80" y="192" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">Bridge handles</text>
+  <text x="80" y="210" text-anchor="middle" font-size="9.5" fill="#78716c">entity spawn/despawn</text>
+  <text x="80" y="226" text-anchor="middle" font-size="9.5" fill="#78716c">NPC set_transform</text>
+  <text x="80" y="242" text-anchor="middle" font-size="9.5" fill="#78716c">ego pose readback</text>
+  <text x="80" y="258" text-anchor="middle" font-size="9.5" fill="#78716c">traffic light control</text>
+  <text x="80" y="274" text-anchor="middle" font-size="9.5" fill="#78716c">frame synchronization</text>
+  <text x="80" y="290" text-anchor="middle" font-size="9.5" fill="#78716c">coord conversion</text>
+
+  <text x="80" y="320" text-anchor="middle" font-size="10" font-weight="700" fill="#880e4f">CARLA provides</text>
+  <text x="80" y="338" text-anchor="middle" font-size="9.5" fill="#78716c">ego PhysX physics</text>
+  <text x="80" y="354" text-anchor="middle" font-size="9.5" fill="#78716c">GPU-rendered sensors</text>
+  <text x="80" y="370" text-anchor="middle" font-size="9.5" fill="#78716c">traffic light actors</text>
+  <text x="80" y="386" text-anchor="middle" font-size="9.5" fill="#78716c">world environment</text>
+
+  <!-- Right: what ACB handles -->
+  <rect x="736" y="332" width="128" height="230" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="800" y="352" text-anchor="middle" font-size="10" font-weight="700" fill="#166534">ACB handles</text>
+  <text x="800" y="370" text-anchor="middle" font-size="9.5" fill="#78716c">sensor attachment</text>
+  <text x="800" y="386" text-anchor="middle" font-size="9.5" fill="#78716c">sensor → ROS 2</text>
+  <text x="800" y="402" text-anchor="middle" font-size="9.5" fill="#78716c">vehicle status</text>
+  <text x="800" y="418" text-anchor="middle" font-size="9.5" fill="#78716c">control commands</text>
+  <text x="800" y="434" text-anchor="middle" font-size="9.5" fill="#78716c">clock publishing</text>
+
+  <text x="800" y="464" text-anchor="middle" font-size="10" font-weight="700" fill="#166534">Autoware runs</text>
+  <text x="800" y="482" text-anchor="middle" font-size="9.5" fill="#78716c">real perception</text>
+  <text x="800" y="498" text-anchor="middle" font-size="9.5" fill="#78716c">GNSS→NDT localization</text>
+  <text x="800" y="514" text-anchor="middle" font-size="9.5" fill="#78716c">path planning</text>
+  <text x="800" y="530" text-anchor="middle" font-size="9.5" fill="#78716c">motion control</text>
+  <text x="800" y="546" text-anchor="middle" font-size="9.5" fill="#78716c">diagnostics</text>
+</svg>
