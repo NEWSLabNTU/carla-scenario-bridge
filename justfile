@@ -13,6 +13,54 @@ acb_src := justfile_directory() + '/src/autoware_carla_bridge'
 default:
     @just --list
 
+# Install prerequisites (Rust toolchain, colcon-cargo, system libraries)
+install-deps:
+    #!/usr/bin/env bash
+    set -e
+
+    # Rust toolchain (via rustup)
+    if ! command -v rustup &>/dev/null; then
+        echo "Installing Rust toolchain via rustup..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source "$HOME/.cargo/env"
+    else
+        echo "Rust toolchain already installed ($(rustc --version))"
+    fi
+
+    # Nightly toolchain (for cargo fmt)
+    if ! rustup toolchain list | grep -q nightly; then
+        echo "Installing Rust nightly toolchain..."
+        rustup toolchain install nightly
+    else
+        echo "Rust nightly toolchain already installed"
+    fi
+
+    # cargo-nextest (for just test)
+    if ! command -v cargo-nextest &>/dev/null; then
+        echo "Installing cargo-nextest..."
+        cargo install cargo-nextest --locked
+    else
+        echo "cargo-nextest already installed"
+    fi
+
+    # System libraries
+    echo "Installing system libraries..."
+    sudo apt-get update
+    sudo apt-get install -y \
+        libclang-dev \
+        protobuf-compiler \
+        libzmq3-dev
+
+    # colcon-cargo for ament_cargo build type
+    if ! python3 -c "import colcon_cargo" &>/dev/null || ! python3 -c "import colcon_ros_cargo" &>/dev/null; then
+        echo "Installing colcon-cargo and colcon-ros-cargo..."
+        pip install colcon-cargo colcon-ros-cargo
+    else
+        echo "colcon-cargo and colcon-ros-cargo already installed"
+    fi
+
+    echo "All prerequisites installed."
+
 # Build all packages
 build:
     #!/usr/bin/env bash
