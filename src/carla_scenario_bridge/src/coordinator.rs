@@ -117,13 +117,22 @@ impl Coordinator {
         );
 
         // Convert pose from ROS to CARLA frame
-        let carla_transform = match req.pose.as_ref() {
+        let mut carla_transform = match req.pose.as_ref() {
             Some(pose) => ros_pose_to_carla_transform(pose),
             None => Transform {
                 location: Location { x: 0.0, y: 0.0, z: 0.0 },
                 rotation: Rotation { roll: 0.0, pitch: 0.0, yaw: 0.0 },
             },
         };
+
+        // Ensure minimum spawn height to avoid ground collision
+        if carla_transform.location.z < 0.5 {
+            tracing::info!(
+                "Raising spawn Z from {:.1} to 0.5 to avoid ground collision",
+                carla_transform.location.z
+            );
+            carla_transform.location.z = 0.5;
+        }
 
         // Determine blueprint name
         let blueprint_key = if asset_key.is_empty() {
