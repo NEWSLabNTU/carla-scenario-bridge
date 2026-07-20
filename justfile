@@ -51,12 +51,19 @@ install-deps:
         protobuf-compiler \
         libzmq3-dev
 
-    # colcon-cargo for ament_cargo build type
-    if ! python3 -c "import colcon_cargo" &>/dev/null || ! python3 -c "import colcon_ros_cargo" &>/dev/null; then
-        echo "Installing colcon-cargo and colcon-ros-cargo..."
-        pip install colcon-cargo colcon-ros-cargo
+    # colcon-cargo-ros2 for ament_cargo build type (generates rosidl_cargo
+    # bindings for custom msg packages like autoware_adapi_v1_msgs; the older
+    # colcon-cargo/colcon-ros-cargo combo only patches prebuilt /opt/ros crates
+    # and cannot see workspace-local or Autoware message packages)
+    if python3 -c "import colcon_cargo" &>/dev/null || python3 -c "import colcon_ros_cargo" &>/dev/null; then
+        echo "Removing conflicting colcon-cargo/colcon-ros-cargo..."
+        pip uninstall -y colcon-cargo colcon-ros-cargo
+    fi
+    if ! python3 -c "import colcon_cargo_ros2" &>/dev/null; then
+        echo "Installing colcon-cargo-ros2..."
+        pip install colcon-cargo-ros2
     else
-        echo "colcon-cargo and colcon-ros-cargo already installed"
+        echo "colcon-cargo-ros2 already installed"
     fi
 
     echo "All prerequisites installed."
@@ -66,7 +73,7 @@ build:
     #!/usr/bin/env bash
     set -e
     export CARLA_VERSION={{carla_version}}
-    source "{{project}}/install/setup.bash"
+    #source "{{project}}/install/setup.bash"
     export CMAKE_POLICY_VERSION_MINIMUM=3.5
     colcon build \
         --base-paths src \
