@@ -61,3 +61,17 @@ All launch commands use `play_launch launch` (with `--web-addr` for the web UI),
 
 ### Use just build
 Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).
+
+### Push submodule commits before bumping the superproject pin
+Never update a submodule pin in this repo to a commit that only exists locally.
+Push the commit to the submodule's remote first, then stage and commit the pin
+here. A pin referencing an unpushed commit breaks `git submodule update` for
+everyone else cloning the repo.
+
+```bash
+cd src/<submodule> && git push origin <branch>   # first
+cd - && git add src/<submodule> && git commit    # then
+```
+
+Verify with `git submodule status` and confirm the SHA is reachable on the
+remote (e.g. `git ls-remote origin | grep <sha>`) before pushing the superproject.
