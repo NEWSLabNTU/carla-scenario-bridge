@@ -1,6 +1,7 @@
 use carla::client::{ActorBase, World};
 use carla::geom::{Location, Rotation, Transform};
 use eyre::{Result, WrapErr};
+use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::coordinate_conversion;
@@ -46,6 +47,11 @@ pub struct Coordinator {
     sync_mode_enabled: bool,
     /// Whether an ego vehicle has been spawned. See [`FrameAction`].
     has_ego: bool,
+    /// Entity names already reported as unknown by `update_entity_status`. SSv2 sends
+    /// status every frame, so without this a desync would emit one warning per frame.
+    warned_unknown_entities: HashSet<String>,
+    /// Whether `update_traffic_lights` has already logged its rejection. Same reason.
+    warned_traffic_lights: bool,
 }
 
 impl Coordinator {
@@ -56,6 +62,8 @@ impl Coordinator {
             step_time: 0.05,
             sync_mode_enabled: false,
             has_ego: false,
+            warned_unknown_entities: HashSet::new(),
+            warned_traffic_lights: false,
         }
     }
 
@@ -73,8 +81,29 @@ impl Coordinator {
         self.sync_mode_enabled = false;
         self.has_ego = false;
 
+        // Fresh run, fresh warnings -- otherwise a second scenario in one process would
+        // stay quiet about problems it also has.
+        self.warned_unknown_entities.clear();
+        self.warned_traffic_lights = false;
+
         // Clear any entities from previous runs
         self.entities.clear();
+
+        // The map named by the scenario is currently ignored -- whichever town CARLA
+        // already holds is the town the scenario runs on, and every pose is interpreted
+        // against it. Loading is roadmap phase 009. Until then this cannot silently pass:
+        // a scenario written for one town running against another does not fail, it
+        // produces meaningless results.
+        if req.lanelet2_map_path.is_empty() {
+            tracing::warn!("Initialize: no lanelet2_map_path supplied; cannot verify the map");
+        } else {
+            tracing::warn!(
+                "Initialize: scenario requests map '{}', but map loading is not implemented \
+                 (roadmap phase 009). Verify CARLA already has the matching town loaded -- \
+                 a mismatch will not fail, it will produce meaningless poses.",
+                req.lanelet2_map_path
+            );
+        }
 
         tracing::info!(
             "Initialized (step_time={}). CARLA left in async mode until the ego is spawned.",
@@ -163,7 +192,10 @@ impl Coordinator {
         };
 
         settings.fixed_delta_seconds = Some(req.simulation_step_time);
-        if let Err(e) = self.world.apply_settings(&settings, Duration::from_secs(10)) {
+        if let Err(e) = self
+            .world
+            .apply_settings(&settings, Duration::from_secs(10))
+        {
             return api::UpdateStepTimeResponse {
                 result: Some(proto_err(format!("Failed to apply settings: {e}"))),
             };
@@ -186,16 +218,22 @@ impl Coordinator {
         let is_ego = req.is_ego;
         let asset_key = &req.asset_key;
 
-        tracing::info!(
-            "SpawnVehicle: name={name}, is_ego={is_ego}, asset_key={asset_key}"
-        );
+        tracing::info!("SpawnVehicle: name={name}, is_ego={is_ego}, asset_key={asset_key}");
 
         // Convert pose from ROS to CARLA frame
         let mut carla_transform = match req.pose.as_ref() {
             Some(pose) => ros_pose_to_carla_transform(pose),
             None => Transform {
-                location: Location { x: 0.0, y: 0.0, z: 0.0 },
-                rotation: Rotation { roll: 0.0, pitch: 0.0, yaw: 0.0 },
+                location: Location {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                rotation: Rotation {
+                    roll: 0.0,
+                    pitch: 0.0,
+                    yaw: 0.0,
+                },
             },
         };
 
@@ -220,14 +258,14 @@ impl Coordinator {
             Ok(b) => b,
             Err(e) => {
                 // Try a fallback blueprint
-                tracing::warn!("Blueprint '{blueprint_key}' not found: {e}, trying vehicle.tesla.model3");
+                tracing::warn!(
+                    "Blueprint '{blueprint_key}' not found: {e}, trying vehicle.tesla.model3"
+                );
                 match self.world.actor_builder("vehicle.tesla.model3") {
                     Ok(b) => b,
                     Err(e2) => {
                         return api::SpawnVehicleEntityResponse {
-                            result: Some(proto_err(format!(
-                                "No valid blueprint: {e2}"
-                            ))),
+                            result: Some(proto_err(format!("No valid blueprint: {e2}"))),
                         };
                     }
                 }
@@ -298,11 +336,15 @@ impl Coordinator {
             .map(|p| p.name.clone())
             .unwrap_or_default();
 
-        tracing::info!("SpawnPedestrian: name={name} (stub - will implement in Phase 3)");
+        // Rejected rather than stubbed. Returning success here would leave SSv2 believing
+        // the pedestrian exists: nothing lands in EntityManager, so update_entity_status
+        // takes its unknown-entity branch and echoes the requested pose straight back.
+        // SSv2 would then score conditions against a pedestrian that CARLA never had and
+        // Autoware's sensors cannot see. Implemented in roadmap phase 008.
+        tracing::warn!("SpawnPedestrian '{name}' rejected: not implemented (roadmap phase 008)");
 
-        // Phase 3: spawn walker + AI controller
         api::SpawnPedestrianEntityResponse {
-            result: Some(proto_ok()),
+            result: Some(pedestrian_not_supported(&name)),
         }
     }
 
@@ -316,44 +358,56 @@ impl Coordinator {
             .map(|p| p.name.clone())
             .unwrap_or_default();
 
-        tracing::info!("SpawnMiscObject: name={name} (stub - will implement in Phase 3)");
+        // Rejected rather than stubbed -- see spawn_pedestrian_entity for why.
+        tracing::warn!("SpawnMiscObject '{name}' rejected: not implemented (roadmap phase 008)");
 
         api::SpawnMiscObjectEntityResponse {
-            result: Some(proto_ok()),
+            result: Some(misc_object_not_supported(&name)),
         }
     }
 
-    pub fn despawn_entity(
-        &mut self,
-        req: api::DespawnEntityRequest,
-    ) -> api::DespawnEntityResponse {
+    pub fn despawn_entity(&mut self, req: api::DespawnEntityRequest) -> api::DespawnEntityResponse {
         let name = &req.name;
 
         match self.entities.remove(name) {
             Some(actor_id) => {
-                // Find and destroy the CARLA actor
-                match self.world.actors() {
-                    Ok(actors) => {
-                        if let Ok(Some(actor)) = actors.find(actor_id) {
-                            match actor.destroy() {
-                                Ok(true) => {
-                                    tracing::info!("Despawned '{name}' (actor_id={actor_id})");
-                                }
-                                Ok(false) => {
-                                    tracing::warn!("Despawn '{name}' returned false (already destroyed?)");
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Despawn '{name}' error: {e}");
-                                }
+                // Report failure when the actor could not be destroyed. This used to warn
+                // and return success regardless, so SSv2 believed an entity was gone while
+                // it was still in the world -- blocking spawn points and appearing in
+                // Autoware's sensors.
+                //
+                // "Already destroyed" and "not found" are both successes: the requested end
+                // state holds either way.
+                let outcome: Result<()> = (|| {
+                    let actors = self.world.actors().wrap_err("get actors")?;
+                    match actors.find(actor_id).wrap_err("find actor")? {
+                        Some(actor) => {
+                            if actor.destroy().wrap_err("destroy actor")? {
+                                tracing::info!("Despawned '{name}' (actor_id={actor_id})");
+                            } else {
+                                tracing::warn!(
+                                    "Despawn '{name}' (actor_id={actor_id}) returned false; \
+                                     treating as already destroyed"
+                                );
                             }
                         }
+                        None => {
+                            tracing::warn!(
+                                "Despawn '{name}': actor {actor_id} not in the world; \
+                                 treating as already destroyed"
+                            );
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to get actors for despawn: {e}");
-                    }
-                }
-                api::DespawnEntityResponse {
-                    result: Some(proto_ok()),
+                    Ok(())
+                })();
+
+                match outcome {
+                    Ok(()) => api::DespawnEntityResponse {
+                        result: Some(proto_ok()),
+                    },
+                    Err(e) => api::DespawnEntityResponse {
+                        result: Some(proto_err(format!("Failed to despawn '{name}': {e}"))),
+                    },
                 }
             }
             None => api::DespawnEntityResponse {
@@ -367,25 +421,51 @@ impl Coordinator {
         req: api::UpdateEntityStatusRequest,
     ) -> api::UpdateEntityStatusResponse {
         let mut updated = Vec::new();
+        let mut teleport_failures: Vec<String> = Vec::new();
 
         for entity_status in &req.status {
             let name = &entity_status.name;
 
-            let entity = match self.entities.get(name) {
-                Some(e) => e,
+            // Copy out what we need so the immutable borrow of `entities` ends here --
+            // the unknown-entity path below needs `&mut self` for the warn-once set.
+            let entity_info = self
+                .entities
+                .get(name)
+                .map(|e| (e.carla_actor_id, e.entity_type == EntityType::Ego));
+
+            let (actor_id, is_ego) = match entity_info {
+                Some(v) => v,
                 None => {
-                    // Echo back unknown entities unchanged
+                    // Echo the requested pose back unchanged.
+                    //
+                    // This is deliberately non-fatal but no longer silent. An unknown
+                    // entity means SSv2 and this bridge disagree about what exists, and
+                    // echoing hides that: SSv2 receives exactly the pose it asked for and
+                    // concludes the entity is tracking its scripted path. That is how the
+                    // pedestrian stub used to produce passing scenarios with no pedestrian.
+                    //
+                    // Failing the whole request instead was considered and rejected: a
+                    // status arriving for an entity mid-despawn would abort an otherwise
+                    // healthy scenario. With spawn now rejecting loudly (phase 006), SSv2
+                    // aborts at spawn time, so reaching here is already exceptional --
+                    // worth a warning, not a scenario failure.
+                    //
+                    // Warns once per entity name; SSv2 sends status every frame.
+                    if self.warned_unknown_entities.insert(name.clone()) {
+                        tracing::warn!(
+                            "UpdateEntityStatus for unknown entity '{name}': echoing the \
+                             requested pose back. SSv2 and the bridge disagree about which \
+                             entities exist; this entity is not present in CARLA."
+                        );
+                    }
                     updated.push(api::UpdatedEntityStatus {
                         name: name.clone(),
                         action_status: entity_status.action_status.clone(),
-                        pose: entity_status.pose.clone(),
+                        pose: entity_status.pose,
                     });
                     continue;
                 }
             };
-
-            let actor_id = entity.carla_actor_id;
-            let is_ego = entity.entity_type == EntityType::Ego;
 
             if is_ego && !req.overwrite_ego_status {
                 // Read ego pose from CARLA physics
@@ -402,7 +482,7 @@ impl Coordinator {
                         updated.push(api::UpdatedEntityStatus {
                             name: name.clone(),
                             action_status: entity_status.action_status.clone(),
-                            pose: entity_status.pose.clone(),
+                            pose: entity_status.pose,
                         });
                     }
                 }
@@ -411,7 +491,11 @@ impl Coordinator {
                 if let Some(pose) = entity_status.pose.as_ref() {
                     let transform = ros_pose_to_carla_transform(pose);
                     if let Err(e) = self.set_actor_transform(actor_id, &transform) {
+                        // A failed teleport used to warn and still report success, so SSv2
+                        // went on believing the NPC had moved -- the same silent divergence
+                        // phase 006 exists to remove.
                         tracing::warn!("set_transform for '{name}': {e}");
+                        teleport_failures.push(format!("{name}: {e}"));
                     }
                 }
 
@@ -419,13 +503,28 @@ impl Coordinator {
                 updated.push(api::UpdatedEntityStatus {
                     name: name.clone(),
                     action_status: entity_status.action_status.clone(),
-                    pose: entity_status.pose.clone(),
+                    pose: entity_status.pose,
                 });
             }
         }
 
+        let result = if teleport_failures.is_empty() {
+            proto_ok()
+        } else {
+            proto_err(format!(
+                "Failed to apply the commanded pose to {} entit{} ({})",
+                teleport_failures.len(),
+                if teleport_failures.len() == 1 {
+                    "y"
+                } else {
+                    "ies"
+                },
+                teleport_failures.join("; ")
+            ))
+        };
+
         api::UpdateEntityStatusResponse {
-            result: Some(proto_ok()),
+            result: Some(result),
             status: updated,
         }
     }
@@ -476,12 +575,24 @@ impl Coordinator {
     }
 
     pub fn update_traffic_lights(
-        &self,
+        &mut self,
         _req: api::UpdateTrafficLightsRequest,
     ) -> api::UpdateTrafficLightsResponse {
-        // Phase 4: freeze + set_state per signal
+        // Rejected rather than stubbed. CARLA's built-in cycling is never frozen, so
+        // reporting success would let a scenario script a red light while CARLA runs its
+        // own schedule underneath. Implemented in roadmap phase 009.
+        //
+        // SSv2 sends this every frame, so the warning fires once.
+        if !self.warned_traffic_lights {
+            self.warned_traffic_lights = true;
+            tracing::warn!(
+                "UpdateTrafficLights rejected: not implemented (roadmap phase 009). \
+                 CARLA's built-in cycling is still running."
+            );
+        }
+
         api::UpdateTrafficLightsResponse {
-            result: Some(proto_ok()),
+            result: Some(traffic_lights_not_supported()),
         }
     }
 
@@ -499,7 +610,10 @@ impl Coordinator {
             Ok(mut settings) => {
                 settings.synchronous_mode = false;
                 settings.fixed_delta_seconds = None;
-                if let Err(e) = self.world.apply_settings(&settings, Duration::from_secs(10)) {
+                if let Err(e) = self
+                    .world
+                    .apply_settings(&settings, Duration::from_secs(10))
+                {
                     tracing::warn!("Failed to restore async mode: {e}");
                 } else {
                     self.sync_mode_enabled = false;
@@ -533,22 +647,35 @@ impl Coordinator {
             t.rotation.yaw,
         );
 
-        let (vx, vy, vz) =
-            coordinate_conversion::carla_to_ros_velocity(v.x, v.y, v.z);
-        let (wx, wy, wz) =
-            coordinate_conversion::carla_to_ros_angular_velocity(av.x, av.y, av.z);
-        let (ax, ay, az) =
-            coordinate_conversion::carla_to_ros_acceleration(acc.x, acc.y, acc.z);
+        let (vx, vy, vz) = coordinate_conversion::carla_to_ros_velocity(v.x, v.y, v.z);
+        let (wx, wy, wz) = coordinate_conversion::carla_to_ros_angular_velocity(av.x, av.y, av.z);
+        let (ax, ay, az) = coordinate_conversion::carla_to_ros_acceleration(acc.x, acc.y, acc.z);
 
         let action_status = traffic_simulator_msgs::ActionStatus {
             current_action: String::new(),
             twist: Some(geometry_msgs::Twist {
-                linear: Some(geometry_msgs::Vector3 { x: vx, y: vy, z: vz }),
-                angular: Some(geometry_msgs::Vector3 { x: wx, y: wy, z: wz }),
+                linear: Some(geometry_msgs::Vector3 {
+                    x: vx,
+                    y: vy,
+                    z: vz,
+                }),
+                angular: Some(geometry_msgs::Vector3 {
+                    x: wx,
+                    y: wy,
+                    z: wz,
+                }),
             }),
             accel: Some(geometry_msgs::Accel {
-                linear: Some(geometry_msgs::Vector3 { x: ax, y: ay, z: az }),
-                angular: Some(geometry_msgs::Vector3 { x: 0.0, y: 0.0, z: 0.0 }),
+                linear: Some(geometry_msgs::Vector3 {
+                    x: ax,
+                    y: ay,
+                    z: az,
+                }),
+                angular: Some(geometry_msgs::Vector3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                }),
             }),
             linear_jerk: 0.0,
         };
@@ -556,19 +683,13 @@ impl Coordinator {
         Some((pose, action_status))
     }
 
-    fn set_actor_transform(
-        &self,
-        actor_id: u32,
-        transform: &Transform,
-    ) -> Result<()> {
+    fn set_actor_transform(&self, actor_id: u32, transform: &Transform) -> Result<()> {
         let actors = self.world.actors().wrap_err("get actors")?;
         let actor = actors
             .find(actor_id)
             .wrap_err("find actor")?
             .ok_or_else(|| eyre::eyre!("actor {actor_id} not found"))?;
-        actor
-            .set_transform(transform)
-            .wrap_err("set_transform")?;
+        actor.set_transform(transform).wrap_err("set_transform")?;
         Ok(())
     }
 }
@@ -611,6 +732,38 @@ fn sensor_not_supported() -> ProtoResult {
     }
 }
 
+/// Rejection for a feature this bridge does not implement yet.
+///
+/// These must never report success. A handler that returns `success = true` without acting
+/// leaves SSv2 believing the entity exists, and SSv2 will then score scenario conditions
+/// against something CARLA never had. See `docs/roadmap/006-honest-failures.md`.
+fn not_implemented(what: &str, roadmap_doc: &str) -> ProtoResult {
+    ProtoResult {
+        success: false,
+        description: format!(
+            "{what} is not implemented in carla-scenario-bridge; see docs/roadmap/{roadmap_doc}"
+        ),
+    }
+}
+
+fn pedestrian_not_supported(name: &str) -> ProtoResult {
+    not_implemented(
+        &format!("Pedestrian entities (entity '{name}')"),
+        "008-entity-fidelity.md",
+    )
+}
+
+fn misc_object_not_supported(name: &str) -> ProtoResult {
+    not_implemented(
+        &format!("Misc object entities (entity '{name}')"),
+        "008-entity-fidelity.md",
+    )
+}
+
+fn traffic_lights_not_supported() -> ProtoResult {
+    not_implemented("Traffic light control", "009-map-and-traffic-lights.md")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,5 +799,57 @@ mod tests {
     #[test]
     fn sync_mode_is_not_re_enabled() {
         assert_eq!(decide_frame_action(true, false), FrameAction::Tick);
+    }
+
+    // --- Phase 006: unimplemented features must reject, never report success ---
+
+    #[test]
+    fn pedestrian_spawn_is_rejected() {
+        let result = pedestrian_not_supported("ped_1");
+        assert!(!result.success);
+        assert!(
+            result.description.contains("ped_1"),
+            "description should name the entity: {}",
+            result.description
+        );
+        assert!(
+            result.description.contains("008-entity-fidelity.md"),
+            "description should point at the roadmap: {}",
+            result.description
+        );
+    }
+
+    #[test]
+    fn misc_object_spawn_is_rejected() {
+        let result = misc_object_not_supported("barrier_1");
+        assert!(!result.success);
+        assert!(result.description.contains("barrier_1"));
+        assert!(result.description.contains("008-entity-fidelity.md"));
+    }
+
+    #[test]
+    fn traffic_light_update_is_rejected() {
+        let result = traffic_lights_not_supported();
+        assert!(!result.success);
+        assert!(
+            result.description.contains("009-map-and-traffic-lights.md"),
+            "description should point at the roadmap: {}",
+            result.description
+        );
+    }
+
+    /// Whatever the message says, it must never be empty -- SSv2 surfaces this text and a
+    /// bare failure with no reason is what phase 006 exists to eliminate.
+    #[test]
+    fn rejections_always_explain_themselves() {
+        for result in [
+            pedestrian_not_supported("x"),
+            misc_object_not_supported("x"),
+            traffic_lights_not_supported(),
+            sensor_not_supported(),
+        ] {
+            assert!(!result.success);
+            assert!(!result.description.is_empty());
+        }
     }
 }

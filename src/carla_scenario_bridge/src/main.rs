@@ -1,5 +1,5 @@
-mod coordinator;
 mod coordinate_conversion;
+mod coordinator;
 mod entity_manager;
 mod proto;
 mod traffic_light_mapper;
@@ -15,14 +15,12 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
     // Config from environment
-    let carla_host =
-        std::env::var("CARLA_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let carla_host = std::env::var("CARLA_HOST").unwrap_or_else(|_| "localhost".to_string());
     let carla_port: u16 = std::env::var("CARLA_PORT")
         .unwrap_or_else(|_| "2000".to_string())
         .parse()
@@ -72,11 +70,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn connect_to_carla(
-    host: &str,
-    port: u16,
-    shutdown: &AtomicBool,
-) -> Option<Client> {
+fn connect_to_carla(host: &str, port: u16, shutdown: &AtomicBool) -> Option<Client> {
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return None;

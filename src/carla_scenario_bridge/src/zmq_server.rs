@@ -32,8 +32,8 @@ impl ZmqServer {
             // Poll with 100ms timeout so we can check shutdown
             let mut items = [self.socket.as_poll_item(zmq::POLLIN)];
             match zmq::poll(&mut items, 100) {
-                Ok(0) => continue,        // timeout, no message
-                Ok(_) => {}               // message ready
+                Ok(0) => continue, // timeout, no message
+                Ok(_) => {}        // message ready
                 Err(e) => {
                     if e == zmq::Error::EINTR {
                         continue; // interrupted by signal
@@ -67,8 +67,14 @@ impl ZmqServer {
         let request = match SimulationRequest::decode(msg) {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("Failed to decode SimulationRequest: {e}");
-                return encode_error_response("Failed to decode request");
+                tracing::error!(
+                    "Failed to decode SimulationRequest ({} bytes): {e}",
+                    msg.len()
+                );
+                return encode_error_response(
+                    peek_request_variant(msg),
+                    "Failed to decode request",
+                );
             }
         };
 
@@ -76,7 +82,7 @@ impl ZmqServer {
             Some(r) => r,
             None => {
                 tracing::warn!("Empty SimulationRequest (no oneof set)");
-                return encode_error_response("Empty request");
+                return encode_error_response(None, "Empty request");
             }
         };
 
@@ -151,17 +157,232 @@ impl ZmqServer {
     }
 }
 
-fn encode_error_response(description: &str) -> Vec<u8> {
-    // Return an Initialize error response as a generic error
-    let resp = SimulationResponse {
-        response: Some(simulation_response::Response::Initialize(
-            api::InitializeResponse {
-                result: Some(api::Result {
-                    success: false,
-                    description: description.to_string(),
-                }),
-            },
-        )),
+/// Recover the oneof field number from an encoded `SimulationRequest`.
+///
+/// Only used when full decoding failed. Protobuf encodes each field as a varint tag of
+/// `(field_number << 3) | wire_type`, and `SimulationRequest` is a bare `oneof`, so the
+/// first tag identifies which request was intended even when the payload after it is
+/// malformed.
+///
+/// Returns `None` if the message is empty or the leading varint is itself unreadable.
+fn peek_request_variant(msg: &[u8]) -> Option<u32> {
+    // Decode a base-128 varint. Tags are small, so cap the read: field numbers here are
+    // all <= 15, giving a single-byte tag, but tolerate multi-byte for robustness.
+    let mut value: u64 = 0;
+    for (i, &byte) in msg.iter().take(5).enumerate() {
+        value |= u64::from(byte & 0x7f) << (7 * i);
+        if byte & 0x80 == 0 {
+            let field_number = (value >> 3) as u32;
+            return (field_number != 0).then_some(field_number);
+        }
+    }
+    None
+}
+
+/// Build a failure response, matching the request's oneof variant when it is known.
+///
+/// The variant matters: SSv2 calls `client.call(request).update_frame()`, and protobuf
+/// returns a default-constructed message when the response holds a different variant. The
+/// caller still sees `success == false`, so the failure is not lost -- but `description` is,
+/// leaving the operator with a generic failure and no reason. Matching the variant keeps the
+/// description attached.
+///
+/// `variant` is `None` when the intended request genuinely cannot be known -- an empty
+/// oneof, or a message too corrupt to yield a leading tag. The response then falls back to
+/// `Initialize`, which is wrong for any other request but still reads as a failure.
+fn encode_error_response(variant: Option<u32>, description: &str) -> Vec<u8> {
+    let result = api::Result {
+        success: false,
+        description: description.to_string(),
     };
-    resp.encode_to_vec()
+
+    // Field numbers are from proto/simulation_api_schema.proto. SimulationRequest and
+    // SimulationResponse assign the same number to each corresponding variant.
+    let response = match variant {
+        Some(2) => simulation_response::Response::UpdateFrame(api::UpdateFrameResponse {
+            result: Some(result),
+        }),
+        Some(3) => {
+            simulation_response::Response::SpawnVehicleEntity(api::SpawnVehicleEntityResponse {
+                result: Some(result),
+            })
+        }
+        Some(4) => simulation_response::Response::SpawnPedestrianEntity(
+            api::SpawnPedestrianEntityResponse {
+                result: Some(result),
+            },
+        ),
+        Some(5) => simulation_response::Response::SpawnMiscObjectEntity(
+            api::SpawnMiscObjectEntityResponse {
+                result: Some(result),
+            },
+        ),
+        Some(6) => simulation_response::Response::DespawnEntity(api::DespawnEntityResponse {
+            result: Some(result),
+        }),
+        Some(7) => {
+            simulation_response::Response::UpdateEntityStatus(api::UpdateEntityStatusResponse {
+                result: Some(result),
+                status: Vec::new(),
+            })
+        }
+        Some(8) => {
+            simulation_response::Response::AttachLidarSensor(api::AttachLidarSensorResponse {
+                result: Some(result),
+            })
+        }
+        Some(9) => simulation_response::Response::AttachDetectionSensor(
+            api::AttachDetectionSensorResponse {
+                result: Some(result),
+            },
+        ),
+        Some(10) => simulation_response::Response::AttachOccupancyGridSensor(
+            api::AttachOccupancyGridSensorResponse {
+                result: Some(result),
+            },
+        ),
+        Some(11) => {
+            simulation_response::Response::UpdateTrafficLights(api::UpdateTrafficLightsResponse {
+                result: Some(result),
+            })
+        }
+        Some(13) => simulation_response::Response::AttachPseudoTrafficLightDetector(
+            api::AttachPseudoTrafficLightDetectorResponse {
+                result: Some(result),
+            },
+        ),
+        Some(14) => simulation_response::Response::UpdateStepTime(api::UpdateStepTimeResponse {
+            result: Some(result),
+        }),
+        Some(15) => simulation_response::Response::AttachImuSensor(api::AttachImuSensorResponse {
+            result: Some(result),
+        }),
+        // Field 1 is Initialize, and it is also the documented fallback for None and for
+        // any field number this build does not know.
+        _ => simulation_response::Response::Initialize(api::InitializeResponse {
+            result: Some(result),
+        }),
+    };
+
+    SimulationResponse {
+        response: Some(response),
+    }
+    .encode_to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Encode a real request, then confirm the tag peek recovers its variant. Guards the
+    /// field numbers against a proto change.
+    fn variant_of(request: simulation_request::Request) -> Option<u32> {
+        let bytes = SimulationRequest {
+            request: Some(request),
+        }
+        .encode_to_vec();
+        peek_request_variant(&bytes)
+    }
+
+    #[test]
+    fn peek_recovers_the_variant_of_a_real_request() {
+        assert_eq!(
+            variant_of(simulation_request::Request::Initialize(
+                api::InitializeRequest::default()
+            )),
+            Some(1)
+        );
+        assert_eq!(
+            variant_of(simulation_request::Request::UpdateFrame(
+                api::UpdateFrameRequest::default()
+            )),
+            Some(2)
+        );
+        assert_eq!(
+            variant_of(simulation_request::Request::UpdateTrafficLights(
+                api::UpdateTrafficLightsRequest::default()
+            )),
+            Some(11)
+        );
+        assert_eq!(
+            variant_of(simulation_request::Request::AttachImuSensor(
+                api::AttachImuSensorRequest::default()
+            )),
+            Some(15)
+        );
+    }
+
+    #[test]
+    fn peek_gives_up_on_unusable_input() {
+        assert_eq!(peek_request_variant(&[]), None);
+        // Continuation bit set the whole way: never terminates within the cap.
+        assert_eq!(peek_request_variant(&[0x80, 0x80, 0x80, 0x80, 0x80]), None);
+        // Field number 0 is not valid protobuf.
+        assert_eq!(peek_request_variant(&[0x00]), None);
+    }
+
+    /// The point of E1: an error for an UpdateFrame must come back as an UpdateFrame
+    /// response, or SSv2's `call(req).update_frame()` default-constructs and the
+    /// description is lost.
+    #[test]
+    fn error_response_matches_the_requested_variant() {
+        let bytes = encode_error_response(Some(2), "boom");
+        let decoded = SimulationResponse::decode(bytes.as_slice()).unwrap();
+
+        match decoded.response {
+            Some(simulation_response::Response::UpdateFrame(r)) => {
+                let result = r.result.expect("result present");
+                assert!(!result.success);
+                assert_eq!(result.description, "boom");
+            }
+            other => panic!("expected UpdateFrame response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_response_falls_back_to_initialize_when_variant_is_unknown() {
+        let bytes = encode_error_response(None, "unknown");
+        let decoded = SimulationResponse::decode(bytes.as_slice()).unwrap();
+
+        match decoded.response {
+            Some(simulation_response::Response::Initialize(r)) => {
+                assert!(!r.result.expect("result present").success);
+            }
+            other => panic!("expected Initialize fallback, got {other:?}"),
+        }
+    }
+
+    /// Every variant must produce a failure carrying the description, whichever one it is.
+    #[test]
+    fn every_known_variant_round_trips_as_a_failure() {
+        for field in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15] {
+            let bytes = encode_error_response(Some(field), "why");
+            let decoded = SimulationResponse::decode(bytes.as_slice())
+                .unwrap_or_else(|e| panic!("field {field} failed to decode: {e}"));
+            let response = decoded
+                .response
+                .unwrap_or_else(|| panic!("field {field} produced no response"));
+
+            let result = match response {
+                simulation_response::Response::Initialize(r) => r.result,
+                simulation_response::Response::UpdateFrame(r) => r.result,
+                simulation_response::Response::SpawnVehicleEntity(r) => r.result,
+                simulation_response::Response::SpawnPedestrianEntity(r) => r.result,
+                simulation_response::Response::SpawnMiscObjectEntity(r) => r.result,
+                simulation_response::Response::DespawnEntity(r) => r.result,
+                simulation_response::Response::UpdateEntityStatus(r) => r.result,
+                simulation_response::Response::AttachLidarSensor(r) => r.result,
+                simulation_response::Response::AttachDetectionSensor(r) => r.result,
+                simulation_response::Response::AttachOccupancyGridSensor(r) => r.result,
+                simulation_response::Response::UpdateTrafficLights(r) => r.result,
+                simulation_response::Response::AttachPseudoTrafficLightDetector(r) => r.result,
+                simulation_response::Response::UpdateStepTime(r) => r.result,
+                simulation_response::Response::AttachImuSensor(r) => r.result,
+            };
+
+            let result = result.unwrap_or_else(|| panic!("field {field} produced no result"));
+            assert!(!result.success, "field {field} should be a failure");
+            assert_eq!(result.description, "why", "field {field} lost description");
+        }
+    }
 }

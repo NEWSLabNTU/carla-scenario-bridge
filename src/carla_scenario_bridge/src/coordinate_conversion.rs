@@ -5,10 +5,9 @@
 ///
 /// Conversion: Y-axis flip on positions, roll/yaw sign flip + degree/radian on rotations.
 /// Identical to autoware_carla_bridge's coordinate_conversion.rs.
-
 use std::f64::consts::PI;
 
-use crate::proto::geometry_msgs::{Pose, Point, Quaternion};
+use crate::proto::geometry_msgs::{Point, Pose, Quaternion};
 
 /// Convert a ROS position to CARLA position (Y-flip).
 pub fn ros_to_carla_position(x: f64, y: f64, z: f64) -> (f64, f64, f64) {
@@ -84,8 +83,12 @@ pub fn ros_pose_to_carla(pose: &Pose) -> (f64, f64, f64, f64, f64, f64) {
 
 /// Convert a CARLA transform to a protobuf Pose (ROS frame).
 pub fn carla_to_ros_pose(
-    x: f32, y: f32, z: f32,
-    roll_deg: f32, pitch_deg: f32, yaw_deg: f32,
+    x: f32,
+    y: f32,
+    z: f32,
+    roll_deg: f32,
+    pitch_deg: f32,
+    yaw_deg: f32,
 ) -> Pose {
     let (rx, ry, rz) = carla_to_ros_position(x as f64, y as f64, z as f64);
     let (ros_roll, ros_pitch, ros_yaw) =
@@ -93,8 +96,17 @@ pub fn carla_to_ros_pose(
     let (qx, qy, qz, qw) = euler_to_quaternion(ros_roll, ros_pitch, ros_yaw);
 
     Pose {
-        position: Some(Point { x: rx, y: ry, z: rz }),
-        orientation: Some(Quaternion { x: qx, y: qy, z: qz, w: qw }),
+        position: Some(Point {
+            x: rx,
+            y: ry,
+            z: rz,
+        }),
+        orientation: Some(Quaternion {
+            x: qx,
+            y: qy,
+            z: qz,
+            w: qw,
+        }),
     }
 }
 
