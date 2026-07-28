@@ -999,8 +999,14 @@ impl Coordinator {
 
         // Wait one tick for the actor to be fully initialized. Only meaningful once we
         // own the tick -- before sync mode is on, CARLA is advancing by itself.
+        //
+        // SAFETY: a failure here is not fatal to the spawn. The actor exists; it is merely
+        // not yet settled. A genuinely broken connection is caught by update_frame, which
+        // owns reconnection.
         if self.sync_mode_enabled {
-            let _ = self.world.tick();
+            if let Err(e) = self.world.tick() {
+                tracing::warn!("Tick after spawning '{name}' failed: {e}");
+            }
         }
 
         // Background AVs are deliberately absent from EntityManager -- see
