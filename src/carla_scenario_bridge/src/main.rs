@@ -1,6 +1,7 @@
 mod coordinate_conversion;
 mod coordinator;
 mod entity_manager;
+mod map_resolver;
 mod proto;
 mod traffic_light_mapper;
 mod zmq_server;
@@ -55,8 +56,15 @@ fn main() -> Result<()> {
     let world = client.world()?;
     tracing::info!("CARLA world acquired");
 
+    // Per-map config (traffic light signal mappings) lives alongside the binary's package.
+    let config_dir = std::env::var("CSB_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("config"));
+    tracing::info!("  Config: {}", config_dir.display());
+
     // The coordinator keeps the client so it can rebuild the world after a CARLA outage.
-    let coord = coordinator::Coordinator::new(client, world, carla_host.clone(), carla_port);
+    let coord =
+        coordinator::Coordinator::new(client, world, carla_host.clone(), carla_port, config_dir);
     let zmq_ctx = zmq::Context::new();
     let mut server = zmq_server::ZmqServer::new(&zmq_ctx, ssv2_port, coord)?;
 

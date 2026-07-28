@@ -2,7 +2,11 @@ use carla::client::{ActorBase, Client, World};
 use carla::geom::{Location, Rotation, Transform};
 use eyre::{Result, WrapErr};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::Duration;
+
+use crate::map_resolver::town_from_map_path;
+use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
 /// Minimum spawn height when the ground cannot be probed.
 const FALLBACK_SPAWN_Z: f32 = 0.5;
@@ -205,14 +209,36 @@ pub struct Coordinator {
     /// Last longitudinal acceleration seen per actor, so jerk can be differenced across
     /// frames. CARLA reports acceleration but not its derivative.
     previous_longitudinal_accel: HashMap<u32, f64>,
+    /// Directory holding per-map config, e.g. the traffic light signal mapping.
+    config_dir: PathBuf,
+    /// Map directory name to CARLA town, for maps whose directory is not the town name.
+    map_aliases: HashMap<String, String>,
+    /// Lanelet2 signal ID to OpenDRIVE sign ID for the loaded town.
+    signal_map: SignalMap,
+    /// Lanelet2 signal IDs already reported as unmapped. SSv2 sends states every frame, so
+    /// an unmapped signal must warn once rather than per frame.
+    warned_unmapped_signals: HashSet<i32>,
+    /// Whether the arrow-shape limitation has been reported for this run.
+    warned_arrow_shapes: bool,
 }
 
 impl Coordinator {
-    pub fn new(client: Client, world: World, carla_host: String, carla_port: u16) -> Self {
+    pub fn new(
+        client: Client,
+        world: World,
+        carla_host: String,
+        carla_port: u16,
+        config_dir: PathBuf,
+    ) -> Self {
         Self {
             client,
             carla_host,
             carla_port,
+            config_dir,
+            map_aliases: HashMap::new(),
+            signal_map: SignalMap::new(),
+            warned_unmapped_signals: HashSet::new(),
+            warned_arrow_shapes: false,
             world,
             entities: EntityManager::new(),
             step_time: 0.05,
@@ -324,6 +350,97 @@ impl Coordinator {
         self.restore_async_mode();
     }
 
+    // --- Map and traffic lights ------------------------------------------------------
+
+    /// Load the town the scenario was authored against, and its signal mapping.
+    ///
+    /// Reloading the world destroys every actor in it, so this must happen before anything
+    /// is spawned -- and the teardown bookkeeping from phase 007 is cleared to match, since
+    /// those actor IDs no longer refer to anything.
+    fn load_scenario_map(&mut self, lanelet2_map_path: &str) -> Result<()> {
+        if lanelet2_map_path.is_empty() {
+            eyre::bail!(
+                "Initialize supplied no lanelet2_map_path, so the town cannot be verified. \
+                 Running against whatever town CARLA currently holds would interpret every \
+                 scenario pose against the wrong map."
+            );
+        }
+
+        let town = town_from_map_path(lanelet2_map_path, &self.map_aliases).ok_or_else(|| {
+            eyre::eyre!(
+                "cannot resolve a CARLA town from lanelet2_map_path '{lanelet2_map_path}'; \
+                 add an entry to the map alias table if this map's directory is not named \
+                 after its town"
+            )
+        })?;
+
+        // CARLA reports map names like "Carla/Maps/Town01"; compare on the final component.
+        let current = self.world.map().map(|m| m.name()).unwrap_or_default();
+        let current_town = current.rsplit('/').next().unwrap_or(&current).to_string();
+
+        if current_town == town {
+            tracing::info!("Map '{town}' is already loaded; not reloading");
+        } else {
+            tracing::info!("Loading map '{town}' (CARLA currently holds '{current_town}')");
+            let world = self
+                .client
+                .load_world(&town)
+                .map_err(|e| eyre::eyre!("load world '{town}': {e}"))?;
+            self.world = world;
+
+            // The old world and everything in it is gone. Anything still recorded for
+            // teardown refers to actors that no longer exist.
+            self.spawned_actors.clear();
+            self.previous_longitudinal_accel.clear();
+            self.sync_mode_enabled = false;
+            self.froze_traffic_lights = false;
+            tracing::info!("Map '{town}' loaded");
+        }
+
+        // Per-map signal mapping. Missing is fine -- it is reported per signal on use.
+        let mapping_path = self.config_dir.join(format!("traffic_lights_{town}.yaml"));
+        self.signal_map = SignalMap::load_or_empty(&mapping_path)?;
+        self.warned_unmapped_signals.clear();
+        self.warned_arrow_shapes = false;
+
+        if self.signal_map.is_empty() {
+            tracing::warn!(
+                "No traffic light mapping for '{town}'. Signals the scenario commands cannot \
+                 be applied to CARLA until {} exists.",
+                mapping_path.display()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Freeze CARLA's signal cycling so SSv2 is the only writer (invariant 3).
+    ///
+    /// Freezing leaves each light in whatever state it happened to be in, which for a light
+    /// the scenario never addresses means an arbitrary but *fixed* state for the whole run.
+    /// That is the intended trade: a cycling light near the ego's route would make the run
+    /// non-deterministic, which is what invariant 3 exists to prevent. A scenario that cares
+    /// about a signal must command it.
+    fn freeze_traffic_lights(&mut self) {
+        match self.world.freeze_all_traffic_lights(true) {
+            Ok(()) => {
+                self.froze_traffic_lights = true;
+                tracing::info!(
+                    "CARLA traffic light cycling frozen; SSv2 is now the only writer. \
+                     Signals the scenario does not command hold their current state."
+                );
+            }
+            Err(e) => {
+                // Not fatal: the scenario may not use traffic lights at all. But if it
+                // does, CARLA will be cycling underneath it, so say so plainly.
+                tracing::warn!(
+                    "Could not freeze CARLA traffic lights ({e}). CARLA's own cycling is \
+                     still running and will fight any scenario-commanded state."
+                );
+            }
+        }
+    }
+
     /// Unfreeze CARLA's traffic lights, but only if this bridge froze them.
     ///
     /// Freezing arrives with phase 009. The guard is here now so that landing the freeze
@@ -430,21 +547,17 @@ impl Coordinator {
         }
         self.entities.clear();
 
-        // The map named by the scenario is currently ignored -- whichever town CARLA
-        // already holds is the town the scenario runs on, and every pose is interpreted
-        // against it. Loading is roadmap phase 009. Until then this cannot silently pass:
-        // a scenario written for one town running against another does not fail, it
-        // produces meaningless results.
-        if req.lanelet2_map_path.is_empty() {
-            tracing::warn!("Initialize: no lanelet2_map_path supplied; cannot verify the map");
-        } else {
-            tracing::warn!(
-                "Initialize: scenario requests map '{}', but map loading is not implemented \
-                 (roadmap phase 009). Verify CARLA already has the matching town loaded -- \
-                 a mismatch will not fail, it will produce meaningless poses.",
-                req.lanelet2_map_path
-            );
+        // Load the town the scenario was authored against. A mismatch is not a visible
+        // failure -- every pose would be interpreted against whatever town CARLA happened
+        // to hold -- so an unresolvable path fails Initialize rather than guessing.
+        if let Err(e) = self.load_scenario_map(&req.lanelet2_map_path) {
+            return api::InitializeResponse {
+                result: Some(proto_err(format!("Cannot prepare the map: {e}"))),
+            };
         }
+
+        // Take authority over the signals (invariant 3).
+        self.freeze_traffic_lights();
 
         tracing::info!(
             "Initialized (step_time={}). CARLA left in async mode until the ego is spawned.",
@@ -995,24 +1108,92 @@ impl Coordinator {
 
     pub fn update_traffic_lights(
         &mut self,
-        _req: api::UpdateTrafficLightsRequest,
+        req: api::UpdateTrafficLightsRequest,
     ) -> api::UpdateTrafficLightsResponse {
-        // Rejected rather than stubbed. CARLA's built-in cycling is never frozen, so
-        // reporting success would let a scenario script a red light while CARLA runs its
-        // own schedule underneath. Implemented in roadmap phase 009.
-        //
-        // SSv2 sends this every frame, so the warning fires once.
-        if !self.warned_traffic_lights {
-            self.warned_traffic_lights = true;
+        let mut applied = 0usize;
+        let mut newly_unmapped = Vec::new();
+        let mut failures = Vec::new();
+
+        for signal in &req.states {
+            // Report the arrow limitation once: CARLA has no arrow states, so a protected
+            // turn cannot be represented and the ego sees a plain colour.
+            if !self.warned_arrow_shapes && signal_uses_arrows(signal) {
+                self.warned_arrow_shapes = true;
+                tracing::warn!(
+                    "Signal {} uses arrow shapes, which CARLA cannot represent. Arrows are \
+                     flattened to their colour, so protected-turn phases will not be faithful.",
+                    signal.id
+                );
+            }
+
+            let state = carla_state_for_signal(signal);
+
+            let Some(opendrive_id) = self.signal_map.opendrive_id(signal.id).map(str::to_owned)
+            else {
+                // Warn once per signal: SSv2 sends states every frame.
+                if self.warned_unmapped_signals.insert(signal.id) {
+                    newly_unmapped.push(signal.id);
+                }
+                continue;
+            };
+
+            match self.set_signal_state(&opendrive_id, state) {
+                Ok(()) => applied += 1,
+                Err(e) => failures.push(format!("signal {} ({opendrive_id}): {e}", signal.id)),
+            }
+        }
+
+        if !newly_unmapped.is_empty() {
             tracing::warn!(
-                "UpdateTrafficLights rejected: not implemented (roadmap phase 009). \
-                 CARLA's built-in cycling is still running."
+                "No CARLA traffic light mapped for lanelet signal(s) {newly_unmapped:?}. Add \
+                 them to config/traffic_lights_<town>.yaml; these signals are not being driven."
             );
         }
 
-        api::UpdateTrafficLightsResponse {
-            result: Some(traffic_lights_not_supported()),
+        // An unmapped signal is a configuration gap, not a request failure -- failing here
+        // would abort every scenario on a map that has no mapping file yet. A signal that
+        // *is* mapped but could not be written is a real failure.
+        if failures.is_empty() {
+            tracing::debug!("Applied {applied} traffic light state(s)");
+            api::UpdateTrafficLightsResponse {
+                result: Some(proto_ok()),
+            }
+        } else {
+            api::UpdateTrafficLightsResponse {
+                result: Some(proto_err(format!(
+                    "Failed to apply {} of {} traffic light state(s): {}",
+                    failures.len(),
+                    req.states.len(),
+                    failures.join("; ")
+                ))),
+            }
         }
+    }
+
+    /// Write one signal state to the CARLA light with the given OpenDRIVE sign ID.
+    fn set_signal_state(
+        &mut self,
+        opendrive_id: &str,
+        state: carla::rpc::TrafficLightState,
+    ) -> Result<()> {
+        let actor = self
+            .world
+            .traffic_light_from_open_drive(opendrive_id)
+            .map_err(|e| eyre::eyre!("look up OpenDRIVE signal '{opendrive_id}': {e}"))?
+            .ok_or_else(|| {
+                eyre::eyre!("no CARLA traffic light with OpenDRIVE id '{opendrive_id}'")
+            })?;
+
+        let light = match actor.into_kinds() {
+            carla::client::ActorKind::TrafficLight(light) => light,
+            _ => {
+                eyre::bail!("CARLA actor for OpenDRIVE id '{opendrive_id}' is not a traffic light")
+            }
+        };
+
+        light
+            .set_state(state)
+            .map_err(|e| eyre::eyre!("set state on '{opendrive_id}': {e}"))
     }
 
     /// Restore async mode so CARLA isn't stuck waiting for ticks on exit.
@@ -1264,24 +1445,6 @@ fn sensor_not_supported() -> ProtoResult {
     }
 }
 
-/// Rejection for a feature this bridge does not implement yet.
-///
-/// These must never report success. A handler that returns `success = true` without acting
-/// leaves SSv2 believing the entity exists, and SSv2 will then score scenario conditions
-/// against something CARLA never had. See `docs/roadmap/006-honest-failures.md`.
-fn not_implemented(what: &str, roadmap_doc: &str) -> ProtoResult {
-    ProtoResult {
-        success: false,
-        description: format!(
-            "{what} is not implemented in carla-scenario-bridge; see docs/roadmap/{roadmap_doc}"
-        ),
-    }
-}
-
-fn traffic_lights_not_supported() -> ProtoResult {
-    not_implemented("Traffic light control", "009-map-and-traffic-lights.md")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1319,18 +1482,9 @@ mod tests {
         assert_eq!(decide_frame_action(true, false), FrameAction::Tick);
     }
 
-    // --- Phase 006: unimplemented features must reject, never report success ---
-
-    #[test]
-    fn traffic_light_update_is_rejected() {
-        let result = traffic_lights_not_supported();
-        assert!(!result.success);
-        assert!(
-            result.description.contains("009-map-and-traffic-lights.md"),
-            "description should point at the roadmap: {}",
-            result.description
-        );
-    }
+    // Phase 006's traffic-light rejection test is gone: phase 009 implements the handler,
+    // and the real conversion is covered in `traffic_light_mapper`. Sensor rejection is
+    // still asserted by `rejections_always_explain_themselves` below.
 
     // --- Phase 007: repeatable runs ---
 
@@ -1462,9 +1616,8 @@ mod tests {
     /// bare failure with no reason is what phase 006 exists to eliminate.
     #[test]
     fn rejections_always_explain_themselves() {
-        for result in [traffic_lights_not_supported(), sensor_not_supported()] {
-            assert!(!result.success);
-            assert!(!result.description.is_empty());
-        }
+        let result = sensor_not_supported();
+        assert!(!result.success);
+        assert!(!result.description.is_empty());
     }
 }
