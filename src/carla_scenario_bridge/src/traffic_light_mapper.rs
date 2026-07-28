@@ -271,24 +271,9 @@ pub fn signal_uses_arrows(signal: &TrafficSignal) -> bool {
 mod tests {
     use super::*;
 
-    /// `TrafficLightState` has no `Debug` impl, so name it for assertion messages.
-    fn state_name(s: TrafficLightState) -> &'static str {
-        if s == TrafficLightState::Red {
-            "Red"
-        } else if s == TrafficLightState::Yellow {
-            "Yellow"
-        } else if s == TrafficLightState::Green {
-            "Green"
-        } else if s == TrafficLightState::Off {
-            "Off"
-        } else {
-            "other"
-        }
-    }
-
-    /// State for a signal built from the given bulbs, named for readable failures.
-    fn state_of(bulbs: Vec<TrafficLight>) -> &'static str {
-        state_name(carla_state_for_signal(&signal(bulbs)))
+    /// State for a signal built from the given bulbs.
+    fn state_of(bulbs: Vec<TrafficLight>) -> TrafficLightState {
+        carla_state_for_signal(&signal(bulbs))
     }
 
     fn bulb(color: traffic_light::Color, status: traffic_light::Status) -> TrafficLight {
@@ -320,19 +305,28 @@ mod tests {
     #[test]
     fn a_lit_bulb_maps_to_its_colour() {
         use traffic_light::{Color, Status};
-        assert_eq!(state_of(vec![bulb(Color::Red, Status::SolidOn)]), "Red");
+        assert_eq!(
+            state_of(vec![bulb(Color::Red, Status::SolidOn)]),
+            TrafficLightState::Red
+        );
         assert_eq!(
             state_of(vec![bulb(Color::Amber, Status::SolidOn)]),
-            "Yellow"
+            TrafficLightState::Yellow
         );
-        assert_eq!(state_of(vec![bulb(Color::Green, Status::SolidOn)]), "Green");
+        assert_eq!(
+            state_of(vec![bulb(Color::Green, Status::SolidOn)]),
+            TrafficLightState::Green
+        );
     }
 
     #[test]
     fn an_unlit_signal_is_off() {
         use traffic_light::{Color, Status};
-        assert_eq!(state_of(vec![bulb(Color::Green, Status::SolidOff)]), "Off");
-        assert_eq!(state_of(vec![]), "Off");
+        assert_eq!(
+            state_of(vec![bulb(Color::Green, Status::SolidOff)]),
+            TrafficLightState::Off
+        );
+        assert_eq!(state_of(vec![]), TrafficLightState::Off);
     }
 
     /// The safety-relevant case: a red circle with a green arrow must not read as green.
@@ -344,14 +338,14 @@ mod tests {
                 bulb(Color::Green, Status::SolidOn),
                 bulb(Color::Red, Status::SolidOn),
             ]),
-            "Red"
+            TrafficLightState::Red
         );
         assert_eq!(
             state_of(vec![
                 bulb(Color::Green, Status::SolidOn),
                 bulb(Color::Amber, Status::SolidOn),
             ]),
-            "Yellow"
+            TrafficLightState::Yellow
         );
     }
 
@@ -364,7 +358,7 @@ mod tests {
                 bulb(Color::Red, Status::SolidOff),
                 bulb(Color::Green, Status::SolidOn),
             ]),
-            "Green"
+            TrafficLightState::Green
         );
     }
 
@@ -374,7 +368,7 @@ mod tests {
         use traffic_light::{Color, Status};
         assert_eq!(
             state_of(vec![bulb(Color::Amber, Status::Flashing)]),
-            "Yellow"
+            TrafficLightState::Yellow
         );
     }
 
@@ -382,10 +376,13 @@ mod tests {
     #[test]
     fn non_vehicle_colours_contribute_nothing() {
         use traffic_light::{Color, Status};
-        assert_eq!(state_of(vec![bulb(Color::White, Status::SolidOn)]), "Off");
+        assert_eq!(
+            state_of(vec![bulb(Color::White, Status::SolidOn)]),
+            TrafficLightState::Off
+        );
         assert_eq!(
             state_of(vec![bulb(Color::UnknownColor, Status::SolidOn)]),
-            "Off"
+            TrafficLightState::Off
         );
     }
 

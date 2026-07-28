@@ -8,7 +8,10 @@ members = [
 carla = "0.14.0"
 
 [patch.crates-io]
-carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "73f5e16" }
+# 575f6aa adds Debug to the generated C-like enums and *_from_ffi_ref accessors for the geom
+# PODs. Without the latter, LabelledPoint::location cannot be read behind a shared reference,
+# which makes World::ground_projection and friends unusable.
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "575f6aa" }
 
 [profile.dev-release]
 inherits = "release"
