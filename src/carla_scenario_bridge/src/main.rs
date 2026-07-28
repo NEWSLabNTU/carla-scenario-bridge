@@ -1,6 +1,7 @@
 mod coordinate_conversion;
 mod coordinator;
 mod entity_manager;
+mod lanelet_map;
 mod map_resolver;
 mod proto;
 mod traffic_light_mapper;

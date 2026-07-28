@@ -26,6 +26,9 @@ prost = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 
+# Lanelet2 maps are OSM XML; roxmltree matches acb_bridge's parser choice
+roxmltree = "0.20"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

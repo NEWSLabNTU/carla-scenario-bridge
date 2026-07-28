@@ -104,6 +104,102 @@ impl SignalMap {
     }
 }
 
+/// A CARLA traffic light, reduced to what matching needs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CarlaSignal {
+    /// OpenDRIVE sign ID -- stable across sessions, unlike the actor ID.
+    pub opendrive_id: String,
+    /// Position in CARLA's frame.
+    pub x: f64,
+    pub y: f64,
+}
+
+/// How close a Lanelet2 element and a CARLA light must be to be the same signal.
+///
+/// Generous enough to absorb converter rounding and the difference between the mapped bulb
+/// bar and CARLA's actor origin, tight enough that neighbouring lights at one intersection
+/// cannot be confused -- in Town01 the closest pair is tens of metres apart.
+pub const SIGNAL_MATCH_TOLERANCE_M: f64 = 5.0;
+
+/// Outcome of matching Lanelet2 traffic lights against CARLA's.
+#[derive(Debug, Default)]
+pub struct MatchReport {
+    /// Lanelet2 way ID to OpenDRIVE sign ID.
+    pub matched: HashMap<i32, String>,
+    /// Lanelet2 way IDs with no CARLA light within tolerance.
+    pub unmatched_lanelet: Vec<i32>,
+    /// OpenDRIVE sign IDs no Lanelet2 element claimed.
+    pub unmatched_carla: Vec<String>,
+}
+
+/// Pair Lanelet2 traffic lights with CARLA's by position.
+///
+/// Nearest-within-tolerance, and each CARLA light is claimed at most once: two Lanelet2
+/// elements resolving to the same CARLA actor would silently drive one light from two
+/// scenario signals. Ties are broken by proximity, so the closer element wins and the other
+/// is reported unmatched rather than quietly mis-bound.
+///
+/// Matching is planar; see [`TrafficLightElement::planar_distance_to_carla`].
+pub fn match_signals(
+    lanelet: &[crate::lanelet_map::TrafficLightElement],
+    carla: &[CarlaSignal],
+) -> MatchReport {
+    // Consider every candidate pair within tolerance, closest first, and take greedily.
+    // With tens of lights per map the quadratic scan is irrelevant, and it makes the
+    // "closest wins" rule obvious.
+    let mut candidates: Vec<(f64, i32, &str)> = Vec::new();
+    for element in lanelet {
+        for signal in carla {
+            let d = element.planar_distance_to_carla(signal.x, signal.y);
+            if d <= SIGNAL_MATCH_TOLERANCE_M {
+                candidates.push((d, element.way_id, signal.opendrive_id.as_str()));
+            }
+        }
+    }
+    candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut report = MatchReport::default();
+    let mut claimed_carla: HashMap<&str, i32> = HashMap::new();
+
+    for (_, way_id, opendrive_id) in candidates {
+        if report.matched.contains_key(&way_id) || claimed_carla.contains_key(opendrive_id) {
+            continue;
+        }
+        report.matched.insert(way_id, opendrive_id.to_string());
+        claimed_carla.insert(opendrive_id, way_id);
+    }
+
+    report.unmatched_lanelet = lanelet
+        .iter()
+        .map(|e| e.way_id)
+        .filter(|id| !report.matched.contains_key(id))
+        .collect();
+    report.unmatched_carla = carla
+        .iter()
+        .map(|s| s.opendrive_id.clone())
+        .filter(|id| !claimed_carla.contains_key(id.as_str()))
+        .collect();
+
+    report
+}
+
+impl SignalMap {
+    /// Fold position matches into the map, without overwriting explicit entries.
+    ///
+    /// The YAML file wins: it exists precisely to correct what matching gets wrong, so an
+    /// automatic result must never silently replace a hand-written one.
+    pub fn merge_matched(&mut self, matched: HashMap<i32, String>) -> usize {
+        let mut added = 0;
+        for (way_id, opendrive_id) in matched {
+            self.signals.entry(way_id.to_string()).or_insert_with(|| {
+                added += 1;
+                opendrive_id
+            });
+        }
+        added
+    }
+}
+
 /// Whether a bulb is emitting light at all.
 ///
 /// `FLASHING` counts as lit. A flashing amber is meaningfully amber, and CARLA cannot render
@@ -303,6 +399,88 @@ mod tests {
             Color::Red,
             Status::SolidOn
         )])));
+    }
+
+    // --- Position matching ---
+
+    fn element(way_id: i32, x: f64, y: f64) -> crate::lanelet_map::TrafficLightElement {
+        crate::lanelet_map::TrafficLightElement {
+            way_id,
+            x,
+            y,
+            z: 5.0,
+        }
+    }
+
+    fn carla(id: &str, x: f64, y: f64) -> CarlaSignal {
+        CarlaSignal {
+            opendrive_id: id.to_string(),
+            x,
+            y,
+        }
+    }
+
+    /// Lanelet y is ROS-frame, so a CARLA light at y=-4.5 is the one at lanelet y=+4.5.
+    #[test]
+    fn a_coincident_light_matches_across_the_y_flip() {
+        let report = match_signals(&[element(43733, 348.7, 4.5)], &[carla("45", 348.7, -4.5)]);
+        assert_eq!(report.matched.get(&43733).map(String::as_str), Some("45"));
+        assert!(report.unmatched_lanelet.is_empty());
+        assert!(report.unmatched_carla.is_empty());
+    }
+
+    /// Forgetting the flip puts the CARLA light 9m away, outside tolerance.
+    #[test]
+    fn a_light_beyond_tolerance_does_not_match() {
+        let report = match_signals(&[element(43733, 348.7, 4.5)], &[carla("45", 348.7, 4.5)]);
+        assert!(report.matched.is_empty());
+        assert_eq!(report.unmatched_lanelet, vec![43733]);
+        assert_eq!(report.unmatched_carla, vec!["45".to_string()]);
+    }
+
+    /// Two elements near one CARLA light must not both bind to it -- that would drive one
+    /// light from two scenario signals. The closer one wins.
+    #[test]
+    fn a_carla_light_is_claimed_at_most_once() {
+        let report = match_signals(
+            &[element(1, 100.0, 0.0), element(2, 102.0, 0.0)],
+            &[carla("A", 100.0, 0.0)],
+        );
+        assert_eq!(report.matched.len(), 1);
+        assert_eq!(report.matched.get(&1).map(String::as_str), Some("A"));
+        assert_eq!(report.unmatched_lanelet, vec![2]);
+    }
+
+    #[test]
+    fn each_element_takes_its_nearest_light() {
+        let report = match_signals(
+            &[element(1, 0.0, 0.0), element(2, 50.0, 0.0)],
+            &[carla("far", 50.5, 0.0), carla("near", 0.5, 0.0)],
+        );
+        assert_eq!(report.matched.get(&1).map(String::as_str), Some("near"));
+        assert_eq!(report.matched.get(&2).map(String::as_str), Some("far"));
+    }
+
+    #[test]
+    fn matching_nothing_reports_everything_unmatched() {
+        let report = match_signals(&[element(1, 0.0, 0.0)], &[]);
+        assert!(report.matched.is_empty());
+        assert_eq!(report.unmatched_lanelet, vec![1]);
+    }
+
+    /// The YAML file exists to correct bad matches, so it must survive a merge.
+    #[test]
+    fn explicit_mappings_are_not_overwritten_by_matching() {
+        let mut map = SignalMap::from_pairs(&[("1234", "explicit")]);
+        let mut matched = HashMap::new();
+        matched.insert(1234, "auto".to_string());
+        matched.insert(5678, "auto-new".to_string());
+
+        let added = map.merge_matched(matched);
+
+        assert_eq!(added, 1, "only the new entry counts as added");
+        assert_eq!(map.opendrive_id(1234), Some("explicit"));
+        assert_eq!(map.opendrive_id(5678), Some("auto-new"));
     }
 
     #[test]

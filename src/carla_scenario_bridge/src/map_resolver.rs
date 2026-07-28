@@ -58,12 +58,51 @@ pub fn town_from_map_path(path: &str, aliases: &HashMap<String, String>) -> Opti
     )
 }
 
+/// The Lanelet2 `.osm` file for a map path.
+///
+/// SSv2 may name either the town directory or the map file itself, so both forms resolve to
+/// the same file.
+pub fn lanelet_map_file(map_path: &str) -> std::path::PathBuf {
+    let path = Path::new(map_path.trim().trim_end_matches('/'));
+
+    let names_a_file = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".osm"));
+
+    if names_a_file {
+        path.to_path_buf()
+    } else {
+        path.join("lanelet2_map.osm")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn no_aliases() -> HashMap<String, String> {
         HashMap::new()
+    }
+
+    #[test]
+    fn a_directory_gains_the_conventional_map_filename() {
+        assert_eq!(
+            lanelet_map_file("/data/Town01"),
+            Path::new("/data/Town01/lanelet2_map.osm")
+        );
+        assert_eq!(
+            lanelet_map_file("/data/Town01/"),
+            Path::new("/data/Town01/lanelet2_map.osm")
+        );
+    }
+
+    #[test]
+    fn an_osm_path_is_used_as_is() {
+        assert_eq!(
+            lanelet_map_file("/data/Town01/lanelet2_map.osm"),
+            Path::new("/data/Town01/lanelet2_map.osm")
+        );
     }
 
     #[test]

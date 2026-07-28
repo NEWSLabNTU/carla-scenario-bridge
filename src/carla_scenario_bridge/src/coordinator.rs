@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::map_resolver::town_from_map_path;
+use crate::map_resolver::{lanelet_map_file, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
 /// Minimum spawn height when the ground cannot be probed.
@@ -397,21 +397,123 @@ impl Coordinator {
             tracing::info!("Map '{town}' loaded");
         }
 
-        // Per-map signal mapping. Missing is fine -- it is reported per signal on use.
+        // Explicit per-map mapping first: it exists to correct what position matching gets
+        // wrong, so it must take precedence over anything derived below.
         let mapping_path = self.config_dir.join(format!("traffic_lights_{town}.yaml"));
         self.signal_map = SignalMap::load_or_empty(&mapping_path)?;
         self.warned_unmapped_signals.clear();
         self.warned_arrow_shapes = false;
 
+        self.match_signals_by_position(lanelet2_map_path);
+
         if self.signal_map.is_empty() {
             tracing::warn!(
-                "No traffic light mapping for '{town}'. Signals the scenario commands cannot \
-                 be applied to CARLA until {} exists.",
+                "No traffic light mapping for '{town}', automatic or explicit. Signals the \
+                 scenario commands cannot be applied to CARLA. Add {} if this map has lights.",
                 mapping_path.display()
             );
         }
 
         Ok(())
+    }
+
+    /// Fill in the signal mapping by pairing Lanelet2 traffic lights with CARLA's by position.
+    ///
+    /// Best-effort and never fatal: a map that cannot be read, or lights that do not pair up,
+    /// leave the explicit YAML mapping as the only source. Every shortfall is reported with
+    /// counts so the gap is visible before the scenario runs rather than discovered when a
+    /// light fails to change.
+    fn match_signals_by_position(&mut self, lanelet2_map_path: &str) {
+        let map_file = lanelet_map_file(lanelet2_map_path);
+
+        let lanelet_lights = match crate::lanelet_map::load_traffic_lights(&map_file) {
+            Ok(lights) => lights,
+            Err(e) => {
+                tracing::warn!(
+                    "Could not read traffic lights from {} ({e}); relying on the explicit \
+                     mapping alone",
+                    map_file.display()
+                );
+                return;
+            }
+        };
+
+        if lanelet_lights.is_empty() {
+            tracing::info!("Lanelet2 map declares no traffic lights");
+            return;
+        }
+
+        let carla_signals = match self.enumerate_carla_signals() {
+            Ok(signals) => signals,
+            Err(e) => {
+                tracing::warn!("Could not enumerate CARLA traffic lights ({e})");
+                return;
+            }
+        };
+
+        let report = crate::traffic_light_mapper::match_signals(&lanelet_lights, &carla_signals);
+        let added = self.signal_map.merge_matched(report.matched);
+
+        tracing::info!(
+            "Traffic light matching: {} lanelet element(s), {} CARLA light(s), {added} newly \
+             mapped by position (tolerance {}m)",
+            lanelet_lights.len(),
+            carla_signals.len(),
+            crate::traffic_light_mapper::SIGNAL_MATCH_TOLERANCE_M
+        );
+
+        if !report.unmatched_lanelet.is_empty() {
+            tracing::warn!(
+                "{} lanelet traffic light(s) had no CARLA light within tolerance: {:?}. These \
+                 signals cannot be driven; add them to config/traffic_lights_<town>.yaml.",
+                report.unmatched_lanelet.len(),
+                report.unmatched_lanelet
+            );
+        }
+        if !report.unmatched_carla.is_empty() {
+            tracing::info!(
+                "{} CARLA traffic light(s) are not referenced by the Lanelet2 map; the \
+                 scenario cannot address them.",
+                report.unmatched_carla.len()
+            );
+        }
+    }
+
+    /// CARLA's traffic lights, reduced to an OpenDRIVE ID and a position.
+    fn enumerate_carla_signals(&self) -> Result<Vec<crate::traffic_light_mapper::CarlaSignal>> {
+        use crate::traffic_light_mapper::CarlaSignal;
+
+        let actors = self.world.actors().wrap_err("list actors")?;
+        let lights = actors
+            .filter("traffic.traffic_light*")
+            .wrap_err("filter traffic lights")?;
+
+        let mut signals = Vec::new();
+        for actor in lights.iter() {
+            let location = match actor.transform() {
+                Ok(t) => t.location,
+                Err(e) => {
+                    tracing::warn!("Could not read a traffic light's transform: {e}");
+                    continue;
+                }
+            };
+
+            let light = match actor.into_kinds() {
+                carla::client::ActorKind::TrafficLight(light) => light,
+                _ => continue,
+            };
+
+            match light.opendrive_id() {
+                Ok(id) => signals.push(CarlaSignal {
+                    opendrive_id: id.to_string(),
+                    x: location.x as f64,
+                    y: location.y as f64,
+                }),
+                Err(e) => tracing::warn!("Could not read a traffic light's OpenDRIVE id: {e}"),
+            }
+        }
+
+        Ok(signals)
     }
 
     /// Freeze CARLA's signal cycling so SSv2 is the only writer (invariant 3).
