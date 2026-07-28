@@ -66,10 +66,45 @@ install-deps:
         echo "colcon-cargo-ros2 already installed"
     fi
 
+    # pip may have pulled a newer setuptools into ~/.local, which shadows the apt one and
+    # breaks colcon --symlink-install. Keep the system setuptools in front.
+    setuptools_path=$(python3 -c 'import setuptools; print(setuptools.__file__)')
+    case "$setuptools_path" in
+        /usr/lib/python3/dist-packages/*) ;;
+        *)
+            echo ""
+            echo "WARNING: setuptools now resolves to $setuptools_path"
+            echo "  A pip-installed setuptools shadows the system one and makes every"
+            echo "  Python package fail with 'option --editable not recognized'."
+            echo "  Run: pip uninstall -y setuptools"
+            ;;
+    esac
+
     echo "All prerequisites installed."
 
+# Fail fast if a pip setuptools shadows the system one.
+#
+# colcon's --symlink-install runs `setup.py develop --editable`, which setuptools removed
+# in v80. When a pip-installed setuptools in ~/.local takes precedence over the apt one,
+# every Python package in the workspace dies with "option --editable not recognized" --
+# a message that says nothing about setuptools. Check up front instead.
+_check-setuptools:
+    #!/usr/bin/env bash
+    set -e
+    path=$(python3 -c 'import setuptools; print(setuptools.__file__)')
+    case "$path" in
+        /usr/lib/python3/dist-packages/*) ;;
+        *)
+            echo "ERROR: setuptools resolves to $path" >&2
+            echo "  Expected the system package (/usr/lib/python3/dist-packages/setuptools)." >&2
+            echo "  colcon --symlink-install will fail with 'option --editable not recognized'." >&2
+            echo "  Fix: pip uninstall -y setuptools" >&2
+            exit 1
+            ;;
+    esac
+
 # Build all packages
-build:
+build: _check-setuptools
     #!/usr/bin/env bash
     set -e
     export CARLA_VERSION={{carla_version}}

@@ -62,6 +62,23 @@ All launch commands use `play_launch launch` (with `--web-addr` for the web UI),
 ### Use just build
 Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).
 
+### Keep the system setuptools
+`--symlink-install` makes colcon run `setup.py develop --editable`, which setuptools removed
+in v80. A pip-installed setuptools in `~/.local` shadows the apt one (`python3-setuptools`,
+59.6.0) and every Python package in the workspace then fails with:
+
+```
+error: option --editable not recognized
+```
+
+colcon aborts the remaining packages after the first failure, so a Rust-only change looks
+broken when it never compiled. `just build` checks for this up front and refuses to start;
+`just install-deps` warns if a `pip install` pulled setuptools in. Fix with:
+
+```bash
+pip uninstall -y setuptools   # falls back to the apt package
+```
+
 ### Push submodule commits before bumping the superproject pin
 Never update a submodule pin in this repo to a commit that only exists locally.
 Push the commit to the submodule's remote first, then stage and commit the pin
