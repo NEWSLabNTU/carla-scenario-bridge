@@ -1,5 +1,9 @@
 # Phase 4: Traffic Lights + Environment
 
+> **Superseded by [009-map-and-traffic-lights.md](009-map-and-traffic-lights.md)**
+> (2026-07-28). The traffic-light mapping analysis below is still the best reference and is
+> cited by 009; the ambient-traffic section is **rejected** outright. Work items live in 009.
+
 Scenario-controlled traffic lights and weather conditions. Optionally, CARLA's Traffic Manager provides ambient background traffic.
 
 ## Design

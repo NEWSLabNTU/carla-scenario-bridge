@@ -70,7 +70,7 @@ TM-driven ambient traffic would give realistic physics and light-obeying behavio
 scenario execution non-deterministic and SSv2's position and timing conditions unreliable.
 Determinism wins: every moving actor is either scripted by the `.xosc` or driven by a real
 Autoware stack. The "Ambient Background Traffic" option in
-[roadmap/4-traffic-lights-environment.md](../roadmap/4-traffic-lights-environment.md) is
+[roadmap/004-traffic-lights-environment.md](../roadmap/004-traffic-lights-environment.md) is
 rejected by this decision.
 
 ## Components
@@ -207,7 +207,7 @@ This requires two things that do not exist yet:
 - **Signal mapping.** Lanelet2 regulatory element IDs and CARLA's OpenDRIVE-derived
   `TrafficLight` actors do not share an ID space. Position-based matching against the Lanelet2
   map named in `InitializeRequest.lanelet2_map_path`, with a per-map YAML fallback for what
-  it misses. Detail in [roadmap/4-traffic-lights-environment.md](../roadmap/4-traffic-lights-environment.md).
+  it misses. Detail in [roadmap/004-traffic-lights-environment.md](../roadmap/004-traffic-lights-environment.md).
 - **Re-enabling recognition.** `acb_launch/carla_simulator.launch.xml` currently sets
   `use_traffic_light_recognition=false`, and `acb_launch`'s component_state_monitor config
   excludes the traffic-light topic. Both must be reverted for the ego, and the diagnostics

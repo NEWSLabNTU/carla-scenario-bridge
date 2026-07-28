@@ -1,5 +1,12 @@
 # Phase 3: NPC + Pedestrian Support
 
+> **Superseded by [008-entity-fidelity.md](008-entity-fidelity.md)** (2026-07-28). This
+> document predates the authority model in
+> [design/multi-instance-architecture.md](../design/multi-instance-architecture.md) and does
+> not cover the NPC physics problem — puppeteered actors are still spawned with CARLA physics
+> enabled, so PhysX and SSv2 teleport both act on the same actor. Retained for context; work
+> items live in 008.
+
 Multi-actor scenarios with NPC vehicles, pedestrians, and static objects visible in CARLA and detectable by Autoware's perception pipeline.
 
 ## Design
