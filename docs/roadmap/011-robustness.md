@@ -54,6 +54,11 @@ competing with Autoware's EKF. It defaults off, so it is a footgun rather than a
 
 - [ ] Remove the unused vehicle-status publishers from `autoware.rs`, or document precisely
       why they exist and how they avoid colliding with `vehicle_control.rs`
+- [ ] **`VehicleBridge::drop` destroys the vehicle actor** (`vehicle_bridge.rs`), which
+      violates invariant 2 — only `csb_bridge` may destroy vehicles. Being in `Drop`, it
+      would fire implicitly on scope exit. Inert today because the module is
+      `#![allow(dead_code)]` and unreferenced, but it is a trap for whoever activates it.
+      Found by the invariant-2 check in [007](007-repeatable-runs.md).
 - [ ] Document `publish_direct_localization` as mutually exclusive with Autoware's own
       localization, and warn at startup when it is enabled
 - [ ] Audit for any other topic with two potential publishers in one domain (invariant 4)

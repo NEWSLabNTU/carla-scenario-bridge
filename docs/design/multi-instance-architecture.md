@@ -304,10 +304,12 @@ Gaps 1, 2 and 3 were regressions of work that was done and lost, not new feature
 
 ### Open items requiring verification
 
-- Whether carla-rust 0.14 exposes `Client::load_world`, `TrafficLight::freeze` and
-  `TrafficLight::set_state`. The crate is not vendored in this workspace and was not available
-  offline when this document was written. If any binding is missing, it must be added upstream
-  in [carla-rust](https://github.com/jerry73204/carla-rust) before gaps 4 and 5 can close.
+- ~~Whether carla-rust exposes `Client::load_world`, `TrafficLight::freeze` and
+  `TrafficLight::set_state`.~~ **Resolved 2026-07-28: all present, no upstream work needed.**
+  Note the crate is not crates.io `carla` 0.14.0 — a `[patch.crates-io]` redirects to
+  `jerry73204/carla-rust` rev `73f5e16`, whose API differs (every call returns
+  `crate::Result<T>`). Detail in
+  [roadmap/009](../roadmap/009-map-and-traffic-lights.md#verify-carla-rust-coverage).
 - Diagnostic consequences of re-enabling traffic-light recognition, given `acb_launch`
   currently excludes that topic from `component_state_monitor` and reports a
   `duplicated_node_checker` error attributed to the flag being off.

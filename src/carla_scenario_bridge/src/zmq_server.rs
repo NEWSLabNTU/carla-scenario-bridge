@@ -151,9 +151,10 @@ impl ZmqServer {
         sim_response.encode_to_vec()
     }
 
-    /// Restore CARLA async mode on drop.
+    /// Undo everything this bridge changed in CARLA: destroy its actors, unfreeze traffic
+    /// lights it froze, restore async mode.
     pub fn cleanup(&mut self) {
-        self.coordinator.restore_async_mode();
+        self.coordinator.shutdown();
     }
 }
 

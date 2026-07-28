@@ -55,8 +55,8 @@ fn main() -> Result<()> {
     let world = client.world()?;
     tracing::info!("CARLA world acquired");
 
-    // Create coordinator and ZMQ server
-    let coord = coordinator::Coordinator::new(world);
+    // The coordinator keeps the client so it can rebuild the world after a CARLA outage.
+    let coord = coordinator::Coordinator::new(client, world, carla_host.clone(), carla_port);
     let zmq_ctx = zmq::Context::new();
     let mut server = zmq_server::ZmqServer::new(&zmq_ctx, ssv2_port, coord)?;
 

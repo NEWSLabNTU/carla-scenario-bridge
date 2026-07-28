@@ -1,8 +1,57 @@
-use carla::client::{ActorBase, World};
+use carla::client::{ActorBase, Client, World};
 use carla::geom::{Location, Rotation, Transform};
 use eyre::{Result, WrapErr};
 use std::collections::HashSet;
 use std::time::Duration;
+
+/// Minimum spawn height when the ground cannot be probed.
+const FALLBACK_SPAWN_Z: f32 = 0.5;
+
+/// Clearance above the ground to spawn at, so the vehicle settles onto its suspension
+/// rather than starting interpenetrated with the road.
+const SPAWN_CLEARANCE: f32 = 0.3;
+
+/// Extra height added on each spawn retry after a collision.
+const SPAWN_RETRY_STEP: f32 = 0.5;
+
+/// How many times to retry a colliding spawn before giving up.
+const SPAWN_RETRIES: usize = 4;
+
+/// Consecutive CARLA failures before the bridge concludes the connection is gone.
+const MAX_CONSECUTIVE_CARLA_FAILURES: u32 = 3;
+
+/// Outcome of a teardown sweep, so the log can state what actually happened.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TeardownReport {
+    pub attempted: usize,
+    pub destroyed: usize,
+    pub failed: usize,
+}
+
+/// Heights to try when a spawn collides, in order.
+///
+/// Only the height varies. The commanded x/y is SSv2's to decide (invariant 5), and quietly
+/// relocating a vehicle to a different point would put CARLA and SSv2 into exactly the kind
+/// of silent disagreement phase 006 removed. Lifting slightly is the standard CARLA
+/// workaround for "Spawn failed because of collision at spawn position" and self-corrects as
+/// the vehicle settles.
+fn spawn_retry_heights(base_z: f32) -> impl Iterator<Item = f32> {
+    (0..=SPAWN_RETRIES).map(move |attempt| base_z + attempt as f32 * SPAWN_RETRY_STEP)
+}
+
+/// Spawn height for a known ground height.
+fn spawn_height_above_ground(ground_z: f32) -> f32 {
+    ground_z + SPAWN_CLEARANCE
+}
+
+/// Spawn height when the ground could not be probed.
+///
+/// Keeps the commanded height if it is already plausible, rather than forcing everything to
+/// one flat value -- the old `z < 0.5 => 0.5` clamp buried vehicles on elevated roads and
+/// floated them in dips.
+fn fallback_spawn_height(commanded_z: f32) -> f32 {
+    commanded_z.max(FALLBACK_SPAWN_Z)
+}
 
 use crate::coordinate_conversion;
 use crate::entity_manager::{EntityManager, EntityType};
@@ -39,6 +88,10 @@ fn decide_frame_action(sync_mode_enabled: bool, has_ego: bool) -> FrameAction {
 }
 
 pub struct Coordinator {
+    /// Kept so the bridge can rebuild `world` after a CARLA outage.
+    client: Client,
+    carla_host: String,
+    carla_port: u16,
     world: World,
     entities: EntityManager,
     step_time: f64,
@@ -52,11 +105,25 @@ pub struct Coordinator {
     warned_unknown_entities: HashSet<String>,
     /// Whether `update_traffic_lights` has already logged its rejection. Same reason.
     warned_traffic_lights: bool,
+    /// Every CARLA actor this bridge created and has not confirmed destroyed.
+    ///
+    /// Deliberately separate from `EntityManager`, which is a name lookup that gets
+    /// emptied on despawn and on re-initialise. Tying teardown to it leaked every actor
+    /// whose name mapping was dropped first.
+    spawned_actors: HashSet<u32>,
+    /// Whether this bridge froze CARLA's traffic lights, so shutdown only unfreezes what
+    /// it actually froze. Set by phase 009 when freezing lands (invariant 3).
+    froze_traffic_lights: bool,
+    /// Consecutive CARLA operation failures, used to decide the connection is gone.
+    consecutive_carla_failures: u32,
 }
 
 impl Coordinator {
-    pub fn new(world: World) -> Self {
+    pub fn new(client: Client, world: World, carla_host: String, carla_port: u16) -> Self {
         Self {
+            client,
+            carla_host,
+            carla_port,
             world,
             entities: EntityManager::new(),
             step_time: 0.05,
@@ -64,7 +131,161 @@ impl Coordinator {
             has_ego: false,
             warned_unknown_entities: HashSet::new(),
             warned_traffic_lights: false,
+            spawned_actors: HashSet::new(),
+            froze_traffic_lights: false,
+            consecutive_carla_failures: 0,
         }
+    }
+
+    // --- Actor ownership -------------------------------------------------------------
+
+    /// Record an actor this bridge created, so teardown can find it later.
+    fn record_spawned(&mut self, actor_id: u32) {
+        self.spawned_actors.insert(actor_id);
+    }
+
+    /// Drop an actor from the teardown set once it is confirmed gone.
+    fn forget_spawned(&mut self, actor_id: u32) {
+        self.spawned_actors.remove(&actor_id);
+    }
+
+    /// Destroy every actor this bridge created that is still alive.
+    ///
+    /// Best effort throughout: CARLA may already be gone, and an actor that has vanished on
+    /// its own is a success -- the requested end state holds either way. Never panics, so it
+    /// is safe on the shutdown path.
+    pub fn destroy_all_spawned(&mut self) -> TeardownReport {
+        let mut report = TeardownReport {
+            attempted: self.spawned_actors.len(),
+            ..Default::default()
+        };
+
+        if report.attempted == 0 {
+            return report;
+        }
+
+        let ids: Vec<u32> = self.spawned_actors.iter().copied().collect();
+        for actor_id in ids {
+            match self.destroy_actor(actor_id) {
+                Ok(()) => {
+                    report.destroyed += 1;
+                    self.forget_spawned(actor_id);
+                }
+                Err(e) => {
+                    report.failed += 1;
+                    tracing::warn!("Teardown: failed to destroy actor {actor_id}: {e}");
+                }
+            }
+        }
+
+        tracing::info!(
+            "Teardown: {} spawned, {} destroyed, {} failed",
+            report.attempted,
+            report.destroyed,
+            report.failed
+        );
+        report
+    }
+
+    /// Destroy one actor by ID. A missing actor counts as destroyed.
+    fn destroy_actor(&self, actor_id: u32) -> Result<()> {
+        let actor = self
+            .world
+            .actor(actor_id)
+            .wrap_err_with(|| format!("look up actor {actor_id}"))?;
+
+        match actor {
+            Some(actor) => {
+                let destroyed = actor
+                    .destroy()
+                    .wrap_err_with(|| format!("destroy actor {actor_id}"))?;
+                if !destroyed {
+                    tracing::debug!("Actor {actor_id} was already destroyed");
+                }
+            }
+            None => tracing::debug!("Actor {actor_id} is no longer in the world"),
+        }
+        Ok(())
+    }
+
+    /// Undo the CARLA-wide changes this bridge made: destroy its actors, unfreeze traffic
+    /// lights it froze, and hand synchronous mode back.
+    ///
+    /// Safe to call more than once, and safe when CARLA has already gone away.
+    pub fn shutdown(&mut self) {
+        self.destroy_all_spawned();
+        self.restore_traffic_lights();
+        self.restore_async_mode();
+    }
+
+    /// Unfreeze CARLA's traffic lights, but only if this bridge froze them.
+    ///
+    /// Freezing arrives with phase 009. The guard is here now so that landing the freeze
+    /// cannot leave a shared CARLA server stuck on whatever states the last scenario left.
+    pub fn restore_traffic_lights(&mut self) {
+        if !self.froze_traffic_lights {
+            return;
+        }
+
+        match self.world.freeze_all_traffic_lights(false) {
+            Ok(()) => {
+                self.froze_traffic_lights = false;
+                tracing::info!("Traffic lights unfrozen; CARLA cycling restored");
+            }
+            Err(e) => tracing::warn!("Failed to unfreeze traffic lights: {e}"),
+        }
+    }
+
+    // --- CARLA connection ------------------------------------------------------------
+
+    /// Note a successful CARLA operation.
+    fn note_carla_ok(&mut self) {
+        self.consecutive_carla_failures = 0;
+    }
+
+    /// Note a failed CARLA operation; returns true once the connection looks lost.
+    fn note_carla_failure(&mut self) -> bool {
+        self.consecutive_carla_failures += 1;
+        self.consecutive_carla_failures >= MAX_CONSECUTIVE_CARLA_FAILURES
+    }
+
+    /// Rebuild the CARLA client and world after an outage.
+    ///
+    /// What survives is deliberately explicit:
+    ///
+    /// - **Synchronous mode does not.** A restarted server defaults to async, and even a
+    ///   surviving one is no longer known to hold our settings, so `sync_mode_enabled` is
+    ///   cleared and the next frame re-applies it (invariant 1).
+    /// - **Entity mappings do**, but may be stale. Actor IDs from a restarted server are
+    ///   meaningless; teardown treats a missing actor as already destroyed, so stale IDs
+    ///   cost a warning rather than a failure.
+    /// - **SSv2 sees failures** for every request made during the outage. It decides
+    ///   whether that ends the scenario; this bridge does not pretend the frames succeeded.
+    fn reconnect_carla(&mut self) -> Result<()> {
+        tracing::warn!(
+            "Reconnecting to CARLA at {}:{} after {} consecutive failures",
+            self.carla_host,
+            self.carla_port,
+            self.consecutive_carla_failures
+        );
+
+        let mut client = Client::connect(&self.carla_host, self.carla_port, None)
+            .map_err(|e| eyre::eyre!("connect: {e}"))?;
+        client
+            .set_timeout(Duration::from_secs(30))
+            .map_err(|e| eyre::eyre!("set timeout: {e}"))?;
+        let world = client.world().map_err(|e| eyre::eyre!("get world: {e}"))?;
+
+        self.client = client;
+        self.world = world;
+        self.consecutive_carla_failures = 0;
+
+        // Whatever CARLA we are now talking to, it is not holding our settings.
+        self.sync_mode_enabled = false;
+        self.froze_traffic_lights = false;
+
+        tracing::info!("Reconnected to CARLA; synchronous mode will be re-applied next frame");
+        Ok(())
     }
 
     pub fn initialize(&mut self, req: api::InitializeRequest) -> api::InitializeResponse {
@@ -86,7 +307,17 @@ impl Coordinator {
         self.warned_unknown_entities.clear();
         self.warned_traffic_lights = false;
 
-        // Clear any entities from previous runs
+        // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
+        // EntityManager first is what used to orphan them: the map was the only record of
+        // what to clean up, so emptying it leaked every actor it referenced, and those
+        // actors then blocked the spawn points this run needs.
+        let report = self.destroy_all_spawned();
+        if report.attempted > 0 {
+            tracing::info!(
+                "Initialize: cleaned up {} actor(s) from the previous run",
+                report.destroyed
+            );
+        }
         self.entities.clear();
 
         // The map named by the scenario is currently ignored -- whichever town CARLA
@@ -152,11 +383,22 @@ impl Coordinator {
 
         if let Err(e) = self.world.tick() {
             tracing::error!("world.tick() failed: {e}");
+
+            // A tick failure is the bridge's most reliable connection signal: SSv2 drives
+            // frames continuously, so repeated failures here mean CARLA is gone rather
+            // than merely idle.
+            if self.note_carla_failure() {
+                if let Err(re) = self.reconnect_carla() {
+                    tracing::error!("CARLA reconnection failed: {re}");
+                }
+            }
+
             return api::UpdateFrameResponse {
                 result: Some(proto_err(format!("tick failed: {e}"))),
             };
         }
 
+        self.note_carla_ok();
         api::UpdateFrameResponse {
             result: Some(proto_ok()),
         }
@@ -237,59 +479,88 @@ impl Coordinator {
             },
         };
 
-        // Ensure minimum spawn height to avoid ground collision
-        if carla_transform.location.z < 0.5 {
-            tracing::info!(
-                "Raising spawn Z from {:.1} to 0.5 to avoid ground collision",
-                carla_transform.location.z
-            );
-            carla_transform.location.z = 0.5;
-        }
+        // Place the vehicle just above the actual ground under the commanded x/y. The old
+        // flat `z < 0.5 => 0.5` clamp assumed a level map: on an elevated road it buried
+        // the vehicle, and in a dip it dropped one in from height.
+        carla_transform.location.z = self.resolve_spawn_height(&carla_transform.location);
 
-        // Determine blueprint name
-        let blueprint_key = if asset_key.is_empty() {
+        // Determine blueprint name, resolving fallbacks once up front so the retry loop
+        // below does not re-probe CARLA on every attempt.
+        let requested_key = if asset_key.is_empty() {
             "vehicle.tesla.model3"
         } else {
             asset_key.as_str()
         };
-
-        // Spawn using actor_builder
-        let mut builder = match self.world.actor_builder(blueprint_key) {
-            Ok(b) => b,
+        let blueprint_key = match self.resolve_blueprint_key(requested_key) {
+            Ok(k) => k,
             Err(e) => {
-                // Try a fallback blueprint
-                tracing::warn!(
-                    "Blueprint '{blueprint_key}' not found: {e}, trying vehicle.tesla.model3"
-                );
-                match self.world.actor_builder("vehicle.tesla.model3") {
-                    Ok(b) => b,
-                    Err(e2) => {
-                        return api::SpawnVehicleEntityResponse {
-                            result: Some(proto_err(format!("No valid blueprint: {e2}"))),
-                        };
-                    }
-                }
+                return api::SpawnVehicleEntityResponse {
+                    result: Some(proto_err(format!("Cannot spawn '{name}': {e}"))),
+                };
             }
         };
 
-        // Set role_name for ego so autoware_carla_bridge can find it
-        if is_ego {
-            match builder.set_attribute("role_name", "hero") {
-                Ok(b) => builder = b,
+        // Retry a colliding spawn at increasing height, same x/y. A leftover actor on the
+        // point is the usual cause; teardown now prevents most of those, and lifting clears
+        // the rest.
+        //
+        // ActorBuilder::spawn consumes the builder, so each attempt builds a fresh one.
+        let base_z = carla_transform.location.z;
+        let base_x = carla_transform.location.x;
+        let base_y = carla_transform.location.y;
+        let mut spawn_loc = carla_transform.location;
+        let mut last_error: Option<String> = None;
+        let mut actor = None;
+
+        for (attempt, z) in spawn_retry_heights(base_z).enumerate() {
+            let builder = match self.build_vehicle_actor(&blueprint_key, is_ego) {
+                Ok(b) => b,
                 Err(e) => {
                     return api::SpawnVehicleEntityResponse {
-                        result: Some(proto_err(format!("Failed to set role_name: {e}"))),
+                        result: Some(proto_err(format!("Cannot build '{name}': {e}"))),
                     };
+                }
+            };
+
+            let mut candidate = carla_transform.clone();
+            candidate.location.z = z;
+            let candidate_loc = candidate.location;
+
+            match builder.spawn(candidate) {
+                Ok(a) => {
+                    if attempt > 0 {
+                        tracing::info!(
+                            "Spawned '{name}' on attempt {} at z={z:.2} (commanded z={base_z:.2})",
+                            attempt + 1
+                        );
+                    }
+                    spawn_loc = candidate_loc;
+                    actor = Some(a);
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Spawn of '{name}' at z={z:.2} failed (attempt {}/{}): {e}",
+                        attempt + 1,
+                        SPAWN_RETRIES + 1
+                    );
+                    last_error = Some(e.to_string());
                 }
             }
         }
 
-        let spawn_loc = carla_transform.location;
-        let actor = match builder.spawn(carla_transform) {
-            Ok(a) => a,
-            Err(e) => {
+        let actor = match actor {
+            Some(a) => a,
+            None => {
+                let detail = last_error.unwrap_or_else(|| "no attempts were made".to_string());
                 return api::SpawnVehicleEntityResponse {
-                    result: Some(proto_err(format!("spawn failed: {e}"))),
+                    result: Some(proto_err(format!(
+                        "Failed to spawn '{name}' (blueprint '{blueprint_key}') at \
+                         CARLA({base_x:.1}, {base_y:.1}, {base_z:.1}) after {} attempts at \
+                         increasing height; last error: {detail}. A leftover actor may be \
+                         occupying the spawn point.",
+                        SPAWN_RETRIES + 1
+                    ))),
                 };
             }
         };
@@ -301,6 +572,10 @@ impl Coordinator {
         }
 
         let actor_id = actor.id();
+        // Record for teardown before anything else can fail. This is the only durable
+        // record of what to clean up; EntityManager is emptied on despawn and re-init.
+        self.record_spawned(actor_id);
+
         let entity_type = if is_ego {
             EntityType::Ego
         } else {
@@ -402,9 +677,13 @@ impl Coordinator {
                 })();
 
                 match outcome {
-                    Ok(()) => api::DespawnEntityResponse {
-                        result: Some(proto_ok()),
-                    },
+                    Ok(()) => {
+                        // Confirmed gone, so teardown no longer needs to chase it.
+                        self.forget_spawned(actor_id);
+                        api::DespawnEntityResponse {
+                            result: Some(proto_ok()),
+                        }
+                    }
                     Err(e) => api::DespawnEntityResponse {
                         result: Some(proto_err(format!("Failed to despawn '{name}': {e}"))),
                     },
@@ -626,6 +905,101 @@ impl Coordinator {
 
     // --- Private helpers ---
 
+    /// Height to spawn at for a commanded location.
+    ///
+    /// Takes the road height from the nearest driving-lane waypoint. Only the height is
+    /// used -- the commanded x/y is SSv2's to decide, and snapping the whole pose to lane
+    /// centre would silently move the vehicle off the scenario's mark.
+    ///
+    /// Falls back to the commanded height when there is no lane nearby, or when CARLA will
+    /// not answer.
+    fn resolve_spawn_height(&self, commanded: &Location) -> f32 {
+        let map = match self.world.map() {
+            Ok(m) => m,
+            Err(e) => {
+                let z = fallback_spawn_height(commanded.z);
+                tracing::warn!(
+                    "Could not read the map to resolve ground height ({e}); using z={z:.2}"
+                );
+                return z;
+            }
+        };
+
+        match map.waypoint_at(commanded) {
+            Ok(Some(waypoint)) => {
+                let road_z = waypoint.transform().location.z;
+                let z = spawn_height_above_ground(road_z);
+                tracing::debug!(
+                    "Road under ({:.1}, {:.1}) is z={road_z:.2}; spawning at z={z:.2}",
+                    commanded.x,
+                    commanded.y
+                );
+                z
+            }
+            Ok(None) => {
+                let z = fallback_spawn_height(commanded.z);
+                tracing::warn!(
+                    "No driving lane near ({:.1}, {:.1}); spawning at z={z:.2}",
+                    commanded.x,
+                    commanded.y
+                );
+                z
+            }
+            Err(e) => {
+                let z = fallback_spawn_height(commanded.z);
+                tracing::warn!("Waypoint lookup failed ({e}); spawning at z={z:.2}");
+                z
+            }
+        }
+    }
+
+    /// Pick a blueprint that CARLA will actually accept, falling back when the requested
+    /// one is unknown. Resolved once per spawn, before any retry.
+    fn resolve_blueprint_key(&mut self, requested: &str) -> Result<String> {
+        const FALLBACK_BLUEPRINT: &str = "vehicle.tesla.model3";
+
+        // The probe builder is dropped at the end of this statement, releasing the borrow
+        // on `world` before the next one is taken.
+        if self.world.actor_builder(requested).is_ok() {
+            return Ok(requested.to_string());
+        }
+
+        tracing::warn!(
+            "Blueprint '{requested}' not available; falling back to {FALLBACK_BLUEPRINT}"
+        );
+
+        self.world.actor_builder(FALLBACK_BLUEPRINT).map_err(|e| {
+            eyre::eyre!(
+                "neither '{requested}' nor '{FALLBACK_BLUEPRINT}' is a valid blueprint: {e}"
+            )
+        })?;
+
+        Ok(FALLBACK_BLUEPRINT.to_string())
+    }
+
+    /// Build a configured vehicle actor builder for an already-resolved blueprint.
+    ///
+    /// `ActorBuilder::spawn` consumes the builder, so a retry needs a fresh one each time.
+    fn build_vehicle_actor(
+        &mut self,
+        blueprint_key: &str,
+        is_ego: bool,
+    ) -> Result<carla::client::ActorBuilder<'_>> {
+        let mut builder = self
+            .world
+            .actor_builder(blueprint_key)
+            .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?;
+
+        // role_name is how acb_bridge finds the vehicle it is meant to serve.
+        if is_ego {
+            builder = builder
+                .set_attribute("role_name", "hero")
+                .map_err(|e| eyre::eyre!("set role_name: {e}"))?;
+        }
+
+        Ok(builder)
+    }
+
     fn read_actor_state(
         &self,
         actor_id: u32,
@@ -836,6 +1210,55 @@ mod tests {
             "description should point at the roadmap: {}",
             result.description
         );
+    }
+
+    // --- Phase 007: repeatable runs ---
+
+    /// Regression guard for B3/C2. The old code forced every spawn to z >= 0.5 regardless
+    /// of terrain, which buried vehicles on elevated roads.
+    #[test]
+    fn spawn_height_sits_above_the_road() {
+        assert!((spawn_height_above_ground(0.0) - SPAWN_CLEARANCE).abs() < 1e-6);
+        // An elevated road: the old flat clamp would have put the vehicle 10m underground.
+        assert!(spawn_height_above_ground(10.0) > 10.0);
+        // A road below the origin, which the old clamp raised into the air.
+        assert!(spawn_height_above_ground(-3.0) < 0.0);
+    }
+
+    #[test]
+    fn fallback_height_keeps_a_plausible_commanded_value() {
+        // Too low to be real: lift to the floor.
+        assert_eq!(fallback_spawn_height(0.0), FALLBACK_SPAWN_Z);
+        assert_eq!(fallback_spawn_height(-5.0), FALLBACK_SPAWN_Z);
+        // Already plausible: leave it alone rather than flattening it.
+        assert_eq!(fallback_spawn_height(12.0), 12.0);
+    }
+
+    #[test]
+    fn spawn_retries_only_raise_the_height() {
+        let heights: Vec<f32> = spawn_retry_heights(2.0).collect();
+
+        assert_eq!(
+            heights.len(),
+            SPAWN_RETRIES + 1,
+            "first attempt plus retries"
+        );
+        assert_eq!(
+            heights[0], 2.0,
+            "the first attempt uses the commanded height"
+        );
+        for pair in heights.windows(2) {
+            assert!(pair[1] > pair[0], "each retry must go higher: {heights:?}");
+        }
+    }
+
+    /// A teardown sweep with nothing recorded must not report phantom work.
+    #[test]
+    fn empty_teardown_reports_nothing() {
+        let report = TeardownReport::default();
+        assert_eq!(report.attempted, 0);
+        assert_eq!(report.destroyed, 0);
+        assert_eq!(report.failed, 0);
     }
 
     /// Whatever the message says, it must never be empty -- SSv2 surfaces this text and a

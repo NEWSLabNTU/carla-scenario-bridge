@@ -39,11 +39,28 @@ OpenDRIVE-derived `TrafficLight` actors share no ID space.
 
 ### Verify carla-rust coverage
 
-- [ ] Confirm `Client::load_world`, `TrafficLight::freeze` and `TrafficLight::set_state` are
-      exposed by carla-rust 0.14 — this was **not verified** when the design was written
-- [ ] If any binding is missing, add it upstream in
-      [carla-rust](https://github.com/jerry73204/carla-rust) before continuing
-- [ ] Record the outcome in the design doc's open-items section
+- [x] Confirm `Client::load_world`, `TrafficLight::freeze` and `TrafficLight::set_state` are
+      exposed — verified 2026-07-28 during phase 007
+- [x] If any binding is missing, add it upstream — **not needed**, everything required exists
+- [x] Record the outcome in the design doc's open-items section
+
+Note the crate in use is **not** crates.io `carla` 0.14.0: a `[patch.crates-io]` in the
+workspace root redirects to `jerry73204/carla-rust` rev `73f5e16`, whose API differs (every
+call returns `crate::Result<T>`). Check that source, not docs.rs.
+
+Confirmed available:
+
+| Need | API |
+|---|---|
+| Load a map | `Client::load_world`, `load_world_if_different`, `avaiable_maps` (upstream typo) |
+| Freeze signals | `World::freeze_all_traffic_lights(bool)`, `World::reset_all_traffic_lights()` |
+| Per-signal control | `TrafficLight::{freeze, is_frozen, set_state, state}` |
+| Signal discovery | `World::{traffic_light_at, traffic_light_from_open_drive, traffic_lights_in_junction, traffic_lights_from_waypoint}` |
+| Lanelet matching | `Map::{all_landmarks, landmarks_from_id, all_landmarks_of_type}`, `TrafficLight::{opendrive_id, sign_id, affected_lane_waypoints, stop_waypoints}` |
+
+`World::traffic_light_from_open_drive(sign_id)` is worth trying before position matching —
+if the Lanelet2 map preserves OpenDRIVE signal IDs, it makes the mapping exact rather than
+approximate.
 
 ### Signal mapping (gap 5)
 
