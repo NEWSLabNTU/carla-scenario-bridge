@@ -1,7 +1,7 @@
 use carla::client::{ActorBase, Client, World};
 use carla::geom::{Location, Rotation, Transform};
 use eyre::{Result, WrapErr};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 /// Minimum spawn height when the ground cannot be probed.
@@ -19,6 +19,70 @@ const SPAWN_RETRIES: usize = 4;
 
 /// Consecutive CARLA failures before the bridge concludes the connection is gone.
 const MAX_CONSECUTIVE_CARLA_FAILURES: u32 = 3;
+
+/// What is being spawned, and how it must behave once placed.
+///
+/// The distinction that matters is pose authority (invariant 5): the ego is driven by CARLA
+/// PhysX under Autoware's control, everything else is teleported by SSv2. An actor must
+/// never have both, which is what `physics_driven` decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnKind {
+    /// The scenario ego. CARLA PhysX moves it; Autoware steers it.
+    Ego,
+    /// A scenario NPC vehicle. SSv2 computes its path and teleports it each frame.
+    Npc,
+    /// A scenario pedestrian. Also teleported -- SSv2's behaviour plugins own the walk.
+    Pedestrian,
+    /// A static obstacle. Placed once and left alone unless SSv2 moves it.
+    MiscObject,
+}
+
+impl SpawnKind {
+    /// Blueprint used when the scenario's asset key does not name a CARLA blueprint.
+    fn default_blueprint(self) -> &'static str {
+        match self {
+            SpawnKind::Ego | SpawnKind::Npc => "vehicle.tesla.model3",
+            SpawnKind::Pedestrian => "walker.pedestrian.0001",
+            SpawnKind::MiscObject => "static.prop.streetbarrier",
+        }
+    }
+
+    fn entity_type(self) -> EntityType {
+        match self {
+            SpawnKind::Ego => EntityType::Ego,
+            SpawnKind::Npc => EntityType::Vehicle,
+            SpawnKind::Pedestrian => EntityType::Pedestrian,
+            SpawnKind::MiscObject => EntityType::MiscObject,
+        }
+    }
+
+    /// Whether CARLA physics drives this actor.
+    ///
+    /// False means SSv2 owns the pose, so CARLA physics is switched off at spawn. Leaving it
+    /// on gives the actor two authorities: `set_transform` places it, then PhysX pulls it
+    /// down and shoves it out of collisions before the next frame. The AWSIM pattern this
+    /// design follows makes puppeteered actors kinematic for exactly this reason.
+    fn physics_driven(self) -> bool {
+        matches!(self, SpawnKind::Ego)
+    }
+
+    /// `role_name` attribute, which is how `acb_bridge` finds the vehicle it serves.
+    fn role_name(self) -> Option<&'static str> {
+        match self {
+            SpawnKind::Ego => Some("hero"),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            SpawnKind::Ego => "ego",
+            SpawnKind::Npc => "NPC vehicle",
+            SpawnKind::Pedestrian => "pedestrian",
+            SpawnKind::MiscObject => "misc object",
+        }
+    }
+}
 
 /// Outcome of a teardown sweep, so the log can state what actually happened.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +106,28 @@ fn spawn_retry_heights(base_z: f32) -> impl Iterator<Item = f32> {
 /// Spawn height for a known ground height.
 fn spawn_height_above_ground(ground_z: f32) -> f32 {
     ground_z + SPAWN_CLEARANCE
+}
+
+/// Acceleration along the entity's heading, in m/s².
+///
+/// SSv2's `linear_jerk` is a signed scalar, so the acceleration vector has to be reduced to
+/// one axis first. Projecting onto the heading keeps the sign that matters -- positive when
+/// speeding up, negative when braking -- which the vector magnitude would throw away.
+///
+/// `yaw_rad` is the ROS-frame heading, so `ax`/`ay` must be ROS-frame too.
+fn longitudinal_acceleration(ax: f64, ay: f64, yaw_rad: f64) -> f64 {
+    ax * yaw_rad.cos() + ay * yaw_rad.sin()
+}
+
+/// Jerk from two consecutive longitudinal accelerations.
+///
+/// Returns 0.0 for a non-positive `dt`, which keeps a bad step time from producing an
+/// infinite or NaN jerk that SSv2 would then evaluate conditions against.
+fn jerk_from_acceleration(previous: f64, current: f64, dt: f64) -> f64 {
+    if dt <= 0.0 {
+        return 0.0;
+    }
+    (current - previous) / dt
 }
 
 /// Spawn height when the ground could not be probed.
@@ -116,6 +202,9 @@ pub struct Coordinator {
     froze_traffic_lights: bool,
     /// Consecutive CARLA operation failures, used to decide the connection is gone.
     consecutive_carla_failures: u32,
+    /// Last longitudinal acceleration seen per actor, so jerk can be differenced across
+    /// frames. CARLA reports acceleration but not its derivative.
+    previous_longitudinal_accel: HashMap<u32, f64>,
 }
 
 impl Coordinator {
@@ -134,7 +223,21 @@ impl Coordinator {
             spawned_actors: HashSet::new(),
             froze_traffic_lights: false,
             consecutive_carla_failures: 0,
+            previous_longitudinal_accel: HashMap::new(),
         }
+    }
+
+    /// Jerk for this actor, from the change in longitudinal acceleration since last frame.
+    ///
+    /// The first sample for an actor has nothing to difference against and reports 0.0.
+    fn differentiate_acceleration(&mut self, actor_id: u32, longitudinal: f64) -> f64 {
+        let jerk = match self.previous_longitudinal_accel.get(&actor_id) {
+            Some(&previous) => jerk_from_acceleration(previous, longitudinal, self.step_time),
+            None => 0.0,
+        };
+        self.previous_longitudinal_accel
+            .insert(actor_id, longitudinal);
+        jerk
     }
 
     // --- Actor ownership -------------------------------------------------------------
@@ -147,6 +250,9 @@ impl Coordinator {
     /// Drop an actor from the teardown set once it is confirmed gone.
     fn forget_spawned(&mut self, actor_id: u32) {
         self.spawned_actors.remove(&actor_id);
+        // Actor IDs are reused by CARLA, so a stale jerk sample would otherwise be
+        // differenced against a completely different entity.
+        self.previous_longitudinal_accel.remove(&actor_id);
     }
 
     /// Destroy every actor this bridge created that is still alive.
@@ -307,6 +413,10 @@ impl Coordinator {
         self.warned_unknown_entities.clear();
         self.warned_traffic_lights = false;
 
+        // Jerk is differenced across frames; carrying last run's samples into this one
+        // would report a spurious spike on the first frame.
+        self.previous_longitudinal_accel.clear();
+
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
         // EntityManager first is what used to orphan them: the map was the only record of
         // what to clean up, so emptying it leaked every actor it referenced, and those
@@ -448,22 +558,22 @@ impl Coordinator {
         }
     }
 
-    pub fn spawn_vehicle_entity(
+    /// Spawn one scenario entity into CARLA.
+    ///
+    /// Shared by all four entity kinds: the differences (blueprint fallback, `role_name`,
+    /// whether CARLA physics drives it) live in [`SpawnKind`] rather than in four copies of
+    /// this logic.
+    fn spawn_entity(
         &mut self,
-        req: api::SpawnVehicleEntityRequest,
-    ) -> api::SpawnVehicleEntityResponse {
-        let name = req
-            .parameters
-            .as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_default();
-        let is_ego = req.is_ego;
-        let asset_key = &req.asset_key;
-
-        tracing::info!("SpawnVehicle: name={name}, is_ego={is_ego}, asset_key={asset_key}");
+        name: &str,
+        asset_key: &str,
+        pose: Option<&Pose>,
+        kind: SpawnKind,
+    ) -> ProtoResult {
+        tracing::info!("Spawn {}: name={name}, asset_key={asset_key}", kind.label());
 
         // Convert pose from ROS to CARLA frame
-        let mut carla_transform = match req.pose.as_ref() {
+        let mut carla_transform = match pose {
             Some(pose) => ros_pose_to_carla_transform(pose),
             None => Transform {
                 location: Location {
@@ -479,25 +589,20 @@ impl Coordinator {
             },
         };
 
-        // Place the vehicle just above the actual ground under the commanded x/y. The old
-        // flat `z < 0.5 => 0.5` clamp assumed a level map: on an elevated road it buried
-        // the vehicle, and in a dip it dropped one in from height.
+        // Place just above the actual ground under the commanded x/y. The old flat
+        // `z < 0.5 => 0.5` clamp assumed a level map: on an elevated road it buried the
+        // actor, and in a dip it dropped one in from height.
         carla_transform.location.z = self.resolve_spawn_height(&carla_transform.location);
 
-        // Determine blueprint name, resolving fallbacks once up front so the retry loop
-        // below does not re-probe CARLA on every attempt.
+        // Resolve the blueprint once up front so the retry loop does not re-probe CARLA.
         let requested_key = if asset_key.is_empty() {
-            "vehicle.tesla.model3"
+            kind.default_blueprint()
         } else {
-            asset_key.as_str()
+            asset_key
         };
-        let blueprint_key = match self.resolve_blueprint_key(requested_key) {
+        let blueprint_key = match self.resolve_blueprint_key(requested_key, kind) {
             Ok(k) => k,
-            Err(e) => {
-                return api::SpawnVehicleEntityResponse {
-                    result: Some(proto_err(format!("Cannot spawn '{name}': {e}"))),
-                };
-            }
+            Err(e) => return proto_err(format!("Cannot spawn '{name}': {e}")),
         };
 
         // Retry a colliding spawn at increasing height, same x/y. A leftover actor on the
@@ -513,13 +618,9 @@ impl Coordinator {
         let mut actor = None;
 
         for (attempt, z) in spawn_retry_heights(base_z).enumerate() {
-            let builder = match self.build_vehicle_actor(&blueprint_key, is_ego) {
+            let builder = match self.build_actor(&blueprint_key, kind) {
                 Ok(b) => b,
-                Err(e) => {
-                    return api::SpawnVehicleEntityResponse {
-                        result: Some(proto_err(format!("Cannot build '{name}': {e}"))),
-                    };
-                }
+                Err(e) => return proto_err(format!("Cannot build '{name}': {e}")),
             };
 
             let mut candidate = carla_transform.clone();
@@ -553,17 +654,37 @@ impl Coordinator {
             Some(a) => a,
             None => {
                 let detail = last_error.unwrap_or_else(|| "no attempts were made".to_string());
-                return api::SpawnVehicleEntityResponse {
-                    result: Some(proto_err(format!(
-                        "Failed to spawn '{name}' (blueprint '{blueprint_key}') at \
-                         CARLA({base_x:.1}, {base_y:.1}, {base_z:.1}) after {} attempts at \
-                         increasing height; last error: {detail}. A leftover actor may be \
-                         occupying the spawn point.",
-                        SPAWN_RETRIES + 1
-                    ))),
-                };
+                return proto_err(format!(
+                    "Failed to spawn {} '{name}' (blueprint '{blueprint_key}') at \
+                     CARLA({base_x:.1}, {base_y:.1}, {base_z:.1}) after {} attempts at \
+                     increasing height; last error: {detail}. A leftover actor may be \
+                     occupying the spawn point.",
+                    kind.label(),
+                    SPAWN_RETRIES + 1
+                ));
             }
         };
+
+        let actor_id = actor.id();
+        // Record for teardown before anything else can fail. This is the only durable
+        // record of what to clean up; EntityManager is emptied on despawn and re-init.
+        self.record_spawned(actor_id);
+
+        // Hand pose authority to whoever owns it (invariant 5). For everything SSv2
+        // teleports, CARLA physics must be off, or PhysX fights set_transform every frame:
+        // gravity pulls the actor down and collision response shoves it out of position
+        // between ticks, while the pose reported back to SSv2 is the commanded one -- so
+        // the divergence is invisible to the scenario.
+        if !kind.physics_driven() {
+            if let Err(e) = actor.set_simulate_physics(false) {
+                // Not fatal, but the actor will not track its commanded pose properly.
+                tracing::warn!(
+                    "Could not disable physics on {} '{name}' (actor {actor_id}): {e}. \
+                     It may drift from its commanded pose.",
+                    kind.label()
+                );
+            }
+        }
 
         // Wait one tick for the actor to be fully initialized. Only meaningful once we
         // own the tick -- before sync mode is on, CARLA is advancing by itself.
@@ -571,33 +692,46 @@ impl Coordinator {
             let _ = self.world.tick();
         }
 
-        let actor_id = actor.id();
-        // Record for teardown before anything else can fail. This is the only durable
-        // record of what to clean up; EntityManager is emptied on despawn and re-init.
-        self.record_spawned(actor_id);
+        self.entities
+            .insert(name.to_string(), kind.entity_type(), actor_id);
 
-        let entity_type = if is_ego {
-            EntityType::Ego
-        } else {
-            EntityType::Vehicle
-        };
-        self.entities.insert(name.clone(), entity_type, actor_id);
-
-        if is_ego {
+        if kind == SpawnKind::Ego {
             // Releases the sync-mode gate: from the next UpdateFrame onward this bridge
             // owns the tick. See FrameAction.
             self.has_ego = true;
         }
 
         tracing::info!(
-            "Spawned vehicle '{name}' (actor_id={actor_id}, is_ego={is_ego}) at CARLA({:.1}, {:.1}, {:.1})",
+            "Spawned {} '{name}' (actor_id={actor_id}, blueprint='{blueprint_key}', \
+             physics={}) at CARLA({:.1}, {:.1}, {:.1})",
+            kind.label(),
+            kind.physics_driven(),
             spawn_loc.x,
             spawn_loc.y,
             spawn_loc.z
         );
 
+        proto_ok()
+    }
+
+    pub fn spawn_vehicle_entity(
+        &mut self,
+        req: api::SpawnVehicleEntityRequest,
+    ) -> api::SpawnVehicleEntityResponse {
+        let name = req
+            .parameters
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+        let kind = if req.is_ego {
+            SpawnKind::Ego
+        } else {
+            SpawnKind::Npc
+        };
+
+        let result = self.spawn_entity(&name, &req.asset_key, req.pose.as_ref(), kind);
         api::SpawnVehicleEntityResponse {
-            result: Some(proto_ok()),
+            result: Some(result),
         }
     }
 
@@ -611,15 +745,18 @@ impl Coordinator {
             .map(|p| p.name.clone())
             .unwrap_or_default();
 
-        // Rejected rather than stubbed. Returning success here would leave SSv2 believing
-        // the pedestrian exists: nothing lands in EntityManager, so update_entity_status
-        // takes its unknown-entity branch and echoes the requested pose straight back.
-        // SSv2 would then score conditions against a pedestrian that CARLA never had and
-        // Autoware's sensors cannot see. Implemented in roadmap phase 008.
-        tracing::warn!("SpawnPedestrian '{name}' rejected: not implemented (roadmap phase 008)");
-
+        // No AI walker controller. SSv2's behaviour plugins compute the walk and send a
+        // pose every frame, so a controller would be a second authority over the same
+        // actor (invariant 5). The walker is spawned kinematic and teleported, exactly
+        // like an NPC vehicle.
+        let result = self.spawn_entity(
+            &name,
+            &req.asset_key,
+            req.pose.as_ref(),
+            SpawnKind::Pedestrian,
+        );
         api::SpawnPedestrianEntityResponse {
-            result: Some(pedestrian_not_supported(&name)),
+            result: Some(result),
         }
     }
 
@@ -633,11 +770,14 @@ impl Coordinator {
             .map(|p| p.name.clone())
             .unwrap_or_default();
 
-        // Rejected rather than stubbed -- see spawn_pedestrian_entity for why.
-        tracing::warn!("SpawnMiscObject '{name}' rejected: not implemented (roadmap phase 008)");
-
+        let result = self.spawn_entity(
+            &name,
+            &req.asset_key,
+            req.pose.as_ref(),
+            SpawnKind::MiscObject,
+        );
         api::SpawnMiscObjectEntityResponse {
-            result: Some(misc_object_not_supported(&name)),
+            result: Some(result),
         }
     }
 
@@ -955,8 +1095,8 @@ impl Coordinator {
 
     /// Pick a blueprint that CARLA will actually accept, falling back when the requested
     /// one is unknown. Resolved once per spawn, before any retry.
-    fn resolve_blueprint_key(&mut self, requested: &str) -> Result<String> {
-        const FALLBACK_BLUEPRINT: &str = "vehicle.tesla.model3";
+    fn resolve_blueprint_key(&mut self, requested: &str, kind: SpawnKind) -> Result<String> {
+        let fallback = kind.default_blueprint();
 
         // The probe builder is dropped at the end of this statement, releasing the borrow
         // on `world` before the next one is taken.
@@ -964,26 +1104,30 @@ impl Coordinator {
             return Ok(requested.to_string());
         }
 
+        // SSv2 asset keys are not CARLA blueprint names in general. Where they happen to
+        // coincide this passes straight through; where they do not, falling back to the
+        // kind's default keeps the scenario running with a warning naming both. A real
+        // asset-key mapping table is config-driven and lands with phase 010.
         tracing::warn!(
-            "Blueprint '{requested}' not available; falling back to {FALLBACK_BLUEPRINT}"
+            "Blueprint '{requested}' is not a CARLA blueprint; falling back to '{fallback}' \
+             for this {}",
+            kind.label()
         );
 
-        self.world.actor_builder(FALLBACK_BLUEPRINT).map_err(|e| {
-            eyre::eyre!(
-                "neither '{requested}' nor '{FALLBACK_BLUEPRINT}' is a valid blueprint: {e}"
-            )
+        self.world.actor_builder(fallback).map_err(|e| {
+            eyre::eyre!("neither '{requested}' nor '{fallback}' is a valid blueprint: {e}")
         })?;
 
-        Ok(FALLBACK_BLUEPRINT.to_string())
+        Ok(fallback.to_string())
     }
 
-    /// Build a configured vehicle actor builder for an already-resolved blueprint.
+    /// Build a configured actor builder for an already-resolved blueprint.
     ///
     /// `ActorBuilder::spawn` consumes the builder, so a retry needs a fresh one each time.
-    fn build_vehicle_actor(
+    fn build_actor(
         &mut self,
         blueprint_key: &str,
-        is_ego: bool,
+        kind: SpawnKind,
     ) -> Result<carla::client::ActorBuilder<'_>> {
         let mut builder = self
             .world
@@ -991,9 +1135,9 @@ impl Coordinator {
             .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?;
 
         // role_name is how acb_bridge finds the vehicle it is meant to serve.
-        if is_ego {
+        if let Some(role) = kind.role_name() {
             builder = builder
-                .set_attribute("role_name", "hero")
+                .set_attribute("role_name", role)
                 .map_err(|e| eyre::eyre!("set role_name: {e}"))?;
         }
 
@@ -1001,7 +1145,7 @@ impl Coordinator {
     }
 
     fn read_actor_state(
-        &self,
+        &mut self,
         actor_id: u32,
     ) -> Option<(Pose, traffic_simulator_msgs::ActionStatus)> {
         let actors = self.world.actors().ok()?;
@@ -1025,7 +1169,18 @@ impl Coordinator {
         let (wx, wy, wz) = coordinate_conversion::carla_to_ros_angular_velocity(av.x, av.y, av.z);
         let (ax, ay, az) = coordinate_conversion::carla_to_ros_acceleration(acc.x, acc.y, acc.z);
 
+        // Longitudinal acceleration, then its rate of change. CARLA reports an acceleration
+        // vector but no jerk, so it is differenced across frames -- see
+        // `longitudinal_acceleration` for why the heading projection is used.
+        let yaw_rad = (t.rotation.yaw as f64).to_radians();
+        let longitudinal = longitudinal_acceleration(ax, ay, yaw_rad);
+        let linear_jerk = self.differentiate_acceleration(actor_id, longitudinal);
+
         let action_status = traffic_simulator_msgs::ActionStatus {
+            // Left empty deliberately. `current_action` names the behaviour-plugin action
+            // driving an entity, and SSv2 owns that for the NPCs it puppeteers -- their
+            // status is echoed back untouched. The ego has no SSv2 behaviour plugin: it is
+            // driven by Autoware, whose action has no equivalent in this field.
             current_action: String::new(),
             twist: Some(geometry_msgs::Twist {
                 linear: Some(geometry_msgs::Vector3 {
@@ -1045,13 +1200,16 @@ impl Coordinator {
                     y: ay,
                     z: az,
                 }),
+                // Angular acceleration stays zero: CARLA exposes angular velocity but not
+                // its derivative, and differencing it frame to frame is too noisy at a 20 Hz
+                // step to be worth reporting as truth. Known limitation.
                 angular: Some(geometry_msgs::Vector3 {
                     x: 0.0,
                     y: 0.0,
                     z: 0.0,
                 }),
             }),
-            linear_jerk: 0.0,
+            linear_jerk,
         };
 
         Some((pose, action_status))
@@ -1120,20 +1278,6 @@ fn not_implemented(what: &str, roadmap_doc: &str) -> ProtoResult {
     }
 }
 
-fn pedestrian_not_supported(name: &str) -> ProtoResult {
-    not_implemented(
-        &format!("Pedestrian entities (entity '{name}')"),
-        "008-entity-fidelity.md",
-    )
-}
-
-fn misc_object_not_supported(name: &str) -> ProtoResult {
-    not_implemented(
-        &format!("Misc object entities (entity '{name}')"),
-        "008-entity-fidelity.md",
-    )
-}
-
 fn traffic_lights_not_supported() -> ProtoResult {
     not_implemented("Traffic light control", "009-map-and-traffic-lights.md")
 }
@@ -1176,30 +1320,6 @@ mod tests {
     }
 
     // --- Phase 006: unimplemented features must reject, never report success ---
-
-    #[test]
-    fn pedestrian_spawn_is_rejected() {
-        let result = pedestrian_not_supported("ped_1");
-        assert!(!result.success);
-        assert!(
-            result.description.contains("ped_1"),
-            "description should name the entity: {}",
-            result.description
-        );
-        assert!(
-            result.description.contains("008-entity-fidelity.md"),
-            "description should point at the roadmap: {}",
-            result.description
-        );
-    }
-
-    #[test]
-    fn misc_object_spawn_is_rejected() {
-        let result = misc_object_not_supported("barrier_1");
-        assert!(!result.success);
-        assert!(result.description.contains("barrier_1"));
-        assert!(result.description.contains("008-entity-fidelity.md"));
-    }
 
     #[test]
     fn traffic_light_update_is_rejected() {
@@ -1252,6 +1372,83 @@ mod tests {
         }
     }
 
+    // --- Phase 008: entity fidelity ---
+
+    /// Regression guard for C1, the whole point of the phase. Anything SSv2 teleports must
+    /// have CARLA physics off, or PhysX and `set_transform` both drive the same actor.
+    #[test]
+    fn only_the_ego_is_physics_driven() {
+        assert!(SpawnKind::Ego.physics_driven());
+        assert!(!SpawnKind::Npc.physics_driven());
+        assert!(!SpawnKind::Pedestrian.physics_driven());
+        assert!(!SpawnKind::MiscObject.physics_driven());
+    }
+
+    /// `acb_bridge` finds its vehicle by role_name. Only the ego should carry one -- an NPC
+    /// tagged `hero` would be picked up by a bridge as if it were an Autoware vehicle.
+    #[test]
+    fn only_the_ego_carries_a_role_name() {
+        assert_eq!(SpawnKind::Ego.role_name(), Some("hero"));
+        assert_eq!(SpawnKind::Npc.role_name(), None);
+        assert_eq!(SpawnKind::Pedestrian.role_name(), None);
+        assert_eq!(SpawnKind::MiscObject.role_name(), None);
+    }
+
+    #[test]
+    fn each_kind_maps_to_its_entity_type() {
+        assert_eq!(SpawnKind::Ego.entity_type(), EntityType::Ego);
+        assert_eq!(SpawnKind::Npc.entity_type(), EntityType::Vehicle);
+        assert_eq!(SpawnKind::Pedestrian.entity_type(), EntityType::Pedestrian);
+        assert_eq!(SpawnKind::MiscObject.entity_type(), EntityType::MiscObject);
+    }
+
+    /// A pedestrian must not fall back to a car, nor a prop to a walker.
+    #[test]
+    fn fallback_blueprints_match_their_kind() {
+        assert!(SpawnKind::Ego.default_blueprint().starts_with("vehicle."));
+        assert!(SpawnKind::Npc.default_blueprint().starts_with("vehicle."));
+        assert!(SpawnKind::Pedestrian
+            .default_blueprint()
+            .starts_with("walker."));
+        assert!(SpawnKind::MiscObject
+            .default_blueprint()
+            .starts_with("static."));
+    }
+
+    /// Jerk needs a signed scalar, so acceleration is projected onto the heading. The
+    /// magnitude would report braking and accelerating identically.
+    #[test]
+    fn longitudinal_acceleration_keeps_its_sign() {
+        // Heading +x: accelerating forward is positive, braking negative.
+        assert!((longitudinal_acceleration(2.0, 0.0, 0.0) - 2.0).abs() < 1e-9);
+        assert!((longitudinal_acceleration(-2.0, 0.0, 0.0) + 2.0).abs() < 1e-9);
+
+        // Heading +y (90 deg): the y component is now the longitudinal one.
+        let yaw = std::f64::consts::FRAC_PI_2;
+        assert!((longitudinal_acceleration(0.0, 3.0, yaw) - 3.0).abs() < 1e-9);
+
+        // Pure lateral acceleration is not longitudinal at all.
+        assert!(longitudinal_acceleration(0.0, 5.0, 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn jerk_is_the_rate_of_change_of_acceleration() {
+        // 0 -> 1 m/s^2 over 0.05 s is 20 m/s^3.
+        assert!((jerk_from_acceleration(0.0, 1.0, 0.05) - 20.0).abs() < 1e-9);
+        // Steady acceleration means no jerk.
+        assert!(jerk_from_acceleration(2.0, 2.0, 0.05).abs() < 1e-9);
+        // Easing off produces negative jerk.
+        assert!(jerk_from_acceleration(2.0, 1.0, 0.05) < 0.0);
+    }
+
+    /// A zero or negative step time must not produce an infinity or NaN that SSv2 would
+    /// then evaluate conditions against.
+    #[test]
+    fn jerk_is_finite_for_a_bad_step_time() {
+        assert_eq!(jerk_from_acceleration(0.0, 1.0, 0.0), 0.0);
+        assert_eq!(jerk_from_acceleration(0.0, 1.0, -0.05), 0.0);
+    }
+
     /// A teardown sweep with nothing recorded must not report phantom work.
     #[test]
     fn empty_teardown_reports_nothing() {
@@ -1265,12 +1462,7 @@ mod tests {
     /// bare failure with no reason is what phase 006 exists to eliminate.
     #[test]
     fn rejections_always_explain_themselves() {
-        for result in [
-            pedestrian_not_supported("x"),
-            misc_object_not_supported("x"),
-            traffic_lights_not_supported(),
-            sensor_not_supported(),
-        ] {
+        for result in [traffic_lights_not_supported(), sensor_not_supported()] {
             assert!(!result.success);
             assert!(!result.description.is_empty());
         }

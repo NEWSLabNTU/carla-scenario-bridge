@@ -36,49 +36,84 @@ Any SSv2 condition reading action state or jerk is reading a constant, not the s
 
 ### NPC physics (C1)
 
-- [ ] Disable physics on scenario NPCs at spawn, so `set_transform` is the only authority
-- [ ] Decide and document the pedestrian equivalent — CARLA walkers differ from vehicles
+- [x] Disable physics on scenario NPCs at spawn, so `set_transform` is the only authority
+- [x] Decide and document the pedestrian equivalent — CARLA walkers differ from vehicles
 - [ ] Verify the commanded pose and CARLA's reported pose agree within tolerance after a tick
-- [ ] Document the consequence in the design doc: NPC-to-NPC and NPC-to-ego collisions are
+- [x] Document the consequence in the design doc: NPC-to-NPC and NPC-to-ego collisions are
       not simulated by CARLA, matching AWSIM; SSv2 owns collision detection
+
+Pose authority is now a property of the entity kind rather than scattered `is_ego` checks.
+`SpawnKind::physics_driven()` is true only for the ego; everything else gets
+`set_simulate_physics(false)` at spawn. Walkers need no special handling — SSv2 sends a pose
+every frame, so they are teleported exactly like NPC vehicles.
+
+The verification item stays open: it needs a live CARLA.
 
 ### Pedestrians (A1)
 
-- [ ] `spawn_pedestrian_entity` spawns a CARLA walker at the converted pose
-- [ ] Register in `EntityManager` as `EntityType::Pedestrian`
-- [ ] `update_entity_status` drives walkers by pose, consistent with the NPC path
-- [ ] Walker despawn works through the existing `despawn_entity`
-- [ ] Decide whether an AI walker controller is used at all — under SSv2 authority it should
-      not be, since SSv2 computes the path
+- [x] `spawn_pedestrian_entity` spawns a CARLA walker at the converted pose
+- [x] Register in `EntityManager` as `EntityType::Pedestrian`
+- [x] `update_entity_status` drives walkers by pose, consistent with the NPC path
+- [x] Walker despawn works through the existing `despawn_entity`
+- [x] Decide whether an AI walker controller is used at all
+
+**No AI walker controller.** SSv2's behaviour plugins compute the walk and send a pose every
+frame; a controller would be a second authority over the same actor. `update_entity_status`
+and `despawn_entity` are kind-agnostic and needed no change.
 
 ### Misc objects (A2)
 
-- [ ] `spawn_misc_object_entity` spawns a static prop
-- [ ] Register as `EntityType::MiscObject`
-- [ ] Map SSv2 asset keys to CARLA prop blueprints, with a documented fallback
-- [ ] Static objects are not teleported per frame unless SSv2 moves them
+- [x] `spawn_misc_object_entity` spawns a static prop
+- [x] Register as `EntityType::MiscObject`
+- [x] Map SSv2 asset keys to CARLA prop blueprints, with a documented fallback
+- [x] Static objects are not teleported per frame unless SSv2 moves them
 
 ### Ego readback fidelity (C3)
 
-- [ ] Populate `current_action` from real state, or document why empty is correct
-- [ ] Compute `linear_jerk` from acceleration history, or document why zero is acceptable
-- [ ] Populate angular acceleration, or document the omission
-- [ ] Whatever is left constant is recorded as a known limitation, not left silent
+- [x] Populate `current_action` from real state, or document why empty is correct
+- [x] Compute `linear_jerk` from acceleration history
+- [x] Populate angular acceleration, or document the omission
+- [x] Whatever is left constant is recorded as a known limitation, not left silent
+
+`current_action` **stays empty, deliberately**: it names the behaviour-plugin action driving
+an entity, SSv2 owns that for the NPCs it puppeteers (their status is echoed back untouched),
+and the ego has no SSv2 behaviour plugin — it is driven by Autoware, whose action has no
+equivalent in this field.
+
+`linear_jerk` is now real. CARLA reports acceleration but not its derivative, so acceleration
+is projected onto the heading to get a signed longitudinal scalar and differenced across
+frames. The projection matters: the vector magnitude would report braking and accelerating
+identically. A non-positive step time yields 0.0 rather than an infinity SSv2 would evaluate
+conditions against.
+
+**Angular acceleration remains zero — a known limitation.** CARLA exposes angular velocity but
+not its derivative, and differencing it at a 20 Hz step is too noisy to report as truth.
 
 ### Blueprint mapping
 
-- [ ] SSv2 asset key → CARLA blueprint resolution for all four entity types
-- [ ] Unresolvable keys log a warning naming the key and the fallback used
-- [ ] Depends on config loading from [010](010-multi-instance.md); until then the mapping
-      table lives in code with a TODO pointing at that phase
+- [x] SSv2 asset key → CARLA blueprint resolution for all four entity types
+- [x] Unresolvable keys log a warning naming the key and the fallback used
+- [x] Depends on config loading from [010](010-multi-instance.md); mapping lives in code
+      with a pointer to that phase
+
+Fallbacks are per kind, so a pedestrian cannot fall back to a car nor a prop to a walker —
+covered by a test. SSv2 asset keys are not CARLA blueprint names in general; where they
+coincide they pass through, otherwise the kind default applies with a warning naming both.
 
 ### Tests
 
+- [x] Unit: only the ego is physics-driven, and only the ego carries a `role_name`
+- [x] Unit: each kind maps to its `EntityType` and to a same-family fallback blueprint
+- [x] Unit: longitudinal projection keeps its sign; jerk is a rate and stays finite
 - [ ] Unit: asset key → blueprint resolution, including fallback and unknown-key paths
 - [ ] Integration: spawned pedestrian appears in CARLA and tracks its commanded pose
 - [ ] Integration: spawned misc object appears and stays put
 - [ ] Integration: NPC pose after a tick matches the commanded pose within tolerance
 - [ ] Integration: all three types despawn cleanly, no leak (ties to 007)
+
+`resolve_blueprint_key` probes CARLA, so it cannot be unit-tested without a live server —
+same `Coordinator` constructibility problem noted in [007](007-repeatable-runs.md). The
+kind→fallback mapping it depends on *is* tested.
 
 ## Acceptance Criteria
 
@@ -87,5 +122,9 @@ Any SSv2 condition reading action state or jerk is reading a constant, not the s
 - [ ] NPC vehicles follow their scripted trajectory without sinking, jittering or drifting
 - [ ] A misc object appears as an obstacle Autoware perceives
 - [ ] Every entity type spawns, updates and despawns without leaking
-- [ ] No handler introduced here returns success without acting
-- [ ] `just test` passes
+- [x] No handler introduced here returns success without acting
+- [x] `just test` passes
+
+Every scenario-level criterion needs a live CARLA and remains unverified. The C1 physics fix
+in particular was predicted from CARLA semantics, never observed — confirming that an NPC
+now tracks its commanded pose is the single most valuable thing to check first.

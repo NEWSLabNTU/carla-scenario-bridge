@@ -64,6 +64,21 @@ background AV with SSv2 as a **misc-object entity** whose pose `csb_bridge` writ
 readback every frame. SSv2 then tracks them without trying to control them. That is the same
 read-PhysX-report-to-SSv2 path already used for the ego, so no new machinery is required.
 
+### Consequence: puppeteered actors are kinematic
+
+Everything SSv2 teleports — NPC vehicles, pedestrians, misc objects — is spawned with CARLA
+physics **disabled**. Invariant 5 demands it: with physics on, `set_transform` places the
+actor and PhysX then pulls it down and shoves it out of collisions before the next frame, so
+two authorities drive one actor. Worse, the pose reported back to SSv2 is the commanded one,
+so the divergence is invisible to the scenario.
+
+The cost is that CARLA simulates no collisions for these actors. An NPC can pass through
+another NPC, or through the ego, without CARLA reacting. This matches AWSIM, where SSv2 owns
+collision detection through its own bounding-box checks rather than the simulator's physics.
+
+The ego is the exception and keeps physics: Autoware drives it, CARLA moves it, and its pose
+is read back rather than commanded.
+
 ### Why no Traffic Manager
 
 TM-driven ambient traffic would give realistic physics and light-obeying behaviour, but makes
