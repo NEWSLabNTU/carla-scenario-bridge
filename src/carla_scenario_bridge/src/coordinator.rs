@@ -9,10 +9,43 @@ use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs;
 
+/// What an `UpdateFrame` should do, given how far startup has progressed.
+///
+/// CARLA synchronous mode cannot be enabled at `Initialize`. `acb_bridge` discovers its
+/// vehicle by polling `world.actors()`, which needs CARLA advancing on its own; but in
+/// sync mode nothing advances until someone ticks, and this bridge does not tick until
+/// SSv2 sends a frame, and SSv2 sends no frame until the ego exists. Enabling sync mode
+/// early deadlocks all three. So we stay async until the ego has been spawned, then
+/// switch on the first frame after it.
+///
+/// See `docs/design/multi-instance-architecture.md` (gap 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameAction {
+    /// No ego yet. Leave CARLA free-running so `acb_bridge` can poll for its vehicle.
+    WaitForEgo,
+    /// Ego exists and this is the first frame since. Enable sync mode, then tick.
+    EnableSyncThenTick,
+    /// Steady state.
+    Tick,
+}
+
+fn decide_frame_action(sync_mode_enabled: bool, has_ego: bool) -> FrameAction {
+    match (sync_mode_enabled, has_ego) {
+        (true, _) => FrameAction::Tick,
+        (false, true) => FrameAction::EnableSyncThenTick,
+        (false, false) => FrameAction::WaitForEgo,
+    }
+}
+
 pub struct Coordinator {
     world: World,
     entities: EntityManager,
     step_time: f64,
+    /// Whether this bridge has switched CARLA into synchronous mode. Also gates the
+    /// cleanup path: we must not restore async mode we never left.
+    sync_mode_enabled: bool,
+    /// Whether an ego vehicle has been spawned. See [`FrameAction`].
+    has_ego: bool,
 }
 
 impl Coordinator {
@@ -21,6 +54,8 @@ impl Coordinator {
             world,
             entities: EntityManager::new(),
             step_time: 0.05,
+            sync_mode_enabled: false,
+            has_ego: false,
         }
     }
 
@@ -33,34 +68,59 @@ impl Coordinator {
 
         self.step_time = req.step_time;
 
-        let mut settings = match self.world.settings() {
-            Ok(s) => s,
-            Err(e) => {
-                return api::InitializeResponse {
-                    result: Some(proto_err(format!("Failed to get settings: {e}"))),
-                };
-            }
-        };
-
-        settings.synchronous_mode = true;
-        settings.fixed_delta_seconds = Some(req.step_time);
-
-        if let Err(e) = self.world.apply_settings(&settings, Duration::from_secs(10)) {
-            return api::InitializeResponse {
-                result: Some(proto_err(format!("Failed to apply settings: {e}"))),
-            };
-        }
+        // Deliberately NOT enabling synchronous mode here -- see FrameAction. CARLA must
+        // keep free-running until the ego exists, or acb_bridge can never discover it.
+        self.sync_mode_enabled = false;
+        self.has_ego = false;
 
         // Clear any entities from previous runs
         self.entities.clear();
 
-        tracing::info!("CARLA sync mode enabled, fixed_delta_seconds={}", req.step_time);
+        tracing::info!(
+            "Initialized (step_time={}). CARLA left in async mode until the ego is spawned.",
+            req.step_time
+        );
         api::InitializeResponse {
             result: Some(proto_ok()),
         }
     }
 
+    /// Switch CARLA into synchronous mode at `self.step_time`.
+    fn enable_sync_mode(&mut self) -> Result<()> {
+        let mut settings = self.world.settings().wrap_err("get settings")?;
+        settings.synchronous_mode = true;
+        settings.fixed_delta_seconds = Some(self.step_time);
+        self.world
+            .apply_settings(&settings, Duration::from_secs(10))
+            .wrap_err("apply settings")?;
+        self.sync_mode_enabled = true;
+        tracing::info!(
+            "CARLA sync mode enabled, fixed_delta_seconds={}",
+            self.step_time
+        );
+        Ok(())
+    }
+
     pub fn update_frame(&mut self, _req: api::UpdateFrameRequest) -> api::UpdateFrameResponse {
+        match decide_frame_action(self.sync_mode_enabled, self.has_ego) {
+            FrameAction::WaitForEgo => {
+                // CARLA is still free-running so acb_bridge can find its vehicle. Ticking
+                // here would be meaningless in async mode, so just acknowledge the frame.
+                tracing::debug!("UpdateFrame before ego spawn: staying async, not ticking");
+                return api::UpdateFrameResponse {
+                    result: Some(proto_ok()),
+                };
+            }
+            FrameAction::EnableSyncThenTick => {
+                if let Err(e) = self.enable_sync_mode() {
+                    return api::UpdateFrameResponse {
+                        result: Some(proto_err(format!("Failed to enable sync mode: {e}"))),
+                    };
+                }
+            }
+            FrameAction::Tick => {}
+        }
+
         if let Err(e) = self.world.tick() {
             tracing::error!("world.tick() failed: {e}");
             return api::UpdateFrameResponse {
@@ -78,6 +138,20 @@ impl Coordinator {
         req: api::UpdateStepTimeRequest,
     ) -> api::UpdateStepTimeResponse {
         self.step_time = req.simulation_step_time;
+
+        // Before sync mode is on, just remember the value. Applying fixed_delta_seconds
+        // while still async would pin CARLA to a fixed timestep without a ticker, which
+        // is not what "async until the ego spawns" means. enable_sync_mode() picks up
+        // self.step_time when it runs.
+        if !self.sync_mode_enabled {
+            tracing::info!(
+                "Recorded step_time={} (applies when sync mode is enabled)",
+                req.simulation_step_time
+            );
+            return api::UpdateStepTimeResponse {
+                result: Some(proto_ok()),
+            };
+        }
 
         let mut settings = match self.world.settings() {
             Ok(s) => s,
@@ -182,8 +256,11 @@ impl Coordinator {
             }
         };
 
-        // Wait one tick for actor to be fully initialized in sync mode
-        let _ = self.world.tick();
+        // Wait one tick for the actor to be fully initialized. Only meaningful once we
+        // own the tick -- before sync mode is on, CARLA is advancing by itself.
+        if self.sync_mode_enabled {
+            let _ = self.world.tick();
+        }
 
         let actor_id = actor.id();
         let entity_type = if is_ego {
@@ -192,6 +269,12 @@ impl Coordinator {
             EntityType::Vehicle
         };
         self.entities.insert(name.clone(), entity_type, actor_id);
+
+        if is_ego {
+            // Releases the sync-mode gate: from the next UpdateFrame onward this bridge
+            // owns the tick. See FrameAction.
+            self.has_ego = true;
+        }
 
         tracing::info!(
             "Spawned vehicle '{name}' (actor_id={actor_id}, is_ego={is_ego}) at CARLA({:.1}, {:.1}, {:.1})",
@@ -403,7 +486,15 @@ impl Coordinator {
     }
 
     /// Restore async mode so CARLA isn't stuck waiting for ticks on exit.
+    ///
+    /// No-op if we never enabled sync mode -- CARLA may be shared with other clients and
+    /// we should not rewrite settings we did not set.
     pub fn restore_async_mode(&mut self) {
+        if !self.sync_mode_enabled {
+            tracing::info!("Sync mode was never enabled; leaving CARLA settings untouched");
+            return;
+        }
+
         match self.world.settings() {
             Ok(mut settings) => {
                 settings.synchronous_mode = false;
@@ -411,6 +502,7 @@ impl Coordinator {
                 if let Err(e) = self.world.apply_settings(&settings, Duration::from_secs(10)) {
                     tracing::warn!("Failed to restore async mode: {e}");
                 } else {
+                    self.sync_mode_enabled = false;
                     tracing::info!("Restored CARLA to async mode");
                 }
             }
@@ -516,5 +608,43 @@ fn sensor_not_supported() -> ProtoResult {
     ProtoResult {
         success: false,
         description: "CARLA sensors provided by autoware_carla_bridge".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression guard for gap 1. Enabling sync mode at Initialize deadlocks startup:
+    /// acb_bridge polls for its vehicle and needs CARLA free-running, but in sync mode
+    /// nothing advances until this bridge ticks, and this bridge does not tick until
+    /// SSv2 sends a frame, which SSv2 will not do until the ego exists.
+    #[test]
+    fn frames_before_the_ego_spawns_do_not_tick() {
+        assert_eq!(
+            decide_frame_action(false, false),
+            FrameAction::WaitForEgo,
+            "CARLA must stay async until the ego exists, or acb_bridge can never find it"
+        );
+    }
+
+    #[test]
+    fn the_first_frame_after_the_ego_spawns_enables_sync_mode() {
+        assert_eq!(
+            decide_frame_action(false, true),
+            FrameAction::EnableSyncThenTick
+        );
+    }
+
+    #[test]
+    fn later_frames_only_tick() {
+        assert_eq!(decide_frame_action(true, true), FrameAction::Tick);
+    }
+
+    /// Sync mode is enabled exactly once. Should the ego flag ever be cleared without
+    /// leaving sync mode, keep ticking rather than re-applying world settings mid-run.
+    #[test]
+    fn sync_mode_is_not_re_enabled() {
+        assert_eq!(decide_frame_action(true, false), FrameAction::Tick);
     }
 }

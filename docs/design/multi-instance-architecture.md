@@ -274,9 +274,9 @@ Verified against `carla-scenario-bridge@5890cae` and `autoware_carla_bridge@c384
 
 | # | Gap | Where | Invariant |
 |---|---|---|---|
-| 1 | Sync mode enabled at `Initialize`, not deferred | `coordinator.rs:45` | 1 |
-| 2 | `/clock` published unconditionally; no `publish_clock` param | `acb_bridge/src/main.rs:595` | 4 |
-| 3 | Sensor stamps use `data.timestamp()` (CARLA server uptime) | `acb_bridge/src/bridge/sensor_bridge.rs`, 5 sites | — |
+| 1 | ~~Sync mode enabled at `Initialize`, not deferred~~ **fixed** | `coordinator.rs` — `FrameAction` state machine | 1 |
+| 2 | ~~`/clock` published unconditionally; no `publish_clock` param~~ **fixed** | `acb_bridge/src/main.rs`, `acb_bridge.launch.xml` | 4 |
+| 3 | ~~Sensor stamps use `data.timestamp()` (CARLA server uptime)~~ **fixed** | `acb_bridge/src/bridge/sensor_bridge.rs`, 5 sites | — |
 | 4 | `lanelet2_map_path` ignored; no `load_world()` | `coordinator.rs::initialize` | — |
 | 5 | `update_traffic_lights` is a stub; CARLA cycling never frozen | `coordinator.rs:395` | 3 |
 | 6 | `TrafficLightBridge` is dead code | `acb_bridge/src/bridge/trafficlight_bridge.rs` | 3 |
@@ -286,7 +286,21 @@ Verified against `carla-scenario-bridge@5890cae` and `autoware_carla_bridge@c384
 | 10 | `--web-addr 0.0.0.0:8082` hardcoded in the concealer patch | SSv2 `external/concealer/include/concealer/launch.hpp` | — |
 | 11 | Ego respawn unimplemented | `acb_bridge/src/main.rs:564` | — |
 
-Gaps 1, 2 and 3 are regressions of work that was done and lost, not new features.
+Gaps 1, 2 and 3 were regressions of work that was done and lost, not new features. Fixed
+2026-07-28, each with a unit test so losing the fix fails the build:
+
+- **Gap 1** — `coordinator.rs` no longer touches world settings in `initialize()`. A
+  `FrameAction` state machine keeps CARLA async until the ego is spawned, enables sync mode on
+  the first `UpdateFrame` after it, and ticks thereafter. `update_step_time` only applies
+  settings once sync mode is on; `restore_async_mode` is a no-op if we never enabled it.
+- **Gap 2** — `publish_clock` bool parameter on `acb_bridge` (default `true`), plumbed through
+  `acb_bridge.launch.xml` and set to `false` in `csb_launch/demo.launch.xml` where SSv2 owns
+  `/clock`. A `ClockEpoch` helper rebases CARLA server uptime onto scenario time and resets on
+  reconnect.
+- **Gap 3** — all five sensor callbacks stamp from `utils::create_ros_header_from_node`, which
+  reads the node's ROS clock. `autoware.tick()` and `vehicle_control.publish_status()` take the
+  same source. The old helper is renamed `create_ros_header_from_epoch_seconds` so the two
+  remaining callers in the dead `vehicle_bridge.rs` are explicit about owning their epoch.
 
 ### Open items requiring verification
 

@@ -13,9 +13,13 @@
     <arg name="ssv2_port" value="$(var ssv2_port)" />
   </include>
 
-  <!-- 2. autoware_carla_bridge (CARLA sensors + vehicle interface to ROS 2) -->
+  <!-- 2. autoware_carla_bridge (CARLA sensors + vehicle interface to ROS 2)
+       publish_clock=false: SSv2's traffic_simulator owns /clock in this domain. A second
+       publisher makes every localization node log "Detected jump back in time. Clearing
+       TF buffer". See docs/design/multi-instance-architecture.md. -->
   <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
     <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="publish_clock" value="false" />
   </include>
 
   <!-- 3. SSv2 scenario runner + Autoware (concealer launches Autoware internally) -->
