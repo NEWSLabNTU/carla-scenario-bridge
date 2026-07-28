@@ -47,7 +47,14 @@ For now, implement weather control as a **custom extension**:
 - Map to CARLA's `world.set_weather(WeatherParameters(...))`:
   - `cloudiness`, `precipitation`, `fog_density`, `sun_altitude_angle`, `wetness`, etc.
 
-### Ambient Background Traffic (Optional)
+### Ambient Background Traffic (REJECTED)
+
+> **Superseded 2026-07-28.** CARLA's Traffic Manager is not used in any role — see
+> [design/multi-instance-architecture.md](../design/multi-instance-architecture.md#why-no-traffic-manager).
+> TM-driven traffic makes scenario execution non-deterministic and SSv2's position and timing
+> conditions unreliable. Every moving actor is either scripted by the `.xosc` or driven by a
+> real Autoware stack (a *background AV*). The tasks and criteria below are retained for
+> context and are not to be implemented.
 
 CARLA's Traffic Manager can provide realistic background traffic alongside SSv2-controlled scenario actors:
 
@@ -80,11 +87,15 @@ CARLA's Traffic Manager can provide realistic background traffic alongside SSv2-
 - [ ] Implement `set_weather()` call on `Initialize` (static weather from config)
 - [ ] Optional: handle weather changes via `CustomCommandAction` or ROS parameter
 
-### Ambient Traffic (Optional)
-- [ ] Config option: `ambient_traffic.enabled`, `ambient_traffic.num_vehicles`
-- [ ] Spawn ambient NPCs with `set_autopilot(True)` after `Initialize`
-- [ ] Destroy ambient NPCs on shutdown
-- [ ] Verify ambient NPCs don't collide with scenario entities
+### Ambient Traffic (REJECTED — do not implement)
+- ~~Config option: `ambient_traffic.enabled`, `ambient_traffic.num_vehicles`~~
+- ~~Spawn ambient NPCs with `set_autopilot(True)` after `Initialize`~~
+- ~~Destroy ambient NPCs on shutdown~~
+- ~~Verify ambient NPCs don't collide with scenario entities~~
+
+Replaced by background AVs — real Autoware stacks in their own ROS domains, spawned by
+`csb_bridge` from `bridge_config.yaml`. See
+[design/multi-instance-architecture.md](../design/multi-instance-architecture.md#actor-classes).
 
 ## Acceptance Criteria
 
@@ -96,4 +107,4 @@ CARLA's Traffic Manager can provide realistic background traffic alongside SSv2-
 - [ ] Autoware's traffic light recognition detects the correct state (if `use_traffic_light_recognition=true`)
 - [ ] Traffic lights return to normal cycling after scenario ends (unfreeze on shutdown)
 - [ ] Weather can be set via config (e.g., rain scenario with `precipitation=80`)
-- [ ] (Optional) Ambient traffic NPCs drive around without interfering with scenario logic
+- ~~(Optional) Ambient traffic NPCs drive around without interfering with scenario logic~~ (rejected)

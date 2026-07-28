@@ -115,6 +115,16 @@ SSv2 sends UpdateFrame
 
 `world.tick()` blocks until CARLA completes the step, so clock publishing is naturally ordered. The bridge must be in passive `wait_for_tick_or_timeout()` mode (not calling `world.tick()` itself). This is the default when `demo_scenario.py` is not running.
 
+> **`/clock` ownership.** SSv2's `traffic_simulator` publishes `/clock` in its own domain. So
+> in the ego's domain `acb_bridge` must be launched with `publish_clock:=false` — two
+> publishers cause "Detected jump back in time. Clearing TF buffer" in NDT and EKF. In
+> background-AV domains there is no SSv2, so `acb_bridge` publishes `/clock` itself. See
+> [multi-instance-architecture.md](multi-instance-architecture.md#clock-ownership).
+>
+> Related: sensor messages must be stamped from the node's ROS clock, never from
+> `data.timestamp()` — the latter is CARLA *server uptime* (tens of thousands of seconds)
+> while SSv2's `/clock` starts at 0.
+
 ## AutowareUniverse Topic Conflict
 
 SSv2's `AutowareUniverse` (concealer node, part of `EgoEntity`) publishes vehicle status topics at 30Hz from its internal vehicle model. Our bridge publishes the same topics from real CARLA physics:
@@ -129,6 +139,11 @@ SSv2's `AutowareUniverse` (concealer node, part of `EgoEntity`) publishes vehicl
 ### Mitigation Strategy
 
 **Phase 2 approach: Accept dual publishers.** Both publish to the same topics; Autoware subscribes and receives whichever message arrives. Since both are publishing at similar rates with similar data (the bridge reflects actual CARLA state, concealer reflects its model), this is unlikely to cause issues in practice.
+
+> **Caveat.** The two publishers agree only while CARLA physics and the concealer's bicycle
+> model agree — and their divergence is exactly what a scenario is meant to detect. Accepting
+> this is a Phase 2 expedient, not a resting state. Tracked in
+> [multi-instance-architecture.md](multi-instance-architecture.md#known-conflict-autowareuniverse-vehicle-status).
 
 **If issues arise**: Remap AutowareUniverse topics by modifying SSv2's launch to add a namespace prefix to the concealer node.
 

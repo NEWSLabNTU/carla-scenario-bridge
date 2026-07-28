@@ -1,5 +1,11 @@
 # Architecture
 
+> **Scope note**: this document describes the single-Autoware, single-domain case. For the
+> authority model that governs multiple Autoware instances over one CARLA world — including
+> `/clock` ownership per domain, background AVs, and the current gap list — see
+> [multi-instance-architecture.md](multi-instance-architecture.md). Where the two disagree,
+> that document wins.
+
 ## Overview
 
 `carla-scenario-bridge` is a ZMQ+Protobuf server that implements the `simulation_interface` protocol defined by [scenario_simulator_v2](https://github.com/tier4/scenario_simulator_v2) (SSv2). It translates SSv2's 14 protobuf request types into CARLA API calls, making CARLA a drop-in replacement for SSv2's built-in `simple_sensor_simulator` or AWSIM.
@@ -123,7 +129,7 @@ Both processes connect to the same CARLA server. Responsibilities are split:
 | Sensor data -> ROS 2 | No | Yes |
 | Vehicle status -> ROS 2 | No | Yes |
 | Control commands -> CARLA | No | Yes (actuation_cmd -> apply_control) |
-| Clock publishing | No | Yes |
+| Clock publishing | No | Domain-dependent — see [multi-instance-architecture.md](multi-instance-architecture.md#clock-ownership). SSv2 owns `/clock` in the ego's domain, so `acb_bridge` must be launched there with `publish_clock:=false` |
 | Traffic light control | Yes (freeze + set_state) | No |
 | CARLA world.tick() | Yes (via UpdateFrame) | No (passive wait_for_tick) |
 
