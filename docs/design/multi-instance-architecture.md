@@ -79,6 +79,56 @@ collision detection through its own bounding-box checks rather than the simulato
 The ego is the exception and keeps physics: Autoware drives it, CARLA moves it, and its pose
 is read back rather than commanded.
 
+### Worked example: two domains
+
+One scenario ego plus one background AV. CARLA must already be running.
+
+**1. Declare the background AV** in `config/bridge_config.yaml`:
+
+```yaml
+ego:
+  role_name: "hero"
+
+background_avs:
+  - role_name: "bg_av_1"
+    ros_domain_id: 1
+    blueprint: "vehicle.tesla.model3"
+    spawn_pose: {x: 120.0, y: -55.0, z: 0.5, yaw: 180.0}
+    goal_pose:  {x: 40.0,  y: -55.0, z: 0.0, yaw: 180.0}
+```
+
+`role_name` must be unique — it is how each `acb_bridge` finds its own vehicle, and a
+duplicate is rejected at startup.
+
+**2. Start the bridge and the scenario** in the ego's domain (`D0`):
+
+```bash
+ROS_DOMAIN_ID=0 just e2e scenarios/town01_ego_drive.xosc
+```
+
+`csb_bridge` loads the map, spawns `bg_av_1` at `Initialize`, then spawns the ego when SSv2
+asks. `acb_bridge` in this domain runs with `publish_clock:=false`, because SSv2 owns
+`/clock` here.
+
+**3. Start the background AV's stack** in its own domain (`D1`):
+
+```bash
+ROS_DOMAIN_ID=1 PLAY_LAUNCH_WEB_ADDR=0.0.0.0:8083 \
+  play_launch launch csb_launch background_av.launch.xml \
+      vehicle_name:=bg_av_1 \
+      map_path:=$PWD/data/carla-autoware-bridge/Town01
+```
+
+`publish_clock` is `true` here — there is no SSv2 in this domain, so without it there would
+be no simulation clock at all. `PLAY_LAUNCH_WEB_ADDR` keeps the web UI off the port the ego's
+Autoware already took.
+
+Order matters only in that CARLA comes first. Each `acb_bridge` waits for both its Autoware
+and its vehicle, so `D1` may start before or after the scenario.
+
+**What you get**: the ego's Autoware perceives `bg_av_1` through its own sensors, as an
+ordinary obstacle. SSv2 does not know it exists.
+
 ### Why no Traffic Manager
 
 TM-driven ambient traffic would give realistic physics and light-obeying behaviour, but makes

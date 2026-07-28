@@ -1,0 +1,45 @@
+<launch>
+  <!--
+    Autoware + acb_bridge for one background AV.
+
+    A background AV is a CARLA vehicle driven by its own Autoware, outside SSv2's model.
+    carla_scenario_bridge spawns the vehicle from its `background_avs` config; this file
+    brings up the stack that drives it.
+
+    Run this in the AV's own ROS domain, which must differ from the scenario ego's:
+
+      ROS_DOMAIN_ID=1 play_launch launch csb_launch background_av.launch.xml \
+          vehicle_name:=bg_av_1 map_path:=/path/to/Town01
+
+    `vehicle_name` must match the `role_name` in bridge_config.yaml, because that is how
+    acb_bridge finds the vehicle it serves.
+
+    publish_clock is true here and false for the scenario ego. SSv2 publishes /clock in its
+    own domain, but there is no SSv2 in this one, so without this the domain would have no
+    simulation clock at all. See docs/design/multi-instance-architecture.md.
+  -->
+  <arg name="vehicle_name" description="CARLA role_name of this AV's vehicle" />
+  <arg name="map_path" description="Directory with lanelet2_map.osm and pointcloud_map.pcd" />
+  <arg name="carla_host" default="localhost" />
+  <arg name="carla_port" default="2000" />
+  <arg name="vehicle_model" default="acb_vehicle" />
+  <arg name="sensor_model" default="acb_sensor_kit" />
+  <arg name="launch_rviz" default="false" />
+
+  <!-- 1. Autoware, using the same CARLA-tuned configuration as the scenario ego -->
+  <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
+    <arg name="map_path" value="$(var map_path)" />
+    <arg name="vehicle_model" value="$(var vehicle_model)" />
+    <arg name="sensor_model" value="$(var sensor_model)" />
+    <arg name="rviz" value="$(var launch_rviz)" />
+  </include>
+
+  <!-- 2. acb_bridge for this vehicle.
+       publish_clock=true: no SSv2 in this domain, so this bridge owns /clock here. -->
+  <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
+    <arg name="carla_address" value="$(var carla_host)" />
+    <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="vehicle_name" value="$(var vehicle_name)" />
+    <arg name="publish_clock" value="true" />
+  </include>
+</launch>

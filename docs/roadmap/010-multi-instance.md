@@ -39,63 +39,107 @@ SSv2's model — invisible to its conditions. See the design doc for why.
 
 ### Config loading (D1)
 
-- [ ] Load `bridge_config.yaml` at startup; make `serde`/`serde_yaml` earn their place
-- [ ] Precedence between file and environment is defined and documented
-- [ ] Wire `blueprint_map` into spawn so the documented mechanism works
-- [ ] Missing or malformed config fails at startup with a clear message, not at first use
-- [ ] Delete any config key that nothing reads
+- [x] Load `bridge_config.yaml` at startup; make `serde`/`serde_yaml` earn their place
+- [x] Precedence between file and environment is defined and documented
+- [x] Wire `blueprint_map` into spawn so the documented mechanism works
+- [x] Missing or malformed config fails at startup with a clear message, not at first use
+- [x] Delete any config key that nothing reads
+
+**Precedence: environment > file > default.** The environment is the more specific source —
+launch files set `CARLA_HOST` / `CARLA_PORT` / `SSV2_PORT` per run, and a checked-in config
+must not silently win over what a launch explicitly asked for.
+
+A *missing* file is fine, since every key has a default. A *malformed* one is fatal: falling
+back to defaults would run the scenario with settings the operator believes they changed.
+`timeout_ms` was dropped — nothing read it.
 
 ### Role names (D2)
 
-- [ ] Ego `role_name` is configurable, defaulting to `hero` for compatibility
-- [ ] Background AVs get distinct role names from config
-- [ ] Names are unique; a collision is rejected at startup, not discovered at spawn
+- [x] Ego `role_name` is configurable, defaulting to `hero` for compatibility
+- [x] Background AVs get distinct role names from config
+- [x] Names are unique; a collision is rejected at startup, not discovered at spawn
+
+`role_name` is no longer a property of the spawn kind — it is passed in, so the ego takes its
+name from config and each background AV takes its own. Duplicates (including one colliding
+with the ego) are rejected by `BridgeConfig::validate`, because `acb_bridge` finds its vehicle
+by `role_name` and a duplicate means two bridges racing for one vehicle.
 
 ### Background AV spawning (gap 9)
 
-- [ ] `background_avs` config section: role name, blueprint, spawn pose, goal pose, domain
-- [ ] Spawn them at `Initialize`, after map load and before the ego
-- [ ] They are tracked for teardown like every other spawned actor (invariant 2, phase 007)
-- [ ] They are **not** registered with SSv2 — no `EntityManager` entry that would reach
+- [x] `background_avs` config section: role name, blueprint, spawn pose, goal pose, domain
+- [x] Spawn them at `Initialize`, after map load and before the ego
+- [x] They are tracked for teardown like every other spawned actor (invariant 2, phase 007)
+- [x] They are **not** registered with SSv2 — no `EntityManager` entry that would reach
       `UpdateEntityStatus`
-- [ ] Their pose authority is CARLA PhysX, never teleport (invariant 5)
-- [ ] Empty list behaves exactly like today's single-ego run
+- [x] Their pose authority is CARLA PhysX, never teleport (invariant 5)
+- [x] Empty list behaves exactly like today's single-ego run
+
+`SpawnKind::entity_type` returns `Option<EntityType>` and `None` for a background AV. That is
+the mechanism keeping it out of SSv2's view: registering it would put it into
+`UpdateEntityStatus`, and SSv2 would start teleporting a vehicle Autoware is already driving —
+two pose authorities on one actor.
+
+Spawning happens after the map (a reload destroys actors) and before the ego, so the
+background Autoware instances can be finding their vehicles while SSv2 is still setting up. A
+background AV that fails to spawn is reported loudly but does not abort the scenario; the ego
+can still run, and killing a whole scenario because a secondary vehicle would not fit is the
+wrong trade.
 
 ### Per-domain launch
 
-- [ ] Launch file bringing up Autoware + `acb_bridge` for one background AV in a given domain
-- [ ] `publish_clock:=true` in background domains, `false` in the ego's — already supported
+- [x] Launch file bringing up Autoware + `acb_bridge` for one background AV in a given domain
+- [x] `publish_clock:=true` in background domains, `false` in the ego's — already supported
 - [ ] A pilot per background domain to set route and engage, since no concealer is present
-- [ ] Document the startup order across domains
+- [x] Document the startup order across domains
+
+`csb_launch/launch/background_av.launch.xml` brings up Autoware and `acb_bridge` for one AV.
+
+The pilot is **not** done. `acb_pilot` exists in the acb workspace and does route-and-engage,
+but wiring it per domain and feeding it `goal_pose` from this config has not been attempted —
+without a live stack there is no way to tell whether it works, and a pilot that silently fails
+to engage looks exactly like one that works until the vehicle never moves.
 
 ### Concealer web-addr (gap 10)
 
-- [ ] Parameterise the hardcoded `--web-addr 0.0.0.0:8082` in our SSv2 `launch.hpp` patch
+- [x] Parameterise the hardcoded `--web-addr 0.0.0.0:8082` in our SSv2 `launch.hpp` patch
 - [ ] Confirm no port collision when several play_launch-managed stacks run on one host
-- [ ] Keep the patch minimal — it is rebased onto upstream regularly
+- [x] Keep the patch minimal — it is rebased onto upstream regularly
+
+Now reads `PLAY_LAUNCH_WEB_ADDR`, falling back to `0.0.0.0:8082`. Four added lines, so the
+rebase burden is unchanged. Confirming no collision needs two stacks actually running.
 
 ### Documentation
 
-- [ ] Record that background AVs are invisible to SSv2 conditions, with the misc-object
+- [x] Record that background AVs are invisible to SSv2 conditions, with the misc-object
       registration escape hatch described in the design doc
-- [ ] Worked two-domain example
+- [x] Worked two-domain example
+
+Both live in [multi-instance-architecture.md](../design/multi-instance-architecture.md), and
+the invisibility warning is repeated in `bridge_config.yaml` where an operator adding a
+background AV will actually read it.
 
 ### Tests
 
-- [ ] Unit: config parsing, including background AV lists and duplicate-name rejection
-- [ ] Unit: `blueprint_map` resolution
+- [x] Unit: config parsing, including background AV lists and duplicate-name rejection
+- [x] Unit: `blueprint_map` resolution
+- [x] Unit: a background AV is not an SSv2 entity, and is physics-driven
 - [ ] Integration: configured background AVs appear with correct role names
 - [ ] Integration: background AVs are absent from SSv2 entity status
 - [ ] Integration: all background AVs are destroyed at teardown
 
 ## Acceptance Criteria
 
-- [ ] `bridge_config.yaml` is read, and every key in it does something
-- [ ] Ego role name is configurable and defaults to `hero`
+- [x] `bridge_config.yaml` is read, and every key in it does something
+- [x] Ego role name is configurable and defaults to `hero`
 - [ ] A two-domain run works: scenario ego plus one background AV, both localize and drive
 - [ ] Each domain has exactly one `/clock` publisher
 - [ ] The background AV is perceived by the ego's Autoware through its sensors
-- [ ] SSv2 neither sees nor controls the background AV
-- [ ] An empty `background_avs` list is byte-for-byte the current behaviour
+- [x] SSv2 neither sees nor controls the background AV
+- [x] An empty `background_avs` list is byte-for-byte the current behaviour
 - [ ] Teardown leaves no background AV behind
-- [ ] `just test` passes
+- [x] `just test` passes
+
+The unchecked criteria all need a live two-domain run. The mechanism keeping background AVs
+out of SSv2's view is enforced by construction and unit-tested, but **no background AV has
+ever been spawned**, and the per-domain pilot does not exist — so a two-domain run would come
+up with a background vehicle that localizes and then sits still.

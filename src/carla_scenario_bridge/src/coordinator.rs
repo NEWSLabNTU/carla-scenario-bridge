@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::config::{BackgroundAv, BridgeConfig};
 use crate::map_resolver::{lanelet_map_file, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
@@ -39,24 +40,34 @@ enum SpawnKind {
     Pedestrian,
     /// A static obstacle. Placed once and left alone unless SSv2 moves it.
     MiscObject,
+    /// An extra Autoware instance's vehicle. Driven by CARLA PhysX under that Autoware's
+    /// control, and deliberately unknown to SSv2 -- see [`SpawnKind::entity_type`].
+    BackgroundAv,
 }
 
 impl SpawnKind {
     /// Blueprint used when the scenario's asset key does not name a CARLA blueprint.
     fn default_blueprint(self) -> &'static str {
         match self {
-            SpawnKind::Ego | SpawnKind::Npc => "vehicle.tesla.model3",
+            SpawnKind::Ego | SpawnKind::Npc | SpawnKind::BackgroundAv => "vehicle.tesla.model3",
             SpawnKind::Pedestrian => "walker.pedestrian.0001",
             SpawnKind::MiscObject => "static.prop.streetbarrier",
         }
     }
 
-    fn entity_type(self) -> EntityType {
+    /// The SSv2 entity type this actor is registered as, if any.
+    ///
+    /// `None` for a background AV, and that is the whole point: it is a CARLA vehicle driven
+    /// by its own Autoware, not a scenario entity. Registering it would put it into
+    /// `UpdateEntityStatus`, and SSv2 would start teleporting a vehicle that Autoware is
+    /// already driving -- two pose authorities on one actor (invariant 5).
+    fn entity_type(self) -> Option<EntityType> {
         match self {
-            SpawnKind::Ego => EntityType::Ego,
-            SpawnKind::Npc => EntityType::Vehicle,
-            SpawnKind::Pedestrian => EntityType::Pedestrian,
-            SpawnKind::MiscObject => EntityType::MiscObject,
+            SpawnKind::Ego => Some(EntityType::Ego),
+            SpawnKind::Npc => Some(EntityType::Vehicle),
+            SpawnKind::Pedestrian => Some(EntityType::Pedestrian),
+            SpawnKind::MiscObject => Some(EntityType::MiscObject),
+            SpawnKind::BackgroundAv => None,
         }
     }
 
@@ -67,15 +78,8 @@ impl SpawnKind {
     /// down and shoves it out of collisions before the next frame. The AWSIM pattern this
     /// design follows makes puppeteered actors kinematic for exactly this reason.
     fn physics_driven(self) -> bool {
-        matches!(self, SpawnKind::Ego)
-    }
-
-    /// `role_name` attribute, which is how `acb_bridge` finds the vehicle it serves.
-    fn role_name(self) -> Option<&'static str> {
-        match self {
-            SpawnKind::Ego => Some("hero"),
-            _ => None,
-        }
+        // Both are driven by an Autoware through CARLA physics, so neither may be teleported.
+        matches!(self, SpawnKind::Ego | SpawnKind::BackgroundAv)
     }
 
     fn label(self) -> &'static str {
@@ -84,6 +88,7 @@ impl SpawnKind {
             SpawnKind::Npc => "NPC vehicle",
             SpawnKind::Pedestrian => "pedestrian",
             SpawnKind::MiscObject => "misc object",
+            SpawnKind::BackgroundAv => "background AV",
         }
     }
 }
@@ -132,6 +137,27 @@ fn jerk_from_acceleration(previous: f64, current: f64, dt: f64) -> f64 {
         return 0.0;
     }
     (current - previous) / dt
+}
+
+/// Convert a configured background-AV pose into the protobuf pose the spawn path expects.
+///
+/// Config states yaw in degrees, which is what an operator writing a YAML file will reach
+/// for; the wire format is a quaternion.
+fn background_av_pose(av: &BackgroundAv) -> Pose {
+    let half = av.spawn_pose.yaw.to_radians() / 2.0;
+    Pose {
+        position: Some(geometry_msgs::Point {
+            x: av.spawn_pose.x,
+            y: av.spawn_pose.y,
+            z: av.spawn_pose.z,
+        }),
+        orientation: Some(geometry_msgs::Quaternion {
+            x: 0.0,
+            y: 0.0,
+            z: half.sin(),
+            w: half.cos(),
+        }),
+    }
 }
 
 /// Spawn height when the ground could not be probed.
@@ -220,6 +246,8 @@ pub struct Coordinator {
     warned_unmapped_signals: HashSet<i32>,
     /// Whether the arrow-shape limitation has been reported for this run.
     warned_arrow_shapes: bool,
+    /// Bridge configuration: ego role name, blueprint map, background AVs.
+    config: BridgeConfig,
 }
 
 impl Coordinator {
@@ -229,13 +257,15 @@ impl Coordinator {
         carla_host: String,
         carla_port: u16,
         config_dir: PathBuf,
+        config: BridgeConfig,
     ) -> Self {
         Self {
+            map_aliases: config.map_alias.clone(),
+            config,
             client,
             carla_host,
             carla_port,
             config_dir,
-            map_aliases: HashMap::new(),
             signal_map: SignalMap::new(),
             warned_unmapped_signals: HashSet::new(),
             warned_arrow_shapes: false,
@@ -516,6 +546,60 @@ impl Coordinator {
         Ok(signals)
     }
 
+    /// Spawn the configured background AVs.
+    ///
+    /// These are ordinary CARLA vehicles that a separate Autoware drives. They are tracked
+    /// for teardown like anything else this bridge creates, but are **not** registered as
+    /// SSv2 entities, so SSv2 neither controls them nor sees them in its conditions.
+    ///
+    /// A failure to spawn one is not fatal: the scenario ego can still run, and aborting the
+    /// whole scenario because a secondary vehicle would not fit is the wrong trade. It is
+    /// reported loudly.
+    fn spawn_background_avs(&mut self) {
+        if self.config.background_avs.is_empty() {
+            return;
+        }
+
+        let avs: Vec<BackgroundAv> = self.config.background_avs.clone();
+        tracing::info!("Spawning {} background AV(s)", avs.len());
+
+        let mut spawned = 0;
+        for av in &avs {
+            let pose = background_av_pose(av);
+            let asset_key = av.blueprint.clone().unwrap_or_default();
+
+            let result = self.spawn_entity(
+                &av.role_name,
+                &asset_key,
+                Some(&pose),
+                SpawnKind::BackgroundAv,
+                Some(&av.role_name),
+            );
+
+            if result.success {
+                spawned += 1;
+                // goal_pose is for that domain's pilot, not for this bridge -- logged so the
+                // operator can see what the run expects without opening the config.
+                tracing::info!(
+                    "Background AV '{}' spawned; its acb_bridge should be launched with \
+                     vehicle_name:={} in ROS domain {:?}, and its pilot routed to {:?}",
+                    av.role_name,
+                    av.role_name,
+                    av.ros_domain_id,
+                    av.goal_pose.map(|p| (p.x, p.y))
+                );
+            } else {
+                tracing::error!(
+                    "Background AV '{}' failed to spawn: {}. The scenario continues without it.",
+                    av.role_name,
+                    result.description
+                );
+            }
+        }
+
+        tracing::info!("{spawned}/{} background AV(s) spawned", avs.len());
+    }
+
     /// Freeze CARLA's signal cycling so SSv2 is the only writer (invariant 3).
     ///
     /// Freezing leaves each light in whatever state it happened to be in, which for a light
@@ -661,6 +745,11 @@ impl Coordinator {
         // Take authority over the signals (invariant 3).
         self.freeze_traffic_lights();
 
+        // Background AVs go in after the map (a reload would destroy them) and before the
+        // ego, so their Autoware instances can be finding their vehicles while SSv2 is
+        // still setting the scenario up.
+        self.spawn_background_avs();
+
         tracing::info!(
             "Initialized (step_time={}). CARLA left in async mode until the ego is spawned.",
             req.step_time
@@ -784,6 +873,7 @@ impl Coordinator {
         asset_key: &str,
         pose: Option<&Pose>,
         kind: SpawnKind,
+        role_name: Option<&str>,
     ) -> ProtoResult {
         tracing::info!("Spawn {}: name={name}, asset_key={asset_key}", kind.label());
 
@@ -810,10 +900,16 @@ impl Coordinator {
         carla_transform.location.z = self.resolve_spawn_height(&carla_transform.location);
 
         // Resolve the blueprint once up front so the retry loop does not re-probe CARLA.
-        let requested_key = if asset_key.is_empty() {
-            kind.default_blueprint()
-        } else {
-            asset_key
+        // The configured blueprint_map takes first refusal: SSv2 asset keys are not CARLA
+        // blueprint names in general, and this is where an operator states the translation.
+        let mapped = self.config.blueprint_for(asset_key).map(str::to_owned);
+        let requested_key = match (mapped.as_deref(), asset_key.is_empty()) {
+            (Some(mapped), _) => {
+                tracing::debug!("Asset key '{asset_key}' mapped to blueprint '{mapped}'");
+                mapped
+            }
+            (None, true) => kind.default_blueprint(),
+            (None, false) => asset_key,
         };
         let blueprint_key = match self.resolve_blueprint_key(requested_key, kind) {
             Ok(k) => k,
@@ -833,7 +929,7 @@ impl Coordinator {
         let mut actor = None;
 
         for (attempt, z) in spawn_retry_heights(base_z).enumerate() {
-            let builder = match self.build_actor(&blueprint_key, kind) {
+            let builder = match self.build_actor(&blueprint_key, role_name) {
                 Ok(b) => b,
                 Err(e) => return proto_err(format!("Cannot build '{name}': {e}")),
             };
@@ -907,8 +1003,12 @@ impl Coordinator {
             let _ = self.world.tick();
         }
 
-        self.entities
-            .insert(name.to_string(), kind.entity_type(), actor_id);
+        // Background AVs are deliberately absent from EntityManager -- see
+        // SpawnKind::entity_type. Everything else SSv2 knows about is registered.
+        if let Some(entity_type) = kind.entity_type() {
+            self.entities
+                .insert(name.to_string(), entity_type, actor_id);
+        }
 
         if kind == SpawnKind::Ego {
             // Releases the sync-mode gate: from the next UpdateFrame onward this bridge
@@ -944,7 +1044,16 @@ impl Coordinator {
             SpawnKind::Npc
         };
 
-        let result = self.spawn_entity(&name, &req.asset_key, req.pose.as_ref(), kind);
+        // Only the ego carries a role_name: acb_bridge finds its vehicle by it, and an NPC
+        // tagged the same would be picked up as if it were an Autoware vehicle.
+        let role_name = (kind == SpawnKind::Ego).then(|| self.config.ego.role_name.clone());
+        let result = self.spawn_entity(
+            &name,
+            &req.asset_key,
+            req.pose.as_ref(),
+            kind,
+            role_name.as_deref(),
+        );
         api::SpawnVehicleEntityResponse {
             result: Some(result),
         }
@@ -969,6 +1078,7 @@ impl Coordinator {
             &req.asset_key,
             req.pose.as_ref(),
             SpawnKind::Pedestrian,
+            None,
         );
         api::SpawnPedestrianEntityResponse {
             result: Some(result),
@@ -990,6 +1100,7 @@ impl Coordinator {
             &req.asset_key,
             req.pose.as_ref(),
             SpawnKind::MiscObject,
+            None,
         );
         api::SpawnMiscObjectEntityResponse {
             result: Some(result),
@@ -1410,7 +1521,7 @@ impl Coordinator {
     fn build_actor(
         &mut self,
         blueprint_key: &str,
-        kind: SpawnKind,
+        role_name: Option<&str>,
     ) -> Result<carla::client::ActorBuilder<'_>> {
         let mut builder = self
             .world
@@ -1418,7 +1529,7 @@ impl Coordinator {
             .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?;
 
         // role_name is how acb_bridge finds the vehicle it is meant to serve.
-        if let Some(role) = kind.role_name() {
+        if let Some(role) = role_name {
             builder = builder
                 .set_attribute("role_name", role)
                 .map_err(|e| eyre::eyre!("set role_name: {e}"))?;
@@ -1635,6 +1746,10 @@ mod tests {
     #[test]
     fn only_the_ego_is_physics_driven() {
         assert!(SpawnKind::Ego.physics_driven());
+        assert!(
+            SpawnKind::BackgroundAv.physics_driven(),
+            "a background AV is driven by its own Autoware through CARLA physics"
+        );
         assert!(!SpawnKind::Npc.physics_driven());
         assert!(!SpawnKind::Pedestrian.physics_driven());
         assert!(!SpawnKind::MiscObject.physics_driven());
@@ -1642,20 +1757,28 @@ mod tests {
 
     /// `acb_bridge` finds its vehicle by role_name. Only the ego should carry one -- an NPC
     /// tagged `hero` would be picked up by a bridge as if it were an Autoware vehicle.
+    /// A background AV is a CARLA vehicle driven by its own Autoware, not a scenario
+    /// entity. Registering it would put it into UpdateEntityStatus and SSv2 would start
+    /// teleporting a vehicle Autoware is already driving.
     #[test]
-    fn only_the_ego_carries_a_role_name() {
-        assert_eq!(SpawnKind::Ego.role_name(), Some("hero"));
-        assert_eq!(SpawnKind::Npc.role_name(), None);
-        assert_eq!(SpawnKind::Pedestrian.role_name(), None);
-        assert_eq!(SpawnKind::MiscObject.role_name(), None);
+    fn a_background_av_is_not_an_ssv2_entity() {
+        assert_eq!(SpawnKind::BackgroundAv.entity_type(), None);
+        assert!(SpawnKind::Ego.entity_type().is_some());
+        assert!(SpawnKind::Npc.entity_type().is_some());
     }
 
     #[test]
     fn each_kind_maps_to_its_entity_type() {
-        assert_eq!(SpawnKind::Ego.entity_type(), EntityType::Ego);
-        assert_eq!(SpawnKind::Npc.entity_type(), EntityType::Vehicle);
-        assert_eq!(SpawnKind::Pedestrian.entity_type(), EntityType::Pedestrian);
-        assert_eq!(SpawnKind::MiscObject.entity_type(), EntityType::MiscObject);
+        assert_eq!(SpawnKind::Ego.entity_type(), Some(EntityType::Ego));
+        assert_eq!(SpawnKind::Npc.entity_type(), Some(EntityType::Vehicle));
+        assert_eq!(
+            SpawnKind::Pedestrian.entity_type(),
+            Some(EntityType::Pedestrian)
+        );
+        assert_eq!(
+            SpawnKind::MiscObject.entity_type(),
+            Some(EntityType::MiscObject)
+        );
     }
 
     /// A pedestrian must not fall back to a car, nor a prop to a walker.

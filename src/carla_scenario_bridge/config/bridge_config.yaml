@@ -1,22 +1,61 @@
 # carla-scenario-bridge configuration
+#
+# Every key here is read. Precedence is: environment > this file > built-in default.
+# The launch files set CARLA_HOST / CARLA_PORT / SSV2_PORT per run, so those override
+# whatever is written below.
+#
+# A missing file is fine -- everything has a default. A malformed one is fatal, so that a
+# typo cannot silently run the scenario with settings you believe you changed.
 
-# CARLA connection
+# CARLA connection. Overridden by CARLA_HOST / CARLA_PORT.
 carla:
   host: "localhost"
   port: 2000
-  timeout_ms: 10000
 
-# SSv2 ZMQ server
+# SSv2 ZMQ server. Overridden by SSV2_PORT.
 ssv2:
   port: 5555
 
-# Blueprint mapping: SSv2 asset_key -> CARLA blueprint
-# Used when SSv2 sends an asset_key that doesn't match a CARLA blueprint directly
-blueprint_map:
-  # SSv2 default vehicles
-  "sample_vehicle": "vehicle.tesla.model3"
-  # Add more mappings as needed
+# The scenario ego.
+ego:
+  # CARLA role_name given to the ego. acb_bridge finds the vehicle it serves by this, so it
+  # must match that bridge's `vehicle_name` parameter in the ego's ROS domain.
+  role_name: "hero"
 
-# Coordinate conversion
-# CARLA uses left-handed (Y = right), SSv2/ROS uses right-handed (Y = left)
-# The Y-flip is applied automatically to all entity poses
+# SSv2 asset key -> CARLA blueprint.
+#
+# SSv2 asset keys are not CARLA blueprint names in general. A key that already names a
+# blueprint (e.g. vehicle.volkswagen.t2) passes straight through and needs no entry here;
+# anything else needs a translation, or the spawn falls back to a default for its kind and
+# warns.
+blueprint_map:
+  sample_vehicle: "vehicle.tesla.model3"
+
+# Map directory name -> CARLA town.
+#
+# The town is normally recovered from the scenario's lanelet2_map_path, whose final directory
+# is the town name. Add an entry only for maps that break that convention.
+map_alias: {}
+#  kashiwanoha: "Town01"
+
+# Additional Autoware instances, each driving its own CARLA vehicle.
+#
+# An empty list is a plain single-ego run and behaves exactly as before.
+#
+# These exist because SSv2 supports exactly one ego -- it throws "Multiple egos in the
+# simulation are unsupported yet." -- and its concealer forks Autoware into SSv2's own
+# ROS_DOMAIN_ID. So extra Autoware stacks cannot be scenario entities.
+#
+# IMPORTANT: background AVs are invisible to SSv2. Its collision detection and its
+# ReachPosition/Distance conditions never see them. A background AV can collide with the
+# scenario ego and SSv2 will still report exitSuccess. See
+# docs/design/multi-instance-architecture.md.
+#
+# This bridge spawns the vehicle. Bringing up the matching Autoware and acb_bridge in the
+# right ROS domain is launch's job -- see csb_launch/launch/background_av.launch.xml.
+background_avs: []
+#  - role_name: "bg_av_1"      # must be unique, and match that domain's vehicle_name
+#    ros_domain_id: 1          # informational here; launch owns the actual domain
+#    blueprint: "vehicle.tesla.model3"
+#    spawn_pose: {x: 0.0, y: 0.0, z: 0.5, yaw: 0.0}   # ROS frame, yaw in degrees
+#    goal_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}    # read by that domain's pilot

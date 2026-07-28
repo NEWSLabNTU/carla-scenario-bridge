@@ -1,3 +1,4 @@
+mod config;
 mod coordinate_conversion;
 mod coordinator;
 mod entity_manager;
@@ -21,20 +22,33 @@ fn main() -> Result<()> {
         )
         .init();
 
-    // Config from environment
-    let carla_host = std::env::var("CARLA_HOST").unwrap_or_else(|_| "localhost".to_string());
-    let carla_port: u16 = std::env::var("CARLA_PORT")
-        .unwrap_or_else(|_| "2000".to_string())
-        .parse()
-        .unwrap_or(2000);
-    let ssv2_port: u16 = std::env::var("SSV2_PORT")
-        .unwrap_or_else(|_| "5555".to_string())
-        .parse()
-        .unwrap_or(5555);
+    // Per-map config (signal mappings) and the bridge config live in the same directory.
+    let config_dir = std::env::var("CSB_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("config"));
+
+    // File first, then environment overrides -- launch files set CARLA_HOST and friends per
+    // run, and a checked-in config must not override what a launch explicitly asked for.
+    let mut config = config::BridgeConfig::load_or_default(&config_dir.join("bridge_config.yaml"))?;
+    config.apply_env_overrides();
+
+    let carla_host = config.carla.host.clone();
+    let carla_port = config.carla.port;
+    let ssv2_port = config.ssv2.port;
 
     tracing::info!("carla-scenario-bridge starting");
     tracing::info!("  CARLA:  {carla_host}:{carla_port}");
     tracing::info!("  SSv2:   tcp://*:{ssv2_port}");
+    tracing::info!("  Config: {}", config_dir.display());
+    tracing::info!("  Ego role_name: {}", config.ego.role_name);
+    if config.background_avs.is_empty() {
+        tracing::info!("  Background AVs: none (single-ego run)");
+    } else {
+        tracing::info!("  Background AVs: {}", config.background_avs.len());
+        for av in &config.background_avs {
+            tracing::info!("    - {} (domain {:?})", av.role_name, av.ros_domain_id);
+        }
+    }
 
     let shutdown = Arc::new(AtomicBool::new(false));
     {
@@ -57,15 +71,15 @@ fn main() -> Result<()> {
     let world = client.world()?;
     tracing::info!("CARLA world acquired");
 
-    // Per-map config (traffic light signal mappings) lives alongside the binary's package.
-    let config_dir = std::env::var("CSB_CONFIG_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("config"));
-    tracing::info!("  Config: {}", config_dir.display());
-
     // The coordinator keeps the client so it can rebuild the world after a CARLA outage.
-    let coord =
-        coordinator::Coordinator::new(client, world, carla_host.clone(), carla_port, config_dir);
+    let coord = coordinator::Coordinator::new(
+        client,
+        world,
+        carla_host.clone(),
+        carla_port,
+        config_dir,
+        config,
+    );
     let zmq_ctx = zmq::Context::new();
     let mut server = zmq_server::ZmqServer::new(&zmq_ctx, ssv2_port, coord)?;
 
