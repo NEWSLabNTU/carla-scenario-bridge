@@ -112,10 +112,21 @@ The first three require a live CARLA and a full stack run. The code path is unit
 the rejection is unconditional, but **no scenario has actually been run** — these stay
 unchecked until someone does.
 
-## Known Issue Left Open
+## Known Issue — resolved 2026-07-30
 
-`cargo clippy -- -D warnings`, and therefore `just check` and `just ci`, fails with 18
-dead-code errors. All are pre-existing and none were introduced here: generated protobuf
-types, `traffic_light_mapper`, `entity_manager::ego`, and the `EntityType::Pedestrian` /
-`MiscObject` variants. Phase 008 constructs the entity variants and phase 009 uses the
-mapper, so most resolve naturally; the generated protobuf types need an `allow` attribute.
+`cargo clippy -- -D warnings`, and therefore `just check` and `just ci`, failed with 18
+dead-code errors. All were pre-existing and none introduced here.
+
+Most resolved as later phases used the code: phase 008 constructs the `EntityType::Pedestrian`
+and `MiscObject` variants, phase 009 replaced the `traffic_light_mapper` stub. The remainder
+were cleared afterwards:
+
+- **Generated protobuf modules** now carry `#[allow(dead_code)]`. They are a transcription of
+  the wire protocol, and a message type this bridge does not construct is a normal state, not
+  an unused-code smell — SSv2 defines messages we never send.
+- **`Entity::name`** was removed. It duplicated the `EntityManager` map key, and two copies of
+  one string only invite them to disagree.
+- **`EntityManager::ego`** was removed. Nothing called it; the ego is reached by name like
+  every other entity.
+
+`cargo clippy --all-targets -- -D warnings` is now clean, as is `cargo fmt --check`.

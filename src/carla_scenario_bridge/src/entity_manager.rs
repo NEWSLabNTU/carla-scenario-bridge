@@ -8,9 +8,12 @@ pub enum EntityType {
     MiscObject,
 }
 
+/// What the bridge knows about one SSv2 entity.
+///
+/// The entity's name is the map key in [`EntityManager`], so it is deliberately not repeated
+/// here -- two copies of the same string invite them to disagree.
 #[derive(Debug)]
 pub struct Entity {
-    pub name: String,
     pub entity_type: EntityType,
     pub carla_actor_id: u32,
 }
@@ -27,9 +30,8 @@ impl EntityManager {
 
     pub fn insert(&mut self, name: String, entity_type: EntityType, carla_actor_id: u32) {
         self.entities.insert(
-            name.clone(),
+            name,
             Entity {
-                name,
                 entity_type,
                 carla_actor_id,
             },
@@ -42,12 +44,6 @@ impl EntityManager {
 
     pub fn get(&self, name: &str) -> Option<&Entity> {
         self.entities.get(name)
-    }
-
-    pub fn ego(&self) -> Option<&Entity> {
-        self.entities
-            .values()
-            .find(|e| e.entity_type == EntityType::Ego)
     }
 
     pub fn clear(&mut self) {
