@@ -708,8 +708,16 @@ impl Coordinator {
 
         // Deliberately NOT enabling synchronous mode here -- see FrameAction. CARLA must
         // keep free-running until the ego exists, or acb_bridge can never discover it.
+        //
+        // Clearing the flag is not enough: it only records what *we* believe. CARLA can
+        // already be in synchronous mode -- left there by a previous scenario in this
+        // process, or by a run that died before restoring it -- and then the bridge thinks
+        // it is async while CARLA is frozen, waiting for a tick that will not come until an
+        // ego exists. That is the gap 1 deadlock returning through the back door, and it is
+        // exactly what a second scenario run hits. So assert the state rather than assume it.
         self.sync_mode_enabled = false;
         self.has_ego = false;
+        self.force_async_mode();
 
         // Fresh run, fresh warnings -- otherwise a second scenario in one process would
         // stay quiet about problems it also has.
@@ -756,6 +764,42 @@ impl Coordinator {
         );
         api::InitializeResponse {
             result: Some(proto_ok()),
+        }
+    }
+
+    /// Force CARLA into asynchronous mode, whatever it was in before.
+    ///
+    /// Unlike [`restore_async_mode`](Self::restore_async_mode), this does not check whether
+    /// *this* bridge enabled sync mode. At `Initialize` the bridge is taking the world for a
+    /// scenario, and the state CARLA happens to be in — possibly left synchronous by a run
+    /// that died — is not something to inherit.
+    fn force_async_mode(&mut self) {
+        let settings = match self.world.settings() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Could not read CARLA settings to force async mode: {e}");
+                return;
+            }
+        };
+
+        if !settings.synchronous_mode {
+            return;
+        }
+
+        tracing::info!("CARLA was left in synchronous mode; forcing async for startup");
+        let mut settings = settings;
+        settings.synchronous_mode = false;
+        settings.fixed_delta_seconds = None;
+        if let Err(e) = self
+            .world
+            .apply_settings(&settings, Duration::from_secs(10))
+        {
+            // Not fatal here, but say so plainly: acb_bridge polls for its vehicle and needs
+            // CARLA advancing, so a stuck synchronous world will stall startup.
+            tracing::error!(
+                "Failed to force CARLA back to async mode ({e}). Startup may deadlock: \
+                 acb_bridge cannot discover its vehicle while CARLA is frozen."
+            );
         }
     }
 
