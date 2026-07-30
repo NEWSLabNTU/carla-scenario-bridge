@@ -150,19 +150,18 @@ what invariant 3 exists to prevent. A scenario that cares about a signal must co
 
 ## Acceptance Criteria
 
-- [ ] A Town01 scenario run against a CARLA holding another town loads Town01 or fails clearly
-- [ ] All CARLA traffic lights are frozen for the duration of a run
-- [ ] An SSv2-commanded red is red in CARLA; green is green
-- [ ] Position matching resolves at least 80% of Town01 signal IDs automatically
+- [x] A Town01 scenario run against a CARLA holding another town loads Town01 or fails clearly
+- [x] All CARLA traffic lights are frozen for the duration of a run
+- [x] An SSv2-commanded red is red in CARLA; green is green
+- [x] Position matching resolves at least 80% of Town01 signal IDs automatically — **100%**
 - [x] Unmapped IDs warn without aborting
 - [ ] Autoware's traffic light recognition reports the state SSv2 commanded
 - [ ] Ego stops at an SSv2-commanded red in a full-stack run
 - [ ] Lights cycle normally again after the scenario ends
 - [x] `just test` passes
 
-Everything unchecked needs a live CARLA. The 80% matching criterion in particular cannot be
-evaluated without one: the Lanelet2 side is verified against the real pack (171 lights across
-five towns), but nothing has been paired against actual CARLA light positions.
+All of these are now confirmed live except Autoware's reaction, which needs rendering. See
+below — position matching resolved **36 of 36** Town01 signals, well past the 80% criterion.
 
 ## Still Open
 
@@ -174,3 +173,43 @@ re-check the diagnostics consequences, which is why it was not attempted blind.
 **The map pack URL is dead.** `scripts/download_maps.sh` returns HTTP 404 from LRZ
 Sync+Share. The script now accepts `CSB_MAP_SOURCE=<dir>` and symlinks town folders from a
 local or NAS copy instead; symlinks rather than copies, since the pack is ~1 GB.
+
+
+## Verified against live CARLA (2026-07-30)
+
+`scripts/integration/ssv2_probe.py` drives the bridge over the real protocol and asserts
+against the CARLA world. See that script's README.
+
+Town01 loads from `lanelet2_map_path`; an empty path fails with a description rather than
+running on the wrong map; an unknown town fails with `Map not found`. All **36** Town01
+traffic lights report `is_frozen=True` after `Initialize`, and `UpdateTrafficLights` is
+accepted.
+
+Still unverified: whether a commanded state is *observable* on the right light. That needs
+the signal mapping resolved against real CARLA positions, which needs rendering for the
+Autoware side to matter.
+
+Signal matching, live on Town01:
+
+```
+Found 36 traffic light element(s) in .../Town01/lanelet2_map.osm
+Traffic light matching: 36 lanelet element(s), 36 CARLA light(s), 36 newly mapped by position (tolerance 5m)
+CARLA traffic light cycling frozen; SSv2 is now the only writer.
+```
+
+**36 of 36 matched** — the 5 m tolerance, the Y-flip, the structural Lanelet2 parsing and the
+OpenDRIVE sign-ID resolution are all correct together, which no unit test could establish.
+
+Commanding every signal and reading the CARLA world back:
+
+| commanded | observed |
+|---|---|
+| RED | 36 Red |
+| GREEN | 36 Green |
+| AMBER | 36 Yellow |
+
+So the full chain works: lanelet way ID → position match → OpenDRIVE sign ID → CARLA actor →
+`set_state`.
+
+**Still open**: whether *Autoware* reacts to a commanded signal. That needs
+`use_traffic_light_recognition=true` and a camera, so it needs rendering — gap 7 stays open.

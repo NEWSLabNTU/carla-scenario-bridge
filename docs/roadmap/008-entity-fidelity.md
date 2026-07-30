@@ -38,7 +38,7 @@ Any SSv2 condition reading action state or jerk is reading a constant, not the s
 
 - [x] Disable physics on scenario NPCs at spawn, so `set_transform` is the only authority
 - [x] Decide and document the pedestrian equivalent — CARLA walkers differ from vehicles
-- [ ] Verify the commanded pose and CARLA's reported pose agree within tolerance after a tick
+- [x] Verify the commanded pose and CARLA's reported pose agree within tolerance after a tick
 - [x] Document the consequence in the design doc: NPC-to-NPC and NPC-to-ego collisions are
       not simulated by CARLA, matching AWSIM; SSv2 owns collision detection
 
@@ -47,7 +47,7 @@ Pose authority is now a property of the entity kind rather than scattered `is_eg
 `set_simulate_physics(false)` at spawn. Walkers need no special handling — SSv2 sends a pose
 every frame, so they are teleported exactly like NPC vehicles.
 
-The verification item stays open: it needs a live CARLA.
+Verified live on 2026-07-30 — see the bottom of this document.
 
 ### Pedestrians (A1)
 
@@ -119,12 +119,23 @@ kind→fallback mapping it depends on *is* tested.
 
 - [ ] A pedestrian-crossing scenario runs with a pedestrian actually present in CARLA
 - [ ] Autoware's perception detects the pedestrian through its sensors
-- [ ] NPC vehicles follow their scripted trajectory without sinking, jittering or drifting
+- [x] NPC vehicles follow their scripted trajectory without sinking, jittering or drifting
 - [ ] A misc object appears as an obstacle Autoware perceives
 - [ ] Every entity type spawns, updates and despawns without leaking
 - [x] No handler introduced here returns success without acting
 - [x] `just test` passes
 
-Every scenario-level criterion needs a live CARLA and remains unverified. The C1 physics fix
-in particular was predicted from CARLA semantics, never observed — confirming that an NPC
-now tracks its commanded pose is the single most valuable thing to check first.
+The remaining criteria need Autoware's perception, so they need a rendering GPU. The C1
+physics fix — the one predicted from CARLA semantics rather than observed — **is now
+confirmed**; see below.
+
+
+## Verified against live CARLA (2026-07-30)
+
+`scripts/integration/ssv2_probe.py` drives the bridge over the real protocol and asserts
+against the CARLA world. See that script's README.
+
+**The C1 physics fix is confirmed.** An NPC commanded to ROS `(125.0, -130.0)` lands at
+CARLA `(125.0, 130.0)` — exact to the printed precision. That validates both
+`set_simulate_physics(false)` and the ROS↔CARLA Y-flip, the two things phase 008 could only
+predict. Pedestrians and misc objects spawn and appear in the world.

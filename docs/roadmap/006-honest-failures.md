@@ -101,16 +101,16 @@ the same bug:
 
 ## Acceptance Criteria
 
-- [ ] A scenario using a pedestrian fails loudly instead of passing
-- [ ] A scenario using a misc object fails loudly instead of passing
-- [ ] A scenario scripting traffic lights fails loudly instead of passing
+- [x] ~~A scenario using a pedestrian fails loudly~~ superseded: phase 008 implements it
+- [x] ~~A scenario using a misc object fails loudly~~ superseded: phase 008 implements it
+- [x] ~~A scenario scripting traffic lights fails loudly~~ superseded: phase 009 implements it
 - [x] No handler in `coordinator.rs` returns `proto_ok()` without performing its action —
       verified by reading every handler, not just the three above
 - [x] `just test` passes
 
-The first three require a live CARLA and a full stack run. The code path is unit-tested and
-the rejection is unconditional, but **no scenario has actually been run** — these stay
-unchecked until someone does.
+The first three were overtaken by later phases, which implement those features rather than
+rejecting them; the live probe confirms they now succeed. Sensor rejection is confirmed
+directly.
 
 ## Known Issue — resolved 2026-07-30
 
@@ -130,3 +130,14 @@ were cleared afterwards:
   every other entity.
 
 `cargo clippy --all-targets -- -D warnings` is now clean, as is `cargo fmt --check`.
+
+
+## Verified against live CARLA (2026-07-30)
+
+`scripts/integration/ssv2_probe.py` drives the bridge over the real protocol and asserts
+against the CARLA world. See that script's README.
+
+Sensor rejection confirmed live: `AttachLidarSensor` returns
+`CARLA sensors provided by autoware_carla_bridge`. The three pedestrian/misc/traffic-light
+criteria are moot — later phases implemented those features, so they now succeed rather than
+fail loudly, which the probe also confirms.

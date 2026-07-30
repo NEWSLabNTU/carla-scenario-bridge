@@ -128,12 +128,25 @@ right rather than something to smuggle into this phase.
 ## Acceptance Criteria
 
 - [ ] Running the same scenario twice in a row succeeds both times, no CARLA restart
-- [ ] After a clean shutdown, `world.actors()` contains nothing this bridge spawned
+- [x] After a clean shutdown, `world.actors()` contains nothing this bridge spawned
 - [ ] After a Ctrl-C mid-scenario, the same holds
-- [ ] A second `Initialize` in one process does not leak the first run's actors
+- [x] A second `Initialize` in one process does not leak the first run's actors
 - [ ] CARLA restarted mid-run: csb recovers rather than erroring until killed
 - [x] `just test` passes
 
-Every criterion except the last needs a live CARLA. The code paths exist and the pure logic is
-unit-tested, but **none of this has been run against a real server** — the leak fix, the spawn
-retry, and the reconnect are all unverified end to end.
+The teardown criteria are now confirmed against a real server; see below. Ctrl-C teardown and
+mid-run CARLA loss remain unverified — both need deliberately killing a process mid-scenario,
+which the probe does not do.
+
+
+## Verified against live CARLA (2026-07-30)
+
+`scripts/integration/ssv2_probe.py` drives the bridge over the real protocol and asserts
+against the CARLA world. See that script's README.
+
+`Teardown: 3 spawned, 3 destroyed, 0 failed`, and a fresh world handle then reports 0
+vehicles, 0 walkers, 0 props. A second `Initialize` cleans up the previous run.
+
+Running the probe twice without restarting CARLA also exposed a real bug: `initialize()`
+recorded async mode without applying it, so a second run inherited a synchronous CARLA and
+resurrected the gap 1 deadlock. Fixed by `force_async_mode`.
