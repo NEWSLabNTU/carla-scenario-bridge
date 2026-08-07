@@ -49,10 +49,10 @@ throw), `UserDefinedValueCondition` on ego state (`currentState` pinned `"INITIA
 MRM/emergency states silently `""` forever), RTC cooperate commands (throw synchronously).
 Pose/distance/collision/traffic-light conditions are all simulator-fed and safe.
 
-Conclusion: full unmanagement is an upstream-contribution-sized change (make the engage gate
-and the concealer optional per ego), not a launch-configuration change. This phase therefore
-delivers the **un-fork**, and full unmanagement moves to [005](005-hardening-awf-contribution.md)'s
-upstream agenda if it is ever worth its cost.
+Conclusion: full unmanagement is a patch-sized change to SSv2 (make the engage gate and the
+concealer optional per ego), not a launch-configuration change. This phase therefore
+delivers the **un-fork**; full unmanagement is [013](013-forked-unmanaged-ego.md), carried
+on the NEWSLabNTU fork and offered upstream via [005](005-hardening-awf-contribution.md).
 
 ### What the un-fork wins
 

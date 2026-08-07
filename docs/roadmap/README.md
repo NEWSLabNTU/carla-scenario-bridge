@@ -27,6 +27,7 @@ what unblocks what.
 - [010: Multi-Instance](010-multi-instance.md) — config loading, role names, background AVs
 - [011: Robustness](011-robustness.md) — tick timeouts, ego respawn, duplicate-publisher hazards
 - [012: SSv2-Unmanaged Autoware](012-ssv2-unmanaged-autoware.md) — SSv2 stops *launching* Autoware (`launch_autoware:=false` against our externally-launched ego stack); kills the last SSv2 patch. Spike done 2026-08-08
+- [013: Unmanaged Ego on the Fork](013-forked-unmanaged-ego.md) — `managed_ego:=false` patch on the NEWSLabNTU fork; ego gets its own domain, pilot, and clock like every background AV
 
 ### Why this order
 
@@ -44,6 +45,10 @@ start appearing — 009 adds per-frame work and makes that likelier.
 "reuse a running Autoware" mode — the concealer still initializes, routes and engages, so
 012 needs no pilot and no longer depends on 010. It can run as soon as a live single-ego
 stack exists to verify against.
+
+013 layers on 012 and does depend on 010's pilot: with the concealer's engage gate patched
+out on the NEWSLabNTU fork, the pilot is the only thing that routes and engages the ego.
+Ship 012 first — it stands alone and shrinks 013's fork patch to the minimum.
 
 ## Status
 
