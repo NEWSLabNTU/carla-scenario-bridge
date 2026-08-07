@@ -411,12 +411,38 @@ impl Coordinator {
         if current_town == town {
             tracing::info!("Map '{town}' is already loaded; not reloading");
         } else {
+            // load_world on a town the server does not have segfaults inside carla-rust
+            // (the C++ exception never crosses the FFI as an Err), so the name must be
+            // validated against the server's own list first.
+            let available = self
+                .client
+                .avaiable_maps()
+                .map_err(|e| eyre::eyre!("list available maps: {e}"))?;
+            let known = available
+                .iter()
+                .any(|m| m.rsplit('/').next() == Some(town.as_str()));
+            if !known {
+                eyre::bail!(
+                    "Map '{town}' is not available on this CARLA server. Available: {}",
+                    available
+                        .iter()
+                        .map(|m| m.rsplit('/').next().unwrap_or(m))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+
             tracing::info!("Loading map '{town}' (CARLA currently holds '{current_town}')");
-            let world = self
+            // A first load of a town takes longer than the 30 s RPC timeout when the
+            // server renders; widen it for the load and restore it afterwards even on
+            // failure.
+            let _ = self.client.set_timeout(Duration::from_secs(120));
+            let loaded = self
                 .client
                 .load_world(&town)
-                .map_err(|e| eyre::eyre!("load world '{town}': {e}"))?;
-            self.world = world;
+                .map_err(|e| eyre::eyre!("load world '{town}': {e}"));
+            let _ = self.client.set_timeout(Duration::from_secs(30));
+            self.world = loaded?;
 
             // The old world and everything in it is gone. Anything still recorded for
             // teardown refers to actors that no longer exist.

@@ -474,19 +474,32 @@ mod tests {
 mod real_map_tests {
     use super::*;
 
-    /// Parse the actual TUM-converted maps when they are available locally.
+    /// Parse the actual converted map pack when it is available locally.
     ///
-    /// Ignored by default: the maps live on a NAS mount that is not present everywhere.
-    /// Run with `cargo test -- --ignored --nocapture` where they are.
+    /// Ignored by default: the maps are large and not checked in. Looks at
+    /// `CSB_MAP_SOURCE`, then the repo's `data/carla-autoware-bridge` (populated by
+    /// `scripts/download_maps.sh`), then the original NAS path. Run with
+    /// `cargo test -- --ignored --nocapture` where one of them exists.
     #[test]
-    #[ignore = "requires the TUM map pack on a local/NAS path"]
+    #[ignore = "requires the map pack on a local/NAS path"]
     fn parses_the_real_tum_maps() {
-        let base = format!(
+        let repo_data = format!(
+            "{}/../../data/carla-autoware-bridge",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let nas = format!(
             "{}/nas/autoveh/dataset/CARLA-map-from-TUM",
             std::env::var("HOME").expect("HOME")
         );
+        let base = std::env::var("CSB_MAP_SOURCE").unwrap_or_else(|_| {
+            if std::path::Path::new(&repo_data).is_dir() {
+                repo_data
+            } else {
+                nas
+            }
+        });
 
-        for town in ["Town01", "Town02", "Town03", "Town05", "Town10"] {
+        for town in ["Town01", "Town02", "Town03", "Town05", "Town10", "Town10HD"] {
             let path = std::path::Path::new(&base)
                 .join(town)
                 .join("lanelet2_map.osm");
