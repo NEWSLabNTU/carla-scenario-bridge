@@ -167,7 +167,21 @@ carla-stop:
 carla-status:
     systemctl --user status "carla-run-{{carla_port}}" || true
 
-# Run SSv2 scenario (adapter + bridge must be running separately)
+# Launch the ego's Autoware + acb_bridge in SSv2's ROS domain (no domain override here:
+# SSv2's concealer needs plain ROS reachability). Long-lived: start it once, BEFORE any
+# `just scenario`, and reuse it across scenario runs.
+# Usage: just ego-av [map_path]
+ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
+    #!/usr/bin/env bash
+    set -e
+    source "{{project}}/install/setup.bash"
+    exec play_launch launch --web-addr 0.0.0.0:8082 \
+        csb_launch ego_av.launch.xml \
+        map_path:="{{map_path}}" \
+        carla_port:={{carla_port}}
+
+# Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already
+# be up; SSv2 no longer launches Autoware)
 # Usage: just scenario /path/to/scenario.xosc
 scenario scenario_file:
     #!/usr/bin/env bash

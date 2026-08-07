@@ -117,16 +117,20 @@ on the NEWSLabNTU fork and offered upstream via [005](005-hardening-awf-contribu
 
 ### Launch
 
-- [ ] `ego_av.launch.xml` brings up Autoware + `acb_bridge` for the ego **in SSv2's
+- [x] `ego_av.launch.xml` brings up Autoware + `acb_bridge` for the ego **in SSv2's
       domain**, `publish_clock:=false`, reusing the structure of
-      `background_av.launch.xml` — one launch mechanism, domain and clock policy as config
-- [ ] The scenario launch sets `launch_autoware:=false` and keeps `sensor_model` /
+      `background_av.launch.xml` — one launch mechanism, domain and clock policy as
+      config. `just ego-av` runs it; `demo.launch.xml` includes it in place of its bare
+      `acb_bridge` include.
+- [x] The scenario launch sets `launch_autoware:=false` and keeps `sensor_model` /
       `vehicle_model` (still read by `EgoEntity` before the branch); drop
       `autoware_launch_package` / `autoware_launch_file`
 - [ ] Startup order documented and enforced where possible: the ego stack must be up and
       Autoware's ADAPI services available before SSv2 spawns the ego — the concealer's
       constructor queues a `ChangeToStop` with a 180 s service timeout, so a late stack
-      turns into a slow, confusing failure
+      turns into a slow, confusing failure. *Documented (ssv2-launch-configuration.md,
+      launch-file comments); no mechanical enforcement yet — needs a live run to pick a
+      readiness check that actually gates.*
 - [ ] Scenario-end semantics checked: with no child process, SSv2 cannot kill Autoware on
       exit; the ego stack persists across scenario runs. Verify the concealer's
       stop-state reset actually returns the reused Autoware to a re-engageable state for
@@ -134,7 +138,12 @@ on the NEWSLabNTU fork and offered upstream via [005](005-hardening-awf-contribu
 
 ### Delete the fork machinery
 
-- [ ] Delete both local commits on the SSv2 submodule; pin clean upstream 25.0.22
+> **Superseded in part**: the SSv2 fork now carries phase 013's `managed_ego` series, so
+> "pin clean upstream" no longer applies. The `launch.hpp` fork-machinery commits still
+> get dropped, but via 013's branch (rebased without them), not a clean-upstream pin.
+
+- [ ] Drop the two `launch.hpp` fork-machinery commits from the SSv2 submodule — via
+      013's `managed_ego` branch, which replaces the old "pin clean upstream 25.0.22"
 - [ ] Remove `PLAY_LAUNCH_WEB_ADDR` plumbing from our launch files and docs
 - [ ] Close gap 10 in [multi-instance-architecture.md](../design/multi-instance-architecture.md)
 
@@ -144,11 +153,13 @@ on the NEWSLabNTU fork and offered upstream via [005](005-hardening-awf-contribu
       drives the ego's *autonomy* (initialize, route, engage); it launches nothing
 - [ ] Update [ssv2-launch-configuration.md](../design/ssv2-launch-configuration.md):
       `launch_autoware:=false`, the ego stack's launch file, startup order; resolve or
-      delete the AutowareUniverse conflict section per the live check
+      delete the AutowareUniverse conflict section per the live check. *Done except the
+      conflict section, which waits on the live check.*
 - [ ] Update the roles table and startup sequence in
       [multi-instance-architecture.md](../design/multi-instance-architecture.md)
 - [ ] Record the reuse semantics: one long-lived ego stack across scenario runs, reset to
-      stop state between them
+      stop state between them. *Recorded in ssv2-launch-configuration.md; the reset flow
+      itself is still unverified (see Launch item above).*
 
 ### Tests
 

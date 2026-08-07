@@ -1,5 +1,7 @@
 <launch>
   <arg name="scenario" description="Path to .xosc scenario file" />
+  <arg name="map_path" default="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town01"
+       description="Map directory for the ego's Autoware; must match the scenario's LogicFile" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
   <arg name="carla_version" default="0.9.16" />
@@ -13,16 +15,18 @@
     <arg name="ssv2_port" value="$(var ssv2_port)" />
   </include>
 
-  <!-- 2. autoware_carla_bridge (CARLA sensors + vehicle interface to ROS 2)
-       publish_clock=false: SSv2's traffic_simulator owns /clock in this domain. A second
-       publisher makes every localization node log "Detected jump back in time. Clearing
-       TF buffer". See docs/design/multi-instance-architecture.md. -->
-  <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
+  <!-- 2. Ego stack: Autoware + acb_bridge, in this (SSv2's) domain. SSv2 no longer forks
+       Autoware; the concealer connects to this stack. Launched here alongside SSv2, the
+       ordering is not enforced — the concealer's 180 s ADAPI service timeout is the only
+       slack for Autoware's startup. For repeated runs, launch ego_av.launch.xml
+       separately and reuse it. -->
+  <include file="$(find-pkg-share csb_launch)/launch/ego_av.launch.xml">
+    <arg name="map_path" value="$(var map_path)" />
+    <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
-    <arg name="publish_clock" value="false" />
   </include>
 
-  <!-- 3. SSv2 scenario runner + Autoware (concealer launches Autoware internally) -->
+  <!-- 3. SSv2 scenario runner (launch_autoware:=false — connects to the stack above) -->
   <include file="$(find-pkg-share csb_launch)/launch/carla_scenario.launch.xml">
     <arg name="scenario" value="$(var scenario)" />
     <arg name="port" value="$(var ssv2_port)" />

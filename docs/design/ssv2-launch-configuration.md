@@ -5,7 +5,8 @@ How to launch scenario_simulator_v2 to use this adapter as its backend instead o
 ## Required Launch Parameters
 
 ```bash
-just scenario /path/to/scenario.xosc
+just ego-av                            # ego's Autoware + acb_bridge, once, long-lived
+just scenario /path/to/scenario.xosc   # then, per scenario run
 ```
 
 Or manually:
@@ -15,16 +16,20 @@ source /opt/autoware/1.5.0/setup.bash
 source ~/repos/autoware_carla_bridge/install/setup.bash
 source install/setup.bash
 
+# First: the ego stack, in the same ROS domain SSv2 will run in. Wait for Autoware's
+# ADAPI services to come up before starting a scenario.
+play_launch launch --web-addr 0.0.0.0:8082 \
+    csb_launch ego_av.launch.xml \
+    map_path:=$PROJECT/data/carla-autoware-bridge/Town01
+
+# Then, per scenario run:
 play_launch launch --web-addr 0.0.0.0:8081 \
     scenario_test_runner scenario_test_runner.launch.py \
     scenario:=/path/to/scenario.xosc \
-    map_path:=$ACB_DIR/data/carla-autoware-bridge/Town01 \
     architecture_type:=awf/universe/20250130 \
-    autoware_launch_package:=acb_launch \
-    autoware_launch_file:=carla_simulator.launch.xml \
     launch_simple_sensor_simulator:=false \
     simulate_localization:=false \
-    launch_autoware:=true \
+    launch_autoware:=false \
     launch_rviz:=false \
     record:=false \
     port:=5555 \
@@ -36,33 +41,43 @@ play_launch launch --web-addr 0.0.0.0:8081 \
 
 | Parameter | Value | Why |
 |---|---|---|
-| `autoware_launch_package` | `acb_launch` | Use our CARLA-optimized Autoware launch (not `autoware_launch`). Provides `use_sim_time`, MRM timeout config, etc. |
-| `autoware_launch_file` | `carla_simulator.launch.xml` | Our launch file with CARLA-specific settings (from autoware_carla_bridge). |
 | `launch_simple_sensor_simulator` | `false` | Don't launch SSv2's built-in simulator. This adapter replaces it. |
 | `simulate_localization` | `false` | Use real GNSS->NDT localization from CARLA sensors, not ground-truth poses. |
-| `launch_autoware` | `true` | SSv2's concealer launches Autoware (init localization, set route, engage). |
+| `launch_autoware` | `false` | Don't fork Autoware; connect the concealer to the Autoware already in this ROS domain (`ego_av.launch.xml`). SSv2 still drives init/route/engage through it. |
 | `port` | `5555` (or `$SSV2_PORT`) | ZMQ port the adapter listens on. Must match adapter's `SSV2_PORT`. |
-| `map_path` | Path to map directory | Directory with `lanelet2_map.osm` and `pointcloud_map.pcd`. Default: `$ACB_DIR/data/carla-autoware-bridge/$MAP_NAME` |
 | `architecture_type` | `awf/universe/20250130` | Must match Autoware version for topic naming and concealer behavior. |
-| `sensor_model` | `acb_sensor_kit` | Our CARLA sensor kit (from autoware_carla_bridge). |
-| `vehicle_model` | `acb_vehicle` | Our CARLA vehicle model (from autoware_carla_bridge). |
+| `sensor_model` | `acb_sensor_kit` | Still required with `launch_autoware:=false`: `EgoEntity` reads it before it reaches the `launch_autoware` branch (`ego_entity.cpp:64-65`). |
+| `vehicle_model` | `acb_vehicle` | Same as `sensor_model` — read unconditionally (`ego_entity.cpp:64-65`). |
 | `launch_rviz` | `false` | SSv2's RViz not needed; use Autoware's own if visualization required. |
 | `record` | `false` | Disable rosbag recording for initial testing. |
 
-### Critical: Autoware Launch Package
+`autoware_launch_package` / `autoware_launch_file` are gone: they configured the fork that
+no longer happens. `map_path` moved to the ego stack launch; the scenario runner takes the
+map from the `.xosc`'s `LogicFile`.
 
-SSv2's `FieldOperatorApplication` (concealer) launches Autoware as a child process. By default it uses `autoware_launch/planning_simulator.launch.xml`, which doesn't have our CARLA-specific settings:
+### The Ego's Autoware Stack
+
+SSv2's `FieldOperatorApplication` (concealer) no longer launches Autoware as a child
+process. `ego_av.launch.xml` brings up the same launch file the concealer used to fork —
+`acb_launch/carla_simulator.launch.xml` — together with the ego's `acb_bridge`
+(`publish_clock:=false`), mirroring `background_av.launch.xml`. That launch file carries
+the CARLA-specific settings a stock `autoware_launch/planning_simulator.launch.xml` lacks:
 - `use_sim_time=true` globally
 - `system_run_mode=logging_simulation` (disables pose_initializer stop check)
 - Relaxed MRM handler timeouts
 - CARLA-optimized NDT parameters
 - Traffic light recognition disabled
 
-Setting `autoware_launch_package:=acb_launch` and `autoware_launch_file:=carla_simulator.launch.xml` makes SSv2 launch our CARLA-optimized Autoware configuration. This requires `autoware_carla_bridge` to be built and its `install/` sourced.
+Two constraints replace the old fork parameters:
+- **Domain**: the ego stack must run in SSv2's `ROS_DOMAIN_ID` — the concealer reaches it
+  over plain ROS topics and services. `ego_av.launch.xml` sets no domain; run it with
+  SSv2's domain ambient.
+- **Environment**: `autoware_carla_bridge` must be built and its `install/` sourced where
+  `ego_av.launch.xml` runs (it resolves `acb_launch` and `acb_bridge`).
 
 ### Source Order Matters
 
-The `just scenario` recipe sources three environments:
+The `just ego-av` and `just scenario` recipes source three environments:
 1. `/opt/autoware/1.5.0/setup.bash` — base Autoware packages
 2. `$ACB_DIR/install/setup.bash` — autoware_carla_bridge packages (acb_launch, sensor_kit, vehicle)
 3. `$PROJECT/install/setup.bash` — SSv2 packages (scenario_test_runner, etc.)
@@ -74,31 +89,46 @@ All three must be sourced for the full launch to resolve all package dependencie
 Four processes across three terminals (CARLA is a background service):
 
 ```
-Terminal 1 (background):  just carla-start           → CARLA server on :2000
-Terminal 2:               just run                    → adapter (CARLA + ZMQ :5555)
-Terminal 3:               cd $ACB_DIR && just bridge  → autoware_carla_bridge (sensors + vehicle)
-Terminal 4:               just scenario <file>        → SSv2 + Autoware
+Terminal 1 (background):  just carla-start      → CARLA server on :2000
+Terminal 2:               just run              → adapter (CARLA + ZMQ :5555)
+Terminal 3:               just ego-av           → ego's Autoware + acb_bridge (long-lived)
+Terminal 4:               just scenario <file>  → SSv2 (per run)
 ```
 
 **Order matters:**
 1. **CARLA** — `just carla-start` (wait ~30s for initialization)
 2. **Adapter** — `just run` (connects to CARLA, binds ZMQ port, waits for SSv2 requests)
-3. **autoware_carla_bridge** — `cd $ACB_DIR && just bridge` (connects to CARLA, waits for hero vehicle)
-4. **SSv2** — `just scenario <file>` (connects to adapter, spawns ego, launches Autoware, runs scenario)
+3. **Ego stack** — `just ego-av` (Autoware + `acb_bridge`; bridge connects to CARLA and waits for the hero vehicle)
+4. **SSv2** — `just scenario <file>` (connects to adapter, spawns ego, connects the concealer to the running Autoware, runs scenario)
+
+The ego stack must be up — and Autoware's ADAPI services available — **before** SSv2
+starts. With `launch_autoware:=false` nothing enforces this by construction anymore: the
+concealer's constructor queues a `ChangeToStop` ADAPI call with a 180 s service timeout,
+so a scenario started against a missing or late ego stack does not fail fast — it dies
+~180 s in with an `AutowareError` service timeout. Check that
+`/api/routing/set_route_points` (or any `/api/...` service) is listed by `ros2 service
+list` before starting a scenario.
+
+**Reuse across runs:** SSv2 forked nothing, so it kills nothing on scenario end — the ego
+stack persists and the next `just scenario` reuses it. This is the concealer's intended
+`launch_autoware:=False` flow: it returns Autoware to a safe STOP state between scenarios
+(`field_operator_application.cpp:171-180`) so the next run can initialize, route, and
+engage again. One long-lived ego stack, many scenario runs; restart it only when Autoware
+itself is wedged.
 
 **What happens in sequence:**
-1. SSv2 sends `Initialize` → adapter sets CARLA sync mode
-2. SSv2 sends `SpawnVehicleEntity(ego, is_ego=true)` → adapter spawns vehicle with `role_name="hero"`
-3. `autoware_carla_bridge` detects hero vehicle → attaches LiDAR, camera, IMU, GNSS sensors
-4. SSv2's `FieldOperatorApplication` launches Autoware (`acb_launch/carla_simulator.launch.xml`)
-5. Autoware's `robot_state_publisher` publishes TF tree → bridge resolves sensor frames
-6. Bridge starts publishing sensor data + vehicle status to ROS 2 topics
-7. SSv2 concealer calls `/api/localization/initialize` → GNSS→gnss_poser→NDT→localized
-8. SSv2 concealer calls `/api/routing/set_route_points` → Autoware plans route
-9. SSv2 concealer calls `/api/external/set/engage` → Autoware drives
-10. Each `UpdateFrame`: adapter calls `world.tick()` → CARLA steps → bridge publishes `/clock`
-11. Each `UpdateEntityStatus`: adapter reads ego pose from CARLA → reports to SSv2
-12. SSv2 evaluates scenario conditions (ReachPositionCondition, timeout) → exitSuccess or exitFailure
+1. `just ego-av` brings up Autoware (`acb_launch/carla_simulator.launch.xml`) and the ego's `acb_bridge`; the bridge waits for a hero vehicle
+2. SSv2 sends `Initialize` → adapter sets CARLA sync mode
+3. SSv2 sends `SpawnVehicleEntity(ego, is_ego=true)` → adapter spawns vehicle with `role_name="hero"`
+4. `acb_bridge` detects the hero vehicle → attaches LiDAR, camera, IMU, GNSS sensors; resolves sensor frames from Autoware's TF tree
+5. Bridge starts publishing sensor data + vehicle status to ROS 2 topics
+6. SSv2 concealer (already connected to the running Autoware) calls `/api/localization/initialize` → GNSS→gnss_poser→NDT→localized
+7. SSv2 concealer calls `/api/routing/set_route_points` → Autoware plans route
+8. SSv2 concealer calls `/api/external/set/engage` → Autoware drives
+9. Each `UpdateFrame`: adapter calls `world.tick()` → CARLA steps → bridge publishes `/clock`
+10. Each `UpdateEntityStatus`: adapter reads ego pose from CARLA → reports to SSv2
+11. SSv2 evaluates scenario conditions (ReachPositionCondition, timeout) → exitSuccess or exitFailure
+12. On scenario end SSv2 requests Autoware's stop state and exits; the ego stack stays up for the next run
 
 ## Clock Synchronization
 
