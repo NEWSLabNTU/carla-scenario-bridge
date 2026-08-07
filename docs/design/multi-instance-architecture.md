@@ -116,15 +116,23 @@ asks. `acb_bridge` in this domain runs with `publish_clock:=false`, because SSv2
 ROS_DOMAIN_ID=1 PLAY_LAUNCH_WEB_ADDR=0.0.0.0:8083 \
   play_launch launch csb_launch background_av.launch.xml \
       vehicle_name:=bg_av_1 \
-      map_path:=$PWD/data/carla-autoware-bridge/Town01
+      map_path:=$PWD/data/carla-autoware-bridge/Town01 \
+      goal_poses_file:=$PWD/scenarios/bg_av_1_poses.yaml
 ```
 
 `publish_clock` is `true` here — there is no SSv2 in this domain, so without it there would
 be no simulation clock at all. `PLAY_LAUNCH_WEB_ADDR` keeps the web UI off the port the ego's
 Autoware already took.
 
+`goal_poses_file` feeds this domain's pilot (`acb_pilot`'s `auto_drive`), which replaces the
+concealer here: it waits for localization, sets the route, and engages. The file is in
+acb_pilot's own format — `goal_pose: {x, y, z, qx, qy, qz, qw}`, quaternion in the map
+frame — not the `{x, y, z, yaw}` shorthand recorded in `bridge_config.yaml`. See
+[Per-domain pilot](#per-domain-pilot) below.
+
 Order matters only in that CARLA comes first. Each `acb_bridge` waits for both its Autoware
-and its vehicle, so `D1` may start before or after the scenario.
+and its vehicle, and the pilot waits for the AD API and localization, so `D1` may start
+before or after the scenario.
 
 **What you get**: the ego's Autoware perceives `bg_av_1` through its own sensors, as an
 ordinary obstacle. SSv2 does not know it exists.
@@ -172,12 +180,14 @@ background_avs:
     ros_domain_id: 1          # informational; launch owns the actual domain
     blueprint: vehicle.tesla.model3
     spawn_pose: {x: 0.0, y: 0.0, z: 0.5, yaw: 0.0}   # ROS frame
-    goal_pose:  {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}   # consumed by that domain's pilot
+    goal_pose:  {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}   # informational; the pilot reads its own file
 ```
 
 `ros_domain_id` and `goal_pose` are not used by `csb_bridge` itself — it only spawns the
 vehicle with the right `role_name`. They are recorded here so one file describes the whole
-run, and the per-domain launch reads the same file.
+run. Launch does not parse this file either: the operator passes matching values
+(`vehicle_name`, `ROS_DOMAIN_ID`, `goal_poses_file`) as launch arguments, and this config is
+the single place to read off what they should be.
 
 ### acb_bridge
 
@@ -192,6 +202,27 @@ Changes required, all small and all additive:
 
 `vehicle_name` is already a parameter defaulting to `hero`, so per-instance vehicle selection
 needs no change — each background `acb_bridge` is launched with its own `role_name`.
+
+### Per-domain pilot
+
+The concealer exists only in the ego's domain, so every background domain needs something
+else to set a route and engage. That is `acb_pilot`'s `auto_drive` node, launched by
+`background_av.launch.xml` (skip with `use_pilot:=false`). It waits for the AD API services,
+waits for GNSS-driven localization to reach `INITIALIZED`, sets the route, engages
+autonomous mode, and exits when the route state reaches `ARRIVED` — nonzero on any failure,
+so a pilot that could not engage is visible in the process table, not just in a vehicle that
+never moves.
+
+Its one input is the `poses_file` parameter, exposed as the `goal_poses_file` launch
+argument: a YAML whose `goal_pose` is `{x, y, z, qx, qy, qz, qw}` in the map frame. This is
+deliberately not derived from `bridge_config.yaml`'s `goal_pose: {x, y, z, yaw}` — the pilot
+lives in a read-only submodule and takes a file path, not an inline pose, and converting at
+launch time would mean generating files from XML. acb_pilot ships per-town examples under
+its `config/poses/` share directory, and `ros2 run acb_pilot capture_poses` records new ones
+from RViz goal clicks.
+
+The pilot adds no startup-order constraint: it only ever waits, so it comes up with the rest
+of the domain's stack.
 
 ### SSv2 / concealer
 

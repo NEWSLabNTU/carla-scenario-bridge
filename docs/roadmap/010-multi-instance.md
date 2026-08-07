@@ -89,15 +89,29 @@ wrong trade.
 
 - [x] Launch file bringing up Autoware + `acb_bridge` for one background AV in a given domain
 - [x] `publish_clock:=true` in background domains, `false` in the ego's — already supported
-- [ ] A pilot per background domain to set route and engage, since no concealer is present
+- [x] A pilot per background domain to set route and engage, since no concealer is present
 - [x] Document the startup order across domains
 
-`csb_launch/launch/background_av.launch.xml` brings up Autoware and `acb_bridge` for one AV.
+`csb_launch/launch/background_av.launch.xml` brings up Autoware, `acb_bridge` and the pilot
+for one AV.
 
-The pilot is **not** done. `acb_pilot` exists in the acb workspace and does route-and-engage,
-but wiring it per domain and feeding it `goal_pose` from this config has not been attempted —
-without a live stack there is no way to tell whether it works, and a pilot that silently fails
-to engage looks exactly like one that works until the vehicle never moves.
+The pilot is wired but unverified. `acb_pilot`'s `auto_drive` node now launches per domain:
+it waits for the AD API services and GNSS-driven localization, sets the route, engages, and
+exits on arrival — the concealer's job, minus the concealer. It runs unless
+`use_pilot:=false`.
+
+The goal does **not** come from `bridge_config.yaml`. The pilot's only input is a
+`poses_file` ROS parameter — a YAML with `goal_pose: {x, y, z, qx, qy, qz, qw}` — while the
+config records `goal_pose: {x, y, z, yaw}` inline. A file path versus an inline pose, a
+quaternion versus a yaw: aligning them would mean either changing the pilot (a read-only
+submodule) or generating pose files at launch time. So the launch takes a
+`goal_poses_file` argument, and the config's `goal_pose` stays what it always was to the
+bridge — an informational record of intent, read by nobody.
+
+What still needs a live stack: that the pilot's engage actually succeeds in a background
+domain (its timing waits were tuned in single-domain runs), and that failure is loud. The
+failure mode is bounded, though — an empty `goal_poses_file` is a fatal log and a nonzero
+exit, not a vehicle that silently never moves.
 
 ### Concealer web-addr (gap 10)
 
@@ -140,6 +154,6 @@ background AV will actually read it.
 - [x] `just test` passes
 
 The unchecked criteria all need a live two-domain run. The mechanism keeping background AVs
-out of SSv2's view is enforced by construction and unit-tested, but **no background AV has
-ever been spawned**, and the per-domain pilot does not exist — so a two-domain run would come
-up with a background vehicle that localizes and then sits still.
+out of SSv2's view is enforced by construction and unit-tested, and the per-domain pilot is
+wired into the launch — but **no background AV has ever been spawned**, so whether the pilot
+actually engages and drives one has never been observed.

@@ -58,4 +58,6 @@ background_avs: []
 #    ros_domain_id: 1          # informational here; launch owns the actual domain
 #    blueprint: "vehicle.tesla.model3"
 #    spawn_pose: {x: 0.0, y: 0.0, z: 0.5, yaw: 0.0}   # ROS frame, yaw in degrees
-#    goal_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}    # read by that domain's pilot
+#    goal_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}    # informational -- the pilot reads its
+#                                                     # own quaternion poses file, passed as
+#                                                     # goal_poses_file to background_av.launch.xml

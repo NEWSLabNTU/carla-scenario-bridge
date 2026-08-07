@@ -12,6 +12,7 @@
   <exec_depend>carla_scenario_bridge</exec_depend>
   <exec_depend>acb_bridge</exec_depend>
   <exec_depend>acb_launch</exec_depend>
+  <exec_depend>acb_pilot</exec_depend>
   <exec_depend>scenario_test_runner</exec_depend>
 
   <export>

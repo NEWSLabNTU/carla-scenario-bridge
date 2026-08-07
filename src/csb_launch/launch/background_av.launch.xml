@@ -1,6 +1,6 @@
 <launch>
   <!--
-    Autoware + acb_bridge for one background AV.
+    Autoware + acb_bridge + pilot for one background AV.
 
     A background AV is a CARLA vehicle driven by its own Autoware, outside SSv2's model.
     carla_scenario_bridge spawns the vehicle from its `background_avs` config; this file
@@ -9,7 +9,8 @@
     Run this in the AV's own ROS domain, which must differ from the scenario ego's:
 
       ROS_DOMAIN_ID=1 play_launch launch csb_launch background_av.launch.xml \
-          vehicle_name:=bg_av_1 map_path:=/path/to/Town01
+          vehicle_name:=bg_av_1 map_path:=/path/to/Town01 \
+          goal_poses_file:=/path/to/bg_av_1_poses.yaml
 
     `vehicle_name` must match the `role_name` in bridge_config.yaml, because that is how
     acb_bridge finds the vehicle it serves.
@@ -17,9 +18,32 @@
     publish_clock is true here and false for the scenario ego. SSv2 publishes /clock in its
     own domain, but there is no SSv2 in this one, so without this the domain would have no
     simulation clock at all. See docs/design/multi-instance-architecture.md.
+
+    The pilot stands in for SSv2's concealer, which only exists in the ego's domain: it
+    waits for the AD API services and GNSS-driven localization, sets the route, engages
+    autonomous mode, and exits when the vehicle arrives. Without it the AV localizes and
+    then sits still.
+
+    `goal_poses_file` is a YAML file with a `goal_pose` key in acb_pilot's format —
+    quaternion, map frame:
+
+      goal_pose: {x: 153.6, y: -36.3, z: 0.0, qx: 0.0, qy: 0.0, qz: -0.614, qw: 0.789}
+
+    This is NOT the `goal_pose: {x, y, z, yaw}` line in bridge_config.yaml — the pilot
+    takes a file path, not an inline pose, and wants a quaternion, not a yaw. The config's
+    goal_pose stays a human-readable record of intent; this file is what the pilot actually
+    reads. acb_pilot ships per-town examples under
+    $(find-pkg-share acb_pilot)/config/poses/, and `ros2 run acb_pilot capture_poses`
+    records new ones from RViz.
   -->
   <arg name="vehicle_name" description="CARLA role_name of this AV's vehicle" />
   <arg name="map_path" description="Directory with lanelet2_map.osm and pointcloud_map.pcd" />
+  <arg name="goal_poses_file" default=""
+       description="YAML with this AV's goal_pose (acb_pilot format). Required unless use_pilot:=false; the pilot exits fatally if left empty." />
+  <arg name="use_pilot" default="true"
+       description="Set false to bring the stack up without route-and-engage, e.g. to drive from RViz" />
+  <arg name="pilot_timeout" default="600.0"
+       description="Seconds the pilot allows for localization, engagement and arrival combined" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
   <arg name="vehicle_model" default="acb_vehicle" />
@@ -42,4 +66,16 @@
     <arg name="vehicle_name" value="$(var vehicle_name)" />
     <arg name="publish_clock" value="true" />
   </include>
+
+  <!-- 3. Pilot: route and engage, since no concealer exists in this domain.
+       It only waits — for AD API services, then localization — so starting it with
+       everything else imposes no ordering. use_sim_time is set explicitly rather than
+       trusting the Autoware include's set_parameter to leak into this context. -->
+  <group if="$(var use_pilot)">
+    <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen">
+      <param name="poses_file" value="$(var goal_poses_file)" />
+      <param name="timeout" value="$(var pilot_timeout)" />
+      <param name="use_sim_time" value="true" />
+    </node>
+  </group>
 </launch>
