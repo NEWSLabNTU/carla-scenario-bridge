@@ -1,146 +1,185 @@
 # Phase 012: SSv2-Unmanaged Autoware
 
-SSv2 stops launching and managing the ego's Autoware. Every Autoware stack — ego and
-background alike — is brought up externally, and `csb_bridge` remains the only process
-touching CARLA's world settings. SSv2 is reduced to what it is uniquely good at: parsing
-scenarios, puppeteering NPCs, and judging conditions over ZMQ.
+SSv2 stops *launching* the ego's Autoware. Every Autoware stack — ego and background alike —
+is brought up by our launch files, and the SSv2 checkout carries zero local patches. SSv2
+keeps driving the ego's autonomy (initialize, route, engage) through the concealer, which
+connects to the externally-launched stack instead of forking one.
 
-**Source**: replaces Design Principle 5 of [architecture.md](../design/architecture.md);
-resolves the AutowareUniverse dual-publisher conflict tracked in
-[multi-instance-architecture.md](../design/multi-instance-architecture.md#known-conflict-autowareuniverse-vehicle-status);
+**Source**: narrows Design Principle 5 of [architecture.md](../design/architecture.md);
 removes gap 10 (the concealer `launch.hpp` patch) entirely.
-**Depends on**: the per-domain pilot from [010](010-multi-instance.md) — this phase makes the
-ego just another consumer of it. Benefits [011](011-robustness.md) by deleting the
-duplicate-publisher hazard instead of mitigating it.
+**Depends on**: nothing outside this phase. The spike removed the expected dependency on
+010's pilot — see below.
 
-## Problem
+## Spike results (2026-08-08)
 
-Design Principle 5 ("SSv2 Drives Autoware Lifecycle") was written at project scaffold and has
-never been revisited. It predates the multi-instance authority model, and everything that
-model had to work around traces back to it:
+Verified against the `src/scenario_simulator_v2` submodule: upstream 25.0.22 plus two local
+commits touching only `external/concealer/include/concealer/launch.hpp`.
 
-- **Dual vehicle-status publishers.** SSv2's `AutowareUniverse` node publishes
-  `/vehicle/status/*` at 30 Hz from its internal bicycle model while `acb_bridge` publishes
-  the same topics from CARLA PhysX. The two agree only while the models agree — and their
-  divergence is exactly what a scenario is meant to detect.
-  [ssv2-launch-configuration.md](../design/ssv2-launch-configuration.md#autowareuniverse-topic-conflict)
-  accepts this as a "Phase 2 expedient"; it was never meant to be a resting state.
-- **A fork patch we rebase forever.** The concealer hardcodes `--web-addr` for the Autoware
-  it launches; our `launch.hpp` patch parameterises it. The patch exists only because SSv2
-  forks Autoware at all.
-- **Domain asymmetry.** `concealer::ros2_launch` is a plain `fork()` + `exec`, so the ego's
-  Autoware always inherits SSv2's `ROS_DOMAIN_ID`. Background AVs get their own domains,
-  their own `/clock` publisher, and a pilot; the ego gets SSv2's domain, a silenced
-  `publish_clock:=false` special case, and the concealer. Two mechanisms for one job.
-- **Ego lifecycle is invisible to us.** When the concealer fails to engage, the failure
-  surfaces as a scenario timeout inside SSv2, not as anything this bridge can see, log, or
-  retry.
+### `launch_autoware:=false` means "don't fork", not "run without Autoware"
 
-The tick side of this refactor is already done: invariant 1 (only `csb_bridge` calls
-`world.tick()` / `apply_settings()`) is implemented by the `FrameAction` state machine and
-unit-tested. This phase is about the other half — Autoware lifecycle.
+`EgoEntity` inherits `concealer::FieldOperatorApplication` as a base class
+(`ego_entity.hpp:34`) — the concealer is always constructed. The parameter decides exactly
+one thing (`ego_entity.cpp:72-77`): whether the constructor gets a real child pid from
+`concealer::ros2_launch(...)` or `0`. A zero pid skips the fork, the `waitpid` liveness
+check, and the shutdown signalling. Every subscription, service client, and state machine
+stays fully wired. The concealer's own source states the intended use: *"In case of reusing
+the same Autoware instance for multiple scenarios (launch_autoware:=False), we need to
+ensure that Autoware is in a safe STOP state before starting the next scenario"*
+(`field_operator_application.cpp:171-180`).
+
+So the supported configuration is: **an Autoware already running in SSv2's ROS domain,
+launched by someone else**. The concealer finds it, initializes localization, sets the route
+from the scenario, and engages — exactly as today, minus the fork.
+
+### Running with *no* Autoware at all is not viable without forking SSv2
+
+With `launch_autoware:=false` and no Autoware present, a scenario does spawn the ego over
+ZMQ (`is_ego=true`), does tick `UpdateFrame` — and never evaluates a single condition. The
+storyboard is gated on ego engagement (`openscenario_interpreter.cpp:164-177`):
+`startNpcLogic()` waits for `isEngaged()`, which requires the concealer's state machine to
+reach `driving`. With no Autoware, every concealer subscriber returns a default-constructed
+message, the legacy state pins at `initializing`, simulation time stays NaN, and the
+storyboard is never reached. The run then dies cleanly ~180 s in, when the
+`requestChangeToStop` queued at construction exhausts the service-availability timeout
+(`service.hpp:53-63`) and surfaces as `AutowareError` at the next `spinSome()`.
+
+Constructs that would break even if that gate were forked away: ego
+`AcquirePositionAction`/`AssignRouteAction` (Autoware ADAPI services, 180 s timeout →
+throw), `UserDefinedValueCondition` on ego state (`currentState` pinned `"INITIALIZING"`,
+MRM/emergency states silently `""` forever), RTC cooperate commands (throw synchronously).
+Pose/distance/collision/traffic-light conditions are all simulator-fed and safe.
+
+Conclusion: full unmanagement is an upstream-contribution-sized change (make the engage gate
+and the concealer optional per ego), not a launch-configuration change. This phase therefore
+delivers the **un-fork**, and full unmanagement moves to [005](005-hardening-awf-contribution.md)'s
+upstream agenda if it is ever worth its cost.
+
+### What the un-fork wins
+
+- `concealer::ros2_launch()` is never called, so our `launch.hpp` patch — the only local
+  SSv2 modification — becomes dead code and is deleted. Gap 10 closes; the submodule pins
+  clean upstream.
+- The ego's Autoware comes up from our launch files with the same lifecycle, logging, and
+  restartability as every background AV. SSv2 no longer needs
+  `autoware_launch_package`/`autoware_launch_file`; the concealer never spawns a process it
+  can kill on scenario end.
+- No scenario-expressiveness loss and no goal-pose duplication: the concealer still routes
+  from the `.xosc` and still engages.
+
+### What the un-fork does not win
+
+- **No domain symmetry.** The concealer reaches Autoware over plain ROS topics/services, so
+  the ego's Autoware must live in SSv2's `ROS_DOMAIN_ID`. The `publish_clock:=false`
+  special case for the ego's `acb_bridge` stays.
+- **SSv2 still owns the ego's autonomy lifecycle.** Initialize/route/engage remain concealer
+  calls. This phase renames Principle 5's mechanism, not its authority.
+
+### Verify live (side findings, not blockers)
+
+- SSv2 publishes `/clock` unconditionally at frame rate (`api.hpp:64-66`,
+  `api.cpp:146-147`), but with the launch default `use_sim_time:=false` it carries **wall
+  time** (`simulation_clock.cpp:40-47`). Confirm what our launch actually passes and what
+  the ego domain's Autoware consumes — a wall-time `/clock` next to sim-time-stamped sensor
+  data would be a real inconsistency, and today's docs assume SSv2's `/clock` is
+  authoritative sim time.
+- The `AutowareUniverse` vehicle-status dual-publisher conflict
+  ([ssv2-launch-configuration.md](../design/ssv2-launch-configuration.md#autowareuniverse-topic-conflict))
+  may be moot already: that node is constructed inside the `simple_sensor_simulator`
+  process (`simple_sensor_simulator.cpp:201-215`), which we launch with
+  `launch_simple_sensor_simulator:=false`. The `FieldOperatorApplication` node in the
+  interpreter process only subscribes. Check a live run for a second
+  `/vehicle/status/*` publisher; if absent, delete the conflict sections from both design
+  docs.
+- `sensor_model` / `vehicle_model` parameters have no defaults and are read before the
+  `launch_autoware` branch (`ego_entity.cpp:64-65`) — they must stay in the SSv2 launch
+  arguments even though SSv2 no longer launches Autoware.
 
 ## What does not change
 
 - The ZMQ protocol and all 14 handlers. SSv2 still spawns the ego via
   `SpawnVehicleEntity(is_ego=true)` and reads its pose back each frame.
 - Pose authority: ego stays CARLA PhysX; NPCs stay teleported.
+- Scenario semantics: routing, engagement, and every condition work exactly as today.
 - Sensors, NPC puppeteering, traffic lights.
 
 ## Work Items
 
 ### Investigation first (spike)
 
-The design hinges on what our pinned SSv2 (25.0.22) actually does when told not to launch
-Autoware. Answer these against the real code before touching anything else:
-
-- [ ] What does `launch_autoware:=false` do to `EgoEntity` / `FieldOperatorApplication`?
-      Does the interpreter still spawn the ego over ZMQ, still tick, still evaluate
-      conditions — or does it block waiting for an Autoware that never comes?
-- [ ] Which scenario constructs silently die without a concealer: ego `AcquirePositionAction`
-      (routing), engage-state conditions, `UserDefinedValueCondition` reading Autoware
-      state? List them; they define what scenario authors lose.
-- [ ] Does SSv2 still publish `/clock` in its own domain with no Autoware attached, and does
-      anything still consume it there?
-
-The spike's output is a short section in this file stating what is possible without forking
-SSv2. If `launch_autoware:=false` cannot produce a spawning, ticking, condition-evaluating
-run, this phase stops here and the fallback is a minimal upstream contribution to SSv2 —
-not a deeper fork.
-
-### Ego pilot
-
-- [ ] The ego's route and engage come from `acb_pilot` in the ego's domain, exactly as 010
-      plans for background AVs — one mechanism, N consumers
-- [ ] The ego's goal pose comes from bridge config. This is a real authoring cost: a
-      scenario's `AcquirePositionAction` on the ego no longer reaches Autoware, so the goal
-      is stated twice (once in the `.xosc` for SSv2's conditions, once in config for the
-      pilot). Document it loudly rather than hiding it
-- [ ] A pilot that fails to engage is reported by the bridge — visibly, not as a scenario
-      that mysteriously times out
+- [x] What does `launch_autoware:=false` do? → "Don't fork; use the Autoware already in my
+      domain." Spawn/tick/conditions all work when such an Autoware exists; see spike
+      results above.
+- [x] Which scenario constructs die without a concealer-connected Autoware? → All ego
+      autonomy actions and ego-state conditions; catalogued above. Moot for this phase since
+      the concealer stays connected.
+- [x] Does SSv2 still publish `/clock` with no Autoware forked? → Yes, unconditionally;
+      wall-time by default. Special case stays; see verify-live list.
 
 ### Launch
 
-- [ ] `ego_av.launch.xml` (or a generalisation of `background_av.launch.xml`) brings up
-      Autoware + `acb_bridge` + pilot for the ego in its own domain, `publish_clock:=true`
-- [ ] The scenario launch sets `launch_autoware:=false` and drops
-      `autoware_launch_package` / `autoware_launch_file` / `sensor_model` / `vehicle_model`
-      — SSv2 no longer needs to know how Autoware is launched
-- [ ] Delete the concealer `launch.hpp` patch and the `PLAY_LAUNCH_WEB_ADDR` plumbing
-      (gap 10 becomes moot)
-- [ ] Startup order documented: the ego stack comes up like any background stack, before
-      SSv2, waiting on its `role_name`
+- [ ] `ego_av.launch.xml` brings up Autoware + `acb_bridge` for the ego **in SSv2's
+      domain**, `publish_clock:=false`, reusing the structure of
+      `background_av.launch.xml` — one launch mechanism, domain and clock policy as config
+- [ ] The scenario launch sets `launch_autoware:=false` and keeps `sensor_model` /
+      `vehicle_model` (still read by `EgoEntity` before the branch); drop
+      `autoware_launch_package` / `autoware_launch_file`
+- [ ] Startup order documented and enforced where possible: the ego stack must be up and
+      Autoware's ADAPI services available before SSv2 spawns the ego — the concealer's
+      constructor queues a `ChangeToStop` with a 180 s service timeout, so a late stack
+      turns into a slow, confusing failure
+- [ ] Scenario-end semantics checked: with no child process, SSv2 cannot kill Autoware on
+      exit; the ego stack persists across scenario runs. Verify the concealer's
+      stop-state reset actually returns the reused Autoware to a re-engageable state for
+      the next scenario (this is the upstream-intended flow, but it has never run here)
 
-### Clock symmetry
+### Delete the fork machinery
 
-- [ ] With the ego's Autoware out of SSv2's domain, `acb_bridge` publishes `/clock` in the
-      ego's domain like every other domain — the `publish_clock:=false` special case is
-      deleted, not defaulted
-- [ ] Verify nothing in SSv2's own domain needs a `/clock` beyond what SSv2 itself publishes
+- [ ] Delete both local commits on the SSv2 submodule; pin clean upstream 25.0.22
+- [ ] Remove `PLAY_LAUNCH_WEB_ADDR` plumbing from our launch files and docs
+- [ ] Close gap 10 in [multi-instance-architecture.md](../design/multi-instance-architecture.md)
 
 ### Documentation
 
 - [ ] Rewrite Design Principle 5 in [architecture.md](../design/architecture.md): SSv2
-      drives the *scenario*, not Autoware
+      drives the ego's *autonomy* (initialize, route, engage); it launches nothing
+- [ ] Update [ssv2-launch-configuration.md](../design/ssv2-launch-configuration.md):
+      `launch_autoware:=false`, the ego stack's launch file, startup order; resolve or
+      delete the AutowareUniverse conflict section per the live check
 - [ ] Update the roles table and startup sequence in
-      [multi-instance-architecture.md](../design/multi-instance-architecture.md); delete the
-      "Known conflict: AutowareUniverse vehicle status" section once it is resolved by
-      construction
-- [ ] Rewrite [ssv2-launch-configuration.md](../design/ssv2-launch-configuration.md) around
-      the unmanaged launch; the AutowareUniverse mitigation section goes away
-- [ ] Record the scenario-authoring constraint: ego autonomy actions in `.xosc` are limited
-      to what the pilot implements
+      [multi-instance-architecture.md](../design/multi-instance-architecture.md)
+- [ ] Record the reuse semantics: one long-lived ego stack across scenario runs, reset to
+      stop state between them
 
 ### Tests
 
-- [ ] Unit: ego config carries a goal pose; missing goal with an ego present fails at
-      startup, not at engage time
-- [ ] Integration: a run with `launch_autoware:=false` spawns the ego, ticks, and evaluates
-      a pose-based condition
-- [ ] End-to-end: single-ego scenario reaches `exitSuccess` with no concealer process alive
-      anywhere on the host
-- [ ] End-to-end: exactly one `/clock` publisher in every domain, none silenced by
-      configuration
+- [ ] Integration: scenario run with `launch_autoware:=false` against a pre-launched stack
+      reaches the storyboard (conditions evaluate; sim time is not NaN)
+- [ ] Integration: two consecutive scenario runs against the same ego stack both engage
+- [ ] End-to-end: single-ego scenario reaches `exitSuccess` with `ps` showing Autoware only
+      under our launch files, none under SSv2
+- [ ] Regression guard: SSv2 submodule pin is reachable on upstream (no local commits)
 
 ## Acceptance Criteria
 
-- [ ] No process forked by SSv2 exists during a scenario run — `ps` shows Autoware only
-      under our launch files
-- [ ] `/vehicle/status/*` has exactly one publisher in the ego's domain (`acb_bridge`)
+- [ ] No process forked by SSv2 exists during a scenario run
 - [ ] The SSv2 checkout carries zero local patches
-- [ ] Ego and background AV stacks use the same launch file, pilot, and clock policy,
-      differing only in config
-- [ ] A scenario in which Autoware fails to engage produces a bridge-side error naming the
-      pilot, not a bare SSv2 timeout
+- [ ] Ego and background AV stacks share launch structure, differing only in domain and
+      clock config
+- [ ] A scenario retains full expressiveness: ego routing from `.xosc`, engage-state
+      conditions work
+- [ ] Consecutive scenario runs reuse the ego stack without a restart
 - [ ] `just test` passes
 
 ## Risks
 
-- **SSv2 may not tolerate an unmanaged ego at all.** That is what the spike is for; the
-  answer bounds the phase before any launch surgery starts.
-- **Scenario expressiveness shrinks.** Conditions over Autoware internals (engage state,
-  MRM state) stop working. Scenarios that only condition on poses, distances, collisions
-  and traffic lights — everything this bridge feeds back — are unaffected.
-- **The pilot becomes load-bearing for every run**, and 010 records that it has never been
-  wired up. Its integration must land (010's open pilot item) before this phase can be
-  verified end-to-end.
+- **Reuse-reset is unproven here.** The concealer's between-scenarios stop-state flow is
+  upstream-intended but has never run in this project; if Autoware does not return to a
+  re-engageable state, scenario N+1 fails in ways scenario N never showed. The
+  two-consecutive-runs test exists to catch exactly this.
+- **Startup ordering becomes operator-visible.** Today SSv2 launches Autoware at the right
+  moment by construction; now a scenario started before the ego stack is ready fails 180 s
+  later with a service timeout. Mitigate with a readiness check in the scenario launch
+  wrapper.
+- **The wall-time `/clock` question.** If verification shows SSv2's `/clock` has been wall
+  time all along, the ego domain's clock story needs rework independent of this phase —
+  surface it, don't bury it.

@@ -26,7 +26,7 @@ what unblocks what.
 - [009: Map and Traffic Lights](009-map-and-traffic-lights.md) — map loading, signal mapping, recognition
 - [010: Multi-Instance](010-multi-instance.md) — config loading, role names, background AVs
 - [011: Robustness](011-robustness.md) — tick timeouts, ego respawn, duplicate-publisher hazards
-- [012: SSv2-Unmanaged Autoware](012-ssv2-unmanaged-autoware.md) — SSv2 stops launching Autoware; every stack launched externally, one lifecycle mechanism
+- [012: SSv2-Unmanaged Autoware](012-ssv2-unmanaged-autoware.md) — SSv2 stops *launching* Autoware (`launch_autoware:=false` against our externally-launched ego stack); kills the last SSv2 patch. Spike done 2026-08-08
 
 ### Why this order
 
@@ -40,9 +40,10 @@ CARLA is restarted, which makes iterative work on 008-011 impractical.
 The rest follow their dependencies. 011 can be pulled forward if spurious CARLA reconnects
 start appearing — 009 adds per-frame work and makes that likelier.
 
-012 comes after 010 because it generalises 010's per-domain pilot to the ego; the pilot must
-exist before every run depends on it. Its spike (what `launch_autoware:=false` actually does
-in SSv2 25.0.22) can run any time — it only reads code and bounds the phase.
+012's spike (2026-08-08) found that `launch_autoware:=false` is upstream's supported
+"reuse a running Autoware" mode — the concealer still initializes, routes and engages, so
+012 needs no pilot and no longer depends on 010. It can run as soon as a live single-ego
+stack exists to verify against.
 
 ## Status
 
