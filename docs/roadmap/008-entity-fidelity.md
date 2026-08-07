@@ -106,10 +106,13 @@ coincide they pass through, otherwise the kind default applies with a warning na
 - [x] Unit: each kind maps to its `EntityType` and to a same-family fallback blueprint
 - [x] Unit: longitudinal projection keeps its sign; jerk is a rate and stays finite
 - [ ] Unit: asset key → blueprint resolution, including fallback and unknown-key paths
-- [ ] Integration: spawned pedestrian appears in CARLA and tracks its commanded pose
-- [ ] Integration: spawned misc object appears and stays put
-- [ ] Integration: NPC pose after a tick matches the commanded pose within tolerance
-- [ ] Integration: all three types despawn cleanly, no leak (ties to 007)
+- [x] Integration: spawned pedestrian appears in CARLA and tracks its commanded pose
+      — probe, re-verified 2026-08-08
+- [x] Integration: spawned misc object appears and stays put — probe, 2026-08-08
+- [x] Integration: NPC pose after a tick matches the commanded pose within tolerance
+      — probe, 2026-08-08: commanded CARLA(125.0, 130.0), actual (125.0, 130.0)
+- [x] Integration: all three types despawn cleanly, no leak (ties to 007) — probe's second
+      `Initialize` left 0 vehicles, 0 walkers, 2026-08-08
 
 `resolve_blueprint_key` probes CARLA, so it cannot be unit-tested without a live server —
 same `Coordinator` constructibility problem noted in [007](007-repeatable-runs.md). The

@@ -65,14 +65,28 @@ release it stays out of tree is rebase work.
 
 ### Fork patch
 
-- [ ] `managed_ego` parameter through `scenario_test_runner.launch.py` → interpreter →
+Implemented 2026-08-08 on branch `managed-ego` (pushed to NEWSLabNTU), three commits off
+`8d48252fc`: `658ee8ef2` (plumbing), `4cd134103` (inert FOA + fast-fail), `8ba99162c`
+(gate + EgoEntity). Compiled clean (colcon Release, ROS humble + Autoware 1.5.0:
+concealer, traffic_simulator, openscenario_interpreter and deps). The submodule pin stays
+on `8d48252fc` until 012 ships and this branch is verified live.
+
+- [x] `managed_ego` parameter through `scenario_test_runner.launch.py` → interpreter →
       `EgoEntity`, defaulting to `true` (stock behavior byte-for-byte)
-- [ ] FOA constructor body skipped when unmanaged; destructor and `spinSome()` remain safe
-      with no node resources
-- [ ] Engage gate passes when unmanaged; `startNpcLogic()` runs on schedule
-- [ ] Ego autonomy actions fail fast with a message naming `managed_ego:=false`
-- [ ] Patch series kept as isolated commits on a dedicated branch, rebased per upstream
-      release pin
+- [x] FOA constructor made inert when unmanaged — in practice by threading an `active`
+      flag through the `Subscriber`/`Service` constructors, since the resources live in
+      member initializers and cannot be skipped as a "body"; `AutowareUniverse`'s call
+      sites pass literal `true`. Destructor and `spinSome()` safe with `process_id == 0`
+- [x] Engage gate passes when unmanaged; `startNpcLogic()` runs. The interpreter's
+      *automatic* engage at activation is also skipped — it is unconditional upstream, so
+      fast-failing it would have killed every unmanaged run; `FieldOperatorApplication::
+      engage()` itself still throws if anything else reaches it
+- [x] Ego autonomy actions fail fast with a `SemanticError` naming `managed_ego:=false`
+      (initialize, both plans, engage, clearRoute, enableAutowareControl,
+      setVelocityLimit, cooperate commands)
+- [x] Patch series kept as isolated commits on a dedicated branch, rebased per upstream
+      release pin. `managed_ego:=false` also overrides `launch_autoware` — an unmanaged
+      FOA could launch a stack but never supervise or stop it
 
 ### Bridge and launch
 

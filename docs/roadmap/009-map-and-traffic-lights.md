@@ -37,6 +37,13 @@ OpenDRIVE-derived `TrafficLight` actors share no ID space.
 - [x] Document the interaction with [007](007-repeatable-runs.md): `load_world` wipes all
       actors, so teardown bookkeeping must be reset
 
+Two hardening fixes landed 2026-08-08, both found by the probe against carla-rust
+`575f6aa`: `load_world` on a town the server does not have **segfaults** inside the binding
+(the C++ exception never crosses the FFI as an `Err`), so the town is now validated against
+`avaiable_maps()` before loading; and a first map load under rendering took 66 s, past the
+30 s RPC timeout, so the timeout is widened to 120 s for the load and restored afterwards.
+The FFI exception problem is tracked in [007](007-repeatable-runs.md)'s verification notes.
+
 ### Verify carla-rust coverage
 
 - [x] Confirm `Client::load_world`, `TrafficLight::freeze` and `TrafficLight::set_state` are
@@ -134,7 +141,9 @@ what invariant 3 exists to prevent. A scenario that cares about a signal must co
 ### Dead code (gap 6)
 
 - [x] Replace csb's `TrafficLightMapper` stub, which mapped to actor IDs and could not work
-- [ ] Remove `acb_bridge`'s `TrafficLightBridge` stub, or implement it with a stated purpose
+- [x] Remove `acb_bridge`'s `TrafficLightBridge` stub, or implement it with a stated purpose
+      — removed 2026-08-08 (acb `c578eb8`); the actor factory now returns an explicit error
+      for traffic-light actors instead of a do-nothing bridge
 - [x] Confirm removal does not violate invariant 3 — csb remains the only writer
 
 ### Tests
@@ -144,9 +153,12 @@ what invariant 3 exists to prevent. A scenario that cares about a signal must co
 - [x] Unit: lanelet ID → CARLA signal matching, including the Y-flip and double-claim cases
 - [x] Unit: Lanelet2 parsing, including the corrupted-subtype and lat/lon-only cases
 - [x] Real-map: all five TUM towns parse (`--ignored`, needs the map pack)
-- [ ] Integration: `Initialize` loads the right town and freezes every light
-- [ ] Integration: a commanded red is observable in CARLA
-- [ ] Integration: lights return to cycling after shutdown
+- [x] Integration: `Initialize` loads the right town and freezes every light — probe,
+      re-verified 2026-08-08 (fresh server holding Town10HD_Opt loaded Town01; 36 frozen)
+- [x] Integration: a commanded red is observable in CARLA — verified live 2026-07-30, all
+      36 signals, RED/GREEN/AMBER (see below)
+- [x] Integration: lights return to cycling after shutdown — verified 2026-08-08: after
+      SIGINT, 0 of 36 lights frozen
 
 ## Acceptance Criteria
 

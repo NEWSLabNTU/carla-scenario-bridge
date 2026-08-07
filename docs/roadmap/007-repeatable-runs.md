@@ -117,8 +117,10 @@ CARLA is gone rather than merely idle. After a reconnect:
 - [x] Unit test: an empty teardown reports no work
 - [ ] Unit test: teardown bookkeeping destroys entities dropped from `EntityManager`
 - [ ] Unit test: unfreeze is skipped when nothing was frozen
-- [ ] Integration test (CARLA, no Autoware): spawn, shut down, verify zero leftover actors
-- [ ] Integration test: two consecutive `Initialize` cycles in one process leave no leak
+- [x] Integration test (CARLA, no Autoware): spawn, shut down, verify zero leftover actors
+      — probe, re-verified 2026-08-08
+- [x] Integration test: two consecutive `Initialize` cycles in one process leave no leak
+      — probe, re-verified 2026-08-08
 
 The two unchecked unit tests need a `Coordinator`, which cannot be built without a live CARLA
 `World` — the pure helpers were extracted and tested instead. Making `Coordinator` testable
@@ -129,14 +131,33 @@ right rather than something to smuggle into this phase.
 
 - [ ] Running the same scenario twice in a row succeeds both times, no CARLA restart
 - [x] After a clean shutdown, `world.actors()` contains nothing this bridge spawned
-- [ ] After a Ctrl-C mid-scenario, the same holds
+- [x] After a Ctrl-C mid-scenario, the same holds
+- [ ] CARLA restarted mid-run: csb recovers rather than erroring until killed — **blocked
+      upstream**, see below
 - [x] A second `Initialize` in one process does not leak the first run's actors
-- [ ] CARLA restarted mid-run: csb recovers rather than erroring until killed
 - [x] `just test` passes
 
-The teardown criteria are now confirmed against a real server; see below. Ctrl-C teardown and
-mid-run CARLA loss remain unverified — both need deliberately killing a process mid-scenario,
-which the probe does not do.
+## Verified 2026-08-08: Ctrl-C teardown; CARLA-loss recovery blocked upstream
+
+**Ctrl-C mid-scenario is clean.** With an ego and an NPC spawned and sync mode on, SIGINT
+produced `Teardown: 2 spawned, 2 destroyed, 0 failed`, unfroze all 36 Town01 lights,
+restored async mode, and a fresh CARLA client then saw zero vehicles and walkers.
+
+**CARLA restarted mid-run: the reconnect logic works, the process does not always survive
+to use it.** Killing CARLA under a running scenario produced honest per-frame failures, and
+in one run the bridge logged `Reconnected to CARLA; synchronous mode will be re-applied
+next frame` and resumed ticking — the designed behaviour, observed live. But in two other
+runs the process died first: carla-rust (rev `575f6aa`) let a
+`carla::client::TimeoutException` escape uncaught — `terminate called after throwing` —
+from the client's worker thread while the connection was down. Nothing on the Rust side of
+the FFI can catch an exception on a thread the binding library owns; this is an upstream
+carla-rust bug (jerry73204/carla-rust — in-house). Related: `load_world` on an unknown town
+segfaulted the same way; the bridge now validates the town against `avaiable_maps()` first
+and widens the RPC timeout to 120 s for the load itself (a first Town01 load took 66 s
+under rendering, past the default 30 s).
+
+Until carla-rust contains worker-thread exceptions, this criterion stays open and a CARLA
+restart mid-run may kill the bridge outright rather than being ridden out.
 
 
 ## Verified against live CARLA (2026-07-30)
