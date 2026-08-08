@@ -45,7 +45,7 @@
 						<RoutingAction>
 							<AcquirePositionAction>
 								<Position>
-									<WorldPosition x="153.6" y="-36.3" z="0.0" h="-0.66" p="0" r="0" />
+									<WorldPosition x="120.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
 								</Position>
 							</AcquirePositionAction>
 						</RoutingAction>
@@ -76,7 +76,7 @@
 											<EntityCondition>
 												<ReachPositionCondition tolerance="5.0">
 													<Position>
-														<WorldPosition x="153.6" y="-36.3" z="0.0" h="0" p="0" r="0" />
+														<WorldPosition x="120.0" y="-129.8" z="0.0" h="0" p="0" r="0" />
 													</Position>
 												</ReachPositionCondition>
 											</EntityCondition>

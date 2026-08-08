@@ -103,6 +103,57 @@ otherwise); `csb_bridge` probes and rebuilds a dead CARLA connection at `Initial
 `--parser python` for both launches and chokes on empty-string parameters
 (`record_storage_id`).
 
+### Second live session (2026-08-08, evening): chain verified through routing
+
+Thirty-six scenario attempts, each failure fixed in the responsible component. The
+concealer now drives the externally-launched Autoware through: connect →
+`ChangeToStop` → `setVelocityLimit` → **localization initialize (accepted)** →
+**`set_route_points` (route SET)** → PLANNING. Engagement remains blocked — see below.
+
+What it took, by component:
+
+- **play_launch** (branch `fix/compound-parameter-serialization` + installed 0.8.2):
+  empty-string params crashed rcl (fixed upstream between 0.5.1 and HEAD); dict
+  params as Python reprs crashed `pose_initializer` fatally; array params were
+  retyped to strings and rejected by statically typed declarations. Both fixed.
+- **DDS on this host**: `lo` multicast is off and NIC-multicast discovery loses a
+  random service almost every run at ~170 participants. `config/
+  cyclonedds-localhost.xml` pins loopback unicast with explicit peers,
+  `MaxAutoParticipantIndex` 300 (every composable takes an index) and
+  `SPDPInterval` 5 s (default resend backoff exceeds the concealer's 180 s service
+  timeout for late joiners). Deterministic since. All recipes export it; zombie
+  `play_launch`/`visualization_node` processes from killed runs must be purged or
+  they exhaust participant indices and ghost-list dead services.
+- **Autoware profile**: `/api/autoware/set/velocity_limit` is served by the
+  *internal* API adaptor (`autoware_iv_internal_api_adaptor`), which nothing
+  launched — the concealer's call sat in a 180 s wait, and after that in
+  30 rejected retries against the external adaptor's lookalike. Both adaptors now
+  launch with `just ego-av`. `component_state_monitor` rates/timeouts relaxed for
+  a sub-realtime sim (acb `6fefaa6`).
+- **Scenario**: the original goal is unreachable in the NEWSLab Town01 routing
+  graph ("The planned route is empty"); re-aimed along the spawn street.
+  `global_frame_rate` 30 → 10 (the host cannot hold 30), `initialize_duration`
+  120 → 480 (the concealer's deadline is absolute from construction and shared by
+  every wait through engage).
+- **acb_bridge**: does not notice when SSv2 despawns the ego, so its sensors die
+  with the actor and the *next* scenario starves — restart it (or the whole ego
+  stack) between runs until vehicle-respawn redetection lands (roadmap 011).
+- **CARLA**: five crashes traced to the 0.9.16 sensor-stream teardown race
+  (`Invalid session: no stream available`), not only VRAM; both bridges survive it
+  (carla-rust `2718365`) and `systemd-run -p Restart=on-failure` (unit
+  `carla-e2e`) makes it self-healing.
+
+**Remaining blocker — engagement**: `is_autonomous_mode_available` never turns
+true; the ego stalls in PLANNING with route SET. Mid-stall inspection shows the
+diagnostics gate red on localization continuity (`pose_twist_fusion_filter/pose`
+ERROR) while clustering perception produces objects. The suspected root is map
+fidelity: the acb pipeline's verified end-to-end runs used the TUM-generated
+Town01 `pointcloud_map.pcd`, and this host substitutes the NEWSLab pack (the TUM
+LRZ link is dead). Continuous NDT matching against that pcd appears too poor for
+EKF to hold. Next step: regenerate the pcd from this exact CARLA install with
+acb's `carla_pcd_gen`, or recover the TUM pack, then re-run — the rest of the
+chain is proven.
+
 ### Verify live (side findings, not blockers)
 
 - SSv2 publishes `/clock` unconditionally at frame rate (`api.hpp:64-66`,

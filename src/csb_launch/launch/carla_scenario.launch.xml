@@ -3,7 +3,11 @@
   <arg name="scenario" description="Path to .xosc scenario file" />
   <arg name="port" default="5555" description="ZMQ port for adapter connection" />
   <arg name="global_timeout" default="600" description="Scenario timeout in seconds" />
-  <arg name="initialize_duration" default="120" description="Autoware init timeout in seconds" />
+  <!-- The concealer's deadline is ABSOLUTE (FieldOperatorApplication construction +
+       initialize_duration) and shared by every wait up to and including engage, so
+       it must cover localization + routing + the diagnostics gate converging on
+       this slow host, not just "init". -->
+  <arg name="initialize_duration" default="480" description="Autoware init-through-engage budget in seconds" />
 
   <!-- The ego's Autoware is NOT launched from here. launch_autoware:=false makes SSv2's
        concealer connect to the Autoware already running in this ROS domain — bring it up
@@ -37,6 +41,12 @@
          need to be non-empty. -->
     <arg name="record_storage_id" value="sqlite3" />
     <arg name="record_option" value="unused" />
+
+    <!-- 10 Hz simulation stepping. At the default 30 Hz this host cannot keep the
+         sim near realtime; Autoware's topic_state_monitor timeouts are WALL time,
+         so a slow sim starves them (obstacle_segmentation observed at 0.3 Hz wall)
+         and autonomous mode never becomes available. -->
+    <arg name="global_frame_rate" value="10" />
 
     <!-- User-configurable pass-through -->
     <arg name="scenario" value="$(var scenario)" />

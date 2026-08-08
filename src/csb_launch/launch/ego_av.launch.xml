@@ -59,6 +59,16 @@
 
   <!-- 3. The tier4 external API adaptor. SSv2's concealer calls
        /api/autoware/set/velocity_limit (a 180 s service timeout, then
-       AutowareError) and nothing in the acb Autoware profile provides it. -->
-  <include file="$(find-pkg-share autoware_iv_external_api_adaptor)/launch/external_api_adaptor.launch.py" />
+       AutowareError) and nothing in the acb Autoware profile provides it.
+
+       Launched OUTSIDE this file for now (see `just ego-av`): with the adaptor
+       inside this ~50-process launch, the concealer repeatedly failed to match
+       its service within 180 s (observed under both multicast and
+       loopback-unicast CycloneDDS configs), while a standalone adaptor process
+       was matched promptly. Cause not yet understood - suspected discovery
+       scaling on a host with lo-multicast disabled. -->
+  <arg name="launch_api_adaptor" default="false" />
+  <group if="$(var launch_api_adaptor)">
+    <include file="$(find-pkg-share autoware_iv_external_api_adaptor)/launch/external_api_adaptor.launch.py" />
+  </group>
 </launch>

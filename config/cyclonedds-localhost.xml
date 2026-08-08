@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Loopback-unicast CycloneDDS profile for single-host runs (Cyclone 0.10 / Humble).
+
+  lo multicast is disabled on this host (enabling needs root) and NIC-multicast
+  discovery flakes at this participant count: each scenario run randomly failed to
+  match a different ADAPI service. Unicast discovery against explicit localhost
+  peers is deterministic and unprivileged. Every ROS process in the pipeline must
+  use this same profile.
+
+  Kept minimal: interface pinning via the 0.10-safe <NetworkInterfaceAddress>,
+  no per-interface attributes. MaxAutoParticipantIndex bounds the unicast port
+  probe range; every composable node takes an index; the full stack runs ~170.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <NetworkInterfaceAddress>lo</NetworkInterfaceAddress>
+      <AllowMulticast>false</AllowMulticast>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>300</MaxAutoParticipantIndex>
+      <!-- Default SPDP resend backoff grows to minutes on long-running
+           participants, so a late-joining process (the scenario interpreter
+           starts minutes after the Autoware stack) can wait longer than the
+           concealer's 180 s service timeout to be discovered. Ping fast and
+           forever; loopback bandwidth is free. -->
+      <SPDPInterval>5s</SPDPInterval>
+      <Peers>
+        <Peer address="127.0.0.1"/>
+      </Peers>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

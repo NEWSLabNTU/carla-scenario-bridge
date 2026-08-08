@@ -180,8 +180,18 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     source /opt/autoware/1.5.0/setup.bash
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
+    # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
+    # discovery flakes at this participant count - each run randomly failed to match
+    # a different ADAPI service. Every ROS process in the pipeline must share this.
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     # --parser python: play_launch's Rust parser fails on tier4_perception_component
     # (KeyError 'front_overhang' evaluating its Python sub-launches)
+    # The API adaptors run as their own processes: inside the big launch the
+    # concealer could not match their services in time (see ego_av.launch.xml).
+    # internal: serves /api/autoware/set/velocity_limit (what the concealer
+    # actually calls); external: /api/external/* including rtc_auto_mode.
+    ros2 launch autoware_iv_internal_api_adaptor internal_api_adaptor.launch.py &
+    ros2 launch autoware_iv_external_api_adaptor external_api_adaptor.launch.py &
     exec play_launch launch --parser python --web-addr 0.0.0.0:8082 \
         csb_launch ego_av.launch.xml \
         map_path:="{{map_path}}" \
@@ -198,6 +208,10 @@ scenario scenario_file:
     source /opt/autoware/1.5.0/setup.bash
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
+    # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
+    # discovery flakes at this participant count - each run randomly failed to match
+    # a different ADAPI service. Every ROS process in the pipeline must share this.
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     # --parser python: scenario_test_runner.launch.py imports launch.actions the
     # Rust parser's embedded Python cannot resolve (EmitEvent)
     exec play_launch launch --parser python --web-addr 0.0.0.0:8081 \
