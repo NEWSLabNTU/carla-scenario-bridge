@@ -174,8 +174,15 @@ carla-status:
 ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     #!/usr/bin/env bash
     set -e
+    # Three overlaid workspaces: base Autoware, then acb (acb_launch, sensor kit,
+    # vehicle description, acb_bridge), then this one (csb_launch). The ego stack
+    # resolves packages from all three.
+    source /opt/autoware/1.5.0/setup.bash
+    source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
-    exec play_launch launch --web-addr 0.0.0.0:8082 \
+    # --parser python: play_launch's Rust parser fails on tier4_perception_component
+    # (KeyError 'front_overhang' evaluating its Python sub-launches)
+    exec play_launch launch --parser python --web-addr 0.0.0.0:8082 \
         csb_launch ego_av.launch.xml \
         map_path:="{{map_path}}" \
         carla_port:={{carla_port}}
@@ -186,8 +193,14 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
 scenario scenario_file:
     #!/usr/bin/env bash
     set -e
+    # SSv2 no longer launches Autoware, but the interpreter still resolves the
+    # sensor/vehicle model description packages from the acb workspace.
+    source /opt/autoware/1.5.0/setup.bash
+    source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
-    exec play_launch launch --web-addr 0.0.0.0:8081 \
+    # --parser python: scenario_test_runner.launch.py imports launch.actions the
+    # Rust parser's embedded Python cannot resolve (EmitEvent)
+    exec play_launch launch --parser python --web-addr 0.0.0.0:8081 \
         csb_launch carla_scenario.launch.xml \
         scenario:="{{scenario_file}}" \
         port:={{ssv2_port}}

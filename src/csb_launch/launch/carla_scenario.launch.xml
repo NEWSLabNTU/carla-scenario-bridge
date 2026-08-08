@@ -20,12 +20,23 @@
     <!-- CARLA adapter mode - no built-in simulator, real sensors -->
     <arg name="launch_simple_sensor_simulator" value="false" />
     <arg name="simulate_localization" value="false" />
-    <arg name="use_sim_time" value="true" />
+    <!-- use_sim_time deliberately left at SSv2's default (false). With true, the
+         interpreter's ROS clock waits for /clock — which only SSv2 itself would
+         publish after activation — and main() blocks forever before the scenario
+         starts. SSv2's /clock then carries wall time; the ego domain's Autoware
+         (use_sim_time=true) consumes it together with sensor stamps from the same
+         clock, which is consistent. -->
+
 
     <!-- SSv2 orchestration -->
     <arg name="launch_autoware" value="false" />
     <arg name="launch_rviz" value="false" />
     <arg name="record" value="false" />
+    <!-- play_launch serializes empty-string parameters as "-p name:=", which rcl
+         rejects at node startup. Both are unused while record:=false; they only
+         need to be non-empty. -->
+    <arg name="record_storage_id" value="sqlite3" />
+    <arg name="record_option" value="unused" />
 
     <!-- User-configurable pass-through -->
     <arg name="scenario" value="$(var scenario)" />

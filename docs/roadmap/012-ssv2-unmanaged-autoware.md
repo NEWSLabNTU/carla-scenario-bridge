@@ -74,6 +74,35 @@ on the NEWSLabNTU fork and offered upstream via [005](005-hardening-awf-contribu
 - **SSv2 still owns the ego's autonomy lifecycle.** Initialize/route/engage remain concealer
   calls. This phase renames Principle 5's mechanism, not its authority.
 
+### First live run (2026-08-08, partial — shared GPU kept killing CARLA)
+
+The full stack ran on this path for the first time: CARLA (offscreen, VRAM-tuned) +
+`csb_bridge` + `ego_av.launch.xml` + `just scenario` with `launch_autoware:=false`.
+Verified live before the shared GPU's training job OOM-killed CARLA (four times):
+
+- SSv2 → ZMQ `Initialize` → Town01 load → **36/36 traffic lights matched** on the
+  NEWSLab map pack → freeze → ego spawn (`role_name=hero`) → sync mode → `acb_bridge`
+  attached all four sensors.
+- **The concealer drove the externally-launched Autoware**: it connected, called
+  `/api/autoware/set/velocity_limit` and `/api/operation_mode/change_to_stop` — the
+  un-fork works end to end up to engagement. Engage/drive/`exitSuccess` remain
+  unverified; CARLA died under the stack first.
+- Startup order works as documented: ego stack first, SSv2 second, concealer finds it.
+- `use_sim_time` on the SSv2 launch **must stay false** (the default): with true, the
+  interpreter's ROS clock waits for a `/clock` that only SSv2 itself would publish
+  after activation, and `main()` blocks before the scenario starts. So SSv2's `/clock`
+  carries wall time by construction; the ego domain's Autoware (`use_sim_time=true`)
+  consumes it together with sensor stamps from the same clock, consistently.
+
+Fixes that landed on the way: SSv2 rejects the map pack's `LocalCartesianUTM`
+projector (`download_maps.sh` now rewrites it to TransverseMercator);
+`ego_av.launch.xml` launches `autoware_iv_external_api_adaptor` (nothing in the acb
+profile provided `/api/autoware/set/velocity_limit` — a silent 180 s timeout
+otherwise); `csb_bridge` probes and rebuilds a dead CARLA connection at `Initialize`
+(tick-driven reconnect never fires between scenarios); play_launch needs
+`--parser python` for both launches and chokes on empty-string parameters
+(`record_storage_id`).
+
 ### Verify live (side findings, not blockers)
 
 - SSv2 publishes `/clock` unconditionally at frame rate (`api.hpp:64-66`,

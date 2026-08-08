@@ -36,3 +36,5 @@ src/generated/
 
 # Temporary files
 tmp/
+play_log/
+record.json

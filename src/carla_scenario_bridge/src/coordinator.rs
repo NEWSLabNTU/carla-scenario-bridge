@@ -754,6 +754,23 @@ impl Coordinator {
         // exactly what a second scenario run hits. So assert the state rather than assume it.
         self.sync_mode_enabled = false;
         self.has_ego = false;
+
+        // The reconnect logic is driven by consecutive tick failures, but a CARLA that
+        // died between scenarios never gets ticked -- the stale client then poisons every
+        // CARLA call this Initialize makes, and SSv2 sees failures until the bridge is
+        // restarted by hand. Probe the connection first and rebuild it if it is gone;
+        // the server may have been restarted and be perfectly healthy.
+        if self.world.settings().is_err() {
+            tracing::warn!("CARLA connection looks dead at Initialize; reconnecting");
+            if let Err(e) = self.reconnect_carla() {
+                return api::InitializeResponse {
+                    result: Some(proto_err(format!(
+                        "CARLA is unreachable and reconnecting failed: {e}"
+                    ))),
+                };
+            }
+        }
+
         self.force_async_mode();
 
         // Fresh run, fresh warnings -- otherwise a second scenario in one process would

@@ -42,10 +42,34 @@ if [ -n "$MAP_SOURCE" ]; then
     for town in "$MAP_SOURCE"/*/; do
         name="$(basename "$town")"
         if [ -f "$town/lanelet2_map.osm" ]; then
-            # Symlink rather than copy: the pack is ~1 GB and often lives on a
-            # network mount that is already the canonical copy.
-            ln -sfn "$(cd "$town" && pwd)" "$OUT/$name"
-            echo "  $name"
+            # Per-file symlinks rather than a directory link, so the projector
+            # yaml can be corrected without touching the source pack.
+            mkdir -p "$OUT/$name"
+            for f in "$town"/*; do
+                ln -sfn "$(cd "$(dirname "$f")" && pwd)/$(basename "$f")" "$OUT/$name/$(basename "$f")"
+            done
+            # The NEWSLab pack declares LocalCartesianUTM, which SSv2's
+            # lanelet_loader rejects (TransverseMercator/MGRS only) and which
+            # does not match CARLA's +proj=tmerc +lat_0=0 +lon_0=0 geolocation
+            # that acb_bridge's GNSS path assumes. Same origin, so the numbers
+            # are unchanged; only the declared projector differs.
+            if grep -q 'LocalCartesianUTM' "$town/map_projector_info.yaml" 2>/dev/null; then
+                rm -f "$OUT/$name/map_projector_info.yaml"
+                cat > "$OUT/$name/map_projector_info.yaml" <<'YAML'
+# Rewritten by download_maps.sh: the source pack declares LocalCartesianUTM,
+# which SSv2 rejects and the CARLA GNSS pipeline does not use. CARLA exports
+# geolocation against +proj=tmerc +lat_0=0 +lon_0=0.
+projector_type: TransverseMercator
+vertical_datum: WGS84
+map_origin:
+  latitude: 0.0
+  longitude: 0.0
+  altitude: 0.0
+YAML
+                echo "  $name (projector rewritten to TransverseMercator)"
+            else
+                echo "  $name"
+            fi
             found=$((found + 1))
         else
             echo "  skipping $name (no lanelet2_map.osm)"
