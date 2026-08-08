@@ -411,38 +411,15 @@ impl Coordinator {
         if current_town == town {
             tracing::info!("Map '{town}' is already loaded; not reloading");
         } else {
-            // load_world on a town the server does not have segfaults inside carla-rust
-            // (the C++ exception never crosses the FFI as an Err), so the name must be
-            // validated against the server's own list first.
-            let available = self
-                .client
-                .avaiable_maps()
-                .map_err(|e| eyre::eyre!("list available maps: {e}"))?;
-            let known = available
-                .iter()
-                .any(|m| m.rsplit('/').next() == Some(town.as_str()));
-            if !known {
-                eyre::bail!(
-                    "Map '{town}' is not available on this CARLA server. Available: {}",
-                    available
-                        .iter()
-                        .map(|m| m.rsplit('/').next().unwrap_or(m))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-
-            tracing::info!("Loading map '{town}' (CARLA currently holds '{current_town}')");
-            // A first load of a town takes longer than the 30 s RPC timeout when the
-            // server renders; widen it for the load and restore it afterwards even on
-            // failure.
+            // Both the map listing and the load take longer than the normal 30 s RPC
+            // timeout when the server is rendering, catching up after a restart, or
+            // enumerating maps mid-tick (observed: 66 s first load, >30 s listing on a
+            // just-restarted server). Widen the timeout for the whole prepare path and
+            // restore it afterwards even on failure.
             let _ = self.client.set_timeout(Duration::from_secs(120));
-            let loaded = self
-                .client
-                .load_world(&town)
-                .map_err(|e| eyre::eyre!("load world '{town}': {e}"));
+            let prepared = self.prepare_map(&town, &current_town);
             let _ = self.client.set_timeout(Duration::from_secs(30));
-            self.world = loaded?;
+            self.world = prepared?;
 
             // The old world and everything in it is gone. Anything still recorded for
             // teardown refers to actors that no longer exist.
@@ -453,6 +430,40 @@ impl Coordinator {
             tracing::info!("Map '{town}' loaded");
         }
 
+        self.load_signal_map(&town, lanelet2_map_path)
+    }
+
+    /// Validate the town against the server's map list and load it.
+    ///
+    /// Split out so the caller can hold a widened RPC timeout across both calls.
+    fn prepare_map(&mut self, town: &str, current_town: &str) -> Result<carla::client::World> {
+        // load_world on a town the server does not have segfaults inside carla-rust
+        // (the C++ exception never crosses the FFI as an Err), so the name must be
+        // validated against the server's own list first.
+        let available = self
+            .client
+            .avaiable_maps()
+            .map_err(|e| eyre::eyre!("list available maps: {e}"))?;
+        let known = available.iter().any(|m| m.rsplit('/').next() == Some(town));
+        if !known {
+            eyre::bail!(
+                "Map '{town}' is not available on this CARLA server. Available: {}",
+                available
+                    .iter()
+                    .map(|m| m.rsplit('/').next().unwrap_or(m))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+
+        tracing::info!("Loading map '{town}' (CARLA currently holds '{current_town}')");
+        self.client
+            .load_world(town)
+            .map_err(|e| eyre::eyre!("load world '{town}': {e}"))
+    }
+
+    /// Load the explicit signal mapping and fill the rest by position matching.
+    fn load_signal_map(&mut self, town: &str, lanelet2_map_path: &str) -> Result<()> {
         // Explicit per-map mapping first: it exists to correct what position matching gets
         // wrong, so it must take precedence over anything derived below.
         let mapping_path = self.config_dir.join(format!("traffic_lights_{town}.yaml"));

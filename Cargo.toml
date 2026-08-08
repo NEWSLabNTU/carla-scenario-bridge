@@ -8,10 +8,12 @@ members = [
 carla = "0.14.0"
 
 [patch.crates-io]
-# 575f6aa adds Debug to the generated C-like enums and *_from_ffi_ref accessors for the geom
-# PODs. Without the latter, LabelledPoint::location cannot be read behind a shared reference,
-# which makes World::ground_projection and friends unusable.
-carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "575f6aa" }
+# 2718365 pulls the carla-rust/0.9.16-3 prebuilt, whose libcarla contains the worker-thread
+# exception containment fix: LightManager RPC callbacks on the episode worker thread threw
+# uncaught TimeoutExceptions when CARLA died mid-run, terminating this process before its
+# reconnect logic could act. (Earlier: 575f6aa added Debug on generated enums and
+# *_from_ffi_ref accessors, which World::ground_projection needs.)
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "2718365" }
 
 [profile.dev-release]
 inherits = "release"

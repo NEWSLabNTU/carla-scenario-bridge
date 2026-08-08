@@ -132,8 +132,8 @@ right rather than something to smuggle into this phase.
 - [ ] Running the same scenario twice in a row succeeds both times, no CARLA restart
 - [x] After a clean shutdown, `world.actors()` contains nothing this bridge spawned
 - [x] After a Ctrl-C mid-scenario, the same holds
-- [ ] CARLA restarted mid-run: csb recovers rather than erroring until killed — **blocked
-      upstream**, see below
+- [x] CARLA restarted mid-run: csb recovers rather than erroring until killed — fixed
+      upstream in carla-rust and verified 2026-08-08, see below
 - [x] A second `Initialize` in one process does not leak the first run's actors
 - [x] `just test` passes
 
@@ -156,8 +156,21 @@ segfaulted the same way; the bridge now validates the town against `avaiable_map
 and widens the RPC timeout to 120 s for the load itself (a first Town01 load took 66 s
 under rendering, past the default 30 s).
 
-Until carla-rust contains worker-thread exceptions, this criterion stays open and a CARLA
-restart mid-run may kill the bridge outright rather than being ridden out.
+**Fixed upstream 2026-08-08.** gdb showed the terminate on the episode worker thread:
+`CallAndWait<std::vector<carla::rpc::LightState>>` — libcarla's built-in `LightManager`
+registers on-tick callbacks that perform RPC calls, and `CallbackList::Call` dispatched
+them with no exception protection. Patched in the jerry73204/carla fork (branch
+`worker-thread-exception-containment`, released as prebuilt `carla-rust/0.9.16-3`):
+`CallbackList::Call` catches per callback and logs a warning; `~LightManager`'s final
+state flush gets the same treatment. carla-rust `2718365` consumes the new prebuilt and
+this workspace pins it.
+
+Verified over three kill/restart cycles: the bridge logs
+`WARNING: exception thrown by a registered callback` where it previously died, reconnects,
+and a fresh `Initialize` (with the RPC timeout widened across the whole map-prepare path —
+the map listing also exceeds 30 s on a just-restarted server) reaches the storyboard-ready
+state again. The unknown-town segfault is also gone at the source, though the bridge keeps
+its `avaiable_maps()` validation for the better error message.
 
 
 ## Verified against live CARLA (2026-07-30)
