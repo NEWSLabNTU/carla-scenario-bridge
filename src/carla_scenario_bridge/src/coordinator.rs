@@ -1,7 +1,7 @@
 use carla::client::{ActorBase, Client, World};
 use carla::geom::{Location, Rotation, Transform};
 use eyre::{Result, WrapErr};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -21,6 +21,14 @@ const SPAWN_CLEARANCE: f32 = 0.3;
 /// -11 m/s² longitudinal at 30 Hz), which SSv2's entity sanity bounds ([-5, 3] m/s²)
 /// treat as scenario-fatal. Half a second covers the bounce at any supported step time.
 const SETTLE_FRAMES: u32 = 15;
+
+/// Frames of raw CARLA acceleration averaged before reporting. PhysX delivers
+/// single-frame contact jolts (±10-17 m/s² for one 100 ms step: suspension contact,
+/// curb touches, brake grab) that no real accelerometer-and-consumer chain would see
+/// unfiltered. SSv2 validates reported acceleration against the scenario's declared
+/// performance bounds, so one such frame is scenario-fatal. A short moving average
+/// damps one-frame jolts while a genuine sustained braking profile passes through.
+const ACCEL_SMOOTHING_FRAMES: usize = 3;
 
 /// Extra height added on each spawn retry after a collision.
 const SPAWN_RETRY_STEP: f32 = 0.5;
@@ -247,6 +255,9 @@ pub struct Coordinator {
     /// entity sanity bounds ([-5, 3] m/s²) treat as a scenario-fatal error. The spike
     /// is a spawn artifact, not vehicle behaviour.
     settle_frames: HashMap<u32, u32>,
+    /// Recent raw acceleration samples per actor, for the reporting-side smoothing
+    /// (see ACCEL_SMOOTHING_FRAMES).
+    accel_history: HashMap<u32, VecDeque<(f64, f64, f64)>>,
     /// Directory holding per-map config, e.g. the traffic light signal mapping.
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
@@ -293,6 +304,7 @@ impl Coordinator {
             consecutive_carla_failures: 0,
             previous_longitudinal_accel: HashMap::new(),
             settle_frames: HashMap::new(),
+            accel_history: HashMap::new(),
         }
     }
 
@@ -323,6 +335,7 @@ impl Coordinator {
         // differenced against a completely different entity.
         self.previous_longitudinal_accel.remove(&actor_id);
         self.settle_frames.remove(&actor_id);
+        self.accel_history.remove(&actor_id);
     }
 
     /// Destroy every actor this bridge created that is still alive.
@@ -440,6 +453,7 @@ impl Coordinator {
             self.spawned_actors.clear();
             self.previous_longitudinal_accel.clear();
             self.settle_frames.clear();
+            self.accel_history.clear();
             self.sync_mode_enabled = false;
             self.froze_traffic_lights = false;
             tracing::info!("Map '{town}' loaded");
@@ -797,6 +811,7 @@ impl Coordinator {
         // would report a spurious spike on the first frame.
         self.previous_longitudinal_accel.clear();
         self.settle_frames.clear();
+        self.accel_history.clear();
 
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
         // EntityManager first is what used to orphan them: the map was the only record of
@@ -1711,6 +1726,20 @@ impl Coordinator {
         let (vx, vy, vz) = coordinate_conversion::carla_to_ros_velocity(v.x, v.y, v.z);
         let (wx, wy, wz) = coordinate_conversion::carla_to_ros_angular_velocity(av.x, av.y, av.z);
         let (ax, ay, az) = coordinate_conversion::carla_to_ros_acceleration(acc.x, acc.y, acc.z);
+
+        // Smooth the reported acceleration (see ACCEL_SMOOTHING_FRAMES).
+        let hist = self.accel_history.entry(actor_id).or_default();
+        hist.push_back((ax, ay, az));
+        if hist.len() > ACCEL_SMOOTHING_FRAMES {
+            hist.pop_front();
+        }
+        let n = hist.len() as f64;
+        let (ax, ay, az) = hist
+            .iter()
+            .fold((0.0, 0.0, 0.0), |(sx, sy, sz), (x, y, z)| {
+                (sx + x, sy + y, sz + z)
+            });
+        let (ax, ay, az) = (ax / n, ay / n, az / n);
 
         // Longitudinal acceleration, then its rate of change. CARLA reports an acceleration
         // vector but no jerk, so it is differenced across frames -- see
