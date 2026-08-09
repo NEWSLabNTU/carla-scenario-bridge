@@ -1114,6 +1114,30 @@ impl Coordinator {
             // its suspension in the first ticks; report zero acceleration while it
             // settles so the impact spike is not read as vehicle behaviour.
             self.settle_frames.insert(actor_id, SETTLE_FRAMES);
+
+            // Park it until its driver takes over. A fresh physics vehicle free-rolls
+            // (observed ~1 m/s while Autoware initializes), and the first stop command
+            // acb_bridge then forwards slams the brake at speed -- a one-frame
+            // deceleration spike past SSv2's [-5, 3] m/s² sanity bounds, which is
+            // scenario-fatal. Any later apply_control from the driver replaces this
+            // whole control struct, hand_brake included.
+            if let carla::client::ActorKind::Vehicle(vehicle) = actor.clone().into_kinds() {
+                let park = carla::rpc::VehicleControl {
+                    throttle: 0.0,
+                    steer: 0.0,
+                    brake: 1.0,
+                    hand_brake: true,
+                    reverse: false,
+                    manual_gear_shift: false,
+                    gear: 0,
+                };
+                if let Err(e) = vehicle.apply_control(&park) {
+                    tracing::warn!(
+                        "Could not park '{name}' (actor {actor_id}) after spawn: {e}. \
+                         It may roll until its driver's first command."
+                    );
+                }
+            }
         }
 
         // Wait one tick for the actor to be fully initialized. Only meaningful once we
@@ -1696,6 +1720,16 @@ impl Coordinator {
         let linear_jerk = self.differentiate_acceleration(actor_id, longitudinal);
 
         // Suppress the suspension-settle impact after spawn (see SETTLE_FRAMES).
+        let settling = matches!(self.settle_frames.get_mut(&actor_id), Some(n) if *n > 0);
+        if !settling && !(-5.0..=3.0).contains(&longitudinal) {
+            tracing::warn!(
+                "Actor {actor_id} acceleration outside SSv2 bounds: longitudinal={longitudinal:.2} \
+                 carla=({:.2},{:.2},{:.2}) ros=({ax:.2},{ay:.2},{az:.2}) speed={:.2} z={:.2}",
+                acc.x, acc.y, acc.z,
+                (v.x * v.x + v.y * v.y).sqrt(),
+                t.location.z,
+            );
+        }
         let (ax, ay, az, linear_jerk) = match self.settle_frames.get_mut(&actor_id) {
             Some(n) if *n > 0 => {
                 *n -= 1;

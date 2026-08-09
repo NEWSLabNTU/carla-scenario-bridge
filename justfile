@@ -192,7 +192,16 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # actually calls); external: /api/external/* including rtc_auto_mode.
     ros2 launch autoware_iv_internal_api_adaptor internal_api_adaptor.launch.py &
     ros2 launch autoware_iv_external_api_adaptor external_api_adaptor.launch.py &
+    # --load-node-timeout 120: the startup burst (93 composables + CARLA on one
+    # host) can push a container's first LoadNode reply past the 30 s default;
+    # a timed-out load falls into play_launch's awaiting-ComponentEvent limbo
+    # and the member stays "pending" forever, silently missing ADAPI services.
+    # --load-total-budget 180: also the threshold for play_launch's
+    # lost-load rescue (ListNodes re-verification of composables stuck
+    # "Loading" with no response), so a lost load self-heals in ~3 min.
     exec play_launch launch --parser python --web-addr 0.0.0.0:8082 \
+        --load-node-timeout 120 \
+        --load-total-budget 180 \
         csb_launch ego_av.launch.xml \
         map_path:="{{map_path}}" \
         carla_port:={{carla_port}}

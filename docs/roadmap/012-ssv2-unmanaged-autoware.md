@@ -161,6 +161,50 @@ EKF fusion does not. Next step: one scenario against a completely fresh stack
 `/localization/kinematic_state` and NDT health topics mid-run; the outcome
 decides between clock-transition handling and NDT convergence profiling.
 
+### Fourth live session (2026-08-09, runs 13-25): **PASSED — exitSuccess**
+
+Run 25: SSv2 verdict `Passed`, JUnit `failures=0 errors=0`. Engage during
+initialize, 70 m autonomous drive, ReachPosition(5 m), exitSuccess — 39 s from
+spawn to verdict. The run-8-vs-12 contradiction fully resolved; the
+"availability" stalls were never one bug but a stack of five, unmasked in
+order:
+
+1. **acb_bridge launched twice per stack** (the availability killer).
+   `ego_av.launch.xml` included `carla_simulator.launch.xml` (whose
+   `launch_vehicle_interface:=true` default starts acb_bridge with
+   `publish_clock:=true`) *and* an explicit acb_bridge with
+   `publish_clock:=false`. Two bridges = two `/clock` timebases (scenario time
+   vs rebased CARLA uptime → the "jump back in time" storm, 2762 hits even in
+   run 8) + doubled sensor streams (zero-dt message pairs →
+   `gyro_bias_estimator` terminates on "dt_pose or dt_gyro is zero" → its diag
+   goes stale-ERROR → `/autoware/modes/autonomous` false forever). Run 8
+   simply got lucky before the estimator died. Fix:
+   `launch_vehicle_interface:=false` in both ego_av and background_av.
+2. **play_launch composable loads silently stuck "pending"** — 13-17 of 93,
+   a different set each launch; whichever ADAPI members were in the stuck set
+   were the services the concealer then couldn't find (`change_to_stop`,
+   `/api/localization/initialize`, ...). Fixed in play_launch (lost-load
+   rescue via ListNodes, commit 862c217) + `--load-node-timeout 120
+   --load-total-budget 180` in `just ego-av`.
+3. **Idle-creep → brake-slam accel spike**: unengaged, CARLA's automatic
+   transmission creeps the ego to ~1 m/s; the first firm stop command then
+   produces a one-frame ~-10 m/s². Fixes: bridge parks a physics spawn
+   (handbrake+brake until the driver's first command), acb holds the
+   handbrake on commanded standstill (8243670).
+4. **Controller overshoot braking while driving** exceeds 5 m/s² at CARLA
+   physics fidelity. Fix: scenario `Performance` bounds raised to
+   maxAcceleration 12 / maxDeceleration 15 — the [-5, 3] check was always the
+   xosc's own declaration, not an SSv2 constant.
+5. **Environment traps re-confirmed**: rebuilding acb_bridge without
+   `CARLA_VERSION=0.9.16` links the 0.10.0 prebuilt and crashes with
+   `std::bad_array_new_length` at connect; a failed scenario leaves a hung
+   interpreter that poisons the next run's ZMQ/clock; every ego despawn
+   dead-binds acb_bridge (011 gap) — fresh ego stack per scenario run.
+
+**Still open**: 011 (acb re-attach on respawn — a scenario rerun against a
+used stack still requires an ego-stack restart), and upstreaming the
+play_launch rescue + concealer arrived_goal patches.
+
 ### Third live session (2026-08-09): THE EGO DROVE — and the gate anatomy is mapped
 
 **The full autonomy loop closed once**: on a fresh stack, Autoware became

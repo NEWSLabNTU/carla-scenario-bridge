@@ -56,6 +56,9 @@
     <arg name="vehicle_model" value="$(var vehicle_model)" />
     <arg name="sensor_model" value="$(var sensor_model)" />
     <arg name="rviz" value="$(var launch_rviz)" />
+    <!-- Same double-bridge hazard as ego_av.launch.xml: the acb vehicle
+         interface would start a second acb_bridge. Launched once below. -->
+    <arg name="launch_vehicle_interface" value="false" />
   </include>
 
   <!-- 2. acb_bridge for this vehicle.

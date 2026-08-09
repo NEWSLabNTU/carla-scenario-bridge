@@ -46,6 +46,14 @@
     <arg name="rviz" value="$(var launch_rviz)" />
     <arg name="lidar_detection_model" value="$(var lidar_detection_model)" />
     <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)" />
+    <!-- The acb vehicle interface would start a second acb_bridge with
+         publish_clock=true (its default). Two bridges mean two /clock
+         publishers and doubled sensor streams: subscribers see time jump
+         backwards and zero-dt message pairs, which crashes
+         gyro_bias_estimator ("dt_pose or dt_gyro is zero") and leaves its
+         diagnostic stale-ERROR in the autonomous-mode gate. The bridge is
+         launched once, explicitly, below. -->
+    <arg name="launch_vehicle_interface" value="false" />
   </include>
 
   <!-- 2. acb_bridge for the ego.
