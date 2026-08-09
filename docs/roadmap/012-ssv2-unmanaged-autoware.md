@@ -146,13 +146,20 @@ What it took, by component:
 **Remaining blocker — engagement**: `is_autonomous_mode_available` never turns
 true; the ego stalls in PLANNING with route SET. Mid-stall inspection shows the
 diagnostics gate red on localization continuity (`pose_twist_fusion_filter/pose`
-ERROR) while clustering perception produces objects. The suspected root is map
-fidelity: the acb pipeline's verified end-to-end runs used the TUM-generated
-Town01 `pointcloud_map.pcd`, and this host substitutes the NEWSLab pack (the TUM
-LRZ link is dead). Continuous NDT matching against that pcd appears too poor for
-EKF to hold. Next step: regenerate the pcd from this exact CARLA install with
-acb's `carla_pcd_gen`, or recover the TUM pack, then re-run — the rest of the
-chain is proven.
+ERROR) while clustering perception produces objects.
+
+The initially suspected cause — pcd map fidelity — is **ruled out** (2026-08-09):
+the NEWSLab Town01 pcd is 16.7M points with extent x[-51.6, 446.2],
+y[-379.3, 40.2], matching the acb-verified TUM map's documented extent exactly
+(same lineage), it is dense at both spawn and goal, and NDT *initial* alignment
+succeeded live against it. The prime suspect is now a **clock discontinuity**:
+NDT logs "Detected jump back in time. Clearing TF buffer", consistent with
+SSv2's wall-time `/clock` stopping and restarting across scenario runs while
+the ego stack persists — single-shot alignment survives that, history-dependent
+EKF fusion does not. Next step: one scenario against a completely fresh stack
+(no prior run, hence no clock transition) while watching
+`/localization/kinematic_state` and NDT health topics mid-run; the outcome
+decides between clock-transition handling and NDT convergence profiling.
 
 ### Verify live (side findings, not blockers)
 
