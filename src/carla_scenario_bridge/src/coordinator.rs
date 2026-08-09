@@ -16,6 +16,12 @@ const FALLBACK_SPAWN_Z: f32 = 0.5;
 /// rather than starting interpenetrated with the road.
 const SPAWN_CLEARANCE: f32 = 0.3;
 
+/// Frames after spawn during which a physics actor's reported acceleration is zeroed.
+/// The drop from SPAWN_CLEARANCE onto the suspension shows up as a spike (observed
+/// -11 m/s² longitudinal at 30 Hz), which SSv2's entity sanity bounds ([-5, 3] m/s²)
+/// treat as scenario-fatal. Half a second covers the bounce at any supported step time.
+const SETTLE_FRAMES: u32 = 15;
+
 /// Extra height added on each spawn retry after a collision.
 const SPAWN_RETRY_STEP: f32 = 0.5;
 
@@ -235,6 +241,12 @@ pub struct Coordinator {
     /// Last longitudinal acceleration seen per actor, so jerk can be differenced across
     /// frames. CARLA reports acceleration but not its derivative.
     previous_longitudinal_accel: HashMap<u32, f64>,
+    /// Frames left to report zero acceleration for a freshly spawned physics actor.
+    /// Vehicles spawn slightly above the road and settle onto their suspension; CARLA
+    /// reports the impact as a spike (observed: -11 m/s² longitudinal), which SSv2's
+    /// entity sanity bounds ([-5, 3] m/s²) treat as a scenario-fatal error. The spike
+    /// is a spawn artifact, not vehicle behaviour.
+    settle_frames: HashMap<u32, u32>,
     /// Directory holding per-map config, e.g. the traffic light signal mapping.
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
@@ -280,6 +292,7 @@ impl Coordinator {
             froze_traffic_lights: false,
             consecutive_carla_failures: 0,
             previous_longitudinal_accel: HashMap::new(),
+            settle_frames: HashMap::new(),
         }
     }
 
@@ -309,6 +322,7 @@ impl Coordinator {
         // Actor IDs are reused by CARLA, so a stale jerk sample would otherwise be
         // differenced against a completely different entity.
         self.previous_longitudinal_accel.remove(&actor_id);
+        self.settle_frames.remove(&actor_id);
     }
 
     /// Destroy every actor this bridge created that is still alive.
@@ -425,6 +439,7 @@ impl Coordinator {
             // teardown refers to actors that no longer exist.
             self.spawned_actors.clear();
             self.previous_longitudinal_accel.clear();
+            self.settle_frames.clear();
             self.sync_mode_enabled = false;
             self.froze_traffic_lights = false;
             tracing::info!("Map '{town}' loaded");
@@ -781,6 +796,7 @@ impl Coordinator {
         // Jerk is differenced across frames; carrying last run's samples into this one
         // would report a spurious spike on the first frame.
         self.previous_longitudinal_accel.clear();
+        self.settle_frames.clear();
 
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
         // EntityManager first is what used to orphan them: the map was the only record of
@@ -1093,6 +1109,11 @@ impl Coordinator {
                     kind.label()
                 );
             }
+        } else {
+            // A physics actor spawns above the road (SPAWN_Z_CLEARANCE) and slams onto
+            // its suspension in the first ticks; report zero acceleration while it
+            // settles so the impact spike is not read as vehicle behaviour.
+            self.settle_frames.insert(actor_id, SETTLE_FRAMES);
         }
 
         // Wait one tick for the actor to be fully initialized. Only meaningful once we
@@ -1673,6 +1694,15 @@ impl Coordinator {
         let yaw_rad = (t.rotation.yaw as f64).to_radians();
         let longitudinal = longitudinal_acceleration(ax, ay, yaw_rad);
         let linear_jerk = self.differentiate_acceleration(actor_id, longitudinal);
+
+        // Suppress the suspension-settle impact after spawn (see SETTLE_FRAMES).
+        let (ax, ay, az, linear_jerk) = match self.settle_frames.get_mut(&actor_id) {
+            Some(n) if *n > 0 => {
+                *n -= 1;
+                (0.0, 0.0, 0.0, 0.0)
+            }
+            _ => (ax, ay, az, linear_jerk),
+        };
 
         let action_status = traffic_simulator_msgs::ActionStatus {
             // Left empty deliberately. `current_action` names the behaviour-plugin action

@@ -161,6 +161,46 @@ EKF fusion does not. Next step: one scenario against a completely fresh stack
 `/localization/kinematic_state` and NDT health topics mid-run; the outcome
 decides between clock-transition handling and NDT convergence profiling.
 
+### Third live session (2026-08-09): THE EGO DROVE — and the gate anatomy is mapped
+
+**The full autonomy loop closed once**: on a fresh stack, Autoware became
+available, engaged, drove the ego ~70 m through CARLA under SSv2's sync ticks,
+and reached `ARRIVED_GOAL`. The scenario still scored FAILURE because the
+concealer's queued engage task ran after arrival and threw on the terminal
+state — fixed on the fork (branch `carla-compat`, `f77cd12c3`): `engage()`
+treats `arrived_goal` as success; `engaged()` deliberately still requires
+`driving` (counting `arrived_goal` there lets a previous run's terminal state
+open the storyboard gate early — tried, reverted after it exposed the
+spawn-settle spike, see below).
+
+The engagement gate is now fully mapped: `planning → waiting_for_engage` in
+the concealer's legacy state requires `is_autonomous_mode_available`, which is
+an AND over the diagnostic graph's `/autoware/modes/autonomous`. Three real
+faults were found in that AND:
+
+- **Two never-matching diag names** in acb's custom graph (accuracy /
+  sensor_fusion_status referenced sources that do not publish under those
+  names in this Autoware build) — permanently stale-ERROR, unfixable by the
+  graph's own `/diagnostics_graph/reset`. Fixed (acb `c3aa6d8`).
+- **`duplicated_node_checker`**: both play_launch instances (ego stack +
+  scenario) named their monitoring node `/play_launch`. Fixed upstream
+  (play_launch `3699f89`, per-process unique name).
+- **Spawn-settle acceleration spike**: the ego drops `SPAWN_CLEARANCE` onto
+  its suspension and CARLA reports ~-11 m/s², which SSv2's entity sanity
+  bounds ([-5, 3]) treat as scenario-fatal once the storyboard is running.
+  The bridge now reports zero acceleration for the first 15 frames after a
+  physics spawn.
+
+**Open**: with all three fixed, later runs still stalled in PLANNING
+(availability false) while the one successful drive predated two of the
+fixes — the availability computation has at least one more input not yet
+identified. Next session: on a fresh stack, dump `/system/command_mode/
+availability` and every `/autoware/modes/autonomous` child live alongside the
+converter_node's view, and diff the run-8 (drove) vs run-12 (stalled)
+play_logs. The vehicle_door diag (`The door status is unknown`, no CARLA door
+API) is also still ERROR and sits under `/autoware/vehicle` — check whether
+it entered the AND in this graph version.
+
 ### Verify live (side findings, not blockers)
 
 - SSv2 publishes `/clock` unconditionally at frame rate (`api.hpp:64-66`,
