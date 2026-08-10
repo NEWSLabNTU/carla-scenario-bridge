@@ -110,34 +110,96 @@ CARLA is gone rather than merely idle. After a reconnect:
 - **SSv2 sees failures** for every request made during the outage. It decides whether that
   ends the scenario; the bridge does not pretend the frames succeeded.
 
+### The CARLA server crash that kept eating these runs (fixed here, 2026-08-11)
+
+Three of eight runs on this host died to a CARLA `SIGSEGV` 24-40 s into a scenario,
+which is what had prevented a run-B verdict for so long. The `.debug` file ships beside
+the packaged binary, so the coredumps symbolize exactly — eight of twelve at one site,
+always the game thread:
+
+```
+AActor::GetRootComponent() const                                    Actor.h:1812
+AInertialMeasurementUnit::GetActorAngularVelocityInRadians(AActor&) InertialMeasurementUnit.cpp:58
+AInertialMeasurementUnit::ComputeGyroscope()                        InertialMeasurementUnit.cpp:151
+```
+
+Destroying a vehicle does not destroy its sensors, so an IMU keeps ticking after its
+owner is gone. `ComputeGyroscope` guards the owner with `check(GetOwner() != nullptr)`,
+which Shipping builds compile away, and then dereferences it. Upstream has the same
+class of report unfixed (carla-simulator/carla#5812, #7046, #3197, #7987), and the
+`ERROR: Invalid session: no stream available with id N` spam that always preceded a
+crash is the client side of the same orphaning.
+
+Two responses, both landed:
+
+- **Here**: whoever destroys a vehicle destroys its attached sensors first, on
+  `DespawnEntity` and in teardown. `acb_bridge` does clean up its own sensors, but only
+  after it notices the vehicle vanish, and the crash lives in that window — only the
+  destroyer can close it. A deliberate, documented bend of invariant 2.
+- **In the CARLA fork**: `jerry73204/carla` branch `sensor-owner-guards` (`e27ed518`)
+  makes `PostPhysTick` skip a frame with no owner and gives `ComputeGyroscope` a real
+  guard. That is UE4 plugin code, so it needs a server rebuild — the carla-rust
+  prebuilt does not carry it.
+
+Two consecutive runs then completed with the server untouched (`NRestarts` unchanged
+across both), where the same sequence used to crash it.
+
 ### Tests
 
 - [x] Unit test: spawn retries only ever raise the height
 - [x] Unit test: ground-relative and fallback spawn heights
 - [x] Unit test: an empty teardown reports no work
-- [ ] Unit test: teardown bookkeeping destroys entities dropped from `EntityManager`
-- [ ] Unit test: unfreeze is skipped when nothing was frozen
+- [x] Unit test: teardown bookkeeping destroys entities dropped from `EntityManager`
+- [x] Unit test: teardown keeps actors it failed to destroy
+- [x] Unit test: unfreeze is skipped when nothing was frozen
 - [x] Integration test (CARLA, no Autoware): spawn, shut down, verify zero leftover actors
       — probe, re-verified 2026-08-08
 - [x] Integration test: two consecutive `Initialize` cycles in one process leave no leak
       — probe, re-verified 2026-08-08
 
-The two unchecked unit tests need a `Coordinator`, which cannot be built without a live CARLA
-`World` — the pure helpers were extracted and tested instead. Making `Coordinator` testable
-without CARLA means introducing a world trait; worth doing, but it is a refactor in its own
-right rather than something to smuggle into this phase.
+Those last three arrived on 2026-08-11 without the world trait this note used to call for.
+The seam that was actually needed is much smaller: `SpawnLedger` owns the teardown loop and
+takes the destroyer from its caller, so the bookkeeping is exercised with a closure instead
+of a CARLA world, and `FreezeGuard` owns the only-undo-what-we-froze rule on its own. The
+`Coordinator` keeps both as fields and supplies the effects.
 
 ## Acceptance Criteria
 
 - [ ] Running the same scenario twice in a row succeeds both times, no CARLA restart
-      — **half-verified 2026-08-10**: run A passes reproducibly on fresh stacks (3×,
-      ~39 s spawn-to-goal); the mechanical blocker is gone (acb re-attaches after ego
-      despawn, roadmap 011), and run B's ego spawns and initializes on the reused
-      stack — but a run-B *verdict* has never been obtained: every attempt was killed
-      mid-run by CARLA server OOM (shared-GPU training jobs, ten kills in one day).
-      Rerun protocol is in `docs/CHECKPOINT.md`; needs one quiet ~15 min GPU window.
-      If B stalls >3 min past spawn with CARLA alive, dump `/api/operation_mode/state`
-      — reused-stack diag aging is the one unexcluded suspect.
+      — **run B has a verdict at last, and it fails outside this bridge (2026-08-11)**.
+      Run A passes reproducibly (six times on this host, ~34-43 s spawn-to-goal). Run B,
+      launched immediately afterwards against the same bridge process, the same ego
+      Autoware and the same CARLA server, ends in
+      `AutowareError: Simulator waited for the Autoware state to transition to
+      WAITING_FOR_ENGAGE, but time is up. The current Autoware state is PLANNING`.
+      Reproduced twice.
+
+      Everything this phase owns behaved: `Teardown: 1 spawned, 1 destroyed, 0 failed`
+      cleaned up run A's leftovers at run B's `Initialize`, both entities respawned at
+      the same points without collision, and the CARLA server survived both runs (see
+      the crash note below). What fails is the ego stack's cross-run state. The
+      mission planner's own log has the sequence:
+
+      ```
+      Failed to plan route.
+       - start checkpoint: (97.8985, -131.594, ...)   <- where run A's ego finished
+       - goal checkpoint: (120, -129.8, 0)
+      ... 5 s later ...
+      Route set via set_waypoint_route
+       Initial pose - x: 191.746506, y: -129.613998   <- run B's actual spawn
+      ```
+
+      So localization does recover, and the route is set. Planning then produces
+      nothing for the remaining eight minutes: `scenario_selector` logs not one line
+      after run A ended, its last message there being `trajectory is delayed:
+      scenario = LaneDriving`. SSv2 restarts simulation time at ~0 for every run, and a
+      stack that has already seen a later clock is the common factor with the identical
+      symptom on background AVs (see [010](010-multi-instance.md)).
+
+      **The remaining work is therefore not in this phase**: either the ego stack is
+      restarted per scenario run (today's answer, ~4 min), or simulation time is made
+      to survive a run boundary. Tracked with the other clock-discontinuity hazards in
+      [011](011-robustness.md).
 - [x] After a clean shutdown, `world.actors()` contains nothing this bridge spawned
 - [x] After a Ctrl-C mid-scenario, the same holds
 - [x] CARLA restarted mid-run: csb recovers rather than erroring until killed — fixed

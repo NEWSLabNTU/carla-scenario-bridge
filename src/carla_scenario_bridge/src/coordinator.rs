@@ -115,6 +115,176 @@ pub struct TeardownReport {
     pub failed: usize,
 }
 
+/// Destroy the sensors attached to an actor, before that actor goes away.
+///
+/// CARLA does not take a vehicle's sensors down with it: they stay alive and parentless,
+/// and the next tick runs them against an owner that no longer exists. For the IMU that is
+/// an outright null dereference in the server:
+///
+/// ```text
+/// AActor::GetRootComponent() const                                  Actor.h:1812
+/// AInertialMeasurementUnit::GetActorAngularVelocityInRadians(AActor&) InertialMeasurementUnit.cpp:58
+/// AInertialMeasurementUnit::ComputeGyroscope()                      InertialMeasurementUnit.cpp:151
+/// ```
+///
+/// `ComputeGyroscope` guards its owner with `check(GetOwner() != nullptr)`, which is
+/// compiled out of Shipping builds — the packaged server then dereferences the null owner.
+/// Symbolized from eight of this host's twelve CARLA coredumps on 2026-08-10, always on the
+/// game thread, always 24-40 s into a scenario. Upstream has the same class of report
+/// (carla-simulator/carla#5812, #7046, #3197).
+///
+/// The sensors belong to `acb_bridge`, which does destroy them when it notices its vehicle
+/// vanish — but it only notices *after* the fact, and the crash happens in that window.
+/// Whoever destroys the vehicle is the only one who can close it, so this bends invariant 2
+/// deliberately: csb removes the orphans it would otherwise create, and nothing else.
+///
+/// Best effort. A sensor that cannot be listed or destroyed is logged, not fatal — the
+/// vehicle still has to go.
+fn destroy_attached_sensors(world: &carla::client::World, parent_id: u32) {
+    let actors = match world.actors() {
+        Ok(actors) => actors,
+        Err(e) => {
+            tracing::warn!("Could not list actors to detach sensors from {parent_id}: {e}");
+            return;
+        }
+    };
+
+    for actor in actors.iter() {
+        if actor.parent_id() != parent_id || !actor.type_id().starts_with("sensor.") {
+            continue;
+        }
+        let sensor_id = actor.id();
+        match actor.destroy() {
+            Ok(_) => tracing::debug!("Destroyed sensor {sensor_id} attached to {parent_id}"),
+            Err(e) => tracing::warn!(
+                "Could not destroy sensor {sensor_id} attached to {parent_id}: {e}. \
+                 The server may crash when it next ticks that sensor."
+            ),
+        }
+    }
+}
+
+/// Destroy one actor by ID in a given world. A missing actor counts as destroyed: the
+/// requested end state holds either way.
+fn destroy_actor_in(world: &carla::client::World, actor_id: u32) -> Result<()> {
+    let actor = world
+        .actor(actor_id)
+        .wrap_err_with(|| format!("look up actor {actor_id}"))?;
+
+    match actor {
+        Some(actor) => {
+            // Children first, or the server ticks them against a dead owner.
+            destroy_attached_sensors(world, actor_id);
+            let destroyed = actor
+                .destroy()
+                .wrap_err_with(|| format!("destroy actor {actor_id}"))?;
+            if !destroyed {
+                tracing::debug!("Actor {actor_id} was already destroyed");
+            }
+        }
+        None => tracing::debug!("Actor {actor_id} is no longer in the world"),
+    }
+    Ok(())
+}
+
+/// Whether this bridge froze CARLA's traffic lights, and therefore owes an unfreeze.
+///
+/// A separate type so the "only undo what we did" rule is testable on its own. CARLA is
+/// shared: unfreezing lights this bridge never froze would stomp whatever else set them,
+/// and leaving our own freeze behind strands the next scenario on the last one's states.
+#[derive(Debug, Default)]
+pub struct FreezeGuard {
+    frozen: bool,
+}
+
+impl FreezeGuard {
+    fn mark_frozen(&mut self) {
+        self.frozen = true;
+    }
+
+    fn mark_restored(&mut self) {
+        self.frozen = false;
+    }
+
+    fn needs_restore(&self) -> bool {
+        self.frozen
+    }
+}
+
+/// The set of actors this bridge created and has not yet destroyed.
+///
+/// Deliberately separate from `EntityManager`, which is a name lookup that gets emptied on
+/// despawn and on re-initialise: tying teardown to it is exactly what leaked every actor
+/// whose name mapping was dropped first (phase 007). The ledger only forgets an actor once
+/// something has confirmed it gone.
+///
+/// It owns the teardown loop rather than just the set, so the bookkeeping can be tested
+/// without a CARLA world -- the caller supplies the destroyer.
+#[derive(Debug, Default)]
+pub struct SpawnLedger {
+    ids: HashSet<u32>,
+}
+
+impl SpawnLedger {
+    fn record(&mut self, actor_id: u32) {
+        self.ids.insert(actor_id);
+    }
+
+    fn forget(&mut self, actor_id: u32) {
+        self.ids.remove(&actor_id);
+    }
+
+    fn clear(&mut self) {
+        self.ids.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    #[cfg(test)]
+    fn contains(&self, actor_id: u32) -> bool {
+        self.ids.contains(&actor_id)
+    }
+
+    /// Destroy everything tracked, in ascending id order so a failure is reproducible.
+    ///
+    /// An actor is forgotten only when `destroy` reports success; one that fails stays on
+    /// the books for the next attempt. Returns the report and the ids that were destroyed,
+    /// so the caller can drop whatever else it keys by actor id.
+    fn teardown<F>(&mut self, mut destroy: F) -> (TeardownReport, Vec<u32>)
+    where
+        F: FnMut(u32) -> Result<()>,
+    {
+        let mut report = TeardownReport {
+            attempted: self.ids.len(),
+            ..Default::default()
+        };
+        let mut destroyed = Vec::new();
+        if report.attempted == 0 {
+            return (report, destroyed);
+        }
+
+        let mut ids: Vec<u32> = self.ids.iter().copied().collect();
+        ids.sort_unstable();
+        for actor_id in ids {
+            match destroy(actor_id) {
+                Ok(()) => {
+                    report.destroyed += 1;
+                    destroyed.push(actor_id);
+                    self.ids.remove(&actor_id);
+                }
+                Err(e) => {
+                    report.failed += 1;
+                    tracing::warn!("Teardown: failed to destroy actor {actor_id}: {e}");
+                }
+            }
+        }
+        (report, destroyed)
+    }
+}
+
 /// Heights to try when a spawn collides, in order.
 ///
 /// Only the height varies. The commanded x/y is SSv2's to decide (invariant 5), and quietly
@@ -240,10 +410,10 @@ pub struct Coordinator {
     /// Deliberately separate from `EntityManager`, which is a name lookup that gets
     /// emptied on despawn and on re-initialise. Tying teardown to it leaked every actor
     /// whose name mapping was dropped first.
-    spawned_actors: HashSet<u32>,
+    spawned_actors: SpawnLedger,
     /// Whether this bridge froze CARLA's traffic lights, so shutdown only unfreezes what
     /// it actually froze. Set by phase 009 when freezing lands (invariant 3).
-    froze_traffic_lights: bool,
+    froze_traffic_lights: FreezeGuard,
     /// Consecutive CARLA operation failures, used to decide the connection is gone.
     consecutive_carla_failures: u32,
     /// Last longitudinal acceleration seen per actor, so jerk can be differenced across
@@ -299,8 +469,8 @@ impl Coordinator {
             has_ego: false,
             warned_unknown_entities: HashSet::new(),
             warned_traffic_lights: false,
-            spawned_actors: HashSet::new(),
-            froze_traffic_lights: false,
+            spawned_actors: SpawnLedger::default(),
+            froze_traffic_lights: FreezeGuard::default(),
             consecutive_carla_failures: 0,
             previous_longitudinal_accel: HashMap::new(),
             settle_frames: HashMap::new(),
@@ -325,14 +495,18 @@ impl Coordinator {
 
     /// Record an actor this bridge created, so teardown can find it later.
     fn record_spawned(&mut self, actor_id: u32) {
-        self.spawned_actors.insert(actor_id);
+        self.spawned_actors.record(actor_id);
     }
 
     /// Drop an actor from the teardown set once it is confirmed gone.
     fn forget_spawned(&mut self, actor_id: u32) {
-        self.spawned_actors.remove(&actor_id);
-        // Actor IDs are reused by CARLA, so a stale jerk sample would otherwise be
-        // differenced against a completely different entity.
+        self.spawned_actors.forget(actor_id);
+        self.forget_actor_samples(actor_id);
+    }
+
+    /// Drop the per-actor motion history. Actor IDs are reused by CARLA, so a stale jerk
+    /// sample would otherwise be differenced against a completely different entity.
+    fn forget_actor_samples(&mut self, actor_id: u32) {
         self.previous_longitudinal_accel.remove(&actor_id);
         self.settle_frames.remove(&actor_id);
         self.accel_history.remove(&actor_id);
@@ -344,27 +518,19 @@ impl Coordinator {
     /// its own is a success -- the requested end state holds either way. Never panics, so it
     /// is safe on the shutdown path.
     pub fn destroy_all_spawned(&mut self) -> TeardownReport {
-        let mut report = TeardownReport {
-            attempted: self.spawned_actors.len(),
-            ..Default::default()
-        };
+        // The ledger drives the loop; the world only supplies the destroyer. Split this way
+        // so the bookkeeping half is reachable from a unit test, which a Coordinator (and
+        // therefore a live CARLA world) is not.
+        let world = &self.world;
+        let (report, destroyed) = self
+            .spawned_actors
+            .teardown(|actor_id| destroy_actor_in(world, actor_id));
+        for actor_id in destroyed {
+            self.forget_actor_samples(actor_id);
+        }
 
         if report.attempted == 0 {
             return report;
-        }
-
-        let ids: Vec<u32> = self.spawned_actors.iter().copied().collect();
-        for actor_id in ids {
-            match self.destroy_actor(actor_id) {
-                Ok(()) => {
-                    report.destroyed += 1;
-                    self.forget_spawned(actor_id);
-                }
-                Err(e) => {
-                    report.failed += 1;
-                    tracing::warn!("Teardown: failed to destroy actor {actor_id}: {e}");
-                }
-            }
         }
 
         tracing::info!(
@@ -374,27 +540,6 @@ impl Coordinator {
             report.failed
         );
         report
-    }
-
-    /// Destroy one actor by ID. A missing actor counts as destroyed.
-    fn destroy_actor(&self, actor_id: u32) -> Result<()> {
-        let actor = self
-            .world
-            .actor(actor_id)
-            .wrap_err_with(|| format!("look up actor {actor_id}"))?;
-
-        match actor {
-            Some(actor) => {
-                let destroyed = actor
-                    .destroy()
-                    .wrap_err_with(|| format!("destroy actor {actor_id}"))?;
-                if !destroyed {
-                    tracing::debug!("Actor {actor_id} was already destroyed");
-                }
-            }
-            None => tracing::debug!("Actor {actor_id} is no longer in the world"),
-        }
-        Ok(())
     }
 
     /// Undo the CARLA-wide changes this bridge made: destroy its actors, unfreeze traffic
@@ -455,7 +600,8 @@ impl Coordinator {
             self.settle_frames.clear();
             self.accel_history.clear();
             self.sync_mode_enabled = false;
-            self.froze_traffic_lights = false;
+            // The reloaded world's lights are CARLA's own again, so we owe no unfreeze.
+            self.froze_traffic_lights.mark_restored();
             tracing::info!("Map '{town}' loaded");
         }
 
@@ -676,7 +822,7 @@ impl Coordinator {
     fn freeze_traffic_lights(&mut self) {
         match self.world.freeze_all_traffic_lights(true) {
             Ok(()) => {
-                self.froze_traffic_lights = true;
+                self.froze_traffic_lights.mark_frozen();
                 tracing::info!(
                     "CARLA traffic light cycling frozen; SSv2 is now the only writer. \
                      Signals the scenario does not command hold their current state."
@@ -698,13 +844,13 @@ impl Coordinator {
     /// Freezing arrives with phase 009. The guard is here now so that landing the freeze
     /// cannot leave a shared CARLA server stuck on whatever states the last scenario left.
     pub fn restore_traffic_lights(&mut self) {
-        if !self.froze_traffic_lights {
+        if !self.froze_traffic_lights.needs_restore() {
             return;
         }
 
         match self.world.freeze_all_traffic_lights(false) {
             Ok(()) => {
-                self.froze_traffic_lights = false;
+                self.froze_traffic_lights.mark_restored();
                 tracing::info!("Traffic lights unfrozen; CARLA cycling restored");
             }
             Err(e) => tracing::warn!("Failed to unfreeze traffic lights: {e}"),
@@ -757,7 +903,9 @@ impl Coordinator {
 
         // Whatever CARLA we are now talking to, it is not holding our settings.
         self.sync_mode_enabled = false;
-        self.froze_traffic_lights = false;
+        // A restarted server froze nothing for us; a surviving one is no longer known to
+        // hold our freeze either. Either way we are not the one who owes an unfreeze.
+        self.froze_traffic_lights.mark_restored();
 
         tracing::info!("Reconnected to CARLA; synchronous mode will be re-applied next frame");
         Ok(())
@@ -1287,6 +1435,11 @@ impl Coordinator {
                     let actors = self.world.actors().wrap_err("get actors")?;
                     match actors.find(actor_id).wrap_err("find actor")? {
                         Some(actor) => {
+                            // Sensors first: a despawn is where a vehicle most often leaves
+                            // acb's sensors behind, and the server segfaults on the next
+                            // tick of an IMU whose owner is gone. See
+                            // `destroy_attached_sensors`.
+                            destroy_attached_sensors(&self.world, actor_id);
                             if actor.destroy().wrap_err("destroy actor")? {
                                 tracing::info!("Despawned '{name}' (actor_id={actor_id})");
                             } else {
@@ -2028,10 +2181,103 @@ mod tests {
     /// A teardown sweep with nothing recorded must not report phantom work.
     #[test]
     fn empty_teardown_reports_nothing() {
-        let report = TeardownReport::default();
+        let mut ledger = SpawnLedger::default();
+        let mut calls = 0;
+        let (report, destroyed) = ledger.teardown(|_| {
+            calls += 1;
+            Ok(())
+        });
+        assert_eq!(calls, 0, "nothing recorded, so nothing to destroy");
+        assert!(destroyed.is_empty());
         assert_eq!(report.attempted, 0);
         assert_eq!(report.destroyed, 0);
         assert_eq!(report.failed, 0);
+    }
+
+    /// Teardown must chase every actor this bridge created, including the ones
+    /// `EntityManager` has already forgotten.
+    ///
+    /// This is the leak phase 007 exists to close: `EntityManager` is a name lookup that
+    /// gets emptied on despawn and on re-initialise, so an actor whose name mapping went
+    /// first used to become untouchable. The ledger is deliberately not keyed by name and
+    /// never learns that a name was dropped -- which is exactly what this asserts.
+    #[test]
+    fn teardown_destroys_entities_dropped_from_entity_manager() {
+        let mut entities = EntityManager::new();
+        let mut ledger = SpawnLedger::default();
+
+        for (name, kind, actor_id) in [
+            ("ego", EntityType::Ego, 10u32),
+            ("npc_1", EntityType::Vehicle, 11),
+            ("bg_av_1", EntityType::Vehicle, 12),
+        ] {
+            entities.insert(name.to_string(), kind, actor_id);
+            ledger.record(actor_id);
+        }
+
+        // The scenario despawns one entity and re-initialises, which historically left the
+        // ledger as the only remaining trace of actors 10 and 11.
+        entities.remove("ego");
+        entities.clear();
+        assert!(entities.get("ego").is_none());
+
+        let mut destroyed_ids = Vec::new();
+        let (report, destroyed) = ledger.teardown(|actor_id| {
+            destroyed_ids.push(actor_id);
+            Ok(())
+        });
+
+        assert_eq!(
+            destroyed_ids,
+            vec![10, 11, 12],
+            "every spawned actor is chased"
+        );
+        assert_eq!(destroyed, vec![10, 11, 12]);
+        assert_eq!(report.attempted, 3);
+        assert_eq!(report.destroyed, 3);
+        assert_eq!(report.failed, 0);
+        assert_eq!(ledger.len(), 0, "destroyed actors are forgotten");
+    }
+
+    /// An actor that could not be destroyed stays on the books for the next sweep; only
+    /// confirmed destruction forgets it.
+    #[test]
+    fn teardown_keeps_actors_it_failed_to_destroy() {
+        let mut ledger = SpawnLedger::default();
+        ledger.record(10);
+        ledger.record(11);
+
+        let (report, destroyed) = ledger.teardown(|actor_id| {
+            if actor_id == 11 {
+                eyre::bail!("CARLA is gone")
+            }
+            Ok(())
+        });
+
+        assert_eq!(report.attempted, 2);
+        assert_eq!(report.destroyed, 1);
+        assert_eq!(report.failed, 1);
+        assert_eq!(destroyed, vec![10]);
+        assert!(!ledger.contains(10));
+        assert!(ledger.contains(11), "a failure is retried, not lost");
+    }
+
+    /// Unfreezing must be skipped entirely when this bridge never froze anything: a shared
+    /// CARLA server may have had its lights frozen by someone else, and stomping that is
+    /// the same class of bug as leaving our own freeze behind.
+    #[test]
+    fn unfreeze_is_skipped_when_nothing_was_frozen() {
+        let mut guard = FreezeGuard::default();
+        assert!(!guard.needs_restore(), "nothing frozen, nothing to undo");
+
+        guard.mark_frozen();
+        assert!(guard.needs_restore());
+
+        guard.mark_restored();
+        assert!(
+            !guard.needs_restore(),
+            "a second shutdown pass must not unfreeze again"
+        );
     }
 
     /// Whatever the message says, it must never be empty -- SSv2 surfaces this text and a

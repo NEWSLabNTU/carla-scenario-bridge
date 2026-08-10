@@ -70,6 +70,40 @@ now goes further than it ever has:
   the server, and the world only ticks during a scenario — to work on the pilot without
   SSv2, spawn the vehicle and drive `world.tick()` from a plain CARLA client.
 
+### The CARLA segfault is understood, and half-fixed
+
+Three of eight runs died to a server `SIGSEGV` 24-40 s in. Symbolized (the `.debug` file
+ships beside the packaged binary): `AInertialMeasurementUnit::ComputeGyroscope()`
+dereferencing an owner that no longer exists, its `check(GetOwner() != nullptr)` having
+been compiled out of the Shipping build. Destroying a vehicle leaves its sensors alive
+and ticking.
+
+csb now destroys a vehicle's attached sensors before the vehicle, on despawn and in
+teardown; the real guard is in the fork on branch `sensor-owner-guards` (`e27ed518`) and
+needs a **server rebuild** to take effect. Two consecutive runs afterwards left the
+server untouched where the same sequence used to kill it.
+
+### A reused ego stack cannot take a second scenario either
+
+Same shape as the background AV, now measured on the ego: run A passes, run B on the
+same stack ends in `AutowareError: waited for WAITING_FOR_ENGAGE ... current state is
+PLANNING`. The mission planner first rejects the route from run A's *final* pose, then
+accepts one 5 s later from the true spawn pose — and planning produces nothing after
+that, `scenario_selector` falling silent from the end of run A onward. SSv2 restarts sim
+time at ~0 every run.
+
+**So: restart `just ego-av` as well as `just bg-av` between scenario runs.** Everything
+csb owns survives a second run — teardown, respawn, reconnect — see
+`docs/roadmap/007-repeatable-runs.md`.
+
+### ROS domains: 1 for the ego, 2+ for background AVs, 0 unused
+
+Domain 0 is where every unconfigured ROS process on the host lands, including other
+people's demos, so a run whose ego lives there can be joined uninvited. `just ego-av`
+and `just scenario` now export `ego_domain` (default 1) and `just bg-av` defaults to
+domain 2; a second background AV takes 3. This bit for real on 2026-08-10, when someone
+else's `planning_simulator` was already sitting in the domain a background stack wanted.
+
 ### A background stack is single-use per scenario run
 
 Verified 2026-08-10, late session. On a **freshly started** background stack the pilot

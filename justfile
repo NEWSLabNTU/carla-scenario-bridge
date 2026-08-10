@@ -5,6 +5,12 @@ carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 ssv2_port := env_var_or_default('SSV2_PORT', '5555')
 map_name := env_var_or_default('MAP_NAME', 'Town01')
+# ROS domain for the ego stack, which is also SSv2's: the concealer reaches the ego over
+# plain ROS, so `just ego-av` and `just scenario` must agree on this. Domain 0 is left
+# free deliberately -- it is where every unconfigured ROS process on the host lands, and
+# a stray node there joins the scenario's graph without anyone asking. Background AVs get
+# 2 and up (see `just bg-av`).
+ego_domain := env_var_or_default('EGO_ROS_DOMAIN_ID', '1')
 data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
 project := justfile_directory()
 acb_src := justfile_directory() + '/src/autoware_carla_bridge'
@@ -188,6 +194,9 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    # The ego and SSv2 share this domain; `just scenario` sets the same one. Not 0 --
+    # see the ego_domain comment at the top of this file.
+    export ROS_DOMAIN_ID={{ego_domain}}
     # --parser python: play_launch's Rust parser fails on tier4_perception_component
     # (KeyError 'front_overhang' evaluating its Python sub-launches)
     # The API adaptors run as their own processes: inside the big launch the
@@ -215,8 +224,16 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
 # the stack that drives it. Long-lived, like `just ego-av`, and startable before or after
 # the scenario -- only CARLA has to be up first.
 #
+#
+# Domains start at 2: 1 belongs to the ego and SSv2, and 0 is left free so that a stray
+# unconfigured ROS process cannot join a run's graph. A second background AV goes on 3.
+#
+# Restart this before every scenario run. SSv2 restarts sim time at ~0 each run, and a
+# stack that has already seen a later clock stalls on the backward jump -- its pilot then
+# waits for a fresh pose that never arrives. See docs/CHECKPOINT.md.
+#
 # Usage: just bg-av [vehicle_name] [domain] [web_port]
-bg-av vehicle_name="bg_av_1" domain="1" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name) goals=(project + "/scenarios/bg_av_1_poses.yaml"):
+bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name) goals=(project + "/scenarios/bg_av_1_poses.yaml"):
     #!/usr/bin/env bash
     set -e
     source /opt/autoware/1.5.0/setup.bash
@@ -252,6 +269,9 @@ scenario scenario_file:
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    # Must match `just ego-av`: the concealer reaches the ego over plain ROS, and a
+    # scenario in another domain simply never finds it.
+    export ROS_DOMAIN_ID={{ego_domain}}
     # --parser python: scenario_test_runner.launch.py imports launch.actions the
     # Rust parser's embedded Python cannot resolve (EmitEvent)
     exec play_launch launch --parser python --web-addr 0.0.0.0:8081 \
@@ -265,6 +285,8 @@ e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc"):
     #!/usr/bin/env bash
     set -e
     source "{{project}}/install/setup.bash"
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    export ROS_DOMAIN_ID={{ego_domain}}
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         csb_launch demo.launch.xml \
         scenario:="{{scenario_file}}" \

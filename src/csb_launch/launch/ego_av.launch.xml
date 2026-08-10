@@ -5,11 +5,14 @@
     Same stack, same structure as background_av.launch.xml; the differences are exactly
     the ego's domain and clock policy:
 
-    - No ROS_DOMAIN_ID override, here or in the run command: this stack must live in
-      SSv2's domain, which is ambient in the caller's environment. SSv2's concealer
-      (launched with launch_autoware:=false) reaches this Autoware over plain ROS
-      topics/services to initialize, route, and engage it — a stack in any other domain
-      is invisible to it.
+    - No ROS_DOMAIN_ID override in this file: this stack must live in SSv2's domain,
+      which is ambient in the caller's environment. SSv2's concealer (launched with
+      launch_autoware:=false) reaches this Autoware over plain ROS topics/services to
+      initialize, route, and engage it — a stack in any other domain is invisible to it.
+      `just ego-av` and `just scenario` therefore export the same ROS_DOMAIN_ID
+      (default 1, `ego_domain` in the justfile). Domain 0 is left free on purpose: it
+      is where every unconfigured ROS process on the host lands, and a stray node there
+      would join the scenario's graph uninvited.
 
     - publish_clock is false here and true for background AVs: SSv2's traffic_simulator
       publishes /clock in this domain, and a second publisher makes localization log

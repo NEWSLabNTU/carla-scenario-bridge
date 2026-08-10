@@ -42,8 +42,14 @@ violates; see [Gaps](#gaps-between-this-design-and-the-code).
 | Autoware | Perception, planning, control for one vehicle | — |
 
 `csb_bridge` is a single process holding the only authoritative CARLA client. It is barely a
-ROS participant. SSv2 forks the ego's Autoware into its own domain, `D0`. Background AVs live
-in `D1..Dn`, brought up by launch.
+ROS participant. The ego's Autoware shares SSv2's domain, `D0` below. Background AVs live in
+`D1..Dn`, brought up by launch.
+
+`D0`, `D1`… are roles, not `ROS_DOMAIN_ID` values. The mapping in this repo is **ego and
+SSv2 = domain 1, background AVs = 2 and up, and domain 0 unused**: an unconfigured ROS
+process on the host lands in 0, and one that joins a run's graph uninvited is a debugging
+session nobody wants. `just ego-av` and `just scenario` both export `ego_domain` (default
+1); `just bg-av` takes its domain as an argument and defaults to 2.
 
 ## Actor classes
 
@@ -91,29 +97,29 @@ ego:
 
 background_avs:
   - role_name: "bg_av_1"
-    ros_domain_id: 1
+    ros_domain_id: 2
     blueprint: "vehicle.tesla.model3"
-    spawn_pose: {x: 120.0, y: -55.0, z: 0.5, yaw: 180.0}
-    goal_pose:  {x: 40.0,  y: -55.0, z: 0.0, yaw: 180.0}
+    spawn_pose: {x: 140.0, y: -55.5, z: 0.5, yaw: 180.0}
+    goal_pose:  {x: 110.0, y: -55.5, z: 0.0, yaw: 180.0}
 ```
 
 `role_name` must be unique — it is how each `acb_bridge` finds its own vehicle, and a
 duplicate is rejected at startup.
 
-**2. Start the bridge and the scenario** in the ego's domain (`D0`):
+**2. Start the bridge and the scenario** in the ego's domain (`D0`, i.e. `ROS_DOMAIN_ID=1`):
 
 ```bash
-ROS_DOMAIN_ID=0 just e2e scenarios/town01_ego_drive.xosc
+just e2e scenarios/town01_ego_drive.xosc   # exports ROS_DOMAIN_ID=1 itself
 ```
 
 `csb_bridge` loads the map, spawns `bg_av_1` at `Initialize`, then spawns the ego when SSv2
 asks. `acb_bridge` in this domain runs with `publish_clock:=false`, because SSv2 owns
 `/clock` here.
 
-**3. Start the background AV's stack** in its own domain (`D1`):
+**3. Start the background AV's stack** in its own domain (`D1`, i.e. `ROS_DOMAIN_ID=2`):
 
 ```bash
-ROS_DOMAIN_ID=1 PLAY_LAUNCH_WEB_ADDR=0.0.0.0:8083 \
+ROS_DOMAIN_ID=2 PLAY_LAUNCH_WEB_ADDR=0.0.0.0:8083 \
   play_launch launch csb_launch background_av.launch.xml \
       vehicle_name:=bg_av_1 \
       map_path:=$PWD/data/carla-autoware-bridge/Town01 \

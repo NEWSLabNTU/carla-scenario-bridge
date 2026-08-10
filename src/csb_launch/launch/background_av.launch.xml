@@ -6,9 +6,12 @@
     carla_scenario_bridge spawns the vehicle from its `background_avs` config; this file
     brings up the stack that drives it.
 
-    Run this in the AV's own ROS domain, which must differ from the scenario ego's:
+    Run this in the AV's own ROS domain, which must differ from the scenario ego's.
+    Domains: 1 is the ego and SSv2, background AVs take 2 and up, and 0 stays empty so
+    that no unconfigured ROS process on the host can join a run. `just bg-av` does this
+    for you.
 
-      ROS_DOMAIN_ID=1 play_launch launch csb_launch background_av.launch.xml \
+      ROS_DOMAIN_ID=2 play_launch launch csb_launch background_av.launch.xml \
           vehicle_name:=bg_av_1 map_path:=/path/to/Town01 \
           goal_poses_file:=/path/to/bg_av_1_poses.yaml
 

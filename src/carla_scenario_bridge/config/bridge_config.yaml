@@ -55,7 +55,9 @@ map_alias: {}
 # right ROS domain is launch's job -- see csb_launch/launch/background_av.launch.xml.
 background_avs:
   - role_name: "bg_av_1"
-    ros_domain_id: 1
+    # Background AVs start at domain 2: the ego and SSv2 share domain 1, and domain 0 is
+    # deliberately left empty so a stray unconfigured ROS process cannot join a run.
+    ros_domain_id: 2
     blueprint: "vehicle.tesla.model3"
     # Both poses lie inside lanelet 16946 of the TUM Town01 map, whose centerline runs
     # x 145.0 -> 101.4 at y = -55.5: westbound, hence yaw 180. Three ways to get this
