@@ -1,0 +1,11 @@
+# Goal for the bg_av_1 background AV's pilot (acb_pilot auto_drive format).
+# Matches the informational goal_pose in config/bridge_config.yaml: the AV drives
+# west along the y=-53.5 westbound lane (x 130->88) of Town01 (ROS frame, yaw 180 deg).
+goal_pose:
+  x: 92.0
+  y: -53.5
+  z: 0.0
+  qx: 0.0
+  qy: 0.0
+  qz: 1.0
+  qw: 0.0

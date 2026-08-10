@@ -53,7 +53,12 @@ map_alias: {}
 #
 # This bridge spawns the vehicle. Bringing up the matching Autoware and acb_bridge in the
 # right ROS domain is launch's job -- see csb_launch/launch/background_av.launch.xml.
-background_avs: []
+background_avs:
+  - role_name: "bg_av_1"
+    ros_domain_id: 1
+    blueprint: "vehicle.tesla.model3"
+    spawn_pose: {x: 125.0, y: -53.5, z: 0.5, yaw: 180.0}
+    goal_pose:  {x: 92.0,  y: -53.5, z: 0.0, yaw: 180.0}
 #  - role_name: "bg_av_1"      # must be unique, and match that domain's vehicle_name
 #    ros_domain_id: 1          # informational here; launch owns the actual domain
 #    blueprint: "vehicle.tesla.model3"

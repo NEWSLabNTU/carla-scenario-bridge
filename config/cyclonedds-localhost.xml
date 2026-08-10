@@ -21,6 +21,15 @@
     <Discovery>
       <ParticipantIndex>auto</ParticipantIndex>
       <MaxAutoParticipantIndex>300</MaxAutoParticipantIndex>
+      <!-- Two-domain runs: the default DomainGain (250) puts domain 1's port base
+           at 7650, inside domain 0's unicast range once MaxAutoParticipantIndex
+           is 300 (ports up to ~8021). A second stack on domain 1 then occupies
+           ports domain 0 still needs, and new domain-0 participants fail with
+           "Failed to find a free participant index". 1000 keeps the ranges
+           disjoint up to ~489 participants per domain. -->
+      <Ports>
+        <DomainGain>1000</DomainGain>
+      </Ports>
       <!-- Default SPDP resend backoff grows to minutes on long-running
            participants, so a late-joining process (the scenario interpreter
            starts minutes after the Autoware stack) can wait longer than the
