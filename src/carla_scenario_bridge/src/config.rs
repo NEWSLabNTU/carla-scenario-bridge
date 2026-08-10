@@ -146,7 +146,14 @@ impl BridgeConfig {
             tracing::info!("Loaded configuration from {}", path.display());
             config
         } else {
-            tracing::info!("No configuration at {}; using defaults", path.display());
+            // A warning, not an info line: the defaults have no background AVs and no
+            // blueprint or map aliases, so a run started from the wrong directory looks
+            // healthy while quietly being a different run than the one configured.
+            tracing::warn!(
+                "No configuration at {}; using defaults (no background AVs, no blueprint \
+                 or map aliases). Set CSB_CONFIG_DIR if this is not what you meant.",
+                path.display()
+            );
             BridgeConfig::default()
         };
 

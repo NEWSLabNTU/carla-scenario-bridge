@@ -4,6 +4,81 @@ State of the SSv2+CARLA integration after the exitSuccess campaign. For the full
 per-phase anatomy see `docs/roadmap/012-ssv2-unmanaged-autoware.md`; this file is
 the cross-machine handoff summary.
 
+## Update — 2026-08-10, second machine (newslab-server243, RTX 5090)
+
+The stack was brought up from a clean clone on a second host and the two-domain run
+now goes further than it ever has:
+
+- **Ego E2E green here too**: `town01_ego_drive.xosc` passed five consecutive times
+  (SSv2 JUnit clean), spawn-to-goal ~35-50 s.
+- **010's last open leg is observed**: the background AV's pilot **set its route and
+  engaged** inside the scenario window — `Route set successfully`, then
+  `Driving... route_state=2, op_mode=2` (AUTONOMOUS) 46 s after the AV spawned, while
+  the ego was still driving. It did not *arrive*: the world only ticks while SSv2 runs
+  a scenario, the ego's scenario is ~50 s long, and the pilot needs ~45 s of that just
+  to localize (GNSS+NDT) and settle. The bg AV therefore gets a few seconds of
+  autonomous driving per run. Making it arrive needs either a longer ego scenario or a
+  shorter pilot cold start, not a fix to the mechanism.
+- **Teardown is clean**: after each run CARLA holds no vehicles or sensors, background
+  AV included (010's "no background AV left behind").
+
+### What it took to get here (all of it new, all of it committed)
+
+1. **play_launch must carry the compound-parameter fix.** The pip 0.8.2 wheel writes
+   array-valued parameters into `overrides.yaml` as quoted strings and dict-valued ones
+   as their Python repr, so `autoware_pose_initializer_node` dies with *"parameter
+   {output_pose_covariance} is of type {double_array}, setting it to {string} is not
+   allowed"* and, once that is fixed, *"Statically typed parameter
+   'user_defined_initial_pose.enable' must be initialized"*. `shape_estimation` dies the
+   same way. Fixed upstream in play_launch `f78745d` (now on main); build from source —
+   a released wheel older than that is unusable here.
+2. **Map projector.** The TUM pack on the NAS declares `projector_type: local`, which
+   SSv2's `lanelet_loader` rejects outright (*"Unsupported projector type: local.
+   Supported types are TransverseMercator and MGRS"*). `scripts/download_maps.sh` used
+   to rewrite only `LocalCartesianUTM`; it now rewrites anything that is not
+   TransverseMercator or MGRS.
+3. **`just run` needs `CSB_CONFIG_DIR`.** Without it the bridge reads `./config`, which
+   exists (the DDS xml lives there) but holds no `bridge_config.yaml` — so the run comes
+   up with *no background AVs* and looks perfectly healthy. The recipe now exports the
+   package config dir, and a missing config is a warning rather than an info line.
+4. **Background AV poses were off the routing graph.** Three separate ways, all of which
+   surface only as the pilot's *"The planned route is empty"*: the goal was past the end
+   of its lanelet; the replacement lane (y=-53.7) carries **no subtype tag** — 65 of this
+   map's 300 lanelets do not, and Autoware routes over `subtype=road` only; and the lane
+   that is tagged runs **east to west**, so a vehicle facing east has its goal behind it.
+   Working poses: spawn (140, -55.5) yaw 180, goal (110, -55.5) yaw 180, both on lanelet
+   16946. Verify candidates with lanelet2 (`lanelet2.io.load` + `RoutingGraph`), never by
+   eye off the OSM — the left/right boundaries are not stored in a consistent order, so a
+   hand-built centerline can come out reversed.
+5. **CARLA now boots on the scenario's town**, which costs nothing and saves 4.1 GB of
+   peak RSS and 3.9 GB of VRAM. See `docs/design/carla-server-tuning.md` for the
+   measurements and for what does not work (`-nullrhi` segfaults; the startup map cannot
+   be set on the command line at all).
+
+### Fresh-machine bring-up notes
+
+- `src/color_names` is **not** a submodule and is not packaged: clone it by hand or the
+  SSv2 build dies on `color_names/color_names.hpp`.
+  `git clone --depth 1 https://github.com/OUXT-Polaris/color_names.git src/color_names`
+- `pip install xmlschema`, or `scenario_test_runner` exits 1 on import.
+- If `traffic_simulator` still fails to find a dependency's headers after that
+  dependency builds, delete `build/traffic_simulator` — its CMake cache remembers the
+  failed configure.
+- CARLA lives at `~/Downloads/CARLA_0.9.16`. `AdditionalMaps` is deliberately **not**
+  extracted; the base package already covers every town in the map pack.
+- Debug loop for anything in a background AV's domain: `scripts/carla_bench.py` is for
+  the server, and the world only ticks during a scenario — to work on the pilot without
+  SSv2, spawn the vehicle and drive `world.tick()` from a plain CARLA client.
+
+### Still open
+
+- Background AV **arrival** (see above) — needs sim-time budget, not a fix.
+- The CARLA sensor-teardown crash is alive and well on this host: five systemd restarts
+  during rapid spawn/teardown cycling, `ERROR: Invalid session: no stream available`.
+  Still the highest-value fix in the jerry73204/carla fork.
+- Occasional `change_to_stop` unavailability on a stack that has been up across several
+  runs (one failure in six). A rerun cleared it.
+
 ## Where things stand
 
 - **E2E green and reproducible**: `town01_ego_drive.xosc` has passed three times

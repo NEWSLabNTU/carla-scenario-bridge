@@ -152,6 +152,10 @@ run:
     export CARLA_HOST="${CARLA_HOST:-localhost}"
     export CARLA_PORT="{{carla_port}}"
     export SSV2_PORT="{{ssv2_port}}"
+    # Without this the bridge looks for bridge_config.yaml in ./config -- which exists
+    # (it holds the DDS xml) but has no bridge config in it, so the run silently comes up
+    # with no background AVs and no blueprint aliases.
+    export CSB_CONFIG_DIR="${CSB_CONFIG_DIR:-{{project}}/src/carla_scenario_bridge/config}"
     cargo run \
         --manifest-path "{{project}}/src/carla_scenario_bridge/Cargo.toml"
 
@@ -204,6 +208,33 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
         --load-total-budget 180 \
         csb_launch ego_av.launch.xml \
         map_path:="{{map_path}}" \
+        carla_port:={{carla_port}}
+
+# Launch one background AV's Autoware + acb_bridge + pilot in its own ROS domain.
+# The bridge spawns the vehicle (see background_avs in bridge_config.yaml); this brings up
+# the stack that drives it. Long-lived, like `just ego-av`, and startable before or after
+# the scenario -- only CARLA has to be up first.
+#
+# Usage: just bg-av [vehicle_name] [domain] [web_port]
+bg-av vehicle_name="bg_av_1" domain="1" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name) goals=(project + "/scenarios/bg_av_1_poses.yaml"):
+    #!/usr/bin/env bash
+    set -e
+    source /opt/autoware/1.5.0/setup.bash
+    source "{{acb_src}}/install/setup.bash"
+    source "{{project}}/install/setup.bash"
+    # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain
+    # 1000 in it is what keeps domain 1's unicast ports out of domain 0's range.
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    export ROS_DOMAIN_ID={{domain}}
+    # Off the ego stack's web port; the concealer's own default is 8082.
+    export PLAY_LAUNCH_WEB_ADDR=0.0.0.0:{{web_port}}
+    exec play_launch launch --parser python --web-addr 0.0.0.0:{{web_port}} \
+        --load-node-timeout 120 \
+        --load-total-budget 180 \
+        csb_launch background_av.launch.xml \
+        vehicle_name:={{vehicle_name}} \
+        map_path:="{{map_path}}" \
+        goal_poses_file:="{{goals}}" \
         carla_port:={{carla_port}}
 
 # Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already

@@ -1,9 +1,15 @@
 # Goal for the bg_av_1 background AV's pilot (acb_pilot auto_drive format).
-# Matches the informational goal_pose in config/bridge_config.yaml: the AV drives
-# west along the y=-53.5 westbound lane (x 130->88) of Town01 (ROS frame, yaw 180 deg).
+# Matches the informational goal_pose in config/bridge_config.yaml: the AV drives west
+# along lanelet 16946 of Town01, from x=140 to x=110 at y=-55.5 (ROS frame, yaw 180 deg).
+#
+# The quaternion below is yaw 180. Direction matters as much as position: lanelet 16946
+# runs x 145.0 -> 101.4, so a goal east of the vehicle, or a vehicle facing east, gives
+# "The planned route is empty" and the pilot exits after three attempts. The parallel
+# lane at y=-53.7 looks equally drivable but carries no subtype tag (65 of this map's
+# 300 lanelets do not), so it is absent from the routing graph entirely.
 goal_pose:
-  x: 92.0
-  y: -53.5
+  x: 110.0
+  y: -55.5
   z: 0.0
   qx: 0.0
   qy: 0.0

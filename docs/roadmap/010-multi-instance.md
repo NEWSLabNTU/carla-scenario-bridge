@@ -149,33 +149,45 @@ background AV will actually read it.
 
 - [x] `bridge_config.yaml` is read, and every key in it does something
 - [x] Ego role name is configurable and defaults to `hero`
-- [ ] A two-domain run works: scenario ego plus one background AV, both localize and drive
-      — **mostly verified 2026-08-10** (csb `3b20205`): both stacks coexist and discover
-      cleanly, `bg_av_1` spawns, its acb attaches and GNSS-initializes localization at
-      the spawn pose, and the ego drove its scenario to `Passed` alongside it. STILL
-      OPEN: the pilot's engage leg — the background AV physically driving — was never
-      observed; every window was cut down by CARLA server OOM-kills. Two prerequisites
-      were fixed on the way and matter to anyone rerunning this:
+- [x] A two-domain run works: scenario ego plus one background AV, both localize and drive
+      — **verified 2026-08-10** on newslab-server243: both stacks coexist and discover
+      cleanly, `bg_av_1` spawns, its acb attaches and GNSS-initializes localization at the
+      spawn pose, its pilot **sets a route and engages** (`Route set successfully`, then
+      `Driving... route_state=2, op_mode=2`) while the ego drives its scenario to
+      `Passed`. Five consecutive ego passes on this host.
+      What is *not* shown is arrival: the world only ticks while a scenario runs (SSv2
+      owns the tick), the ego's scenario lasts ~50 s, and the pilot spends ~45 s of it on
+      localization plus its 15 s settle — so the background AV gets a few seconds of
+      autonomous driving per run and then the world stops. Closing that gap is a
+      sim-time budget question (longer ego scenario, or a shorter pilot cold start), not
+      a defect in the mechanism.
+      Three prerequisites were fixed on the way and matter to anyone rerunning this:
       1. **CycloneDDS `DomainGain 1000`** (config/cyclonedds-localhost.xml): the default
          (250) puts domain 1's unicast port base inside domain 0's range once
          `MaxAutoParticipantIndex` is 300 — launching the D1 stack then breaks NEW
          domain-0 participants with "Failed to find a free participant index".
-      2. **On-lanelet pilot goal** (scenarios/bg_av_1_poses.yaml): the design doc's
-         example goal (x=40, y=-55) is off the routing graph (the street ends near
-         x≈88) and the pilot dies with "The planned route is empty". Route now runs the
-         westbound y=-53.5 lane, (125,-53.5) → (92,-53.5). Check candidate poses
-         against the lanelet osm before trusting them.
-      Also note: the world only ticks while a scenario is running (SSv2 owns the tick),
-      so a background AV can only drive DURING a scenario, never between runs.
+      2. **On-lanelet, on-graph, correctly-directed pilot goal**
+         (scenarios/bg_av_1_poses.yaml). "The planned route is empty" has three distinct
+         causes and one message. The design doc's example goal (x=40) is past the end of
+         its lanelet. The obvious replacement lane (y=-53.7) carries **no subtype tag** —
+         65 of this map's 300 lanelets do not — and Autoware routes over `subtype=road`
+         only. And the lane that is tagged (16946) runs **east to west**, so a vehicle
+         facing east has its goal behind it. Working pair: spawn (140, -55.5) yaw 180,
+         goal (110, -55.5) yaw 180. Check candidates with lanelet2's own `RoutingGraph`,
+         not by eye off the OSM: left and right boundaries are not stored in a consistent
+         order, so a hand-built centerline can come out reversed.
+      3. **play_launch's compound-parameter fix** (`f78745d`): without it
+         `autoware_pose_initializer_node` and `shape_estimation` abort at startup, so the
+         background stack never localizes at all.
 - [x] Each domain has exactly one `/clock` publisher (verified in D0 after the
       double-acb_bridge fix, csb `b974590`; D1 uses `publish_clock:=true` by design)
 - [ ] The background AV is perceived by the ego's Autoware through its sensors
 - [x] SSv2 neither sees nor controls the background AV
 - [x] An empty `background_avs` list is byte-for-byte the current behaviour
-- [ ] Teardown leaves no background AV behind
+- [x] Teardown leaves no background AV behind (2026-08-10: after each of five runs the
+      CARLA world holds no vehicles and no sensors)
 - [x] `just test` passes
 
-The unchecked criteria all need a live two-domain run. The mechanism keeping background AVs
-out of SSv2's view is enforced by construction and unit-tested, and the per-domain pilot is
-wired into the launch — but **no background AV has ever been spawned**, so whether the pilot
-actually engages and drives one has never been observed.
+One criterion is left: whether the ego's Autoware *perceives* the background AV through
+its sensors. That needs the two to be near each other during a run — today the bg AV sits
+on a different street from the ego's route, so the question has not been posed yet.

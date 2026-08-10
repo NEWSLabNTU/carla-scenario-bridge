@@ -48,17 +48,28 @@ if [ -n "$MAP_SOURCE" ]; then
             for f in "$town"/*; do
                 ln -sfn "$(cd "$(dirname "$f")" && pwd)/$(basename "$f")" "$OUT/$name/$(basename "$f")"
             done
-            # The NEWSLab pack declares LocalCartesianUTM, which SSv2's
-            # lanelet_loader rejects (TransverseMercator/MGRS only) and which
-            # does not match CARLA's +proj=tmerc +lat_0=0 +lon_0=0 geolocation
-            # that acb_bridge's GNSS path assumes. Same origin, so the numbers
-            # are unchanged; only the declared projector differs.
-            if grep -q 'LocalCartesianUTM' "$town/map_projector_info.yaml" 2>/dev/null; then
-                rm -f "$OUT/$name/map_projector_info.yaml"
-                cat > "$OUT/$name/map_projector_info.yaml" <<'YAML'
-# Rewritten by download_maps.sh: the source pack declares LocalCartesianUTM,
-# which SSv2 rejects and the CARLA GNSS pipeline does not use. CARLA exports
-# geolocation against +proj=tmerc +lat_0=0 +lon_0=0.
+            # SSv2's lanelet_loader accepts TransverseMercator and MGRS and nothing
+            # else -- it throws "Unsupported projector type" and the scenario dies
+            # before Initialize. Packs in the wild declare other things: the NEWSLab
+            # pack says LocalCartesianUTM, the TUM pack says local. Neither matches
+            # CARLA's +proj=tmerc +lat_0=0 +lon_0=0 geolocation that acb_bridge's GNSS
+            # path assumes anyway. Same origin either way, so the numbers are
+            # unchanged; only the declared projector differs. Rewrite anything that is
+            # not already one of the two supported types.
+            declared="$(sed -n 's/^projector_type:[[:space:]]*//p' \
+                "$town/map_projector_info.yaml" 2>/dev/null | tr -d '"'"'"' ')"
+            case "$declared" in
+              TransverseMercator|MGRS)
+                echo "  $name"
+                found=$((found + 1))
+                continue
+                ;;
+            esac
+            rm -f "$OUT/$name/map_projector_info.yaml"
+            cat > "$OUT/$name/map_projector_info.yaml" <<'YAML'
+# Rewritten by download_maps.sh: the source pack declares a projector SSv2 rejects
+# (it supports TransverseMercator and MGRS only), and one the CARLA GNSS pipeline
+# does not use either. CARLA exports geolocation against +proj=tmerc +lat_0=0 +lon_0=0.
 projector_type: TransverseMercator
 vertical_datum: WGS84
 map_origin:
@@ -66,10 +77,7 @@ map_origin:
   longitude: 0.0
   altitude: 0.0
 YAML
-                echo "  $name (projector rewritten to TransverseMercator)"
-            else
-                echo "  $name"
-            fi
+            echo "  $name (projector '$declared' rewritten to TransverseMercator)"
             found=$((found + 1))
         else
             echo "  skipping $name (no lanelet2_map.osm)"
