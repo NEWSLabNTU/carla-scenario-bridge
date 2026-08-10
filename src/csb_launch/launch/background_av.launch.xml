@@ -44,6 +44,10 @@
        description="Set false to bring the stack up without route-and-engage, e.g. to drive from RViz" />
   <arg name="pilot_timeout" default="600.0"
        description="Seconds the pilot allows for localization, engagement and arrival combined" />
+  <arg name="pilot_stabilize_seconds" default="15.0"
+       description="Pilot settling time between localization and routing. Comes out of the scenario's sim-time budget, since the world only ticks while a scenario runs." />
+  <arg name="pilot_route_timeout" default="120.0"
+       description="Seconds the pilot keeps retrying the route before giving up" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
   <arg name="vehicle_model" default="acb_vehicle" />
@@ -78,6 +82,8 @@
     <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen">
       <param name="poses_file" value="$(var goal_poses_file)" />
       <param name="timeout" value="$(var pilot_timeout)" />
+      <param name="stabilize_seconds" value="$(var pilot_stabilize_seconds)" />
+      <param name="route_timeout" value="$(var pilot_route_timeout)" />
       <param name="use_sim_time" value="true" />
     </node>
   </group>

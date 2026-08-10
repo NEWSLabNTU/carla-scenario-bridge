@@ -70,6 +70,28 @@ now goes further than it ever has:
   the server, and the world only ticks during a scenario — to work on the pilot without
   SSv2, spawn the vehicle and drive `world.tick()` from a plain CARLA client.
 
+### A background stack is single-use per scenario run
+
+Verified 2026-08-10, late session. On a **freshly started** background stack the pilot
+does the whole job: localizes at the spawn pose, `Route set successfully (attempt 1)`,
+engages, drives (`op_mode=2`). On a stack that has **already run a scenario** it used to
+fail every time with "The planned route is empty", for a reason that had nothing to do
+with the goal:
+
+- `/api/localization/initialization_state` is latched, so after the first run it still
+  reads INITIALIZED — for a vehicle that was destroyed at teardown. The pilot skipped
+  its wait and routed from a pose belonging to nothing. Nothing re-triggered the
+  automatic initializer either: it fires on the UNINITIALIZED → INITIALIZED edge, and
+  the state never left INITIALIZED.
+- acb `auto_drive` now detects that case, calls `/api/localization/initialize` (GNSS),
+  and refuses to proceed until a *fresh* `/localization/kinematic_state` arrives.
+
+With that in place the second run no longer routes off a phantom pose — but it still
+does not drive, because the fresh pose never comes: SSv2 restarts sim time at ~0 for
+every scenario, and a stack that has already seen a later clock stalls on the backward
+jump. **So: restart the background AV stack before each scenario run.** `just bg-av`
+takes ~4 minutes; budget for it.
+
 ### Still open
 
 - Background AV **arrival** (see above) — needs sim-time budget, not a fix.
