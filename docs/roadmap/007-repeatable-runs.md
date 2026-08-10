@@ -130,6 +130,14 @@ right rather than something to smuggle into this phase.
 ## Acceptance Criteria
 
 - [ ] Running the same scenario twice in a row succeeds both times, no CARLA restart
+      — **half-verified 2026-08-10**: run A passes reproducibly on fresh stacks (3×,
+      ~39 s spawn-to-goal); the mechanical blocker is gone (acb re-attaches after ego
+      despawn, roadmap 011), and run B's ego spawns and initializes on the reused
+      stack — but a run-B *verdict* has never been obtained: every attempt was killed
+      mid-run by CARLA server OOM (shared-GPU training jobs, ten kills in one day).
+      Rerun protocol is in `docs/CHECKPOINT.md`; needs one quiet ~15 min GPU window.
+      If B stalls >3 min past spawn with CARLA alive, dump `/api/operation_mode/state`
+      — reused-stack diag aging is the one unexcluded suspect.
 - [x] After a clean shutdown, `world.actors()` contains nothing this bridge spawned
 - [x] After a Ctrl-C mid-scenario, the same holds
 - [x] CARLA restarted mid-run: csb recovers rather than erroring until killed — fixed

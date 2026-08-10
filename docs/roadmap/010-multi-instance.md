@@ -116,7 +116,9 @@ exit, not a vehicle that silently never moves.
 ### Concealer web-addr (gap 10)
 
 - [x] Parameterise the hardcoded `--web-addr 0.0.0.0:8082` in our SSv2 `launch.hpp` patch
-- [ ] Confirm no port collision when several play_launch-managed stacks run on one host
+- [x] Confirm no port collision when several play_launch-managed stacks run on one host
+      (2026-08-10: `PLAY_LAUNCH_WEB_ADDR=0.0.0.0:8083` for the D1 stack; no collision.
+      The REAL port collision was DDS: see the DomainGain note below)
 - [x] Keep the patch minimal — it is rebased onto upstream regularly
 
 Now reads `PLAY_LAUNCH_WEB_ADDR`, falling back to `0.0.0.0:8082`. Four added lines, so the
@@ -137,8 +139,10 @@ background AV will actually read it.
 - [x] Unit: config parsing, including background AV lists and duplicate-name rejection
 - [x] Unit: `blueprint_map` resolution
 - [x] Unit: a background AV is not an SSv2 entity, and is physics-driven
-- [ ] Integration: configured background AVs appear with correct role names
-- [ ] Integration: background AVs are absent from SSv2 entity status
+- [x] Integration: configured background AVs appear with correct role names (live:
+      `bg_av_1` spawned before the ego, found by its own acb_bridge in domain 1)
+- [x] Integration: background AVs are absent from SSv2 entity status (live: ego
+      scenario ran to `Passed` with `bg_av_1` in-world; SSv2 never saw it)
 - [ ] Integration: all background AVs are destroyed at teardown
 
 ## Acceptance Criteria
@@ -146,7 +150,25 @@ background AV will actually read it.
 - [x] `bridge_config.yaml` is read, and every key in it does something
 - [x] Ego role name is configurable and defaults to `hero`
 - [ ] A two-domain run works: scenario ego plus one background AV, both localize and drive
-- [ ] Each domain has exactly one `/clock` publisher
+      — **mostly verified 2026-08-10** (csb `3b20205`): both stacks coexist and discover
+      cleanly, `bg_av_1` spawns, its acb attaches and GNSS-initializes localization at
+      the spawn pose, and the ego drove its scenario to `Passed` alongside it. STILL
+      OPEN: the pilot's engage leg — the background AV physically driving — was never
+      observed; every window was cut down by CARLA server OOM-kills. Two prerequisites
+      were fixed on the way and matter to anyone rerunning this:
+      1. **CycloneDDS `DomainGain 1000`** (config/cyclonedds-localhost.xml): the default
+         (250) puts domain 1's unicast port base inside domain 0's range once
+         `MaxAutoParticipantIndex` is 300 — launching the D1 stack then breaks NEW
+         domain-0 participants with "Failed to find a free participant index".
+      2. **On-lanelet pilot goal** (scenarios/bg_av_1_poses.yaml): the design doc's
+         example goal (x=40, y=-55) is off the routing graph (the street ends near
+         x≈88) and the pilot dies with "The planned route is empty". Route now runs the
+         westbound y=-53.5 lane, (125,-53.5) → (92,-53.5). Check candidate poses
+         against the lanelet osm before trusting them.
+      Also note: the world only ticks while a scenario is running (SSv2 owns the tick),
+      so a background AV can only drive DURING a scenario, never between runs.
+- [x] Each domain has exactly one `/clock` publisher (verified in D0 after the
+      double-acb_bridge fix, csb `b974590`; D1 uses `publish_clock:=true` by design)
 - [ ] The background AV is perceived by the ego's Autoware through its sensors
 - [x] SSv2 neither sees nor controls the background AV
 - [x] An empty `background_avs` list is byte-for-byte the current behaviour

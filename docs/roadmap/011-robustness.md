@@ -107,13 +107,20 @@ than hiding. Scenario-aborting failures gained their descriptions in phase 006.
 - [x] Unit: timeout classification — timeout does not increment the disconnect counter, a
       transport error does
 - [ ] Integration: a 120 s idle period with no frames does not trigger a reconnect
-- [ ] Integration: ego destroyed and respawned mid-run recovers without a bridge restart
+- [x] Integration: ego destroyed and respawned mid-run recovers without a bridge restart
+      (live, 2026-08-10: despawn → sensor release → re-attach in under a second, repeatedly)
 
 ## Acceptance Criteria
 
 - [ ] A scenario with a long Autoware startup never logs a spurious CARLA reconnect
-- [ ] Genuine CARLA loss is still detected and recovered from
-- [ ] Ego respawn works without restarting `acb_bridge`
+- [x] Genuine CARLA loss is still detected and recovered from (acb side verified live
+      through ten server OOM-kills on 2026-08-10; the csb bridge process can still wedge
+      after a crash — fresh `Client::world()` times out in-process — restart the bridge,
+      it is stateless)
+- [x] Ego respawn works without restarting `acb_bridge` — acb `aeb2031`: per-tick
+      `is_alive` despawn detection (`SessionExit::VehicleLost`), world re-fetch per wait
+      poll (map reload = new episode), 60 s fruitless-wait reconnect (silently replaced
+      server). Verified across CARLA server crashes and map reloads.
 - [x] No topic has two publishers in one ROS domain, dead code included
 - [x] Enabling `publish_direct_localization` warns about the conflict it creates
 - [x] `just test` passes
