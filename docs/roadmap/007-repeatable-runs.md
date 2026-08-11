@@ -172,7 +172,12 @@ of a CARLA world, and `FreezeGuard` owns the only-undo-what-we-froze rule on its
       Autoware and the same CARLA server, ends in
       `AutowareError: Simulator waited for the Autoware state to transition to
       WAITING_FOR_ENGAGE, but time is up. The current Autoware state is PLANNING`.
-      Reproduced twice.
+      Reproduced three times, the third deliberately as a control: `just ego-av` used to
+      leak its two API adaptors on every restart (fixed, see below), and sixteen of them
+      had accumulated during the first two attempts — duplicate ADAPI nodes are exactly
+      the kind of thing that could explain this. The third run was made on a graph with
+      one adaptor pair, both stacks freshly started and fully loaded (93/93 and 54/54),
+      and failed identically. The leak was a real bug and not this one.
 
       Everything this phase owns behaved: `Teardown: 1 spawned, 1 destroyed, 0 failed`
       cleaned up run A's leftovers at run B's `Initialize`, both entities respawned at

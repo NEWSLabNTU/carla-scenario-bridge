@@ -203,8 +203,19 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # concealer could not match their services in time (see ego_av.launch.xml).
     # internal: serves /api/autoware/set/velocity_limit (what the concealer
     # actually calls); external: /api/external/* including rtc_auto_mode.
+    # These outlive the recipe unless something kills them: the shell used to exec
+    # play_launch, replacing itself, so no trap could ever fire and every restart of this
+    # stack left another pair behind. Sixteen of them accumulated in one session, each
+    # holding the same ADAPI node names, and a fresh stack then stalled with
+    # /adapi/node/autoware_state stuck "pending" and the concealer never seeing
+    # WAITING_FOR_ENGAGE. Own them: no exec below, and a trap that takes the whole process
+    # group so the nodes go with the launcher.
     ros2 launch autoware_iv_internal_api_adaptor internal_api_adaptor.launch.py &
+    internal_api_pid=$!
     ros2 launch autoware_iv_external_api_adaptor external_api_adaptor.launch.py &
+    external_api_pid=$!
+    trap 'kill -- -$internal_api_pid -$external_api_pid 2>/dev/null; \
+          kill $internal_api_pid $external_api_pid 2>/dev/null' EXIT INT TERM
     # --load-node-timeout 120: the startup burst (93 composables + CARLA on one
     # host) can push a container's first LoadNode reply past the 30 s default;
     # a timed-out load falls into play_launch's awaiting-ComponentEvent limbo
@@ -212,7 +223,8 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # --load-total-budget 180: also the threshold for play_launch's
     # lost-load rescue (ListNodes re-verification of composables stuck
     # "Loading" with no response), so a lost load self-heals in ~3 min.
-    exec play_launch launch --parser python --web-addr 0.0.0.0:8082 \
+    # Not exec: the trap above has to survive to clean up the API adaptors.
+    play_launch launch --parser python --web-addr 0.0.0.0:8082 \
         --load-node-timeout 120 \
         --load-total-budget 180 \
         csb_launch ego_av.launch.xml \

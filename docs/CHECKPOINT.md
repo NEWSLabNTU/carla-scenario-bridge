@@ -83,11 +83,26 @@ teardown; the real guard is in the fork on branch `sensor-owner-guards` (`e27ed5
 needs a **server rebuild** to take effect. Two consecutive runs afterwards left the
 server untouched where the same sequence used to kill it.
 
+### `just ego-av` leaked its API adaptors, and a stack eventually refuses to start
+
+The recipe backgrounded two `ros2 launch` API adaptors and then `exec`ed play_launch,
+replacing the shell — so no trap could fire and every restart left another pair running.
+Sixteen accumulated in one session, the oldest 11.5 hours old, all holding the same
+ADAPI node names. A fresh stack then stalls at **92/93 composables** with
+`/adapi/node/autoware_state` pending forever (`LoadNode service call timed out after
+120s ... deferring to ComponentEvent`), which play_launch's lost-load rescue does not
+recover. Killing the strays and restarting brought the same launch up 93/93 first try.
+
+Fixed: the recipe keeps the adaptor pids, drops the `exec`, and traps `EXIT INT TERM` to
+kill their process groups. If a stack ever stalls short of 93/93 again, count them:
+`ps -eo args | grep -c internal_api_adaptor.launch.py` should be 2, not 16.
+
 ### A reused ego stack cannot take a second scenario either
 
 Same shape as the background AV, now measured on the ego: run A passes, run B on the
 same stack ends in `AutowareError: waited for WAITING_FOR_ENGAGE ... current state is
-PLANNING`. The mission planner first rejects the route from run A's *final* pose, then
+PLANNING`. Three reproductions, the last one on a graph with no leaked adaptors and both
+stacks freshly loaded — so the leak above is not the cause of this. The mission planner first rejects the route from run A's *final* pose, then
 accepts one 5 s later from the true spawn pose — and planning produces nothing after
 that, `scenario_selector` falling silent from the end of run A onward. SSv2 restarts sim
 time at ~0 every run.
