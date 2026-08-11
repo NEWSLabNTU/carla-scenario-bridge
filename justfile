@@ -210,12 +210,17 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # /adapi/node/autoware_state stuck "pending" and the concealer never seeing
     # WAITING_FOR_ENGAGE. Own them: no exec below, and a trap that takes the whole process
     # group so the nodes go with the launcher.
-    ros2 launch autoware_iv_internal_api_adaptor internal_api_adaptor.launch.py &
+    # setsid, so each adaptor leads its own process group and the trap can take the whole
+    # tree. Killing the `ros2 launch` process alone is not enough: the nodes it spawns
+    # survive it, and their command lines look nothing like the launch file's --
+    # `--plugin external_api::RTCController`, `__ns:=/default_adapi/helpers` -- so they
+    # also survive every pkill aimed at "api_adaptor". Sixty-four of them were found alive
+    # in one domain, five deep on /internal/operator and /internal/velocity.
+    setsid ros2 launch autoware_iv_internal_api_adaptor internal_api_adaptor.launch.py &
     internal_api_pid=$!
-    ros2 launch autoware_iv_external_api_adaptor external_api_adaptor.launch.py &
+    setsid ros2 launch autoware_iv_external_api_adaptor external_api_adaptor.launch.py &
     external_api_pid=$!
-    trap 'kill -- -$internal_api_pid -$external_api_pid 2>/dev/null; \
-          kill $internal_api_pid $external_api_pid 2>/dev/null' EXIT INT TERM
+    trap 'kill -- -$internal_api_pid -$external_api_pid 2>/dev/null' EXIT INT TERM
     # --load-node-timeout 120: the startup burst (93 composables + CARLA on one
     # host) can push a container's first LoadNode reply past the 30 s default;
     # a timed-out load falls into play_launch's awaiting-ComponentEvent limbo

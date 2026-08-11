@@ -97,19 +97,32 @@ Fixed: the recipe keeps the adaptor pids, drops the `exec`, and traps `EXIT INT 
 kill their process groups. If a stack ever stalls short of 93/93 again, count them:
 `ps -eo args | grep -c internal_api_adaptor.launch.py` should be 2, not 16.
 
-### A reused ego stack cannot take a second scenario either
+### Stacks are reusable across runs (2026-08-12) — acb was never noticing the despawn
 
-Same shape as the background AV, now measured on the ego: run A passes, run B on the
-same stack ends in `AutowareError: waited for WAITING_FOR_ENGAGE ... current state is
-PLANNING`. Three reproductions, the last one on a graph with no leaked adaptors and both
-stacks freshly loaded — so the leak above is not the cause of this. The mission planner first rejects the route from run A's *final* pose, then
-accepts one 5 s later from the true spawn pose — and planning produces nothing after
-that, `scenario_selector` falling silent from the end of run A onward. SSv2 restarts sim
-time at ~0 every run.
+**Two scenario runs back to back on one stack now both pass**, with nothing restarted
+between them: same bridge process, same ego Autoware, same background stack, same CARLA
+server, `NRestarts` unchanged. 50 s each.
 
-**So: restart `just ego-av` as well as `just bg-av` between scenario runs.** Everything
-csb owns survives a second run — teardown, respawn, reconnect — see
-`docs/roadmap/007-repeatable-runs.md`.
+Getting there meant chasing a failure that pointed everywhere except at its cause. Run B
+used to end in `AutowareError: waited for WAITING_FOR_ENGAGE ... current state is
+PLANNING`, and the ego's diagnostic graph blamed localization (scan_matching_status,
+accuracy, sensor_fusion_status), perception (`topic_rate_check/pointcloud`) and planning
+(`topic_rate_check/trajectory`) all at once, which is what `autonomous=False` on
+`/system/operation_mode/availability` is made of. Counting messages per hop showed
+behavior planning still producing `path_with_lane_id` at 43 points while
+`lane_driving/trajectory` and `scenario_planning/trajectory` sat at zero.
+
+The cause was one line in acb: `Actor::IsAlive()` is a **client-side flag**, true until
+*that* client destroys the actor. acb never destroys the vehicle — csb does, from its own
+client — so acb's session never ended, and it went on publishing sensor topics whose
+CARLA actors were gone. Autoware saw publishers with no data behind them. Fixed in acb
+`ab5dc67` by asking the world snapshot, which is the server's actor list for the frame
+just ticked. (`World::GetActor` is not a substitute: tried first, never fired, same
+client-side registry problem.)
+
+Both bridges now log `Vehicle 'hero' (actor N) is gone from the world` within seconds of
+the next run's first tick and re-attach. Across the four runs before the fix, neither
+ever noticed.
 
 ### ROS domains: 1 for the ego, 2+ for background AVs, 0 unused
 
@@ -135,11 +148,16 @@ with the goal:
 - acb `auto_drive` now detects that case, calls `/api/localization/initialize` (GNSS),
   and refuses to proceed until a *fresh* `/localization/kinematic_state` arrives.
 
-With that in place the second run no longer routes off a phantom pose — but it still
-does not drive, because the fresh pose never comes: SSv2 restarts sim time at ~0 for
-every scenario, and a stack that has already seen a later clock stalls on the backward
-jump. **So: restart the background AV stack before each scenario run.** `just bg-av`
-takes ~4 minutes; budget for it.
+With that in place the second run no longer routes off a phantom pose. At the time it
+still did not drive, and this file blamed sim time restarting at ~0 — but the real reason
+was the same acb bug described above: the background AV's sensors were gone too, so no
+fresh pose could ever arrive. That is fixed (acb `ab5dc67`), and `bg_av_1`'s bridge is
+now seen re-attaching on the second run alongside the ego's.
+
+**Untested as of 2026-08-12**: whether the background AV's *pilot* completes route and
+engage on a reused stack. The pilot exits after its first run, so a second run needs it
+restarted — `just bg-av`, or run `acb_pilot auto_drive` on its own against the stack that
+is already up. Nothing is known to require restarting the stack itself any more.
 
 ### Still open
 

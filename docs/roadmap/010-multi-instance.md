@@ -161,7 +161,11 @@ background AV will actually read it.
       autonomous driving per run and then the world stops. Closing that gap is a
       sim-time budget question (longer ego scenario, or a shorter pilot cold start), not
       a defect in the mechanism.
-      Three prerequisites were fixed on the way and matter to anyone rerunning this:
+      Domains changed since this was written: the ego and SSv2 share **domain 1** and
+      background AVs start at **2**, leaving 0 empty so no unconfigured ROS process on
+      the host can join a run.
+
+      Four prerequisites were fixed on the way and matter to anyone rerunning this:
       1. **CycloneDDS `DomainGain 1000`** (config/cyclonedds-localhost.xml): the default
          (250) puts domain 1's unicast port base inside domain 0's range once
          `MaxAutoParticipantIndex` is 300 — launching the D1 stack then breaks NEW
@@ -179,6 +183,12 @@ background AV will actually read it.
       3. **play_launch's compound-parameter fix** (`f78745d`): without it
          `autoware_pose_initializer_node` and `shape_estimation` abort at startup, so the
          background stack never localizes at all.
+      4. **acb noticing a despawn** (acb `ab5dc67`): `Actor::IsAlive()` is client-side and
+         never went false for a vehicle csb destroyed, so on the *second* scenario run a
+         background AV's bridge kept publishing sensor topics with no CARLA actors behind
+         them and its Autoware was fed nothing. Both bridges now re-attach within seconds
+         of the next run's first tick. Before this, a second run needed the whole stack
+         restarted; it no longer does.
 - [x] Each domain has exactly one `/clock` publisher (verified in D0 after the
       double-acb_bridge fix, csb `b974590`; D1 uses `publish_clock:=true` by design)
 - [ ] The background AV is perceived by the ego's Autoware through its sensors

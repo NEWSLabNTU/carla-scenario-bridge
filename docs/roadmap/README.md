@@ -34,9 +34,9 @@ what unblocks what.
 006 comes first because three handlers currently report success while doing nothing, so a
 scenario suite can score fiction — no later phase can be validated until that stops.
 
-007 comes second because nothing destroys spawned actors and spawn has no retry, so a leaked
-actor blocks the next run's spawn point. The second run of any scenario currently fails until
-CARLA is restarted, which makes iterative work on 008-011 impractical.
+007 came second because nothing destroyed spawned actors and spawn had no retry, so a leaked
+actor blocked the next run's spawn point and the second run of any scenario failed until CARLA
+was restarted. Done as of 2026-08-12; iterative work on 008-011 no longer pays that tax.
 
 The rest follow their dependencies. 011 can be pulled forward if spurious CARLA reconnects
 start appearing — 009 adds per-frame work and makes that likelier.
@@ -50,10 +50,11 @@ stack exists to verify against.
 out on the NEWSLabNTU fork, the pilot is the only thing that routes and engages the ego.
 Ship 012 first — it stands alone and shrinks 013's fork patch to the minimum.
 
-## Status (checkpoint 2026-08-10 — read this first)
+## Status (checkpoint 2026-08-12 — read this first)
 
-**The E2E is green**: `town01_ego_drive.xosc` passes reproducibly on a fresh stack
-(SSv2 `Passed`, JUnit clean, three consecutive fresh-stack passes). The full causal
+**The E2E is green, and now repeatable**: `town01_ego_drive.xosc` passes on a fresh
+stack and passes again on the same stack immediately afterwards (007's acceptance,
+2026-08-12) — no restarts of anything between runs. The full causal
 anatomy of getting there — five stacked availability bugs, the double-`/clock`
 killer, PhysX acceleration jolts — is in [012](012-ssv2-unmanaged-autoware.md).
 Operational recipe and traps: `docs/CHECKPOINT.md` at the repo root docs dir.
@@ -64,12 +65,17 @@ Per-phase state:
 - **011 effectively done** — acb_bridge detects ego despawn and re-attaches to the
   next spawn without a restart (acb `aeb2031`), across map reloads and server
   replacements. Remaining checkboxes are test-harness work, not functionality.
-- **007 half-verified** — run A reproduces; the scenario-twice run B has never
-  received a verdict because the shared GPU's training jobs OOM-kill the CARLA
-  server mid-run (ten kills in one day). Pure rerun, needs a quiet GPU window.
-- **010 mostly verified** — two-domain run works up to and including "ego passes
-  its scenario with the background AV in-world"; the background AV *driving*
-  (pilot engage) is the one unverified leg. Same GPU story.
+- **007 done (2026-08-12)** — the same scenario twice in a row, both clean, nothing
+  restarted between and no CARLA restart. Took two fixes found by chasing run B: the
+  IMU-orphan server crash (csb destroys a vehicle's sensors first; real guard on the
+  carla fork, branch `sensor-owner-guards`) and acb never noticing a despawn, because
+  `Actor::IsAlive()` is client-side (acb `ab5dc67`).
+- **010 verified** — two-domain run works, and the background AV's pilot routes and
+  engages (`Driving... op_mode=2`) while the ego runs its scenario. Its *arrival* is
+  still unseen: the world only ticks during a scenario, and the pilot spends most of
+  that on localization and its settle. Open criterion: the ego perceiving the
+  background AV through its own sensors — they drive different streets today, so the
+  question has not been posed.
 - **012 DONE and verified live** — this is the architecture the passing runs use.
 - **013 designed, largely unimplemented** — the deeper `managed_ego:=false` fork
   work. Run only after 007/010 close.
@@ -78,15 +84,17 @@ Per-phase state:
 
 **Priority order for the next sessions:**
 
-1. **007-B + 010-drive verification** — both are pure reruns with all pieces
-   committed; ~15 quiet GPU minutes each. Protocols in `docs/CHECKPOINT.md`.
-2. **CARLA sensor-teardown crash fix** in the jerry73204/carla fork — the OOM/
-   teardown crash class has eaten two full verification sessions; fixing it at
-   the source de-flakes everything else.
+1. **Rebuild the CARLA server from the fork** so `sensor-owner-guards` (the IMU
+   null-owner guard) is actually in the running binary. csb's sensor-first teardown
+   avoids the crash today, but only for actors csb destroys.
+2. **Background AV arrival** — give the pilot enough sim time to reach its goal: a
+   longer ego scenario, or a shorter pilot cold start (`stabilize_seconds` is now a
+   parameter).
 3. **`just e2e`** — codify the bring-up + preflight gates (Startup complete,
    `change_to_stop` present, single `/clock`, no duplicate nodes) as one target.
-4. **005 upstreaming batch** — play_launch lost-load rescue (landed on its main),
-   SSv2 `carla-compat` arrived_goal patch, carla-fork exception containment.
+4. **005 upstreaming batch** — play_launch lost-load rescue and compound-parameter
+   fix (both on its main), SSv2 `carla-compat` arrived_goal patch, carla-fork
+   exception containment and the IMU owner guard.
 5. **009 / 008 / 013** in whatever order the above unblocks.
 
 Gaps 1-3 from the design doc are fixed (deferred sync mode, `/clock` ownership,

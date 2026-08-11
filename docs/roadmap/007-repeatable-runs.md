@@ -165,7 +165,43 @@ of a CARLA world, and `FreezeGuard` owns the only-undo-what-we-froze rule on its
 
 ## Acceptance Criteria
 
-- [ ] Running the same scenario twice in a row succeeds both times, no CARLA restart
+- [x] Running the same scenario twice in a row succeeds both times, no CARLA restart
+      — **done 2026-08-12**. Two runs back to back, both `failures="0" errors="0"`, 50 s
+      each, with nothing restarted between them: same bridge process, same ego Autoware,
+      same background stack, same CARLA server, `NRestarts` unchanged across the pair.
+
+      It took two fixes outside this phase's own code, both found by chasing run B:
+
+      1. **The server was crashing** on orphaned sensors (see the section below). Three
+         of eight runs died to it before the sensor-first teardown landed.
+      2. **acb never noticed its vehicle was despawned.** `Actor::IsAlive()` is a
+         client-side flag: true until *that* client destroys the actor. acb does not
+         destroy the vehicle — csb does, from its own client — so acb's session never
+         ended and it kept publishing sensor topics whose CARLA actors were gone.
+         Autoware got publishers with no data, and the failure surfaced four layers away
+         as `waited for WAITING_FOR_ENGAGE ... current state is PLANNING`. Fixed in acb
+         `ab5dc67`, which asks the world snapshot instead.
+
+      The diagnosis is worth keeping because the symptom pointed everywhere but the
+      cause: the ego's diagnostic graph showed ERROR on `/autoware/localization`
+      (scan_matching_status, accuracy, sensor_fusion_status),
+      `/autoware/perception/topic_rate_check/pointcloud` and
+      `/autoware/planning/topic_rate_check/trajectory` simultaneously — which is what
+      `/system/operation_mode/availability = autonomous:False` is assembled from — while
+      message counts per hop showed behavior planning still emitting `path_with_lane_id`
+      at 43 points and both trajectory topics at zero. Two red herrings were ruled out
+      along the way: a leak of the API adaptors from `just ego-av` (real bug, fixed, but
+      it stalls *startup*, not the run) and 64 stale ADAPI nodes left in the domain by
+      earlier stacks.
+
+      The superseded diagnosis, for anyone who read it before: this said the failure was
+      the ego stack's cross-run state and that SSv2 restarting sim time at ~0 made a
+      reused stack unusable. That was wrong. Restarting stacks between runs is not
+      required.
+
+<details>
+<summary>Superseded write-up (2026-08-11)</summary>
+
       — **run B has a verdict at last, and it fails outside this bridge (2026-08-11)**.
       Run A passes reproducibly (six times on this host, ~34-43 s spawn-to-goal). Run B,
       launched immediately afterwards against the same bridge process, the same ego
@@ -205,6 +241,8 @@ of a CARLA world, and `FreezeGuard` owns the only-undo-what-we-froze rule on its
       restarted per scenario run (today's answer, ~4 min), or simulation time is made
       to survive a run boundary. Tracked with the other clock-discontinuity hazards in
       [011](011-robustness.md).
+
+</details>
 - [x] After a clean shutdown, `world.actors()` contains nothing this bridge spawned
 - [x] After a Ctrl-C mid-scenario, the same holds
 - [x] CARLA restarted mid-run: csb recovers rather than erroring until killed — fixed
