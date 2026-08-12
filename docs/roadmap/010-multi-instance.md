@@ -155,12 +155,30 @@ background AV will actually read it.
       spawn pose, its pilot **sets a route and engages** (`Route set successfully`, then
       `Driving... route_state=2, op_mode=2`) while the ego drives its scenario to
       `Passed`. Five consecutive ego passes on this host.
-      What is *not* shown is arrival: the world only ticks while a scenario runs (SSv2
-      owns the tick), the ego's scenario lasts ~50 s, and the pilot spends ~45 s of it on
-      localization plus its 15 s settle — so the background AV gets a few seconds of
-      autonomous driving per run and then the world stops. Closing that gap is a
-      sim-time budget question (longer ego scenario, or a shorter pilot cold start), not
-      a defect in the mechanism.
+      **Arrival too, 2026-08-12**, on `scenarios/town01_two_av.xosc`:
+
+      ```
+      Localization: INITIALIZED at (139.95, -55.48)   <- its own spawn pose
+      Route set successfully (attempt 1)
+      Autonomous mode engaged
+      ARRIVED at goal after 18.8s
+      ```
+
+      with the ego passing its own scenario in the same run. Two Autoware stacks driving
+      two real vehicles in one world, both reaching their goals, SSv2 scoring one of them
+      and never seeing the other.
+
+      This needed nothing but sim time. The pilot's cold start is ~62 s from spawn to
+      arrival — 16 s to localize, 17 s settling, 10 s to engage, 19 s to drive its 30 m —
+      and the world only ticks while a scenario runs, so `town01_ego_drive.xosc` at ~50 s
+      used to cut it off seconds after engage. `town01_two_av.xosc` runs the ego 212 m
+      instead of 71 m (x 320 -> 108) and raises the scenario timeout to 300 s. That whole
+      stretch is one lanelet, 6583, which carries **no regulatory element** — worth
+      keeping when extending a route, because csb freezes the traffic lights and a red one
+      on the way would strand the ego for the rest of the run.
+
+      Budget rule for any new multi-AV scenario: the ego must stay in motion for at least
+      ~65 s of sim time, or the background AV will not finish.
       Domains changed since this was written: the ego and SSv2 share **domain 1** and
       background AVs start at **2**, leaving 0 empty so no unconfigured ROS process on
       the host can join a run.
@@ -199,5 +217,10 @@ background AV will actually read it.
 - [x] `just test` passes
 
 One criterion is left: whether the ego's Autoware *perceives* the background AV through
-its sensors. That needs the two to be near each other during a run — today the bg AV sits
-on a different street from the ego's route, so the question has not been posed yet.
+its sensors. That needs the two to be near each other during a run — today the bg AV
+drives y=-55.5 while the ego drives y=-129.8, two parallel streets, so the question has
+not been posed yet. Posing it means putting the background AV on the ego's street ahead
+of it: the ego's lanelet 6583 runs x 325.6 -> 101.4 westbound, and it now covers
+x 320 -> 108 of that, so there is room for a slower vehicle in front. Expect the ego to
+*react* as well as perceive — which is worth watching, since SSv2 scores the ego's
+arrival but cannot see what it is avoiding.

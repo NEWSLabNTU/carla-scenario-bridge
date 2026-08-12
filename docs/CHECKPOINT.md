@@ -11,14 +11,14 @@ now goes further than it ever has:
 
 - **Ego E2E green here too**: `town01_ego_drive.xosc` passed five consecutive times
   (SSv2 JUnit clean), spawn-to-goal ~35-50 s.
-- **010's last open leg is observed**: the background AV's pilot **set its route and
-  engaged** inside the scenario window — `Route set successfully`, then
-  `Driving... route_state=2, op_mode=2` (AUTONOMOUS) 46 s after the AV spawned, while
-  the ego was still driving. It did not *arrive*: the world only ticks while SSv2 runs
-  a scenario, the ego's scenario is ~50 s long, and the pilot needs ~45 s of that just
-  to localize (GNSS+NDT) and settle. The bg AV therefore gets a few seconds of
-  autonomous driving per run. Making it arrive needs either a longer ego scenario or a
-  shorter pilot cold start, not a fix to the mechanism.
+- **The background AV drives to its goal** (2026-08-12): `Localization: INITIALIZED at
+  (139.95, -55.48)`, `Route set successfully (attempt 1)`, `Autonomous mode engaged`,
+  `ARRIVED at goal after 18.8s`, with the ego passing its own scenario in the same run.
+  It needed sim time, nothing else: the pilot's cold start is ~62 s from spawn to
+  arrival and the world only ticks during a scenario, so use
+  `scenarios/town01_two_av.xosc` (ego runs 212 m, timeout 300 s) rather than
+  `town01_ego_drive.xosc` (~50 s, cuts the pilot off just after engage) whenever a
+  background AV has to finish.
 - **Teardown is clean**: after each run CARLA holds no vehicles or sensors, background
   AV included (010's "no background AV left behind").
 

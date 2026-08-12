@@ -70,11 +70,11 @@ Per-phase state:
   IMU-orphan server crash (csb destroys a vehicle's sensors first; real guard on the
   carla fork, branch `sensor-owner-guards`) and acb never noticing a despawn, because
   `Actor::IsAlive()` is client-side (acb `ab5dc67`).
-- **010 verified** — two-domain run works, and the background AV's pilot routes and
-  engages (`Driving... op_mode=2`) while the ego runs its scenario. Its *arrival* is
-  still unseen: the world only ticks during a scenario, and the pilot spends most of
-  that on localization and its settle. Open criterion: the ego perceiving the
-  background AV through its own sensors — they drive different streets today, so the
+- **010 verified** — two-domain run works end to end: the background AV localizes,
+  routes, engages and **arrives**, while the ego passes its own scenario in the same
+  run (2026-08-12, on `scenarios/town01_two_av.xosc` — the short scenario does not give
+  the pilot's ~62 s cold start enough sim time). Open criterion: the ego perceiving the
+  background AV through its own sensors — they drive parallel streets today, so the
   question has not been posed.
 - **012 DONE and verified live** — this is the architecture the passing runs use.
 - **013 designed, largely unimplemented** — the deeper `managed_ego:=false` fork
@@ -87,9 +87,9 @@ Per-phase state:
 1. **Rebuild the CARLA server from the fork** so `sensor-owner-guards` (the IMU
    null-owner guard) is actually in the running binary. csb's sensor-first teardown
    avoids the crash today, but only for actors csb destroys.
-2. **Background AV arrival** — give the pilot enough sim time to reach its goal: a
-   longer ego scenario, or a shorter pilot cold start (`stabilize_seconds` is now a
-   parameter).
+2. **Ego perceives the background AV** — 010's last criterion. Put the bg AV on the
+   ego's own street (lanelet 6583, x 325.6 -> 101.4) ahead of it, and watch whether the
+   ego reacts as well as sees.
 3. **`just e2e`** — codify the bring-up + preflight gates (Startup complete,
    `change_to_stop` present, single `/clock`, no duplicate nodes) as one target.
 4. **005 upstreaming batch** — play_launch lost-load rescue and compound-parameter
