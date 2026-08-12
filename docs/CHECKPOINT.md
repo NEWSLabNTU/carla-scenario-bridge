@@ -1,4 +1,4 @@
-# Session checkpoint — 2026-08-10
+# Session checkpoint — 2026-08-12
 
 State of the SSv2+CARLA integration after the exitSuccess campaign. For the full
 per-phase anatomy see `docs/roadmap/012-ssv2-unmanaged-autoware.md`; this file is
@@ -70,18 +70,38 @@ now goes further than it ever has:
   the server, and the world only ticks during a scenario — to work on the pilot without
   SSv2, spawn the vehicle and drive `world.tick()` from a plain CARLA client.
 
-### The CARLA segfault is understood, and half-fixed
+### Never destroy a vehicle while its sensors are attached
 
-Three of eight runs died to a server `SIGSEGV` 24-40 s in. Symbolized (the `.debug` file
-ships beside the packaged binary): `AInertialMeasurementUnit::ComputeGyroscope()`
-dereferencing an owner that no longer exists, its `check(GetOwner() != nullptr)` having
-been compiled out of the Shipping build. Destroying a vehicle leaves its sensors alive
-and ticking.
+**The rule**: destroy an actor's children first, always, in every language and every
+client. In Rust that is `ActorBase::destroy_with_children()` (carla-rust `9596cde`); in
+Python, sweep `world.get_actors().filter('sensor.*')` for `sensor.parent.id == vehicle.id`
+before `vehicle.destroy()` — see `demo_scenario.py::destroy_attached_sensors`. Do not
+write a fresh sweep by hand; the helper exists so there is one implementation to get
+right.
 
-csb now destroys a vehicle's attached sensors before the vehicle, on despawn and in
-teardown; the real guard is in the fork on branch `sensor-owner-guards` (`e27ed518`) and
-needs a **server rebuild** to take effect. Two consecutive runs afterwards left the
-server untouched where the same sequence used to kill it.
+**Why it matters**: three of eight runs once died to a server `SIGSEGV` 24-40 s in.
+Symbolized (the `.debug` file ships beside the packaged binary):
+`AInertialMeasurementUnit::ComputeGyroscope()` dereferencing an owner that no longer
+exists, its `check(GetOwner() != nullptr)` compiled out of the Shipping build. CARLA does
+not take a vehicle's sensors down with it — they stay alive, parentless and still
+ticking. Cameras give a second crash on the render thread from the same orphaning
+(`BeginReleaseResource`). Upstream has this reported and unfixed:
+carla-simulator/carla#5812, #7046, #3197, #7987.
+
+**Why the helper reads the server's actor list** rather than anything local: the client
+that owns a vehicle's lifetime is usually not the one that attached its sensors. csb
+spawns and despawns vehicles; acb attaches sensors to them. acb does clean up after
+itself, but only once it notices the vehicle is gone, and the crash lives in that window.
+Only the destroyer can close it. This is a deliberate, documented bend of invariant 2.
+
+**Result**: the server has now been up 35 hours across dozens of runs with
+`NRestarts` unchanged, against 5 restarts in the 11 hours before the ordering was fixed.
+
+**The fork patch is not needed for this workflow.** `jerry73204/carla` branch
+`sensor-owner-guards` (`e27ed518`) guards the IMU at the source, but it is UE4 plugin
+code: it needs a full server rebuild and a forked binary to distribute, and it would not
+have covered the render-thread crash anyway. It stays parked as an upstream PR candidate.
+Reach for it only if something outside our control starts orphaning sensors.
 
 ### `just ego-av` leaked its API adaptors, and a stack eventually refuses to start
 
@@ -215,20 +235,30 @@ is already up. Nothing is known to require restarting the stack itself any more.
   AV cannot drive between runs.
 - `pkill -f` with any pattern that appears in your own wrapper's command line
   kills the wrapper. Match on comm, not args.
+- Destroying a vehicle with sensors still attached segfaults the server. Use
+  `destroy_with_children()` in Rust, the sensor sweep in Python — see the rule above.
+  This applies to throwaway scripts too; a sandbox script that skipped it cost a run.
+- A CARLA client's `Actor::IsAlive()` and `World::GetActor()` can both answer from the
+  client's own registry, so neither notices an actor another client destroyed. Check
+  `world.snapshot().contains(id)` instead — that is the server's list for the ticked
+  frame.
 
 ## Next actions
 
-1. Quiet GPU (`nvidia-smi` < ~2 GB): 007-B verdict, then the bg-AV-drives leg
-   of 010. Both are pure reruns.
-2. CARLA sensor-teardown crash fix in the jerry73204/carla fork — ends the
-   OOM/teardown crash class that has eaten two verification sessions.
-3. Upstream batch: play_launch rescue, SSv2 `carla-compat` arrived_goal patch.
+1. **Background AV arrival** — the pilot routes and engages, but the ego scenario is
+   ~50 s of sim time and the pilot spends most of it localizing and settling. Either
+   lengthen the scenario or shorten the cold start (`pilot_stabilize_seconds`).
+2. **Ego perceives the background AV** — 010's last open criterion. They drive
+   different streets today, so the question has not been posed; put them on one.
+3. **Upstream batch**: play_launch rescue and compound-parameter fix (both landed on
+   its main), SSv2 `carla-compat` arrived_goal patch, carla-fork exception containment
+   and the IMU owner guard (`sensor-owner-guards`).
 
 ## Repo pins at checkpoint
 
-- csb main `3b20205` (+ this checkpoint)
-- acb main `aeb2031`
+- csb main `05af09b` (+ this checkpoint)
+- acb main `ece42e7`
 - SSv2 fork branch `carla-compat` `f77cd12c3`
 - play_launch main `9d06d08`
-- carla-rust master `2718365`, CARLA fork branch
+- carla-rust master `9596cde` (adds `destroy_with_children`), CARLA fork branch
   `worker-thread-exception-containment`, release `carla-rust/0.9.16-3`
