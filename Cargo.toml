@@ -13,7 +13,7 @@ carla = "0.14.0"
 # uncaught TimeoutExceptions when CARLA died mid-run, terminating this process before its
 # reconnect logic could act. (Earlier: 575f6aa added Debug on generated enums and
 # *_from_ffi_ref accessors, which World::ground_projection needs.)
-carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "2718365" }
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "9596cde" }
 
 [profile.dev-release]
 inherits = "release"

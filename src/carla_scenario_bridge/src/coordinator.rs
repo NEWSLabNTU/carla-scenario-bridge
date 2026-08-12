@@ -115,52 +115,31 @@ pub struct TeardownReport {
     pub failed: usize,
 }
 
-/// Destroy the sensors attached to an actor, before that actor goes away.
+/// Report what a destroy-with-children sweep left behind.
 ///
-/// CARLA does not take a vehicle's sensors down with it: they stay alive and parentless,
-/// and the next tick runs them against an owner that no longer exists. For the IMU that is
-/// an outright null dereference in the server:
-///
-/// ```text
-/// AActor::GetRootComponent() const                                  Actor.h:1812
-/// AInertialMeasurementUnit::GetActorAngularVelocityInRadians(AActor&) InertialMeasurementUnit.cpp:58
-/// AInertialMeasurementUnit::ComputeGyroscope()                      InertialMeasurementUnit.cpp:151
-/// ```
-///
-/// `ComputeGyroscope` guards its owner with `check(GetOwner() != nullptr)`, which is
-/// compiled out of Shipping builds — the packaged server then dereferences the null owner.
-/// Symbolized from eight of this host's twelve CARLA coredumps on 2026-08-10, always on the
-/// game thread, always 24-40 s into a scenario. Upstream has the same class of report
-/// (carla-simulator/carla#5812, #7046, #3197).
-///
-/// The sensors belong to `acb_bridge`, which does destroy them when it notices its vehicle
-/// vanish — but it only notices *after* the fact, and the crash happens in that window.
-/// Whoever destroys the vehicle is the only one who can close it, so this bends invariant 2
-/// deliberately: csb removes the orphans it would otherwise create, and nothing else.
-///
-/// Best effort. A sensor that cannot be listed or destroyed is logged, not fatal — the
-/// vehicle still has to go.
-fn destroy_attached_sensors(world: &carla::client::World, parent_id: u32) {
-    let actors = match world.actors() {
-        Ok(actors) => actors,
-        Err(e) => {
-            tracing::warn!("Could not list actors to detach sensors from {parent_id}: {e}");
-            return;
-        }
-    };
-
-    for actor in actors.iter() {
-        if actor.parent_id() != parent_id || !actor.type_id().starts_with("sensor.") {
-            continue;
-        }
-        let sensor_id = actor.id();
-        match actor.destroy() {
-            Ok(_) => tracing::debug!("Destroyed sensor {sensor_id} attached to {parent_id}"),
-            Err(e) => tracing::warn!(
-                "Could not destroy sensor {sensor_id} attached to {parent_id}: {e}. \
-                 The server may crash when it next ticks that sensor."
-            ),
-        }
+/// Kept separate from the sweep itself because carla-rust does not log: it hands back a
+/// [`carla::client::DestroyOutcome`] and lets the caller decide what is worth saying.
+fn log_destroy_outcome(actor_id: u32, outcome: &carla::client::DestroyOutcome) {
+    if let Some(e) = &outcome.list_error {
+        tracing::warn!(
+            "Could not list actors to detach children from {actor_id}: {e}. Any attached \
+             sensors are now orphaned, and the server may crash when it next ticks them."
+        );
+    }
+    for (sensor_id, e) in outcome.orphans() {
+        tracing::warn!(
+            "Could not destroy actor {sensor_id} attached to {actor_id}: {e}. \
+             The server may crash when it next ticks it."
+        );
+    }
+    if outcome.children_destroyed > 0 {
+        tracing::debug!(
+            "Destroyed {} actor(s) attached to {actor_id}",
+            outcome.children_destroyed
+        );
+    }
+    if !outcome.destroyed {
+        tracing::debug!("Actor {actor_id} was already destroyed");
     }
 }
 
@@ -173,14 +152,15 @@ fn destroy_actor_in(world: &carla::client::World, actor_id: u32) -> Result<()> {
 
     match actor {
         Some(actor) => {
-            // Children first, or the server ticks them against a dead owner.
-            destroy_attached_sensors(world, actor_id);
-            let destroyed = actor
-                .destroy()
+            // Children first, or the server ticks them against a dead owner: CARLA leaves
+            // a destroyed vehicle's sensors alive, and an orphaned IMU segfaults the
+            // server on its next tick. carla-rust's helper reads attachment from the
+            // server's actor list, which is what makes it work across clients -- acb
+            // attached these sensors, not us.
+            let outcome = actor
+                .destroy_with_children()
                 .wrap_err_with(|| format!("destroy actor {actor_id}"))?;
-            if !destroyed {
-                tracing::debug!("Actor {actor_id} was already destroyed");
-            }
+            log_destroy_outcome(actor_id, &outcome);
         }
         None => tracing::debug!("Actor {actor_id} is no longer in the world"),
     }
@@ -1437,10 +1417,11 @@ impl Coordinator {
                         Some(actor) => {
                             // Sensors first: a despawn is where a vehicle most often leaves
                             // acb's sensors behind, and the server segfaults on the next
-                            // tick of an IMU whose owner is gone. See
-                            // `destroy_attached_sensors`.
-                            destroy_attached_sensors(&self.world, actor_id);
-                            if actor.destroy().wrap_err("destroy actor")? {
+                            // tick of an IMU whose owner is gone.
+                            let outcome =
+                                actor.destroy_with_children().wrap_err("destroy actor")?;
+                            log_destroy_outcome(actor_id, &outcome);
+                            if outcome.destroyed {
                                 tracing::info!("Despawned '{name}' (actor_id={actor_id})");
                             } else {
                                 tracing::warn!(

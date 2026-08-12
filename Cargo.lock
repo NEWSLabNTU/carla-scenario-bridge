@@ -399,7 +399,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 [[package]]
 name = "carla"
 version = "0.14.1"
-source = "git+https://github.com/jerry73204/carla-rust.git?rev=2718365#271836527a8e50a44fca080c11acdce5f1274817"
+source = "git+https://github.com/jerry73204/carla-rust.git?rev=9596cde#9596cde600abccc02c02ea68fad00035ec37b4c8"
 dependencies = [
  "anyhow",
  "autocxx",
@@ -423,7 +423,7 @@ dependencies = [
 [[package]]
 name = "carla-src"
 version = "0.12.1"
-source = "git+https://github.com/jerry73204/carla-rust.git?rev=2718365#271836527a8e50a44fca080c11acdce5f1274817"
+source = "git+https://github.com/jerry73204/carla-rust.git?rev=9596cde#9596cde600abccc02c02ea68fad00035ec37b4c8"
 dependencies = [
  "anyhow",
  "autotools",
@@ -447,7 +447,7 @@ dependencies = [
 [[package]]
 name = "carla-sys"
 version = "0.14.1"
-source = "git+https://github.com/jerry73204/carla-rust.git?rev=2718365#271836527a8e50a44fca080c11acdce5f1274817"
+source = "git+https://github.com/jerry73204/carla-rust.git?rev=9596cde#9596cde600abccc02c02ea68fad00035ec37b4c8"
 dependencies = [
  "anyhow",
  "autocxx",
