@@ -144,6 +144,34 @@ Both bridges now log `Vehicle 'hero' (actor N) is gone from the world` within se
 the next run's first tick and re-attach. Across the four runs before the fix, neither
 ever noticed.
 
+### In flight: the background AV moved into the ego's lane (NOT yet run)
+
+The last open criterion in [010] is whether the ego's Autoware *perceives* the
+background AV. Everything for it is committed and nothing has been executed — the server
+went down before the first run — so treat the config below as a proposal that compiles,
+not as a result.
+
+What changed:
+
+- `bridge_config.yaml`: `bg_av_1` moved onto the ego's street, spawn (230, -129.8) yaw
+  180, goal (110, -129.8) yaw 180 — lanelet 6583, same lane as the ego, 90 m ahead of it.
+- `scenarios/bg_av_1_poses.yaml`: pilot goal to match.
+- `town01_two_av.xosc` (and its `raw/` twin): ego goal 108 -> **135**, so the ego stops
+  25 m short of where the background AV parks. Any background goal inside the ego's
+  remaining path blocks the lane and the ego never arrives — that constraint is what set
+  both numbers.
+
+Expected timing, from the arrival run: the ego starts moving ~30 s in, the pilot engages
+~45 s in, so between roughly t+45 s and t+75 s the two share the lane with a 50-70 m gap.
+That window is what the perception check has to catch.
+
+To run it: `scripts/two_av_run.sh` is the harness
+(restart bg stack for a fresh pilot -> long scenario -> `scripts/perception_probe.py` in domain 1
+for 170 s). The probe reports the ego's speed and its closest tracked object from
+`/perception/object_recognition/objects`; the pass condition is a tracked object near the
+background AV's position, and worth watching whether the ego also *slows*, since SSv2
+scores the ego's arrival but cannot see what it is avoiding.
+
 ### ROS domains: 1 for the ego, 2+ for background AVs, 0 unused
 
 Domain 0 is where every unconfigured ROS process on the host lands, including other

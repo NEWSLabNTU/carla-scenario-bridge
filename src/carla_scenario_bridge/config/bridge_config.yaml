@@ -59,23 +59,17 @@ background_avs:
     # deliberately left empty so a stray unconfigured ROS process cannot join a run.
     ros_domain_id: 2
     blueprint: "vehicle.tesla.model3"
-    # Both poses lie inside lanelet 16946 of the TUM Town01 map, whose centerline runs
-    # x 145.0 -> 101.4 at y = -55.5: westbound, hence yaw 180. Three ways to get this
-    # wrong, all of which surface only as the pilot's "The planned route is empty":
-    #   * Wrong lane. Autoware routes over subtype=road lanelets only, and 65 of this
-    #     map's 300 lanelets carry no subtype at all -- including the whole parallel
-    #     lane at y = -53.7. A pose there is invisible to the routing graph.
-    #   * Wrong direction. A lanelet is directed; a goal "ahead" of a vehicle facing
-    #     against the lanelet is behind it as far as routing is concerned.
-    #   * Past the end. This lanelet stops at x = 101.4; a goal west of that (the
-    #     original x = 92) is off the graph.
-    # Check any new pose with lanelet2 against
-    # data/carla-autoware-bridge/Town01/lanelet2_map.osm -- nearest lanelet, its
-    # subtype, and the direction of its centerline. Not by eye off the OSM nodes: the
-    # left and right boundaries are not stored in a consistent order, so a hand-built
-    # centerline can come out reversed.
-    spawn_pose: {x: 140.0, y: -55.5, z: 0.5, yaw: 180.0}
-    goal_pose:  {x: 110.0, y: -55.5, z: 0.0, yaw: 180.0}
+    # On the ego's own street, ahead of it: lanelet 6583 runs x 325.6 -> 101.4 westbound
+    # at y = -129.8, the ego covers 320 -> 135 of it, and this AV covers 230 -> 110. The
+    # overlap is the point -- it is how the ego's Autoware gets something real to perceive
+    # -- and the 25 m of clearance past the ego's goal is what keeps a parked background
+    # AV from blocking the lane the ego still has to finish in.
+    #
+    # Same three traps as any pose on this map: subtype=road only (65 of 300 lanelets
+    # carry no subtype), ahead of the vehicle along the lanelet's own direction, and
+    # inside its span. Check with lanelet2, not by eye off the OSM.
+    spawn_pose: {x: 230.0, y: -129.8, z: 0.5, yaw: 180.0}
+    goal_pose:  {x: 110.0, y: -129.8, z: 0.0, yaw: 180.0}
 #  - role_name: "bg_av_1"      # must be unique, and match that domain's vehicle_name
 #    ros_domain_id: 1          # informational here; launch owns the actual domain
 #    blueprint: "vehicle.tesla.model3"
