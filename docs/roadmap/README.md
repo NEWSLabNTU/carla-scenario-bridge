@@ -80,8 +80,13 @@ Per-phase state:
 - **012 DONE and verified live** — this is the architecture the passing runs use.
 - **013 designed, largely unimplemented** — the deeper `managed_ego:=false` fork
   work. Run only after 007/010 close.
-- **008 / 009** untouched by the recent campaign; 009's traffic-light recognition
-  leg needs GPU headroom (TRT beside CARLA) or a non-camera injection path.
+- **008 acceptance closed (2026-08-16)** — a pedestrian and a misc object are both
+  detected by the ego's own perception, and the ego *stops* for a pedestrian crossing its
+  lane and resumes when it clears (`scenarios/town01_pedestrian.xosc`). Everything comes
+  back classified UNKNOWN; classification needs the camera leg 009 has parked. One test
+  checkbox stays open — `resolve_blueprint_key` probes CARLA and cannot be unit-tested.
+- **009** untouched by the recent campaign; its traffic-light recognition leg needs GPU
+  headroom (TRT beside CARLA) or a non-camera injection path.
 
 **Priority order for the next sessions:**
 

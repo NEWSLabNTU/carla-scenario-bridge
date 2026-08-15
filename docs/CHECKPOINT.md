@@ -22,11 +22,18 @@ now goes further than it ever has:
 - **The ego follows it** (2026-08-15): with `bg_av_1` in the ego's own lane the ego closes
   to 18 m, slows, and holds a ~24 m gap for the rest of the run, still passing its
   scenario. 010 is complete; see the section below for what that measurement cost.
+- **The ego stops for a pedestrian** (2026-08-16): on
+  `scenarios/town01_pedestrian.xosc` the ego halts 9 m short of a walker crossing its
+  lane, holds 53 s, and resumes when the walker reaches the far walkway. A street barrier
+  3 m off the driving line is detected too. Both come back classified **UNKNOWN** —
+  detection works, classification is the camera leg 009 has parked. 008's acceptance is
+  closed.
 - **Teardown is clean**: after each run CARLA holds no vehicles or sensors, background
   AV included (010's "no background AV left behind"). A background AV is not an SSv2
   entity, so it outlives the scenario that spawned it *by design* — it is destroyed at the
   next `Initialize` or at bridge shutdown, both verified, with its sensors, via
-  `destroy_with_children`.
+  `destroy_with_children`. Pedestrians and props leak nothing either: 0 vehicles,
+  0 sensors, 0 walkers, 0 non-map props after every run.
 
 ### What it took to get here (all of it new, all of it committed)
 
@@ -289,6 +296,11 @@ is already up. Nothing is known to require restarting the stack itself any more.
 - A freshly connected CARLA client's `get_actors()` is empty until it has seen a tick.
   In synchronous mode that makes a full world look like a torn-down one. `wait_for_tick()`
   before believing an actor count, or keep one client for the whole observation.
+- Perception keeps publishing the *previous* run's object list for the first seconds
+  after `Initialize`. A leftover object sitting on a new entity's coordinates reads as a
+  detection 200 m away — reject any match beyond sensor range before believing it.
+- Town01 holds ~150 `static.prop.mesh` actors of its own. When looking for props a
+  scenario spawned, filter that type out or the two you care about vanish into 150 lines.
 - An ego crawling at 0.25 m/s with tens of phantom obstacles is usually starved sensors,
   not a planner decision. `ros2 topic hz` on the ego's LiDAR settles it: 10 Hz healthy,
   ~1 Hz starved. No velocity factor and no virtual wall means nothing in planning asked

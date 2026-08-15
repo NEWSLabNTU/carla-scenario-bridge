@@ -120,17 +120,79 @@ kind→fallback mapping it depends on *is* tested.
 
 ## Acceptance Criteria
 
-- [ ] A pedestrian-crossing scenario runs with a pedestrian actually present in CARLA
-- [ ] Autoware's perception detects the pedestrian through its sensors
+- [x] A pedestrian-crossing scenario runs with a pedestrian actually present in CARLA
+- [x] Autoware's perception detects the pedestrian through its sensors
 - [x] NPC vehicles follow their scripted trajectory without sinking, jittering or drifting
-- [ ] A misc object appears as an obstacle Autoware perceives
-- [ ] Every entity type spawns, updates and despawns without leaking
+- [x] A misc object appears as an obstacle Autoware perceives
+- [x] Every entity type spawns, updates and despawns without leaking
 - [x] No handler introduced here returns success without acting
 - [x] `just test` passes
 
-The remaining criteria need Autoware's perception, so they need a rendering GPU. The C1
-physics fix — the one predicted from CARLA semantics rather than observed — **is now
-confirmed**; see below.
+The C1 physics fix — the one predicted from CARLA semantics rather than observed — **is
+confirmed**; see the 2026-07-30 section below. The three perception criteria closed on
+2026-08-16 against a live Autoware, below.
+
+## Perception, verified live (2026-08-16)
+
+`scenarios/town01_pedestrian.xosc` puts a pedestrian and two street barriers on the ego's
+route through Town01, and `scripts/entity_perception_probe.py` reads CARLA's walkers and
+props directly, matching each against the ego's tracked objects. Four runs, all
+`failures="0"`.
+
+**The pedestrian is detected, and the ego stops for it.** With the crossing timed to put
+the walker in the ego's lane as it arrives, the ego halted at x=248.9 — 9 m short of the
+crossing line — held for 53 s while the pedestrian crossed, then resumed the moment it
+reached the far walkway and drove on to its goal:
+
+```
+t+ 31s ego( 253.2)  ped0001@(240,-131.8)  approaching
+t+ 33s ego( 248.9)  ped0001@(240,-130.4) ego 12m HIT d=0.0 UNKNOWN
+t+ 33s .. t+86s     ego held at 248.9 while the pedestrian crossed
+t+ 88s ego( 247.8)  pedestrian clear at y=-126.1, ego moving again
+t+119s ego( 139.7)  goal reached, exitSuccess
+```
+
+**The misc object is detected**: the walkway barrier at (200, -126.8), 3 m off the ego's
+driving line, matched a tracked object to 0.0 m with the ego 4 m away.
+
+Everything is classified **UNKNOWN**, never PEDESTRIAN. Detection is what the criteria
+ask for and detection is what happens, but nothing here exercises classification, and the
+camera-based leg that would is the same one [009](009-map-and-traffic-lights.md) has
+parked for want of GPU headroom.
+
+**Detection range is short.** `barrier_1` sits in the ego's own lane at x=120, which is
+15 m past the ego's goal, so the ego never came closer than 20 m to it — and it was never
+detected. The barrier that *was* detected came inside 11 m first. For a 1.2 m prop with
+this sensor kit, plan on well under 20 m; a scenario that needs a prop seen has to route
+the ego past it, not merely towards it.
+
+**Teardown leaks nothing**, across all four entity types: after each run the world holds
+0 vehicles, 0 sensors, 0 walkers and 0 non-map props.
+
+Two traps in measuring any of this:
+
+1. **Town01 contains ~150 `static.prop.mesh` actors** — the map's own scenery, part of
+   the pointcloud map and subtracted from perception by design. A probe that reports
+   every prop buries the two the scenario spawned in a wall of noise.
+2. **For the first seconds after `Initialize`, perception still publishes the previous
+   run's object list.** A leftover object landing on a new entity's coordinates scores as
+   a detection at 200 m — which is how the probe first "detected" `barrier_1`. The probe
+   now refuses any match beyond 80 m.
+
+### FollowTrajectoryAction starts late
+
+This map has **no crosswalk lanelets** — 169 road, 66 walkway, 65 untagged, and nothing
+tagged crosswalk — so SSv2's usual pedestrian pattern (teleport onto a crosswalk lanelet,
+give it a speed) has nothing to stand on. The crossing is a `FollowTrajectoryAction` over
+world positions instead, which needs no lanelet.
+
+Triggering it from a `ReachPositionCondition` on the ego did not work as written: on two
+runs the walk began **~15 s after** the ego passed the trigger point, by which time the
+ego was past the crossing and the pedestrian stepped into the lane behind it. The
+scenario now starts the crossing on simulation time and holds the pedestrian in the lane
+for 28 s, so the meeting does not depend on that lag being any particular value. The lag
+itself is unexplained and worth a look if anything else starts depending on
+action-trigger latency.
 
 
 ## Verified against live CARLA (2026-07-30)

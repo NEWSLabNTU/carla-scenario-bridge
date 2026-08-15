@@ -1,0 +1,274 @@
+<?xml version="1.0"?>
+<!--
+	Town01: the ego drives lanelet 6583 westbound past a street barrier and through a
+	pedestrian crossing its lane. Written for phase 008's two perception criteria - that
+	Autoware detects a pedestrian and a misc object through its own sensors - so every
+	position here is chosen to be seen, not just to exist.
+
+	The geometry, measured off lanelet2_map.osm rather than guessed:
+
+	    y = -124.0 .. -128.0   north walkway (lanelet 7485)
+	    y = -128.3 .. -132.4   the ego's lane, westbound (lanelet 6583)
+	    y = -132.4 .. -136.4   the oncoming lane (lanelet 5230)
+	    y = -136.7 .. -140.7   south walkway (lanelet 6132)
+
+	This map has **no crosswalk lanelets** - only road, walkway and untagged - so the
+	usual SSv2 pattern of teleporting a pedestrian onto a crosswalk lanelet and giving it
+	a speed has nothing to stand on. The crossing is a FollowTrajectoryAction over world
+	positions instead, which needs no lanelet at all.
+
+	There are two barriers because one alone cannot tell two failures apart. `barrier_0`
+	sits on the north walkway at y=-126.8, 3.0 m from the ego's driving line; `barrier_1`
+	sits squarely in the ego's own lane at x=120, which is 15 m *past* the ego's goal at
+	x=135. So the second one is in the road, in front of the ego, and still not something
+	the ego ever has to drive around - the run cannot time out on it. If the walkway
+	barrier goes unseen and the in-lane one is detected, the difference is where it stood;
+	if neither is seen, the prop itself returns nothing to the LiDAR.
+-->
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-08-16T00:00:00+00:00" description="Town01 ego drive past a misc object and through a pedestrian crossing" revMajor="1" revMinor="2" />
+	<ParameterDeclarations />
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town01" />
+	</RoadNetwork>
+	<Entities>
+		<ScenarioObject name="ego">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="Autoware">
+					<Properties>
+						<Property name="maxJerk" value="1.5" />
+						<Property name="minJerk" value="-1.5" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<ScenarioObject name="pedestrian_0">
+			<Pedestrian model="unspecified" mass="70.0" name="walker.pedestrian.0001" pedestrianCategory="pedestrian">
+				<BoundingBox>
+					<Center x="0.0" y="0.0" z="0.9" />
+					<Dimensions width="0.6" length="0.6" height="1.8" />
+				</BoundingBox>
+				<Properties />
+			</Pedestrian>
+		</ScenarioObject>
+		<ScenarioObject name="barrier_0">
+			<MiscObject mass="50.0" miscObjectCategory="obstacle" name="static.prop.streetbarrier">
+				<BoundingBox>
+					<Center x="0.0" y="0.0" z="0.5" />
+					<Dimensions width="1.2" length="0.4" height="1.0" />
+				</BoundingBox>
+				<Properties />
+			</MiscObject>
+		</ScenarioObject>
+		<ScenarioObject name="barrier_1">
+			<MiscObject mass="50.0" miscObjectCategory="obstacle" name="static.prop.streetbarrier">
+				<BoundingBox>
+					<Center x="0.0" y="0.0" z="0.5" />
+					<Dimensions width="1.2" length="0.4" height="1.0" />
+				</BoundingBox>
+				<Properties />
+			</MiscObject>
+		</ScenarioObject>
+	</Entities>
+	<Storyboard>
+		<Init>
+			<Actions>
+				<Private entityRef="ego">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="320.0" y="-129.8" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="135.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="barrier_0">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="200.0" y="-126.8" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="barrier_1">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="120.0" y="-129.8" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="pedestrian_0">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="240.0" y="-138.5" z="0.3" h="1.5708" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+			</Actions>
+		</Init>
+		<Story name="town01_pedestrian">
+			<Act name="drive_act">
+				<ManeuverGroup maximumExecutionCount="1" name="ego_maneuvers">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="ego" />
+					</Actors>
+					<Maneuver name="end_conditions">
+						<Event name="success" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="reach_goal" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="ego" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<ReachPositionCondition tolerance="5.0">
+													<Position>
+														<WorldPosition x="135.0" y="-129.8" z="0.0" h="0" p="0" r="0" />
+													</Position>
+												</ReachPositionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="timeout" priority="parallel">
+							<Action name="exit_failure">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="timeout_condition" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="300" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<!--
+					The crossing starts on simulation time, not on the ego's position, and
+					the reason is measured rather than assumed. Triggering it off a
+					ReachPositionCondition at x=280 was tried twice on 2026-08-16: both
+					times the walk began ~15 s after the ego passed the trigger point, by
+					which time the ego was already past x=240 and the pedestrian stepped
+					into the lane behind it. That lag is a property of the trajectory
+					action, so the scenario is sized against it instead of fighting it.
+
+					At the same ~15 s lag, a t=1 trigger puts the pedestrian into the ego's
+					lane around sim 28 s and keeps it there to ~sim 55 s, while the ego
+					reaches x=240 at about sim 35 s. The 28 s dwell is what makes this
+					robust: the exact lag can move and the ego still meets the pedestrian.
+					The pedestrian does leave afterwards, which is what stops a halted ego
+					from burning the 300 s timeout.
+				-->
+				<ManeuverGroup maximumExecutionCount="1" name="pedestrian_crossing">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="pedestrian_0" />
+					</Actors>
+					<Maneuver name="cross_the_road">
+						<Event name="cross" priority="overwrite">
+							<Action name="walk_across">
+								<PrivateAction>
+									<RoutingAction>
+										<FollowTrajectoryAction initialDistanceOffset="0">
+											<TimeReference>
+												<Timing domainAbsoluteRelative="relative" offset="0" scale="1" />
+											</TimeReference>
+											<TrajectoryFollowingMode followingMode="position" />
+											<TrajectoryRef>
+												<Trajectory name="cross_north" closed="false">
+													<ParameterDeclarations />
+													<Shape>
+														<Polyline>
+															<Vertex time="0">
+																<Position>
+																	<WorldPosition x="240.0" y="-138.5" z="0.3" h="1.5708" p="0" r="0" />
+																</Position>
+															</Vertex>
+															<Vertex time="12">
+																<Position>
+																	<WorldPosition x="240.0" y="-130.5" z="0.3" h="1.5708" p="0" r="0" />
+																</Position>
+															</Vertex>
+															<Vertex time="40">
+																<Position>
+																	<WorldPosition x="240.0" y="-129.5" z="0.3" h="1.5708" p="0" r="0" />
+																</Position>
+															</Vertex>
+															<Vertex time="52">
+																<Position>
+																	<WorldPosition x="240.0" y="-126.0" z="0.3" h="1.5708" p="0" r="0" />
+																</Position>
+															</Vertex>
+														</Polyline>
+													</Shape>
+												</Trajectory>
+											</TrajectoryRef>
+										</FollowTrajectoryAction>
+									</RoutingAction>
+								</PrivateAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="crossing_start" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="1" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>
