@@ -85,8 +85,16 @@ Per-phase state:
   lane and resumes when it clears (`scenarios/town01_pedestrian.xosc`). Everything comes
   back classified UNKNOWN; classification needs the camera leg 009 has parked. One test
   checkbox stays open — `resolve_blueprint_key` probes CARLA and cannot be unit-tested.
-- **009** untouched by the recent campaign; its traffic-light recognition leg needs GPU
-  headroom (TRT beside CARLA) or a non-camera injection path.
+- **009 gap 7 wired, and blocked on the map pack (2026-08-16).** Traffic-light
+  recognition now runs end to end — four silent wiring defects fixed, including a map
+  whose lights were untyped (`subtype=""`), a camera namespace with no parameter file
+  that killed the detector at startup, and acb publishing its camera on
+  `/sensing/camera/camera6/camera_link/image_raw` where Autoware listens on
+  `/sensing/camera/camera6/image_raw`. It still reports nothing, because every light in
+  every town of the pack is a 3-14 cm stub at a fixed 135 deg bearing: sub-pixel at range
+  and 45 deg outside `car_traffic_light_max_angle_range` on every approach. Not a GPU
+  problem, as previously assumed. Next: regenerate light geometry from CARLA's own
+  actors, or inject ground truth.
 
 **Priority order for the next sessions:**
 

@@ -84,6 +84,20 @@ YAML
         fi
     done
 
+    # Four of the five towns ship their traffic lights with the two tags lanelet2 keys
+    # on left empty, which makes every signal invisible to Autoware and unaddressable
+    # from SSv2. Repair in place -- the map file is a per-file symlink into the source
+    # pack, so replace it with a real file first, exactly as the projector yaml above.
+    for town in "$OUT"/*/; do
+        [ -f "$town/lanelet2_map.osm" ] || continue
+        if [ -L "$town/lanelet2_map.osm" ]; then
+            src="$(readlink -f "$town/lanelet2_map.osm")"
+            rm -f "$town/lanelet2_map.osm"
+            cp "$src" "$town/lanelet2_map.osm"
+        fi
+    done
+    python3 "$(dirname "$0")/repair_lanelet_traffic_lights.py" "$OUT"
+
     if [ "$found" -eq 0 ]; then
         echo "ERROR: no town directories with lanelet2_map.osm under $MAP_SOURCE" >&2
         exit 1

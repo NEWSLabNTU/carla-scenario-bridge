@@ -130,13 +130,70 @@ what invariant 3 exists to prevent. A scenario that cares about a signal must co
 
 ### Autoware perception (gap 7)
 
-- [ ] Re-enable `use_traffic_light_recognition` in `acb_launch/carla_simulator.launch.xml`
-- [ ] Restore the traffic-light topic in the `component_state_monitor` config
-- [ ] Re-check the diagnostics consequences — the flag was turned off for a reason, and
-      `duplicated_node_checker` errors were attributed to it
-- [ ] Confirm the camera sensor's placement and resolution can actually resolve signals
-- [ ] If recognition proves impractical, record the decision and fall back to ground-truth
-      injection rather than leaving the flag silently off
+- [x] Re-enable `use_traffic_light_recognition` in `acb_launch/carla_simulator.launch.xml`
+      — it was already on; what was missing was everything downstream of it, below
+- [x] Restore the traffic-light topic in the `component_state_monitor` config
+- [x] Re-check the diagnostics consequences — no `duplicated_node_checker` errors
+      appeared; the ego stack comes up 50/50 with recognition running
+- [x] Confirm the camera sensor's placement and resolution can actually resolve signals
+      — it could not, and now can: 160x80 and yawed 59 deg off the centreline, now
+      1280x720 and forward-facing
+- [x] If recognition proves impractical, record the decision and fall back to ground-truth
+      injection rather than leaving the flag silently off — **it is impractical against
+      this map pack, for a reason no amount of camera work fixes.** See below. The
+      fallback is not yet built.
+
+Four separate defects sat between a commanded signal and Autoware, each silent:
+
+1. **The map's traffic lights were untyped.** Four of the five towns ship regulatory
+   elements with `subtype=""` and light ways with `type=""` where both should read
+   `traffic_light`. lanelet2 then builds a `GenericRegulatoryElement`, SSv2 rejects the id
+   outright — *"Given lanelet ID 43763 is neither a traffic light ID not a traffic relation
+   ID"* — and Autoware finds no signals on the map at all. Repaired by
+   `scripts/repair_lanelet_traffic_lights.py`, wired into `download_maps.sh`: 152 lights
+   across Town01/02/03/05, Town10 already correct and left alone.
+2. **Recognition ran on camera namespaces nothing published.** Upstream defaults to
+   `[camera6, camera7]`, the namespaces of a real vehicle's sensor kit.
+3. **A camera namespace with no parameter file kills the detector silently.** Autoware
+   derives `config/perception/.../<namespace>_traffic_light_map_based_detector.param.yaml`
+   from the namespace and ships only `camera6` and `camera7`. Pointing it at `camera0`
+   made `traffic_light_map_based_detector` exit at startup — the launch reported *"Exited
+   without code"* and carried on, and the pipeline published empty signal arrays forever.
+   That is why acb's traffic-light camera is named **camera6**: it is the namespace with a
+   file, not a description.
+4. **acb published its camera on the wrong topic.** The topic was built from the whole TF
+   frame, giving `/sensing/camera/camera6/camera_link/image_raw`, while Autoware
+   subscribes to `/sensing/camera/camera6/image_raw`. No image had ever reached the
+   pipeline under any camera name. Fixed in `acb_bridge`'s `autoware.rs`; images now
+   arrive at 9.3 Hz.
+
+With all four fixed the pipeline is genuinely alive — 14 nodes, 50/50 at startup, the
+map-based detector publishing `expect/rois` every frame — and it still reports nothing,
+because of a fifth problem the pack cannot be talked out of.
+
+**The pack's traffic light geometry is a placeholder.** A lanelet2 traffic light is a
+linestring across the face of the signal head: its length is the head's width and its
+bearing is what the light faces. In this pack every light in every town is the same stub:
+
+| town | bar length | distinct bearings |
+|---|---|---|
+| Town01 | 0.141 m | 1 (135 deg) |
+| Town02 | 0.141 m | 1 (135 deg) |
+| Town05 | 0.141 m | 1 (135 deg) |
+| Town10 | 0.035 m | 1 (135 deg) |
+
+Thirty-six lights on Town01 govern roads running north, south, east and west, and all
+thirty-six claim to face 135 degrees. Two consequences, either one fatal:
+`car_traffic_light_max_angle_range` is 40 degrees, so a light 45 degrees off every
+approach is rejected before projection; and a 0.141 m bar at 30 m subtends 0.27 degrees,
+about 5 px at 1280x720, which is not something the fine detector can find or the
+classifier can read. Note Town10 is *correctly tagged* and still has stub geometry, so
+this is not the same corruption as the missing type tags — it is what the converter emits.
+
+Recognition against this pack is therefore not a tuning problem. It needs either light
+geometry regenerated from CARLA's own `TrafficLight` actors (their `bounding_box` and
+transform give both width and facing) or the ground-truth injection path this work item
+allows for.
 
 ### Dead code (gap 6)
 
@@ -167,20 +224,45 @@ what invariant 3 exists to prevent. A scenario that cares about a signal must co
 - [x] An SSv2-commanded red is red in CARLA; green is green
 - [x] Position matching resolves at least 80% of Town01 signal IDs automatically — **100%**
 - [x] Unmapped IDs warn without aborting
-- [ ] Autoware's traffic light recognition reports the state SSv2 commanded
-- [ ] Ego stops at an SSv2-commanded red in a full-stack run
-- [ ] Lights cycle normally again after the scenario ends
+- [ ] Autoware's traffic light recognition reports the state SSv2 commanded — **blocked
+      by the pack's stub light geometry**, not by wiring; see gap 7 above
+- [ ] Ego stops at an SSv2-commanded red in a full-stack run — **not earned.** The ego
+      does stop at the stop line, with `behavior: traffic-signal` and 0.35 m to go, but it
+      stops the same way whatever the light says: SSv2 turned the signal green in CARLA
+      mid-run (`GREENx1` on the ground-truth actor) and the ego sat there until the 300 s
+      timeout. That is the traffic-signal module being conservative about a signal it has
+      no state for, which is the correct behaviour and the wrong evidence
+- [x] Lights cycle normally again after the scenario ends — after SIGINT, 0 of 36 frozen
 - [x] `just test` passes
 
-All of these are now confirmed live except Autoware's reaction, which needs rendering. See
-below — position matching resolved **36 of 36** Town01 signals, well past the 80% criterion.
+Signal matching resolved **36 of 36** Town01 signals, well past the 80% criterion.
+
+`scenarios/town01_traffic_light.xosc` is the scenario for the two open criteria: the ego
+drives 219 m west to a signal SSv2 holds red, and SSv2 turns it green at sim 150 s. It
+fails today, and it should keep failing until recognition works — it is the test, not a
+regression.
 
 ## Still Open
 
-**Gap 7 — Autoware traffic light recognition** is untouched. `acb_launch` still sets
-`use_traffic_light_recognition=false` and excludes the topic from `component_state_monitor`,
-so nothing in Autoware reacts to a commanded signal yet. Re-enabling needs a live stack to
-re-check the diagnostics consequences, which is why it was not attempted blind.
+**Gap 7 — Autoware traffic light recognition** is wired end to end and produces nothing,
+for the map reason above. The next move is one of two, and it is a design decision rather
+than a bug to chase:
+
+1. **Regenerate the light geometry from CARLA.** Each CARLA `TrafficLight` actor carries a
+   transform and a `bounding_box`, which is exactly the width and facing the lanelet2
+   linestring is supposed to encode, and csb already resolves lanelet element to CARLA
+   actor for all 36 Town01 signals. A generator pass over the map would make recognition
+   possible for every town in the pack. It also makes the maps diverge from the pack, so
+   it belongs beside `repair_lanelet_traffic_lights.py` as an explicit, re-runnable step.
+2. **Ground-truth injection**, which this phase's work items already allow: publish the
+   commanded states onto `/perception/traffic_light_recognition/traffic_signals` and skip
+   the camera entirely. Cheaper, and it tests planning's reaction rather than perception's.
+   It needs a decision about who writes it — invariant 3 makes csb the only writer of
+   signal state, and this would be a second interface into Autoware.
+
+Option 1 is the one worth doing if traffic-light *perception* is ever in scope; option 2
+if only the ego's *reaction* is. Nothing about the camera path needs revisiting either
+way: the four wiring defects are fixed and the pipeline is alive.
 
 **The map pack URL is dead.** `scripts/download_maps.sh` returns HTTP 404 from LRZ
 Sync+Share. The script now accepts `CSB_MAP_SOURCE=<dir>` and symlinks town folders from a

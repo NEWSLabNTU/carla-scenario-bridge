@@ -296,6 +296,16 @@ is already up. Nothing is known to require restarting the stack itself any more.
 - A freshly connected CARLA client's `get_actors()` is empty until it has seen a tick.
   In synchronous mode that makes a full world look like a torn-down one. `wait_for_tick()`
   before believing an actor count, or keep one client for the whole observation.
+- The map pack's traffic lights are untyped: `subtype=""` on the regulatory element and
+  `type=""` on the light way, where both should read `traffic_light`. SSv2 then rejects
+  the id (*"neither a traffic light ID not a traffic relation ID"*) and Autoware finds no
+  signals at all. `scripts/repair_lanelet_traffic_lights.py` fixes it and
+  `download_maps.sh` runs it; re-run it on any new pack.
+- A camera namespace with no `<ns>_traffic_light_map_based_detector.param.yaml` makes
+  that node exit at startup and the launch carry on. Symptom: perception publishes empty
+  signal arrays forever and the ego stops at every stop line for want of information.
+  Only `camera6` and `camera7` have files, which is why acb's traffic-light camera is
+  named camera6.
 - Perception keeps publishing the *previous* run's object list for the first seconds
   after `Initialize`. A leftover object sitting on a new entity's coordinates reads as a
   detection 200 m away — reject any match beyond sensor range before believing it.
