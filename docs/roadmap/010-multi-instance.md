@@ -143,7 +143,32 @@ background AV will actually read it.
       `bg_av_1` spawned before the ego, found by its own acb_bridge in domain 1)
 - [x] Integration: background AVs are absent from SSv2 entity status (live: ego
       scenario ran to `Passed` with `bg_av_1` in-world; SSv2 never saw it)
-- [ ] Integration: all background AVs are destroyed at teardown
+- [x] Integration: all background AVs are destroyed at teardown — **2026-08-15**, on both
+      paths. A background AV outlives its scenario by design (it is not an SSv2 entity, so
+      nothing despawns it when the ego despawns); it dies at the *next* `Initialize` or at
+      bridge shutdown, and both were watched from a CARLA client:
+
+      ```
+      06:50:57 Despawned 'ego' (actor_id=175)      <- scenario ends, bg_av_1 (174) stays
+      13:52:40 vehicles=1 sensors=4 ['bg_av_1']    <- and its 4 sensors with it
+      06:56:01 Initialize: step_time=0.1 ...
+      06:56:01 Teardown: 1 spawned, 1 destroyed, 0 failed
+      06:56:01 Initialize: cleaned up 1 actor(s) from the previous run
+      13:56:01 vehicles=0 sensors=0                <- vehicle and sensors both gone
+      13:56:02 vehicles=2 sensors=12 [(184,'bg_av_1'), (189,'hero')]   <- fresh ids
+      ```
+
+      Shutdown (SIGINT) does the same: `Teardown: 1 spawned, 1 destroyed, 0 failed`, world
+      back to 0 vehicles and 0 sensors. The sensors go because `destroy_actor_in` uses
+      carla-rust's `destroy_with_children`, which reads attachment from the server's actor
+      list — the sensors belong to acb's client, not ours, so a client-local lookup would
+      miss them and leave an orphaned IMU to segfault the server.
+
+      Reading this from CARLA has one trap worth writing down: **a fresh client's actor
+      list is empty until it has seen a tick**. In synchronous mode `get_actors()` on a
+      just-connected client returns 0 actors whether the world is empty or full, which
+      reads exactly like a successful teardown. Call `world.wait_for_tick()` first, or
+      hold one long-lived client for the whole observation.
 
 ## Acceptance Criteria
 
@@ -209,18 +234,66 @@ background AV will actually read it.
          restarted; it no longer does.
 - [x] Each domain has exactly one `/clock` publisher (verified in D0 after the
       double-acb_bridge fix, csb `b974590`; D1 uses `publish_clock:=true` by design)
-- [ ] The background AV is perceived by the ego's Autoware through its sensors
+- [x] The background AV is perceived by the ego's Autoware through its sensors —
+      **verified 2026-08-15**, and the ego does not merely see it, it follows it. Both AVs
+      on lanelet 6583: bg_av_1 spawns at x=230 and drives to x=110, the ego covers
+      x 320 -> 135 behind it. `scripts/lead_vehicle_probe.py` reads CARLA's truth and
+      Autoware's estimate in the same sample:
+
+      ```
+      t+29s truth_x=286.26 est_x=286.03 pose_err=0.23 gap_to_bg= 56.3 speed=3.9 objects=7
+      t+39s truth_x=248.09 est_x=247.84 pose_err=0.25 gap_to_bg= 18.1 speed=2.9 objects=4
+      t+49s truth_x=230.45 est_x=230.38 pose_err=0.09 gap_to_bg= 19.7 speed=2.5 objects=4
+      t+60s truth_x=195.95 est_x=195.57 pose_err=0.39 gap_to_bg= 23.7 speed=3.7 objects=3
+      t+70s truth_x=157.12 est_x=156.78 pose_err=0.34 gap_to_bg= 24.4 speed=3.9 objects=3
+      ```
+
+      The ego closes from 56 m to 18 m, slows 3.9 -> 2.5 m/s, then holds ~24 m and matches
+      the lead vehicle's speed for the rest of the run — and still passes its scenario.
+      Localization error stays under 0.45 m and the tracked-object count stays at 2-7.
 - [x] SSv2 neither sees nor controls the background AV
 - [x] An empty `background_avs` list is byte-for-byte the current behaviour
 - [x] Teardown leaves no background AV behind (2026-08-10: after each of five runs the
       CARLA world holds no vehicles and no sensors)
 - [x] `just test` passes
 
-One criterion is left: whether the ego's Autoware *perceives* the background AV through
-its sensors. That needs the two to be near each other during a run — today the bg AV
-drives y=-55.5 while the ego drives y=-129.8, two parallel streets, so the question has
-not been posed yet. Posing it means putting the background AV on the ego's street ahead
-of it: the ego's lanelet 6583 runs x 325.6 -> 101.4 westbound, and it now covers
-x 320 -> 108 of that, so there is room for a slower vehicle in front. Expect the ego to
-*react* as well as perceive — which is worth watching, since SSv2 scores the ego's
-arrival but cannot see what it is avoiding.
+Phase 010 is complete.
+
+### What the same-lane run cost to get right
+
+The first two attempts at it failed on the 300 s timeout, and both failures were the
+harness and the host, not the bridge. They are recorded because the symptoms are
+misleading enough to send the next person after the wrong thing.
+
+**Symptom**: the ego drives normally for 40 s, then its tracked-object count jumps from
+4 to 40-52, its planned trajectory drops to a 0.25 m/s crawl, and it times out 30 m short
+of its goal. The extra objects sit off the road at y -112 to -120 and -136 to -185, where
+Town01's buildings are — the signature of pointcloud-map subtraction no longer working.
+Its LiDAR was arriving at **1.1 Hz** with 2.3 s gaps against a 10 Hz sensor.
+
+**Not the cause**: no planning velocity factor and no virtual wall were ever published,
+so nothing in behaviour planning was asking it to stop, and chasing stop reasons is a
+dead end. Nor is it two Autoware stacks being too much for the host — see below.
+
+**Cause**: `scripts/two_av_run.sh` said "restarting background AV stack" and only ever
+started one. The second invocation left **two** full background Autoware stacks in domain
+2, both `acb_bridge`s attached to `bg_av_1`, and the ego's sensor pipeline starved. Fixed
+in the script: it now kills anything on the background stack's web port first.
+
+Three runs separate the explanations, and they are the runs to repeat if this comes back:
+
+| background AV | second Autoware stack | ego LiDAR | load (1 min) | verdict |
+| --- | --- | --- | --- | --- |
+| same lane, duplicated stack | two | 1.1 Hz | 69 | timeout at 300 s |
+| none | none | — | 8.9 | pass, 60 s |
+| parallel street (y=-55.5) | one | 10.0 Hz | 48 | pass, 63 s |
+| same lane, one stack | one | 9.7 Hz | 20-45 | pass, ~65 s |
+
+The parallel-street row is the one that matters: it carries the full CPU cost of a second
+Autoware and passes at 10 Hz. Two stacks are affordable on this host; a third, accidental
+one is not.
+
+**Load average is a lagging indicator here.** The failing runs showed load 69/140 against
+20-50 for the passing ones, which reads like a cause and is mostly an effect: a stalled
+ego runs the scenario for 300 s instead of 60, so both stacks stay up five times longer.
+Measure the LiDAR topic rate instead — it separates the cases in seconds.

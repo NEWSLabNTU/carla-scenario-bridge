@@ -19,8 +19,14 @@ now goes further than it ever has:
   `scenarios/town01_two_av.xosc` (ego runs 212 m, timeout 300 s) rather than
   `town01_ego_drive.xosc` (~50 s, cuts the pilot off just after engage) whenever a
   background AV has to finish.
+- **The ego follows it** (2026-08-15): with `bg_av_1` in the ego's own lane the ego closes
+  to 18 m, slows, and holds a ~24 m gap for the rest of the run, still passing its
+  scenario. 010 is complete; see the section below for what that measurement cost.
 - **Teardown is clean**: after each run CARLA holds no vehicles or sensors, background
-  AV included (010's "no background AV left behind").
+  AV included (010's "no background AV left behind"). A background AV is not an SSv2
+  entity, so it outlives the scenario that spawned it *by design* — it is destroyed at the
+  next `Initialize` or at bridge shutdown, both verified, with its sensors, via
+  `destroy_with_children`.
 
 ### What it took to get here (all of it new, all of it committed)
 
@@ -144,33 +150,43 @@ Both bridges now log `Vehicle 'hero' (actor N) is gone from the world` within se
 the next run's first tick and re-attach. Across the four runs before the fix, neither
 ever noticed.
 
-### In flight: the background AV moved into the ego's lane (NOT yet run)
+### The ego follows the background AV in its own lane (2026-08-15)
 
-The last open criterion in [010] is whether the ego's Autoware *perceives* the
-background AV. Everything for it is committed and nothing has been executed — the server
-went down before the first run — so treat the config below as a proposal that compiles,
-not as a result.
+[010]'s last criterion is closed: the ego's Autoware perceives the background AV and
+*follows* it. Both on lanelet 6583 — `bg_av_1` from x=230 to x=110, the ego from x=320 to
+x=135 behind it, 25 m of clearance past the ego's goal so the parked background AV never
+blocks the lane the ego still has to finish in.
 
-What changed:
+```
+t+29s truth_x=286.26 est_x=286.03 pose_err=0.23 gap_to_bg= 56.3 speed=3.9 objects=7
+t+39s truth_x=248.09 est_x=247.84 pose_err=0.25 gap_to_bg= 18.1 speed=2.9 objects=4
+t+60s truth_x=195.95 est_x=195.57 pose_err=0.39 gap_to_bg= 23.7 speed=3.7 objects=3
+t+70s truth_x=157.12 est_x=156.78 pose_err=0.34 gap_to_bg= 24.4 speed=3.9 objects=3
+```
 
-- `bridge_config.yaml`: `bg_av_1` moved onto the ego's street, spawn (230, -129.8) yaw
-  180, goal (110, -129.8) yaw 180 — lanelet 6583, same lane as the ego, 90 m ahead of it.
-- `scenarios/bg_av_1_poses.yaml`: pilot goal to match.
-- `town01_two_av.xosc` (and its `raw/` twin): ego goal 108 -> **135**, so the ego stops
-  25 m short of where the background AV parks. Any background goal inside the ego's
-  remaining path blocks the lane and the ego never arrives — that constraint is what set
-  both numbers.
+Closes to 18 m, slows 3.9 -> 2.5 m/s, then holds ~24 m and matches speed — and still
+passes its scenario. `scripts/lead_vehicle_probe.py` produced that; it samples CARLA's
+ground truth and Autoware's estimate together, which is the only way to tell "the ego
+stopped" from "the ego thinks it is somewhere else".
 
-Expected timing, from the arrival run: the ego starts moving ~30 s in, the pilot engages
-~45 s in, so between roughly t+45 s and t+75 s the two share the lane with a 50-70 m gap.
-That window is what the perception check has to catch.
+Three traps this cost a day to find, all worth knowing before the next multi-AV run:
 
-To run it: `scripts/two_av_run.sh` is the harness
-(restart bg stack for a fresh pilot -> long scenario -> `scripts/perception_probe.py` in domain 1
-for 170 s). The probe reports the ego's speed and its closest tracked object from
-`/perception/object_recognition/objects`; the pass condition is a tracked object near the
-background AV's position, and worth watching whether the ego also *slows*, since SSv2
-scores the ego's arrival but cannot see what it is avoiding.
+1. **Never trust "the nearest tracked object".** A ghost object trails ~1 m off the ego's
+   own bumper for the entire run, so the nearest object is always the ego itself. The
+   question is the nearest object *ahead, in lane, and outside a 5 m self-radius*, which
+   is what `scripts/perception_probe.py` now reports as `BEST LANE HIT`.
+2. **A fresh CARLA client sees zero actors until it has ticked.** In synchronous mode
+   `get_actors()` on a just-connected client returns an empty list whether the world is
+   empty or full — indistinguishable from a clean teardown. `world.wait_for_tick()` first.
+3. **A harness that says "restart" must actually kill.** `scripts/two_av_run.sh` only ever
+   started a background stack, so its second invocation ran two full Autoware stacks in
+   domain 2 against one vehicle. The ego's LiDAR fell to 1.1 Hz, its tracked-object count
+   went from 4 to 50 as buildings stopped being subtracted from the pointcloud map, and
+   its trajectory dropped to a 0.25 m/s crawl. Nothing published a planning velocity
+   factor or a virtual wall, so the planner-side evidence was all absent — the diagnostic
+   that separates this in seconds is `ros2 topic hz` on the ego's LiDAR: 10 Hz healthy,
+   ~1 Hz starved. Load average does not separate them, because a stalled run keeps both
+   stacks alive five times longer and the load is mostly an effect.
 
 ### ROS domains: 1 for the ego, 2+ for background AVs, 0 unused
 
@@ -270,17 +286,25 @@ is already up. Nothing is known to require restarting the stack itself any more.
   client's own registry, so neither notices an actor another client destroyed. Check
   `world.snapshot().contains(id)` instead — that is the server's list for the ticked
   frame.
+- A freshly connected CARLA client's `get_actors()` is empty until it has seen a tick.
+  In synchronous mode that makes a full world look like a torn-down one. `wait_for_tick()`
+  before believing an actor count, or keep one client for the whole observation.
+- An ego crawling at 0.25 m/s with tens of phantom obstacles is usually starved sensors,
+  not a planner decision. `ros2 topic hz` on the ego's LiDAR settles it: 10 Hz healthy,
+  ~1 Hz starved. No velocity factor and no virtual wall means nothing in planning asked
+  for the stop, so do not go looking for a stop reason.
 
 ## Next actions
 
-1. **Background AV arrival** — the pilot routes and engages, but the ego scenario is
-   ~50 s of sim time and the pilot spends most of it localizing and settling. Either
-   lengthen the scenario or shorten the cold start (`pilot_stabilize_seconds`).
-2. **Ego perceives the background AV** — 010's last open criterion. They drive
-   different streets today, so the question has not been posed; put them on one.
-3. **Upstream batch**: play_launch rescue and compound-parameter fix (both landed on
+1. **Upstream batch**: play_launch rescue and compound-parameter fix (both landed on
    its main), SSv2 `carla-compat` arrived_goal patch, carla-fork exception containment
    and the IMU owner guard (`sensor-owner-guards`).
+2. **A second background AV** (domain 3). Two stacks cost ~48 load and leave the ego's
+   LiDAR at 10 Hz on this host; a third is unmeasured, and the failure mode when the
+   host runs out is a quiet crawl, not an error.
+3. **Background AV on a reused stack** — the pilot exits after its first arrival, so a
+   second scenario needs the background stack restarted (`scripts/two_av_run.sh` does
+   this). Making the pilot re-arm on a new run would remove the restart.
 
 ## Repo pins at checkpoint
 

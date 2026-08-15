@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """Did the ego's Autoware see the other vehicle, and did it react?
 
-Watches the ego's perception output and its own speed, and reports the closest tracked
-object ahead. Run this in the ego's domain while a two-AV scenario is going.
+Run this in the ego's domain while a two-AV scenario is going.
+
+It reports every tracked object, not the nearest one. The nearest object is always the
+ego's own body -- a ghost that trails about a metre off its bumper for the whole run --
+so "closest object 1.1 m" says nothing about the vehicle ahead. What answers the question
+is the closest object that is *ahead* of the ego, *in its lane*, and far enough away not
+to be the self-ghost. That is what BEST LANE HIT reports.
+
+`LANE_Y` is the ego lane's y in the ROS frame; pass it as the second argument for a
+scenario on a different street.
 """
 import math
 import sys
@@ -12,57 +20,73 @@ import rclpy
 from nav_msgs.msg import Odometry
 from autoware_perception_msgs.msg import PredictedObjects
 
+SELF_GHOST_RADIUS = 5.0  # m: anything closer than this is the ego's own body
+LANE_HALF_WIDTH = 4.0    # m: how far off the lane centre still counts as "in lane"
+
 
 def main():
     seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 150.0
+    lane_y = float(sys.argv[2]) if len(sys.argv) > 2 else -129.8
+
     rclpy.init()
     n = rclpy.create_node("perception_probe")
-
-    state = {"objects": 0, "frames": 0, "ego": None, "speed": 0.0,
-             "closest": None, "max_objects": 0}
+    state = {"ego": None, "speed": 0.0, "objs": [], "frames": 0,
+             "best_hit": None, "max_objs": 0, "t": 0.0}
 
     def on_objects(msg):
         state["frames"] += 1
-        state["objects"] = len(msg.objects)
-        state["max_objects"] = max(state["max_objects"], len(msg.objects))
+        state["max_objs"] = max(state["max_objs"], len(msg.objects))
+        out = []
+        for o in msg.objects:
+            p = o.kinematics.initial_pose_with_covariance.pose.position
+            v = o.kinematics.initial_twist_with_covariance.twist.linear
+            cls = o.classification[0].label if o.classification else -1
+            out.append((p.x, p.y, math.hypot(v.x, v.y), cls))
+        state["objs"] = out
+
         ego = state["ego"]
         if ego is None:
             return
-        best = None
-        for obj in msg.objects:
-            p = obj.kinematics.initial_pose_with_covariance.pose.position
-            d = math.hypot(p.x - ego[0], p.y - ego[1])
-            if best is None or d < best[0]:
-                best = (d, p.x, p.y)
-        state["closest"] = best
+        for (x, y, sp, _cls) in out:
+            d = math.hypot(x - ego[0], y - ego[1])
+            # The ego drives along -x on this map, so "ahead" is a smaller x.
+            if d > SELF_GHOST_RADIUS and x < ego[0] and abs(y - lane_y) < LANE_HALF_WIDTH:
+                if state["best_hit"] is None or d < state["best_hit"][0]:
+                    state["best_hit"] = (d, x, y, sp, state["t"])
 
     def on_odom(msg):
         p = msg.pose.pose.position
         v = msg.twist.twist.linear
         state["ego"] = (p.x, p.y)
-        state["speed"] = math.sqrt(v.x**2 + v.y**2)
+        state["speed"] = math.hypot(v.x, v.y)
 
     n.create_subscription(PredictedObjects, "/perception/object_recognition/objects",
                           on_objects, 1)
     n.create_subscription(Odometry, "/localization/kinematic_state", on_odom, 1)
 
-    end = time.time() + seconds
-    last = 0.0
     start = time.time()
+    end = start + seconds
+    last = -99.0
     while time.time() < end:
         rclpy.spin_once(n, timeout_sec=0.2)
         now = time.time() - start
-        if now - last >= 10.0:
+        state["t"] = now
+        if now - last >= 5.0:
             last = now
             ego = state["ego"]
-            where = f"ego({ego[0]:.1f}, {ego[1]:.1f})" if ego else "ego(?)"
-            closest = state["closest"]
-            near = (f"closest object {closest[0]:.1f} m at ({closest[1]:.1f}, {closest[2]:.1f})"
-                    if closest else "no objects")
-            print(f"t+{now:3.0f}s  {where}  {state['speed']:.1f} m/s  "
-                  f"tracked={state['objects']}  {near}", flush=True)
-    print(f"perception frames={state['frames']}  most objects seen at once="
-          f"{state['max_objects']}")
+            where = f"ego({ego[0]:7.1f},{ego[1]:7.1f})" if ego else "ego(      ?      )"
+            objs = " | ".join(f"({x:.1f},{y:.1f}) v={sp:.1f} c={cls}"
+                              for (x, y, sp, cls) in state["objs"]) or "none"
+            print(f"t+{now:3.0f}s {where} {state['speed']:4.1f} m/s  "
+                  f"n={len(state['objs'])}  {objs}", flush=True)
+
+    hit = state["best_hit"]
+    print(f"frames={state['frames']} max_objects={state['max_objs']}")
+    if hit:
+        print(f"BEST LANE HIT: {hit[0]:.1f} m ahead at ({hit[1]:.1f},{hit[2]:.1f}) "
+              f"speed {hit[3]:.1f} m/s, first seen t+{hit[4]:.0f}s")
+    else:
+        print("BEST LANE HIT: none -- no tracked object ahead of the ego in its lane")
     rclpy.shutdown()
 
 

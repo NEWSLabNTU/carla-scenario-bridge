@@ -70,12 +70,13 @@ Per-phase state:
   IMU-orphan server crash (csb destroys a vehicle's sensors first; real guard on the
   carla fork, branch `sensor-owner-guards`) and acb never noticing a despawn, because
   `Actor::IsAlive()` is client-side (acb `ab5dc67`).
-- **010 verified** — two-domain run works end to end: the background AV localizes,
+- **010 COMPLETE** — two-domain run works end to end: the background AV localizes,
   routes, engages and **arrives**, while the ego passes its own scenario in the same
   run (2026-08-12, on `scenarios/town01_two_av.xosc` — the short scenario does not give
-  the pilot's ~62 s cold start enough sim time). Open criterion: the ego perceiving the
-  background AV through its own sensors — they drive parallel streets today, so the
-  question has not been posed.
+  the pilot's ~62 s cold start enough sim time). The last criterion closed 2026-08-15:
+  with both AVs on lanelet 6583 the ego perceives the one ahead and **follows** it —
+  closes to 18 m, slows 3.9 -> 2.5 m/s, holds ~24 m, and still passes. Teardown of the
+  background AV is verified on both paths (next `Initialize`, and bridge shutdown).
 - **012 DONE and verified live** — this is the architecture the passing runs use.
 - **013 designed, largely unimplemented** — the deeper `managed_ego:=false` fork
   work. Run only after 007/010 close.
@@ -87,9 +88,9 @@ Per-phase state:
 1. **Rebuild the CARLA server from the fork** so `sensor-owner-guards` (the IMU
    null-owner guard) is actually in the running binary. csb's sensor-first teardown
    avoids the crash today, but only for actors csb destroys.
-2. **Ego perceives the background AV** — 010's last criterion. Put the bg AV on the
-   ego's own street (lanelet 6583, x 325.6 -> 101.4) ahead of it, and watch whether the
-   ego reacts as well as sees.
+2. **A second background AV** (domain 3). Two Autoware stacks leave the ego's LiDAR at
+   10 Hz on this host; a third is unmeasured, and running out shows up as a quiet crawl
+   rather than an error — check `ros2 topic hz` on the ego's LiDAR, not load average.
 3. **`just e2e`** — codify the bring-up + preflight gates (Startup complete,
    `change_to_stop` present, single `/clock`, no duplicate nodes) as one target.
 4. **005 upstreaming batch** — play_launch lost-load rescue and compound-parameter
