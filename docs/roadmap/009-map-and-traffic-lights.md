@@ -298,13 +298,43 @@ t+61s ego(153.2,-55.4) 3.8 m/s expect=1 rois=1 recognised[43856:UNKNOWN]
 Regulatory element 43856 is the one the scenario commands. The whole chain now runs:
 map -> projection -> ROI -> classifier -> fusion -> planning.
 
-**Open: the colour is UNKNOWN.** The classifier publishes on
-`.../classification/car/traffic_signals` and is fed an ROI every frame, but never returns
-a colour, so planning still has no state to obey and the two criteria stay unticked. The
-head is 0.451 m wide, which is a handful of pixels at 30-190 m; whether that is the whole
-story, or CARLA's rendering of a signal simply does not look like what a mobilenet trained
-on real Japanese signal heads expects, is the next thing to find out. Dumping
-`.../debug/rois` alongside the image is the way in.
+**Open: the colour is UNKNOWN, and the pictures say why.**
+`scripts/roi_capture.py` pairs each `detection/rois` message with the camera frame it
+refers to and writes the region the classifier is handed. The signal *is* in there and is
+unmistakably red to a human eye -- top bulb lit, lower two dark -- but it occupies only
+about a third of the crop, off to one side, with a palm tree and a fence taking the rest.
+The classifier resizes exactly that region to 224x224, so most of its input is scenery.
+
+The region is not mis-aimed, it is inflated, and by a knowable amount.
+`traffic_light_map_based_detector` pads its projection by a vibration margin of
+`sin(max_vibration_yaw/2) * depth + max_vibration_width/2` on each side. Those defaults
+(0.01745 rad, 0.5 m) are sized for a real vehicle's mount against a roughly 1 m signal
+head. Against CARLA's 0.451 m head:
+
+| depth | ROI width | head's share of the crop |
+|---|---|---|
+| 10 m | 1.13 m (2.5x the head) | 40% |
+| 30 m | 1.47 m (3.3x) | 31% |
+| 100 m | 2.70 m (6.0x) | 17% |
+| 190 m | 4.27 m (9.5x) | 11% |
+
+31% at 30 m is exactly what the captured crops show.
+
+The obvious fix is `use_high_accuracy_detection`, whose whole job is to find the real box
+inside that padding -- and **it makes things worse**. Turning it on rewires
+`detection/rois` to the fine detector's refined output, and that node does not stay up:
+the topic went from 529 non-empty messages in a run to zero, and the chain produced
+nothing at all. It is back off, with the reason recorded in the launch file. Two ways
+forward, neither tried: work out why the fine detector exits (the classifiers, loaded the
+same way, now survive), or shrink the vibration margins, which live in
+`<namespace>_traffic_light_map_based_detector.param.yaml` under autoware_launch's share
+and are neither writable nor overridable from acb's include -- the same wall the
+per-camera parameter file presented earlier.
+
+Worth noting about the scene itself: CARLA's default weather on this map is cloudiness 60,
+precipitation 40 and sun altitude 20 degrees. It is overcast and raining in every frame,
+which is not what a classifier trained on real daylight footage expects, and nothing sets
+the weather today.
 
 Three traps cost time here and are worth repeating. `ros2 node list` without `--no-daemon`
 reports nodes that are already gone. `pgrep -f classifier` matches the shell running the
