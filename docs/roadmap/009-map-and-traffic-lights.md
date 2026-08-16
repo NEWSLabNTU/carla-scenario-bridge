@@ -242,9 +242,41 @@ That is the stage which was dead before, and it stays alive for the whole 190 m.
 
 **Still open: classification.** `.../camera6/classification/traffic_signals` never
 publishes, and the fused `judged/traffic_signals` publishes empty groups, so no colour
-reaches planning and the two acceptance criteria stay unticked. The next thing to look at
-is the classifier itself rather than anything upstream of it -- it has a region of
-interest handed to it every frame and produces nothing from it.
+reaches planning and the two acceptance criteria stay unticked. Two distinct causes, one
+fixed:
+
+**Fixed -- the model directory has to be writable.** The classifier never loaded at all.
+Running it standalone shows why, and it is not what the composable-node loader reports:
+
+```
+[I] [TRT] Engine generation completed in 32.9556 seconds.
+[E] [TRT] Fail to open engine file
+[ERROR] Component constructor threw an exception: Failed to setup TensorRT engine
+```
+
+TensorRT builds the engine from the ONNX and then writes it *next to that file*. acb
+pointed `data_path` at the packaged `/opt/autoware/1.5.0/data`, which is root-owned, so
+the build succeeded and the write failed, the constructor threw, and the node never came
+up. Nothing downstream said a word: the rest of the pipeline runs and publishes empty
+results forever. Upstream's own default for `data_path` is `$HOME/autoware_data` for
+exactly this reason; acb now matches it, and `scripts/link_autoware_data.sh` mirrors the
+packaged tree there as real directories full of symlinks so engines are cached in a
+writable place instead of being rebuilt (33 s each) every launch. With that, both
+classifiers and the fine detector load and appear in the graph.
+
+**Open -- they do not stay up.** Having loaded, the classifier processes exit during the
+run: gone from `ros2 node list --no-daemon`, no process left, and no coredump, so a clean
+exit rather than a crash. Nothing subscribes to `/sensing/camera/camera6/image_raw` by
+the time the ego reaches the signal. Worth knowing before picking this up: play_launch
+runs each composable node as its own `component_node` process with a `--ready-fd`
+handshake, and it had already been logging *"ComponentEvent LOADED not received ... after
+10s -- falling back to service response"* for these three nodes back when the engine
+build made them slow. Whether that machinery is also what stops them is the next
+question.
+
+Two traps cost time here and are worth repeating. `ros2 node list` without `--no-daemon`
+reports nodes that are already gone. And `pgrep -f classifier` matches the shell running
+the pgrep, which makes zero surviving processes look like one.
 
 One practical note for whoever picks this up: several ego stacks in a row came up
 degraded during this work -- 88/89 composable nodes, or localization never publishing, or

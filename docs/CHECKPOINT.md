@@ -306,6 +306,15 @@ is already up. Nothing is known to require restarting the stack itself any more.
   signal arrays forever and the ego stops at every stop line for want of information.
   Only `camera6` and `camera7` have files, which is why acb's traffic-light camera is
   named camera6.
+- **Autoware's `data_path` must be writable.** TensorRT builds each engine from the ONNX
+  and writes it next to that file; pointed at the packaged root-owned directory the build
+  succeeds, the write fails with `[E] [TRT] Fail to open engine file`, the component
+  constructor throws, and the node silently never loads. Run acb's
+  `scripts/link_autoware_data.sh` to mirror the packaged tree into `$HOME/autoware_data`.
+  Engines then cache instead of costing 33 s per model per launch.
+- Camera topics carry the **optical** frame (`<ns>/camera_optical_link`), not the mounting
+  frame. Anything projecting 3D into the image reads that frame off the header and assumes
+  z forward; stamped with `camera_link` every projection lands behind the image plane.
 - Perception keeps publishing the *previous* run's object list for the first seconds
   after `Initialize`. A leftover object sitting on a new entity's coordinates reads as a
   detection 200 m away — reject any match beyond sensor range before believing it.
