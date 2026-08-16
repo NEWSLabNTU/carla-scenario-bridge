@@ -93,8 +93,15 @@ Per-phase state:
   `/sensing/camera/camera6/image_raw`. It still reports nothing, because every light in
   every town of the pack is a 3-14 cm stub at a fixed 135 deg bearing: sub-pixel at range
   and 45 deg outside `car_traffic_light_max_angle_range` on every approach. Not a GPU
-  problem, as previously assumed. Next: regenerate light geometry from CARLA's own
-  actors, or inject ground truth.
+  problem, as previously assumed.
+- **009 light geometry regenerated from CARLA (2026-08-16).**
+  `scripts/regenerate_light_geometry.py` rebuilds each linestring from
+  `TrafficLight.get_light_boxes()` with facing taken from the referencing lanelet:
+  36 of 36 on Town01, heads 0.451 x 1.221 m, facings spread across the compass. Plus a
+  fifth wiring defect — acb stamped camera topics with the mounting frame rather than
+  the optical one, so every projection landed behind the image plane. **Detection now
+  works**: the signal is projected and found in the image continuously from 195 m out to
+  7 m out. Classification is the last silent hop; the two criteria stay unticked.
 
 **Priority order for the next sessions:**
 

@@ -19,6 +19,7 @@ import time
 import rclpy
 from nav_msgs.msg import Odometry
 from autoware_perception_msgs.msg import TrafficLightGroupArray
+from tier4_perception_msgs.msg import TrafficLightRoiArray
 
 try:
     import carla
@@ -69,6 +70,38 @@ def main():
                           on_signals, 1)
     n.create_subscription(Odometry, "/localization/kinematic_state", on_odom, 1)
 
+    # The two stages before classification. `expect` is what the map-based detector
+    # projects into the image from the map alone; `rois` is what the fine detector
+    # actually found there. Which of the two is empty says whether the problem is the
+    # map's geometry or the image.
+    camera_ns = os.environ.get("TL_CAMERA_NS", "camera6")
+    g["expect"], g["rois"] = 0, 0
+    for key, topic in (("expect", f"/perception/traffic_light_recognition/{camera_ns}"
+                                  "/detection/expect/rois"),
+                       ("rois", f"/perception/traffic_light_recognition/{camera_ns}"
+                                "/detection/rois")):
+        n.create_subscription(
+            TrafficLightRoiArray, topic,
+            (lambda k: lambda m: g.__setitem__(k, len(m.rois)))(key), 1)
+
+    # And the two hops after classification, so a colour that is read but then dropped
+    # looks different from one that was never read.
+    g["classified"], g["judged"] = "-", "-"
+
+    def summarise(msg):
+        out = []
+        for grp in msg.traffic_light_groups:
+            out.append(f"{grp.traffic_light_group_id}:"
+                       + "/".join(COLOURS.get(e.color, f"?{e.color}") for e in grp.elements))
+        return ",".join(out) if out else "empty"
+
+    for key, topic in (("classified", f"/perception/traffic_light_recognition/{camera_ns}"
+                                      "/classification/traffic_signals"),
+                       ("judged", "/perception/traffic_light_recognition/judged/traffic_signals")):
+        n.create_subscription(
+            TrafficLightGroupArray, topic,
+            (lambda k: lambda m: g.__setitem__(k, summarise(m)))(key), 1)
+
     # What recognition reported, and the ego's slowest speed while it reported it.
     history = {}
     start = time.time()
@@ -95,8 +128,9 @@ def main():
         ego = g["ego"]
         where = f"ego({ego[0]:6.1f},{ego[1]:6.1f})" if ego else "ego(     ?      )"
         rec = "  ".join(f"{gid}:{'/'.join(c)}" for gid, c in sorted(g["groups"].items())) or "none"
-        print(f"t+{now:3.0f}s {where} {g['speed']:4.1f} m/s  recognised[{rec}]{truth}",
-              flush=True)
+        print(f"t+{now:3.0f}s {where} {g['speed']:4.1f} m/s  "
+              f"expect={g['expect']} rois={g['rois']} class[{g['classified']}] "
+              f"judged[{g['judged']}]  recognised[{rec}]{truth}", flush=True)
 
         for gid, cols in g["groups"].items():
             key = (gid, "/".join(cols))

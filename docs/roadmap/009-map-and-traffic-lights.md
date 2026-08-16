@@ -191,9 +191,65 @@ classifier can read. Note Town10 is *correctly tagged* and still has stub geomet
 this is not the same corruption as the missing type tags — it is what the converter emits.
 
 Recognition against this pack is therefore not a tuning problem. It needs either light
-geometry regenerated from CARLA's own `TrafficLight` actors (their `bounding_box` and
-transform give both width and facing) or the ground-truth injection path this work item
-allows for.
+geometry regenerated from CARLA's own `TrafficLight` actors or the ground-truth injection
+path this work item allows for.
+
+#### Geometry regenerated from CARLA (2026-08-16)
+
+`scripts/regenerate_light_geometry.py` takes the first option. CARLA's
+`TrafficLight.get_light_boxes()` returns the signal head in world coordinates -- centre,
+extent and rotation -- so width, height and mounting position are measured rather than
+guessed. Facing is *not* taken from CARLA: it comes from the map, as the travel direction
+of the lanelet that references the regulatory element, since that is the definition
+Autoware checks against. Travel direction is derived as centroid -> stop line rather than
+from boundary point order, which this pack does not store consistently.
+
+The contract, read out of `autoware_traffic_light_map_based_detector` and
+`traffic_light_utils` rather than assumed:
+
+| linestring | meaning |
+|---|---|
+| `front` | bottom-left corner of the head, as the driver sees it |
+| `back` | bottom-right corner |
+| way tag `height` | how far the head extends above those two points |
+| `atan2(back - front) + 90 deg` | the direction the head faces; must be within `car_traffic_light_max_angle_range` of the camera's view direction |
+
+Town01 after regeneration: 36 of 36 lights, heads 0.451 m wide and 1.221 m tall with
+their bottoms at 2.00 m, and facings spread across the compass (0, ±90, ±180, each within
+about 10 degrees) instead of all 36 claiming 135. The test signal 43763 now reads bar yaw
+90 deg, so it faces 180 deg -- exactly the westbound approach that drives at it.
+
+A fifth wiring defect surfaced immediately after: acb stamped its camera topics with the
+*mounting* frame, `camera6/camera_link`. Everything that projects a 3D point into an
+image assumes the REP-103 optical convention -- z forward, x right, y down -- and reads
+that frame off the header, so the detector's forward ray pointed at the sky and every
+projected point landed behind the image plane. Fixed in acb; the header now carries
+`camera6/camera_optical_link`.
+
+**With both fixes the projection works.** Across a full approach the map-based detector
+projects the signal and the fine detector finds it in the image, continuously from 195 m
+out to 7 m out:
+
+```
+t+ 20s ego( 297.4, -55.4)  3.8 m/s  expect=1 rois=1   <- 195 m from the signal
+t+ 53s ego( 173.3, -55.4)  3.8 m/s  expect=1 rois=1
+t+ 67s ego( 119.1, -55.4)  3.8 m/s  expect=1 rois=1
+t+ 71s ego( 107.9, -55.4)  1.7 m/s  expect=1 rois=1   <- braking for the stop line
+t+ 73s ego( 106.4, -55.4)  0.0 m/s  expect=0 rois=0   <- head now above the camera's FOV
+```
+
+That is the stage which was dead before, and it stays alive for the whole 190 m.
+
+**Still open: classification.** `.../camera6/classification/traffic_signals` never
+publishes, and the fused `judged/traffic_signals` publishes empty groups, so no colour
+reaches planning and the two acceptance criteria stay unticked. The next thing to look at
+is the classifier itself rather than anything upstream of it -- it has a region of
+interest handed to it every frame and produces nothing from it.
+
+One practical note for whoever picks this up: several ego stacks in a row came up
+degraded during this work -- 88/89 composable nodes, or localization never publishing, or
+the ego routed but never engaging. Restarting the stack cleared it every time. Check that
+the run under test actually drove before reading anything into a silent pipeline.
 
 ### Dead code (gap 6)
 
@@ -224,8 +280,9 @@ allows for.
 - [x] An SSv2-commanded red is red in CARLA; green is green
 - [x] Position matching resolves at least 80% of Town01 signal IDs automatically — **100%**
 - [x] Unmapped IDs warn without aborting
-- [ ] Autoware's traffic light recognition reports the state SSv2 commanded — **blocked
-      by the pack's stub light geometry**, not by wiring; see gap 7 above
+- [ ] Autoware's traffic light recognition reports the state SSv2 commanded — detection
+      now works end to end (the signal is projected from the map and found in the image
+      for a whole 190 m approach); **classification is the last silent hop**. See gap 7
 - [ ] Ego stops at an SSv2-commanded red in a full-stack run — **not earned.** The ego
       does stop at the stop line, with `behavior: traffic-signal` and 0.35 m to go, but it
       stops the same way whatever the light says: SSv2 turned the signal green in CARLA
