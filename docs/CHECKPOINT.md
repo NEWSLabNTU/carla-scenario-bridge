@@ -315,6 +315,14 @@ is already up. Nothing is known to require restarting the stack itself any more.
 - Camera topics carry the **optical** frame (`<ns>/camera_optical_link`), not the mounting
   frame. Anything projecting 3D into the image reads that frame off the header and assumes
   z forward; stamped with `camera_link` every projection lands behind the image plane.
+- **play_launch SIGKILLs a composable node whose constructor runs past its ready
+  timeout.** The default is 30 s; Autoware's traffic light classifier needs ~45 s even
+  with a cached TensorRT engine. The launch recipes export
+  `PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS=180000`. Symptom without it: three inference
+  nodes that never exist and a perception stage publishing empty results forever.
+- A composable node that throws in its constructor is reported by the loader only as a
+  missing LOADED event. Run it under `ros2 component standalone` with the same parameters
+  to see the actual exception.
 - Perception keeps publishing the *previous* run's object list for the first seconds
   after `Initialize`. A leftover object sitting on a new entity's coordinates reads as a
   detection 200 m away — reject any match beyond sensor range before believing it.

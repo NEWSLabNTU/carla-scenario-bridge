@@ -264,19 +264,53 @@ packaged tree there as real directories full of symlinks so engines are cached i
 writable place instead of being rebuilt (33 s each) every launch. With that, both
 classifiers and the fine detector load and appear in the graph.
 
-**Open -- they do not stay up.** Having loaded, the classifier processes exit during the
-run: gone from `ros2 node list --no-daemon`, no process left, and no coredump, so a clean
-exit rather than a crash. Nothing subscribes to `/sensing/camera/camera6/image_raw` by
-the time the ego reaches the signal. Worth knowing before picking this up: play_launch
-runs each composable node as its own `component_node` process with a `--ready-fd`
-handshake, and it had already been logging *"ComponentEvent LOADED not received ... after
-10s -- falling back to service response"* for these three nodes back when the engine
-build made them slow. Whether that machinery is also what stops them is the next
-question.
+**Fixed -- play_launch killed them for taking too long to construct.** play_launch forks a
+`component_node` process per composable node and waits on a ready pipe. That wait was a
+fixed 30 s, after which it sends SIGKILL
+(`play_launch_container/src/clone_isolated_component_manager.cpp`):
 
-Two traps cost time here and are worth repeating. `ros2 node list` without `--no-daemon`
-reports nodes that are already gone. And `pgrep -f classifier` matches the shell running
-the pgrep, which makes zero surviving processes look like one.
+```cpp
+constexpr int kReadyTimeoutMs = 30000;  // 30s matches LoadNode service timeout
+...
+if (!got_response || ready_buf.empty()) {
+  kill(child_pid, SIGKILL);
+  throw std::runtime_error("component_node did not respond (timeout or crash)");
+}
+```
+
+A constructor runs before the node can answer, and these constructors are slow: **33 s**
+to build the TensorRT engine on a cold cache, and **45 s** to construct even with the
+engine cached. So the child was killed seconds short of reporting ready, the LoadNode
+retry forked a fresh child that died identically, and all three inference nodes never
+existed. The 30 s also undercut play_launch's own `LoadTimings`, whose 60 s retry and
+600 s total budget name TensorRT loads as their reason but never get the chance to apply.
+
+Fixed in play_launch_container `480f5fc`: the budget is now
+`PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS`, default unchanged at 30 s. csb's launch recipes
+export 180000. With that, both classifiers and the fine detector stay up for the whole
+run, and the fused `traffic_signals` topic finally carries the commanded signal:
+
+```
+t+23s ego(300.5,-55.4) 3.9 m/s expect=1 rois=1 recognised[43856:UNKNOWN]
+t+61s ego(153.2,-55.4) 3.8 m/s expect=1 rois=1 recognised[43856:UNKNOWN]
+```
+
+Regulatory element 43856 is the one the scenario commands. The whole chain now runs:
+map -> projection -> ROI -> classifier -> fusion -> planning.
+
+**Open: the colour is UNKNOWN.** The classifier publishes on
+`.../classification/car/traffic_signals` and is fed an ROI every frame, but never returns
+a colour, so planning still has no state to obey and the two criteria stay unticked. The
+head is 0.451 m wide, which is a handful of pixels at 30-190 m; whether that is the whole
+story, or CARLA's rendering of a signal simply does not look like what a mobilenet trained
+on real Japanese signal heads expects, is the next thing to find out. Dumping
+`.../debug/rois` alongside the image is the way in.
+
+Three traps cost time here and are worth repeating. `ros2 node list` without `--no-daemon`
+reports nodes that are already gone. `pgrep -f classifier` matches the shell running the
+pgrep, so zero surviving processes read as one. And a composable node that dies in its
+constructor is reported by the loader only as a missing LOADED event -- run it under
+`ros2 component standalone` to see the real exception.
 
 One practical note for whoever picks this up: several ego stacks in a row came up
 degraded during this work -- 88/89 composable nodes, or localization never publishing, or

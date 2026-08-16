@@ -194,6 +194,13 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    # play_launch forks a process per composable node and SIGKILLs it if it has not
+    # reported ready within this window. The default is 30 s, and Autoware's traffic
+    # light classifier needs ~45 s to construct even with its TensorRT engine cached
+    # (~33 s of that is the engine build itself on a cold cache). At the default the
+    # three inference nodes were killed seconds before they would have reported, and
+    # the only symptom was a perception pipeline publishing empty results forever.
+    export PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS="${PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS:-180000}"
     # The ego and SSv2 share this domain; `just scenario` sets the same one. Not 0 --
     # see the ego_domain comment at the top of this file.
     export ROS_DOMAIN_ID={{ego_domain}}
@@ -259,6 +266,13 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
     # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain
     # 1000 in it is what keeps domain 1's unicast ports out of domain 0's range.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    # play_launch forks a process per composable node and SIGKILLs it if it has not
+    # reported ready within this window. The default is 30 s, and Autoware's traffic
+    # light classifier needs ~45 s to construct even with its TensorRT engine cached
+    # (~33 s of that is the engine build itself on a cold cache). At the default the
+    # three inference nodes were killed seconds before they would have reported, and
+    # the only symptom was a perception pipeline publishing empty results forever.
+    export PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS="${PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS:-180000}"
     export ROS_DOMAIN_ID={{domain}}
     # Off the ego stack's web port; the concealer's own default is 8082.
     export PLAY_LAUNCH_WEB_ADDR=0.0.0.0:{{web_port}}
@@ -286,6 +300,13 @@ scenario scenario_file:
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    # play_launch forks a process per composable node and SIGKILLs it if it has not
+    # reported ready within this window. The default is 30 s, and Autoware's traffic
+    # light classifier needs ~45 s to construct even with its TensorRT engine cached
+    # (~33 s of that is the engine build itself on a cold cache). At the default the
+    # three inference nodes were killed seconds before they would have reported, and
+    # the only symptom was a perception pipeline publishing empty results forever.
+    export PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS="${PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS:-180000}"
     # Must match `just ego-av`: the concealer reaches the ego over plain ROS, and a
     # scenario in another domain simply never finds it.
     export ROS_DOMAIN_ID={{ego_domain}}
@@ -303,6 +324,13 @@ e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc"):
     set -e
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    # play_launch forks a process per composable node and SIGKILLs it if it has not
+    # reported ready within this window. The default is 30 s, and Autoware's traffic
+    # light classifier needs ~45 s to construct even with its TensorRT engine cached
+    # (~33 s of that is the engine build itself on a cold cache). At the default the
+    # three inference nodes were killed seconds before they would have reported, and
+    # the only symptom was a perception pipeline publishing empty results forever.
+    export PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS="${PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS:-180000}"
     export ROS_DOMAIN_ID={{ego_domain}}
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         csb_launch demo.launch.xml \
