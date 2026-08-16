@@ -14,6 +14,10 @@ ego_domain := env_var_or_default('EGO_ROS_DOMAIN_ID', '1')
 data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
 project := justfile_directory()
 acb_src := justfile_directory() + '/src/autoware_carla_bridge'
+# Where Autoware's own setup.bash lives. The NEWSLabNTU 1.5.0 Debian installs under
+# /opt/autoware/1.5.0; other hosts install the same packages straight into the ROS
+# prefix (/opt/ros/humble). Override with AUTOWARE_SETUP when yours is elsewhere.
+autoware_setup := env_var_or_default('AUTOWARE_SETUP', '/opt/autoware/1.5.0/setup.bash')
 
 # List available recipes
 default:
@@ -187,7 +191,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # Three overlaid workspaces: base Autoware, then acb (acb_launch, sensor kit,
     # vehicle description, acb_bridge), then this one (csb_launch). The ego stack
     # resolves packages from all three.
-    source /opt/autoware/1.5.0/setup.bash
+    source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
@@ -260,7 +264,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
 bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name) goals=(project + "/scenarios/bg_av_1_poses.yaml"):
     #!/usr/bin/env bash
     set -e
-    source /opt/autoware/1.5.0/setup.bash
+    source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain
@@ -293,7 +297,7 @@ scenario scenario_file:
     set -e
     # SSv2 no longer launches Autoware, but the interpreter still resolves the
     # sensor/vehicle model description packages from the acb workspace.
-    source /opt/autoware/1.5.0/setup.bash
+    source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
