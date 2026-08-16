@@ -323,6 +323,11 @@ is already up. Nothing is known to require restarting the stack itself any more.
 - A composable node that throws in its constructor is reported by the loader only as a
   missing LOADED event. Run it under `ros2 component standalone` with the same parameters
   to see the actual exception.
+- **Nothing sets CARLA's weather**, and Town01's default is cloudiness 60, precipitation
+  40, sun altitude 20 — overcast and raining in every frame. `scripts/set_weather.py
+  ClearNoon` fixes it, and the setting persists in the server across runs. Worth doing
+  before any camera-based work; it will not fix traffic light classification, which fails
+  for other reasons.
 - Perception keeps publishing the *previous* run's object list for the first seconds
   after `Initialize`. A leftover object sitting on a new entity's coordinates reads as a
   detection 200 m away — reject any match beyond sensor range before believing it.

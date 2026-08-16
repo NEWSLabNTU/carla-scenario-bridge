@@ -331,10 +331,26 @@ same way, now survive), or shrink the vibration margins, which live in
 and are neither writable nor overridable from acb's include -- the same wall the
 per-camera parameter file presented earlier.
 
-Worth noting about the scene itself: CARLA's default weather on this map is cloudiness 60,
-precipitation 40 and sun altitude 20 degrees. It is overcast and raining in every frame,
-which is not what a classifier trained on real daylight footage expects, and nothing sets
-the weather today.
+**Daylight was tried and is not the answer.** CARLA's default on this map is cloudiness
+60, precipitation 40 and sun altitude 20 degrees -- overcast and raining in every frame
+of every run so far, which is not what a classifier trained on real daylight footage
+expects. `scripts/set_weather.py` sets a preset; ClearNoon takes it to cloudiness 5,
+precipitation 0, sun altitude 45.
+
+The captured regions improve enormously: bright, sharp, the head well framed with its top
+bulb plainly lit. Classification did not change. Keep the weather setting anyway -- there
+is no reason to test perception against a wet dusk by accident -- but the colour is not
+being lost to the lighting.
+
+What the runs point at instead is the classifier's own lifetime. Across consecutive runs
+on the same stack its output topic went from publishing at 9.6 Hz to not publishing at
+all, while `detection/rois` carried a region on every frame of a 120 m approach in both.
+It also once emitted an element for the right light (43763) carrying colour `18`, which
+is outside `tier4_perception_msgs/TrafficLightElement`'s enum entirely -- that field is a
+uint8 with 0..4 defined, and the label file has only 11 entries. Whether that is a stale
+message, a type mismatch on the wire, or the node publishing before it is initialised,
+it is the thread to pull. The composable-node ready timeout is fixed but something about
+these three nodes' lifetime still is not right.
 
 Three traps cost time here and are worth repeating. `ros2 node list` without `--no-daemon`
 reports nodes that are already gone. `pgrep -f classifier` matches the shell running the

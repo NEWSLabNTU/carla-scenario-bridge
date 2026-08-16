@@ -19,7 +19,7 @@ import time
 import rclpy
 from nav_msgs.msg import Odometry
 from autoware_perception_msgs.msg import TrafficLightGroupArray
-from tier4_perception_msgs.msg import TrafficLightRoiArray
+from tier4_perception_msgs.msg import TrafficLightArray, TrafficLightRoiArray
 
 try:
     import carla
@@ -89,18 +89,29 @@ def main():
     g["classified"], g["judged"] = "-", "-"
 
     def summarise(msg):
+        # The car classifier publishes TrafficLightArray (`signals`); the fused topics
+        # publish TrafficLightGroupArray (`traffic_light_groups`). Same question of both.
+        groups = getattr(msg, "traffic_light_groups", None)
+        if groups is None:
+            groups = getattr(msg, "signals", [])
         out = []
-        for grp in msg.traffic_light_groups:
-            out.append(f"{grp.traffic_light_group_id}:"
-                       + "/".join(COLOURS.get(e.color, f"?{e.color}") for e in grp.elements))
+        for grp in groups:
+            gid = getattr(grp, "traffic_light_group_id", getattr(grp, "traffic_light_id", "?"))
+            out.append(f"{gid}:" + "/".join(
+                COLOURS.get(e.color, f"?{e.color}") for e in grp.elements))
         return ",".join(out) if out else "empty"
 
-    for key, topic in (("classified", f"/perception/traffic_light_recognition/{camera_ns}"
-                                      "/classification/traffic_signals"),
-                       ("judged", "/perception/traffic_light_recognition/judged/traffic_signals")):
-        n.create_subscription(
-            TrafficLightGroupArray, topic,
-            (lambda k: lambda m: g.__setitem__(k, summarise(m)))(key), 1)
+    # The *car* classifier's own output. The merged `classification/traffic_signals` is a
+    # later stage; watching that one cannot tell "the classifier never ran" from "the
+    # classifier ran and something downstream dropped it".
+    n.create_subscription(
+        TrafficLightArray,
+        f"/perception/traffic_light_recognition/{camera_ns}/classification/car/traffic_signals",
+        lambda m: g.__setitem__("classified", summarise(m)), 1)
+    n.create_subscription(
+        TrafficLightGroupArray,
+        "/perception/traffic_light_recognition/judged/traffic_signals",
+        lambda m: g.__setitem__("judged", summarise(m)), 1)
 
     # What recognition reported, and the ego's slowest speed while it reported it.
     history = {}
