@@ -26,8 +26,20 @@ try:
 except ImportError:
     carla = None
 
-# autoware_perception_msgs/TrafficLightElement colour
+# autoware_perception_msgs/TrafficLightElement colour, used by the fused topics.
 COLOURS = {0: "UNKNOWN", 1: "RED", 2: "AMBER", 3: "GREEN", 4: "WHITE"}
+
+# tier4_perception_msgs/TrafficLightElement, used by the per-camera classifier, is a
+# DIFFERENT and flat enum: colours, shapes and statuses share one numbering and UNKNOWN
+# is 18, not 0. Decoding a classifier message with the table above prints "?18" for what
+# is simply an unknown light, which is exactly how an ordinary result gets mistaken for
+# a corrupt one.
+T4_ELEMENT = {
+    0: "UNKNOWN_0", 1: "RED", 2: "AMBER", 3: "GREEN", 4: "WHITE",
+    5: "CIRCLE", 6: "LEFT_ARROW", 7: "RIGHT_ARROW", 8: "UP_ARROW", 9: "UP_LEFT_ARROW",
+    10: "UP_RIGHT_ARROW", 11: "DOWN_ARROW", 12: "DOWN_LEFT_ARROW", 13: "DOWN_RIGHT_ARROW",
+    14: "CROSS", 15: "SOLID_OFF", 16: "SOLID_ON", 17: "FLASHING", 18: "UNKNOWN",
+}
 # CARLA's own enum, for the ground-truth column
 CARLA_STATES = {"Red": "RED", "Yellow": "AMBER", "Green": "GREEN", "Off": "OFF"}
 
@@ -92,13 +104,15 @@ def main():
         # The car classifier publishes TrafficLightArray (`signals`); the fused topics
         # publish TrafficLightGroupArray (`traffic_light_groups`). Same question of both.
         groups = getattr(msg, "traffic_light_groups", None)
-        if groups is None:
+        table = COLOURS
+        if groups is None:                      # tier4 TrafficLightArray, flat enum
             groups = getattr(msg, "signals", [])
+            table = T4_ELEMENT
         out = []
         for grp in groups:
             gid = getattr(grp, "traffic_light_group_id", getattr(grp, "traffic_light_id", "?"))
             out.append(f"{gid}:" + "/".join(
-                COLOURS.get(e.color, f"?{e.color}") for e in grp.elements))
+                table.get(e.color, f"?{e.color}") for e in grp.elements))
         return ",".join(out) if out else "empty"
 
     # The *car* classifier's own output. The merged `classification/traffic_signals` is a

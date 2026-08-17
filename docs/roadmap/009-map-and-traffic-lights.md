@@ -342,15 +342,55 @@ bulb plainly lit. Classification did not change. Keep the weather setting anyway
 is no reason to test perception against a wet dusk by accident -- but the colour is not
 being lost to the lighting.
 
-What the runs point at instead is the classifier's own lifetime. Across consecutive runs
-on the same stack its output topic went from publishing at 9.6 Hz to not publishing at
-all, while `detection/rois` carried a region on every frame of a 120 m approach in both.
-It also once emitted an element for the right light (43763) carrying colour `18`, which
-is outside `tier4_perception_msgs/TrafficLightElement`'s enum entirely -- that field is a
-uint8 with 0..4 defined, and the label file has only 11 entries. Whether that is a stale
-message, a type mismatch on the wire, or the node publishing before it is initialised,
-it is the thread to pull. The composable-node ready timeout is fixed but something about
-these three nodes' lifetime still is not right.
+#### The classifier was never silent, and it does read the light
+
+Two earlier readings in this document were wrong, both from probes rather than from the
+stack, and the correction is the actual finding.
+
+**"The classifier topic goes silent between runs" was a measurement artefact.** Counting
+messages directly over a full run:
+
+```
+rois=1868  non-empty=529
+classifier debug images (it ran this many times): 516
+classifier output messages: 1826, of which non-empty: 516
+```
+
+It fires on essentially every region it is given -- 516 of 529 -- and publishes
+throughout. Nothing goes silent.
+
+**"Colour 18 is outside the enum" was the wrong enum.** The per-camera classifier
+publishes `tier4_perception_msgs/TrafficLightElement`, and the *installed* definition is a
+single flat numbering shared by colour, shape and status in which **UNKNOWN is 18**:
+
+```
+RED=1 AMBER=2 GREEN=3 WHITE=4 CIRCLE=5 LEFT_ARROW=6 ... FLASHING=17 UNKNOWN=18
+```
+
+`autoware_perception_msgs`, which the fused topics use, numbers UNKNOWN as 0 instead.
+Decoding one with the other's table turns every ordinary unknown into an apparent
+corruption. `scripts/classifier_probe.py` and `traffic_light_probe.py` now carry both
+tables.
+
+Decoded properly, one run reads:
+
+| classifier output | count |
+|---|---|
+| RED circle | 13 |
+| AMBER circle | 23 |
+| GREEN arrow | 4 |
+| UNKNOWN | 480 |
+
+So the chain is complete and the classifier genuinely recognises CARLA's signal -- about
+7% of the time. The rest is UNKNOWN, which is what the fusion stage forwards, which is
+why planning has no state to obey. Note also that a commanded **red** comes back as AMBER
+more often than RED: CARLA renders its red bulb bright orange, and the classifier is not
+wrong to hesitate.
+
+That makes the remaining criteria a question of recognition *rate*, not of plumbing, and
+the two levers are the ones already measured: the region handed to the classifier is
+2.5-9.5x wider than the signal head, and CARLA's bulb colours are not the ones the model
+was trained on.
 
 Three traps cost time here and are worth repeating. `ros2 node list` without `--no-daemon`
 reports nodes that are already gone. `pgrep -f classifier` matches the shell running the

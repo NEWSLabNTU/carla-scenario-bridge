@@ -328,6 +328,11 @@ is already up. Nothing is known to require restarting the stack itself any more.
   ClearNoon` fixes it, and the setting persists in the server across runs. Worth doing
   before any camera-based work; it will not fix traffic light classification, which fails
   for other reasons.
+- **The two traffic-light message packages number their enums differently.**
+  `tier4_perception_msgs/TrafficLightElement` (per-camera classifier) is one flat
+  numbering where `UNKNOWN=18` and `CIRCLE=5`; `autoware_perception_msgs` (fused topics)
+  numbers `UNKNOWN=0`. Decode one with the other's table and every ordinary unknown looks
+  like a corrupt value.
 - Perception keeps publishing the *previous* run's object list for the first seconds
   after `Initialize`. A leftover object sitting on a new entity's coordinates reads as a
   detection 200 m away — reject any match beyond sensor range before believing it.
