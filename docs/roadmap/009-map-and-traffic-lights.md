@@ -387,10 +387,34 @@ why planning has no state to obey. Note also that a commanded **red** comes back
 more often than RED: CARLA renders its red bulb bright orange, and the classifier is not
 wrong to hesitate.
 
-That makes the remaining criteria a question of recognition *rate*, not of plumbing, and
-the two levers are the ones already measured: the region handed to the classifier is
-2.5-9.5x wider than the signal head, and CARLA's bulb colours are not the ones the model
-was trained on.
+That makes the remaining criteria a question of recognition *rate*, not of plumbing.
+
+#### Shrinking the vibration margins makes it worse, not better
+
+The region handed to the classifier is 2.5-9.5x wider than the signal head, entirely
+because of `traffic_light_map_based_detector`'s vibration padding, so cutting that padding
+looks like free accuracy. It was tried and the result is unambiguous:
+
+| margins | non-empty regions | non-empty classifier outputs |
+|---|---|---|
+| upstream (yaw 0.01745, width 0.5) | 529 | **516** |
+| shrunk (yaw 0.001, width 0.05) | 534 | **0** |
+
+Zero. The padding is load-bearing. A 0.451 m head subtends about 13 px at 30 m and 4 px
+at 100 m, so with the margins gone the region collapses to the head's true size and there
+is nothing left to resize into the classifier's 224x224 input; 4x7 px crops were captured.
+What looked like the classifier wasting its input on scenery is closer to the padding
+being the only reason the crop is large enough to read at all.
+
+The margins are back at upstream's defaults, with this recorded in the launch file so the
+idea is not retried from scratch. The lever that remains is the head's *apparent* size --
+a longer focal length on the traffic light camera, or a scenario that brings the ego
+closer before it needs the answer -- not the padding. Note the ego already stops 4 m short
+of the stop line, where the head is above the camera's field of view entirely, so
+"closer" has a hard limit here.
+
+The other lever is unchanged: a commanded red renders bright orange in CARLA and comes
+back as AMBER more often than RED.
 
 Three traps cost time here and are worth repeating. `ros2 node list` without `--no-daemon`
 reports nodes that are already gone. `pgrep -f classifier` matches the shell running the
