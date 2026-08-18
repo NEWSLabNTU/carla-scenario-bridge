@@ -84,7 +84,7 @@ background_avs:
 # it owns those stream sessions. Despawning the vehicle destroys the sensors with it, and a
 # sensor destroyed while still being listened to leaves that client retrying a dead stream
 # forever -- CARLA 0.9.16 answers at ~48,000 "Invalid session: no stream available with id
-# N" a second, which starves the simulation and eventually segfaults the server.
+# N" a second, until the server segfaults.
 #
 # Neither side can fix that alone: the listener cannot unsubscribe after the fact, and this
 # bridge cannot stop a stream it never subscribed to. So we announce first and wait briefly.

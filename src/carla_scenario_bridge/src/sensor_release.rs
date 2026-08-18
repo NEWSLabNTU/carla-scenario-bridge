@@ -10,7 +10,7 @@
 //! `Listen()`, so it owns their stream sessions, and destroying a sensor that is still
 //! listening leaves that client retrying a dead stream forever. CARLA 0.9.16 answers those
 //! retries at ~48,000 `Invalid session: no stream available with id N` a second -- 2.6 MB/s
-//! of log -- which starves the simulation and eventually segfaults the server.
+//! of log -- until the server segfaults.
 //!
 //! Neither side can fix this alone. The listener cannot unsubscribe after the fact
 //! (`Sensor::stop()` on a destroyed actor fails), and we cannot stop a stream we never
