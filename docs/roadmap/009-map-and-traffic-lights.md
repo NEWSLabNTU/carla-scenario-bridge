@@ -416,6 +416,43 @@ of the stop line, where the head is above the camera's field of view entirely, s
 The other lever is unchanged: a commanded red renders bright orange in CARLA and comes
 back as AMBER more often than RED.
 
+#### A commanded red read back, once (2026-08-19)
+
+The chain has now produced the right answer at least once. Same scenario, ClearNoon
+weather, margins at upstream defaults:
+
+```
+t+73s ego(223.2,-52.3) 0.0 m/s expect=1 rois=1 class[43763:UNKNOWN] judged[43856:RED]   recognised[43856:RED]   carla=REDx24
+t+47s ego(239.4,-55.8) 3.2 m/s expect=1 rois=1 class[43763:AMBER]   judged[43856:AMBER] recognised[43856:AMBER] carla=REDx24
+```
+
+SSv2 commanded that signal red, CARLA's own actor holds it red, and
+`/perception/traffic_light_recognition/traffic_signals` reported RED for regulatory
+element 43856 — the element the scenario addresses. Every hop in the chain is therefore
+sound. The count in the same run is the whole story of what is left: **1 RED, 2 AMBER,
+104 UNKNOWN**.
+
+Two things about that run are worth writing down, because both are counter-intuitive.
+
+**It produced the most regions ever measured, and it did so by failing.** The run logged
+2320 roi messages with **2113 non-empty**, against 529 in the best previous run. The
+reason is that the ego stalled at x=223 with the signal in clear view and sat there for
+about 150 s. A stationary ego staring down the road gets far more attempts than a 3.8 m/s
+drive-past does, and it is at close-to-zero speed that the fused topic finally settled on
+RED. That suggests the recognition rate is partly a *dwell* problem: the scenario gives
+the classifier a few seconds of usable range and then the ego is past.
+
+**The ego drove badly, and that is a separate open problem.** Speed swung between 0 and
+5.1 m/s instead of holding 3.8, and the ego drifted to y=-52.4 — outside its lane, whose
+bounds are -53.8 to -57.9 — before stopping 120 m short of the signal. Host load hit 23.7
+during the run. Until that is understood the second criterion cannot be earned, since the
+ego has to reach a red before it can stop at one.
+
+A previous run in the same session showed the opposite extreme, 9 non-empty regions in
+2019 messages, again explained by what the ego did rather than by perception. **Read the
+ego trace before reading anything into a recognition count**; `scripts/traffic_light_probe.py`
+prints both on one timeline for exactly this reason.
+
 Three traps cost time here and are worth repeating. `ros2 node list` without `--no-daemon`
 reports nodes that are already gone. `pgrep -f classifier` matches the shell running the
 pgrep, so zero surviving processes read as one. And a composable node that dies in its
@@ -456,9 +493,12 @@ the run under test actually drove before reading anything into a silent pipeline
 - [x] An SSv2-commanded red is red in CARLA; green is green
 - [x] Position matching resolves at least 80% of Town01 signal IDs automatically — **100%**
 - [x] Unmapped IDs warn without aborting
-- [ ] Autoware's traffic light recognition reports the state SSv2 commanded — detection
-      now works end to end (the signal is projected from the map and found in the image
-      for a whole 190 m approach); **classification is the last silent hop**. See gap 7
+- [~] Autoware's traffic light recognition reports the state SSv2 commanded —
+      **demonstrated once, end to end, and far too rarely to tick.** On 2026-08-19 the
+      fused topic reported RED for regulatory element 43856, the element the scenario
+      commands, while CARLA held that signal red. The whole chain therefore works: SSv2 →
+      csb → CARLA actor → camera → map projection → classifier → fusion. The rate is the
+      problem, not the wiring: **1 RED, 2 AMBER, 104 UNKNOWN** in that run. See gap 7
 - [ ] Ego stops at an SSv2-commanded red in a full-stack run — **not earned.** The ego
       does stop at the stop line, with `behavior: traffic-signal` and 0.35 m to go, but it
       stops the same way whatever the light says: SSv2 turned the signal green in CARLA
@@ -474,6 +514,11 @@ Signal matching resolved **36 of 36** Town01 signals, well past the 80% criterio
 drives 219 m west to a signal SSv2 holds red, and SSv2 turns it green at sim 150 s. It
 fails today, and it should keep failing until recognition works — it is the test, not a
 regression.
+
+Runs of it vary enormously and the variance is in the *ego*, not in perception: one run
+produced 2113 non-empty regions and a correct RED, the next produced 9 and nothing, and
+the difference each time was where the ego went and how long it lingered. Always read the
+ego trace alongside; a recognition count on its own means nothing.
 
 ## Still Open
 
