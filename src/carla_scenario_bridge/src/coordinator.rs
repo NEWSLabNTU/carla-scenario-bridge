@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::config::{BackgroundAv, BridgeConfig};
+use crate::config::{BackgroundAv, BridgeConfig, SensorReleaseConfig};
 use crate::map_resolver::{lanelet_map_file, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
@@ -338,6 +338,7 @@ use crate::entity_manager::{EntityManager, EntityType};
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs;
+use crate::sensor_release::SensorReleaseNotifier;
 
 /// What an `UpdateFrame` should do, given how far startup has progressed.
 ///
@@ -385,6 +386,12 @@ pub struct Coordinator {
     warned_unknown_entities: HashSet<String>,
     /// Whether `update_traffic_lights` has already logged its rejection. Same reason.
     warned_traffic_lights: bool,
+    /// Announces despawns to sensor bridges so they can stop listening first.
+    ///
+    /// `None` when disabled in config, or when the sockets could not be bound -- this is
+    /// an optimisation, and a scenario that cannot announce still runs (noisily). See
+    /// `sensor_release`.
+    sensor_release: Option<SensorReleaseNotifier>,
     /// Every CARLA actor this bridge created and has not confirmed destroyed.
     ///
     /// Deliberately separate from `EntityManager`, which is a name lookup that gets
@@ -432,6 +439,7 @@ impl Coordinator {
         config_dir: PathBuf,
         config: BridgeConfig,
     ) -> Self {
+        let config_for_release = config.sensor_release.clone();
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -449,6 +457,7 @@ impl Coordinator {
             has_ego: false,
             warned_unknown_entities: HashSet::new(),
             warned_traffic_lights: false,
+            sensor_release: Self::bind_sensor_release(&config_for_release),
             spawned_actors: SpawnLedger::default(),
             froze_traffic_lights: FreezeGuard::default(),
             consecutive_carla_failures: 0,
@@ -492,6 +501,42 @@ impl Coordinator {
         self.accel_history.remove(&actor_id);
     }
 
+    /// Bind the release channel, or explain why we are not using one.
+    fn bind_sensor_release(config: &SensorReleaseConfig) -> Option<SensorReleaseNotifier> {
+        if !config.enabled {
+            tracing::info!(
+                "Sensor release channel disabled by config; sensor bridges will not be \
+                 warned before a despawn"
+            );
+            return None;
+        }
+        match SensorReleaseNotifier::bind(
+            &config.notify_endpoint,
+            &config.ack_endpoint,
+            Duration::from_millis(config.timeout_ms),
+        ) {
+            Ok(notifier) => Some(notifier),
+            Err(e) => {
+                tracing::warn!(
+                    "Sensor release channel unavailable ({e:#}); despawns will destroy \
+                     sensors without warning their bridges, which costs a burst of CARLA \
+                     server log per teardown"
+                );
+                None
+            }
+        }
+    }
+
+    /// Give whoever attached sensors to `actor_id` a chance to stop them first.
+    ///
+    /// Must be called immediately before destroying the actor: the point is that the
+    /// sensors are still alive when their owner stops listening.
+    fn announce_release(&self, actor_id: u32, role_name: &str) {
+        if let Some(notifier) = &self.sensor_release {
+            notifier.release(actor_id, role_name);
+        }
+    }
+
     /// Destroy every actor this bridge created that is still alive.
     ///
     /// Best effort throughout: CARLA may already be gone, and an actor that has vanished on
@@ -501,10 +546,18 @@ impl Coordinator {
         // The ledger drives the loop; the world only supplies the destroyer. Split this way
         // so the bookkeeping half is reachable from a unit test, which a Coordinator (and
         // therefore a live CARLA world) is not.
+        // Disjoint field borrows: the ledger is taken mutably, the world and the release
+        // channel immutably.
         let world = &self.world;
-        let (report, destroyed) = self
-            .spawned_actors
-            .teardown(|actor_id| destroy_actor_in(world, actor_id));
+        let notifier = self.sensor_release.as_ref();
+        let (report, destroyed) = self.spawned_actors.teardown(|actor_id| {
+            // The ledger knows the actor id but not the role name; the notice carries "-"
+            // and the bridges match on the id, which is the key both sides always have.
+            if let Some(notifier) = notifier {
+                notifier.release(actor_id, "-");
+            }
+            destroy_actor_in(world, actor_id)
+        });
         for actor_id in destroyed {
             self.forget_actor_samples(actor_id);
         }
@@ -1415,6 +1468,13 @@ impl Coordinator {
                     let actors = self.world.actors().wrap_err("get actors")?;
                     match actors.find(actor_id).wrap_err("find actor")? {
                         Some(actor) => {
+                            // Warn whoever attached sensors to this vehicle, while those
+                            // sensors are still alive and they can still stop listening.
+                            // Destroying a sensor out from under its listener leaves that
+                            // client retrying a dead stream at ~48k errors/s. See
+                            // sensor_release.
+                            self.announce_release(actor_id, name);
+
                             // Sensors first: a despawn is where a vehicle most often leaves
                             // acb's sensors behind, and the server segfaults on the next
                             // tick of an IMU whose owner is gone.

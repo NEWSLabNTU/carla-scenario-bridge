@@ -5,6 +5,7 @@ mod entity_manager;
 mod lanelet_map;
 mod map_resolver;
 mod proto;
+mod sensor_release;
 mod traffic_light_mapper;
 mod zmq_server;
 

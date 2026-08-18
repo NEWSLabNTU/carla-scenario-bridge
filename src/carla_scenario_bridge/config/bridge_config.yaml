@@ -77,3 +77,25 @@ background_avs:
 #    goal_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}    # informational -- the pilot reads its
 #                                                     # own quaternion poses file, passed as
 #                                                     # goal_poses_file to background_av.launch.xml
+
+# Telling the sensor bridges before we despawn something.
+#
+# acb attaches sensors to the vehicles this bridge spawns and listens to their streams, so
+# it owns those stream sessions. Despawning the vehicle destroys the sensors with it, and a
+# sensor destroyed while still being listened to leaves that client retrying a dead stream
+# forever -- CARLA 0.9.16 answers at ~48,000 "Invalid session: no stream available with id
+# N" a second, which starves the simulation and eventually segfaults the server.
+#
+# Neither side can fix that alone: the listener cannot unsubscribe after the fact, and this
+# bridge cannot stop a stream it never subscribed to. So we announce first and wait briefly.
+# See src/autoware_carla_bridge/docs/issues/015-*.
+sensor_release:
+  enabled: true
+  # Ours to bind. Sensor bridges connect to these; acb takes the same two as ROS
+  # parameters (release_notify_endpoint, release_ack_endpoint).
+  notify_endpoint: "tcp://127.0.0.1:5556"
+  ack_endpoint: "tcp://127.0.0.1:5557"
+  # Paid once per despawned entity that nobody acknowledges -- an entity with no sensor
+  # bridge, which is every entity in a run with no Autoware. Long enough for a local round
+  # trip, short enough not to matter to a scenario.
+  timeout_ms: 300

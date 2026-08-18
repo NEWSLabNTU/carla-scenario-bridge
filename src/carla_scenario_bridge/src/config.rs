@@ -59,6 +59,39 @@ impl Default for Ssv2Config {
     }
 }
 
+/// Where to announce upcoming despawns, and how long to wait for sensor bridges to react.
+///
+/// A vehicle's sensors belong to whichever bridge attached them, and destroying one that
+/// is still being listened to leaves that client hammering a dead stream -- see
+/// `sensor_release`. Announcing first lets it stop cleanly.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct SensorReleaseConfig {
+    /// Set false to skip the announcement entirely (and pay the error storm).
+    pub enabled: bool,
+    /// Our PUB socket; sensor bridges SUB to it.
+    pub notify_endpoint: String,
+    /// Our PULL socket; sensor bridges PUSH acknowledgements to it.
+    pub ack_endpoint: String,
+    /// How long to wait for an acknowledgement before despawning anyway.
+    ///
+    /// Paid once per despawned entity that nobody acknowledges, so it trades scenario
+    /// latency against a burst of server log. 300 ms is far longer than a local round
+    /// trip and short enough not to matter to a scenario.
+    pub timeout_ms: u64,
+}
+
+impl Default for SensorReleaseConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            notify_endpoint: "tcp://127.0.0.1:5556".to_string(),
+            ack_endpoint: "tcp://127.0.0.1:5557".to_string(),
+            timeout_ms: 300,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct EgoConfig {
@@ -129,6 +162,8 @@ pub struct BridgeConfig {
     pub map_alias: HashMap<String, String>,
     /// Additional Autoware instances. Empty means a plain single-ego run.
     pub background_avs: Vec<BackgroundAv>,
+    /// Channel for telling sensor bridges to release their sensors before a despawn.
+    pub sensor_release: SensorReleaseConfig,
 }
 
 impl BridgeConfig {
