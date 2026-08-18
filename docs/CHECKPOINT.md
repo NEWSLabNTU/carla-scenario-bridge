@@ -288,6 +288,26 @@ is already up. Nothing is known to require restarting the stack itself any more.
   kills the wrapper. Match on comm, not args.
 - Destroying a vehicle with sensors still attached segfaults the server. Use
   `destroy_with_children()` in Rust, the sensor sweep in Python — see the rule above.
+- **`just scenario` does not exit after its verdict.** It writes
+  `/tmp/scenario_test_runner/result.junit.xml` and keeps its launch alive. A loop that
+  waits for "no scenario processes" before starting the next run therefore blocks
+  forever; kill the previous one yourself (`pkill -f "csb_launch
+  carla_scenario.launch.xml"`, then the `openscenario_*` comms). Starting a second run
+  while the first is still up is worse than waiting: the two interpreters both talk to
+  the adapter's single ZMQ REP socket and the new one blocks with `main of
+  openscenario_interpreter_node unresponsive`.
+- **`EGO_ROS_DOMAIN_ID` must be set on both `just ego-av` and `just scenario`.** The
+  concealer reaches the ego over plain ROS; a scenario in another domain never finds it
+  and fails on `change_to_stop … not ready after 180 seconds`. Useful when another agent
+  is on the host — pick a domain well clear of 1 and of the background-AV range.
+- **Anything measured between runs is a frozen snapshot.** `/clock` only advances while a
+  scenario runs, so every `use_sim_time` node's timers stop with it: diagnostics go
+  silent, the diagnostic-graph aggregator stops publishing, and
+  `/system/operation_mode/availability` holds its last value. Probes that land in that
+  window read as "everything has stalled" when nothing is wrong. Sample across a whole
+  run — `src/autoware_carla_bridge/scripts/trace_run.py` does this.
+- `grep -c` exits 1 when the count is zero, so `n=$(grep -c … || echo 0)` yields two
+  lines and breaks the next arithmetic. Use `| head -1`.
   This applies to throwaway scripts too; a sandbox script that skipped it cost a run.
 - A CARLA client's `Actor::IsAlive()` and `World::GetActor()` can both answer from the
   client's own registry, so neither notices an actor another client destroyed. Check
