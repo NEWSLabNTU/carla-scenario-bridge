@@ -8,12 +8,16 @@ members = [
 carla = "0.14.0"
 
 [patch.crates-io]
+# 68aef48 stops a sensor before destroying it in destroy_with_children: an orphaned
+# sensor stream makes 0.9.16 log "Invalid session: no stream available with id N" in a
+# hot loop (~10 MB/s), starving the simulation and eventually segfaulting the server.
+# See src/autoware_carla_bridge/docs/issues/015.
 # 2718365 pulls the carla-rust/0.9.16-3 prebuilt, whose libcarla contains the worker-thread
 # exception containment fix: LightManager RPC callbacks on the episode worker thread threw
 # uncaught TimeoutExceptions when CARLA died mid-run, terminating this process before its
 # reconnect logic could act. (Earlier: 575f6aa added Debug on generated enums and
 # *_from_ffi_ref accessors, which World::ground_projection needs.)
-carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "9596cde" }
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "68aef48" }
 
 [profile.dev-release]
 inherits = "release"
