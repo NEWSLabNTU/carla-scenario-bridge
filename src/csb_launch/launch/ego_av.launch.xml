@@ -35,6 +35,11 @@
   <arg name="vehicle_model" default="acb_vehicle" />
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
+  <!-- Whether acb reports the wheel angle it measured, or echoes the command.
+       Echoing (false, acb's default) leaves no actuator inside the loop MPC
+       closes, while the CARLA wheel measurably lags the command by ~0.5 s.
+       Exposed here so the two can be compared; see acb docs/issues/016. -->
+  <arg name="report_measured_steering" default="false" />
   <!-- clustering = CPU-only rule-based lidar detection. This host shares its GPU;
        CARLA takes what headroom there is and centerpoint's TensorRT engine does
        not fit beside it. -->
@@ -66,6 +71,7 @@
     <arg name="carla_port" value="$(var carla_port)" />
     <arg name="vehicle_name" value="$(var vehicle_name)" />
     <arg name="publish_clock" value="false" />
+    <arg name="report_measured_steering" value="$(var report_measured_steering)" />
   </include>
 
   <!-- 3. The tier4 external API adaptor. SSv2's concealer calls
