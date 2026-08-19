@@ -32,6 +32,10 @@
   <arg name="vehicle_name" default="hero" description="CARLA role_name of the ego vehicle" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
+  <!-- Whether the vehicle interface reports the measured front-wheel angle or echoes
+       the command. Exposed here so it can be A/B tested against lateral tracking
+       quality without editing acb; see acb docs/issues/009 and 016. -->
+  <arg name="report_measured_steering" default="false" />
   <arg name="vehicle_model" default="acb_vehicle" />
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
