@@ -92,3 +92,57 @@ cd - && git add src/<submodule> && git commit    # then
 
 Verify with `git submodule status` and confirm the SHA is reachable on the
 remote (e.g. `git ls-remote origin | grep <sha>`) before pushing the superproject.
+
+### Account for every process a run starts, and reap what it leaves
+
+A run starts a lot: one CARLA server, an ego stack of ~90 `component_node` processes, a
+scenario stack, and the bridge. Killing the `play_launch` that owns a stack does not
+always take its children with it, so repeated start/stop cycles silently accumulate
+orphans that hold ports and memory.
+
+Before a run, know what is already up:
+
+```bash
+# stacks, by web port -- 8081 is the scenario stack, 8082 the ego stack
+for p in $(pgrep -x play_launch); do tr '\0' ' ' < /proc/$p/cmdline | grep -oE 'web-addr [0-9.:]+'; done
+ps -eo pid,ppid,etimes,args --no-headers | grep -E "CarlaUE4-Linux|carla_scenario_bridge" | grep -v grep
+ss -lpn | grep 5555        # exactly one bridge should hold the SSv2 port
+```
+
+**Check the bridge's age against the run, not just that one exists.** A bridge left over
+from an earlier session keeps port 5555, so the freshly launched one cannot bind and dies
+-- while play_launch still reports `Startup complete: all nodes ready`. The scenario then
+runs against stale code with hours of accumulated entity state and nothing in the log says
+so. This has already confounded a measurement: every run in one session was served by a
+44-hour-old bridge from a previous session.
+
+After stopping a stack, reap what outlived it. Orphans show up as `ppid == 1`:
+
+```bash
+ps -eo pid,ppid,etimes,comm --no-headers | awk '$2==1 && ($4=="component_node" ||
+    $4=="add_two_ints_se" || $4=="zenohd" || $4=="carla_scenario_")'
+```
+
+Kill those by pid. Leave the CARLA server alone unless it is actually wedged -- it costs
+minutes to restart and one instance serves every run.
+
+### Never match your own command line with pkill
+
+`pkill -f ego_av` also matches the script that runs it, so a cleanup step kills its own
+harness mid-run. This has cost several runs. Match on the executable name and read the
+full command line from `/proc`, which cannot match the shell doing the matching:
+
+```bash
+for p in $(pgrep -x play_launch); do
+    tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q "8082" && kill "$p"
+done
+```
+
+For a process tree you started yourself, give it its own process group with `setsid` and
+signal the group, which needs no pattern at all:
+
+```bash
+setsid just scenario "$SCENARIO" > run.log 2>&1 &
+SPID=$!
+kill -TERM -$SPID        # the whole tree, and only that tree
+```
