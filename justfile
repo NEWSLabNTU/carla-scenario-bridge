@@ -292,8 +292,45 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
 
 # Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already
 # be up; SSv2 no longer launches Autoware)
+# Clear leftovers from a previous scenario run.
+#
+# An interrupted run -- Ctrl-C, a timeout, a killed harness -- can leave its interpreter
+# alive. It keeps the /simulation namespace and the simulator connection, so the *next*
+# run's interpreter starts, reports "all nodes ready", and then never initialises: the
+# adapter receives no requests, no ego is spawned, and the scenario hangs until its global
+# timeout with nothing in any log to explain it. That failure mode cost several hours before
+# it was tracked down, and the only visible hint was a duplicate `Address already in use` on
+# the web UI port.
+#
+# Matching is deliberately narrow. `carla_scenario.launch.xml` belongs to this recipe, so
+# `just ego-av` (ego_av.launch.xml, its own web port) is never touched -- killing the ego
+# stack here would be far worse than the problem being fixed.
+_clear-stale-scenario:
+    #!/usr/bin/env bash
+    set -u
+    stale=0
+    for pat in "carla_scenario.launch.xml" "openscenario_interpreter_node" \
+               "openscenario_preprocessor" "scenario_test_runner"; do
+        for pid in $(pgrep -f "$pat" 2>/dev/null || true); do
+            # Never the shell doing the killing, nor its parents: pgrep -f matches full
+            # command lines, and a shell's own line usually contains the pattern it was
+            # asked to search for.
+            [ "$pid" = "$$" ] && continue
+            [ "$pid" = "${PPID:-0}" ] && continue
+            cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
+            case "$cmd" in *just*|*pgrep*) continue ;; esac
+            kill -9 "$pid" 2>/dev/null && stale=$((stale + 1))
+        done
+    done
+    if [ "$stale" -gt 0 ]; then
+        echo "[scenario] cleared $stale stale process(es) from a previous run"
+        # ROS needs a moment to drop the old graph entries, or the new interpreter can
+        # still collide with a name that is on its way out.
+        sleep 3
+    fi
+
 # Usage: just scenario /path/to/scenario.xosc
-scenario scenario_file:
+scenario scenario_file: _clear-stale-scenario
     #!/usr/bin/env bash
     set -e
     # SSv2 no longer launches Autoware, but the interpreter still resolves the
