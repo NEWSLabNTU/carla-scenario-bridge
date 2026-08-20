@@ -399,7 +399,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 [[package]]
 name = "carla"
 version = "0.14.1"
-source = "git+https://github.com/jerry73204/carla-rust.git?rev=9596cde#9596cde600abccc02c02ea68fad00035ec37b4c8"
+source = "git+https://github.com/jerry73204/carla-rust.git?rev=68aef48#68aef480b95d6bf06c91a9e5f96dc329bd8a82e8"
 dependencies = [
  "anyhow",
  "autocxx",
@@ -423,7 +423,7 @@ dependencies = [
 [[package]]
 name = "carla-src"
 version = "0.12.1"
-source = "git+https://github.com/jerry73204/carla-rust.git?rev=9596cde#9596cde600abccc02c02ea68fad00035ec37b4c8"
+source = "git+https://github.com/jerry73204/carla-rust.git?rev=68aef48#68aef480b95d6bf06c91a9e5f96dc329bd8a82e8"
 dependencies = [
  "anyhow",
  "autotools",
@@ -447,7 +447,7 @@ dependencies = [
 [[package]]
 name = "carla-sys"
 version = "0.14.1"
-source = "git+https://github.com/jerry73204/carla-rust.git?rev=9596cde#9596cde600abccc02c02ea68fad00035ec37b4c8"
+source = "git+https://github.com/jerry73204/carla-rust.git?rev=68aef48#68aef480b95d6bf06c91a9e5f96dc329bd8a82e8"
 dependencies = [
  "anyhow",
  "autocxx",
@@ -3750,79 +3750,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
-
-[[patch.unused]]
-name = "action_msgs"
-version = "1.2.2"
-
-[[patch.unused]]
-name = "autoware_adapi_v1_msgs"
-version = "1.9.1"
-
-[[patch.unused]]
-name = "autoware_common_msgs"
-version = "1.11.0"
-
-[[patch.unused]]
-name = "autoware_control_msgs"
-version = "1.11.0"
-
-[[patch.unused]]
-name = "autoware_planning_msgs"
-version = "1.11.0"
-
-[[patch.unused]]
-name = "autoware_vehicle_msgs"
-version = "1.11.0"
-
-[[patch.unused]]
-name = "builtin_interfaces"
-version = "1.2.2"
-
-[[patch.unused]]
-name = "geographic_msgs"
-version = "1.0.6"
-
-[[patch.unused]]
-name = "geometry_msgs"
-version = "4.9.1"
-
-[[patch.unused]]
-name = "nav_msgs"
-version = "4.9.1"
-
-[[patch.unused]]
-name = "rcl_interfaces"
-version = "1.2.2"
-
-[[patch.unused]]
-name = "rmw_dds_common"
-version = "1.6.0"
-
-[[patch.unused]]
-name = "sensor_msgs"
-version = "4.9.1"
-
-[[patch.unused]]
-name = "shape_msgs"
-version = "4.9.1"
-
-[[patch.unused]]
-name = "std_msgs"
-version = "4.9.1"
-
-[[patch.unused]]
-name = "tf2_msgs"
-version = "0.25.20"
-
-[[patch.unused]]
-name = "tier4_control_msgs"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "tier4_vehicle_msgs"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "unique_identifier_msgs"
-version = "2.2.1"
