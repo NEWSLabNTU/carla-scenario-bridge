@@ -1,11 +1,18 @@
 use prost::Message;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::coordinator::Coordinator;
 use crate::proto::simulation_api_schema::{
     self as api, simulation_request, simulation_response, SimulationRequest, SimulationResponse,
 };
+
+/// How long the bridge waits for an SSv2 request before concluding the session is gone and
+/// giving CARLA back to itself. A running scenario steps at `step_time` (0.1 s by default),
+/// so ten seconds is two orders of magnitude beyond the normal gap and will not fire on a
+/// merely slow frame.
+const IDLE_BEFORE_ASYNC: Duration = Duration::from_secs(10);
 
 pub struct ZmqServer {
     socket: zmq::Socket,
@@ -27,13 +34,34 @@ impl ZmqServer {
     /// Run the server loop until shutdown is signaled.
     pub fn run(&mut self, shutdown: Arc<AtomicBool>) {
         tracing::info!("ZMQ server ready, waiting for SSv2 requests...");
+        let mut last_request = Instant::now();
 
         while !shutdown.load(Ordering::SeqCst) {
             // Poll with 100ms timeout so we can check shutdown
             let mut items = [self.socket.as_poll_item(zmq::POLLIN)];
             match zmq::poll(&mut items, 100) {
-                Ok(0) => continue, // timeout, no message
-                Ok(_) => {}        // message ready
+                Ok(0) => {
+                    // No request for a while, but CARLA is still held in synchronous mode:
+                    // the scenario ended or died without the bridge being told, so nothing
+                    // is ticking and the world is frozen. Every later run then meets a dead
+                    // world -- the ego spawns and cannot move, or SSv2 never gets as far as
+                    // Initialize. Hand sync mode back so CARLA runs on its own again.
+                    //
+                    // Safe to do unprompted: if the session is merely slow, the next frame
+                    // finds sync mode off and turns it back on (see decide_frame_action).
+                    if self.coordinator.sync_mode_enabled()
+                        && last_request.elapsed() > IDLE_BEFORE_ASYNC
+                    {
+                        tracing::warn!(
+                            "No SSv2 request for {:?} while CARLA is in synchronous mode; \
+                             restoring async so the world is not left frozen",
+                            IDLE_BEFORE_ASYNC
+                        );
+                        self.coordinator.restore_async_mode();
+                    }
+                    continue; // timeout, no message
+                }
+                Ok(_) => {} // message ready
                 Err(e) => {
                     if e == zmq::Error::EINTR {
                         continue; // interrupted by signal
@@ -51,6 +79,8 @@ impl ZmqServer {
                     continue;
                 }
             };
+
+            last_request = Instant::now();
 
             // Decode, dispatch, encode, send
             let response_bytes = self.dispatch(&msg);

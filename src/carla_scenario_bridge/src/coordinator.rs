@@ -1069,6 +1069,14 @@ impl Coordinator {
         }
     }
 
+    /// Whether this bridge currently holds CARLA in synchronous mode.
+    ///
+    /// The server loop uses this to notice a session that has gone away while sync mode is
+    /// still on, which leaves CARLA frozen with nobody ticking it.
+    pub fn sync_mode_enabled(&self) -> bool {
+        self.sync_mode_enabled
+    }
+
     /// Switch CARLA into synchronous mode at `self.step_time`.
     fn enable_sync_mode(&mut self) -> Result<()> {
         let mut settings = self.world.settings().wrap_err("get settings")?;
