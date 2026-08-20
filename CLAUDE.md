@@ -109,12 +109,20 @@ ps -eo pid,ppid,etimes,args --no-headers | grep -E "CarlaUE4-Linux|carla_scenari
 ss -lpn | grep 5555        # exactly one bridge should hold the SSv2 port
 ```
 
-**Check the bridge's age against the run, not just that one exists.** A bridge left over
-from an earlier session keeps port 5555, so the freshly launched one cannot bind and dies
--- while play_launch still reports `Startup complete: all nodes ready`. The scenario then
-runs against stale code with hours of accumulated entity state and nothing in the log says
-so. This has already confounded a measurement: every run in one session was served by a
-44-hour-old bridge from a previous session.
+**The bridge is not part of any launch file.** `carla_scenario.launch.xml` includes only
+SSv2's `scenario_test_runner`; the bridge is a separate long-lived process started by
+`just run`. Nothing restarts it between scenarios, so it routinely outlives the session
+that started it -- one was found still serving scenarios 44 hours later, running code from
+two rebuilds earlier. Killing it does not get a fresh one: it leaves no bridge at all, and
+every scenario then spawns no ego.
+
+So treat the bridge as a tracked singleton. Check its age against the current build before
+trusting a measurement, and after a rebuild restart it deliberately:
+
+```bash
+ps -eo pid,etimes,args --no-headers | grep carla_scenario_bridge | grep -v grep
+just run &      # the only thing that starts one
+```
 
 After stopping a stack, reap what outlived it. Orphans show up as `ppid == 1`:
 
