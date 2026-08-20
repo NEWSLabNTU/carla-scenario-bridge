@@ -22,12 +22,19 @@ const SPAWN_CLEARANCE: f32 = 0.3;
 /// treat as scenario-fatal. Half a second covers the bounce at any supported step time.
 const SETTLE_FRAMES: u32 = 15;
 
-/// Frames of raw CARLA acceleration averaged before reporting. PhysX delivers
-/// single-frame contact jolts (±10-17 m/s² for one 100 ms step: suspension contact,
-/// curb touches, brake grab) that no real accelerometer-and-consumer chain would see
-/// unfiltered. SSv2 validates reported acceleration against the scenario's declared
-/// performance bounds, so one such frame is scenario-fatal. A short moving average
-/// damps one-frame jolts while a genuine sustained braking profile passes through.
+/// Frames of raw CARLA acceleration combined before reporting. PhysX delivers
+/// single-frame contact jolts (suspension contact, curb touches, brake grab) that no real
+/// accelerometer-and-consumer chain would see unfiltered. SSv2 validates reported
+/// acceleration against the scenario's declared performance bounds, so one such frame is
+/// scenario-fatal.
+///
+/// The window is combined with a **median, not a mean**. A mean passes a fraction of every
+/// outlier through: averaging three frames leaves a third of a one-frame jolt in the
+/// reported value, which is how a 52 m/s² jolt was still reported as 17.5 and aborted a
+/// scenario against SSv2's ±15 bound. A median of three discards a single outlier
+/// outright, because two ordinary neighbours outvote it, while a genuine sustained profile
+/// -- two or more consecutive frames agreeing -- passes through unchanged. Same window,
+/// same latency, the filter that actually matches the noise.
 const ACCEL_SMOOTHING_FRAMES: usize = 3;
 
 /// Extra height added on each spawn retry after a collision.
@@ -310,6 +317,26 @@ fn spawn_height_above_ground(ground_z: f32) -> f32 {
 
 /// Acceleration along the entity's heading, in m/s².
 ///
+/// Median of up to [`ACCEL_SMOOTHING_FRAMES`] samples, used to reject PhysX's one-frame
+/// contact jolts (see that constant for why a mean will not do).
+///
+/// With an even count there is no middle sample, so the two straddling it are averaged --
+/// the usual definition. That only arises on the first frame after a spawn, before the
+/// window has filled; from then on the count is odd and one outlier is always outvoted.
+fn median_of(values: impl Iterator<Item = f64>) -> f64 {
+    let mut v: Vec<f64> = values.collect();
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = v.len() / 2;
+    if v.len() % 2 == 1 {
+        v[mid]
+    } else {
+        0.5 * (v[mid - 1] + v[mid])
+    }
+}
+
 /// SSv2's `linear_jerk` is a signed scalar, so the acceleration vector has to be reduced to
 /// one axis first. Projecting onto the heading keeps the sign that matters -- positive when
 /// speeding up, negative when braking -- which the vector magnitude would throw away.
@@ -2010,13 +2037,11 @@ impl Coordinator {
         if hist.len() > ACCEL_SMOOTHING_FRAMES {
             hist.pop_front();
         }
-        let n = hist.len() as f64;
-        let (ax, ay, az) = hist
-            .iter()
-            .fold((0.0, 0.0, 0.0), |(sx, sy, sz), (x, y, z)| {
-                (sx + x, sy + y, sz + z)
-            });
-        let (ax, ay, az) = (ax / n, ay / n, az / n);
+        let (ax, ay, az) = (
+            median_of(hist.iter().map(|(x, _, _)| *x)),
+            median_of(hist.iter().map(|(_, y, _)| *y)),
+            median_of(hist.iter().map(|(_, _, z)| *z)),
+        );
 
         // Longitudinal acceleration, then its rate of change. CARLA reports an acceleration
         // vector but no jerk, so it is differenced across frames -- see
@@ -2323,6 +2348,41 @@ mod tests {
     #[test]
     fn an_unprobed_fallback_is_not_assumed_to_work() {
         assert_eq!(choose_blueprint(false, None), BlueprintChoice::Neither);
+    }
+
+    /// The whole point of the median: one PhysX contact jolt must not reach SSv2. A mean
+    /// of three leaves a third of it in the reported value, which is how a 52 m/s2 jolt
+    /// was reported as 17.5 and aborted a scenario against SSv2's +-15 bound.
+    #[test]
+    fn a_single_frame_jolt_is_rejected() {
+        // Two ordinary frames either side of one contact jolt.
+        assert_eq!(median_of([-1.2, -52.6, -1.4].into_iter()), -1.4);
+        assert_eq!(median_of([0.5, 17.5, 0.6].into_iter()), 0.6);
+        // A mean would have passed a third of each through; check the gap is real.
+        let mean = (-1.2 + -52.6 + -1.4) / 3.0;
+        assert!(
+            mean < -18.0,
+            "mean of the same window is {mean}, well past SSv2's bound"
+        );
+    }
+
+    /// A real braking profile is not an outlier: once two frames agree, the median has to
+    /// follow them. Rejecting sustained deceleration would hide exactly what SSv2 is
+    /// validating.
+    #[test]
+    fn a_sustained_profile_passes_through() {
+        assert_eq!(median_of([-3.0, -3.2, -3.1].into_iter()), -3.1);
+        // Onset: two frames of braking outvote the one remaining quiet frame.
+        assert_eq!(median_of([0.0, -4.0, -4.2].into_iter()), -4.0);
+    }
+
+    /// Before the window fills there is no third sample to break the tie, so the even case
+    /// averages the two straddling the middle rather than inventing a preference.
+    #[test]
+    fn a_partial_window_still_reports_something_sane() {
+        assert_eq!(median_of([2.0].into_iter()), 2.0);
+        assert_eq!(median_of([2.0, 4.0].into_iter()), 3.0);
+        assert_eq!(median_of(std::iter::empty()), 0.0);
     }
 
     /// A pedestrian must not fall back to a car, nor a prop to a walker.
