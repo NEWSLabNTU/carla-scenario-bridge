@@ -41,16 +41,24 @@ competing with Autoware's EKF. It defaults off, so it is a footgun rather than a
 - [x] Distinguish "no tick within the timeout" from a transport `CarlaError`
 - [x] Only transport errors count toward the reconnect counter
 - [x] Waiting logs at a decreasing rate so a 120 s Autoware startup is not a log flood
-- [ ] The timeout is configurable and its default justified in a comment
+- [x] The timeout's default is justified in a comment; **configurability was declined** —
+      recorded below as a scope change rather than silently ticked off
 
 carla-rust turned out to model this precisely: `ConnectionError::Timeout` and
 `ConnectionError::Disconnected` are separate variants, so `classify_tick_error` maps the
 first to `TickOutcome::Idle` and everything else to `ConnectionLost`. Only the latter
 increments the failure counter. Idle periods log after ~2 s and then roughly every 30 s.
 
-The timeout is still the hardcoded 50 ms loop period. Making it configurable was not done —
-with idle no longer meaning disconnection the value stopped mattering much, and adding a
-parameter nothing needs is the kind of knob that ages badly.
+The timeout is still the hardcoded 50 ms loop period, and it now carries its reasoning in
+`main.rs` rather than only here (acb `66f6fd6`). A timeout used to decide whether CARLA was
+gone, which made it worth tuning, and 150 ms was far too short against SSv2's 120 s
+`initialize_duration`. Now that a timeout classifies as `TickOutcome::Idle` it decides
+nothing: it only sets how promptly a new frame is noticed — half a poll of latency, 25 ms
+against a 100 ms CARLA step — and how often the idle log ticks over.
+
+**The configurability half of this item was dropped on purpose.** A knob here would let
+someone tune a number that no longer affects robustness, which is how a parameter becomes a
+trap.
 
 ### Ego respawn (gap 11)
 
@@ -106,13 +114,21 @@ than hiding. Scenario-aborting failures gained their descriptions in phase 006.
 
 - [x] Unit: timeout classification — timeout does not increment the disconnect counter, a
       transport error does
-- [ ] Integration: a 120 s idle period with no frames does not trigger a reconnect
+- [x] Integration: a 120 s idle period with no frames does not trigger a reconnect —
+      live, 2026-08-20: CARLA forced into synchronous mode with nobody ticking it, so the
+      bridge genuinely received no frames for 150 s. Zero reconnect, disconnect or
+      connection-lost lines. The only output was five INFO lines, at 2 s, 30 s, 60 s, 90 s
+      and 120 s — "No CARLA frame for 120s; the simulation is paused" — which is the
+      decreasing-rate idle log doing exactly what it was built for.
 - [x] Integration: ego destroyed and respawned mid-run recovers without a bridge restart
       (live, 2026-08-10: despawn → sensor release → re-attach in under a second, repeatedly)
 
 ## Acceptance Criteria
 
-- [ ] A scenario with a long Autoware startup never logs a spurious CARLA reconnect
+- [x] A scenario with a long Autoware startup never logs a spurious CARLA reconnect —
+      live, 2026-08-20, same run: `acb_bridge` reached its main loop while the ego stack was
+      still bringing Autoware up, and stayed there through a startup running well past ten
+      minutes without a single reconnect line.
 - [x] Genuine CARLA loss is still detected and recovered from (acb side verified live
       through ten server OOM-kills on 2026-08-10; the csb bridge process can still wedge
       after a crash — fresh `Client::world()` times out in-process — restart the bridge,
@@ -125,6 +141,17 @@ than hiding. Scenario-aborting failures gained their descriptions in phase 006.
 - [x] Enabling `publish_direct_localization` warns about the conflict it creates
 - [x] `just test` passes
 
-The first three need a live run. The classification they depend on is unit-tested, but no
-Autoware has been restarted mid-run and no CARLA has been killed under a running bridge — the
-respawn path in particular has never executed.
+All acceptance criteria are now met. The idle classification was unit-tested first and has
+since been exercised live: 150 s of genuine no-frame idle produced no reconnect, and a long
+Autoware startup produced none either.
+
+One caveat worth keeping, because it changes how this is retested. Reaching a genuine
+no-frame state now takes deliberate setup: csb hands CARLA back to asynchronous mode when a
+session goes idle (the sync-mode watchdog, csb `d8a92d7`), and with CARLA free-running the
+bridge is never starved of frames. The test therefore forces synchronous mode by hand and
+ticks nothing. That is still the state the bridge meets during a real SSv2 pause — it is
+just no longer the state a crashed scenario leaves behind.
+
+Also fixed on the way through: `acb_bridge` did not compile at all, having read a
+`WheelPhysicsControl::position` field that the pinned carla-rust calls `offset` (acb
+`66f6fd6`). Nothing in this phase could have been verified live until that was repaired.

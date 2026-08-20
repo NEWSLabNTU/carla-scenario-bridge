@@ -59,6 +59,33 @@ enum SpawnKind {
     BackgroundAv,
 }
 
+/// Which blueprint a spawn should use once CARLA has been asked about them.
+///
+/// Separated from [`Coordinator::resolve_blueprint_key`] so the policy can be tested
+/// without a running server: `actor_builder` takes `&mut World` and needs a live CARLA,
+/// which would otherwise make the fallback and unknown-key paths untestable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlueprintChoice {
+    /// The requested key is a real CARLA blueprint; use it unchanged.
+    Requested,
+    /// The requested key is unknown but the kind's default works; warn and substitute.
+    Fallback,
+    /// Neither is usable, so the spawn cannot proceed.
+    Neither,
+}
+
+/// `fallback_exists` is only consulted when the requested key is missing, so callers that
+/// have not probed it may pass `None`.
+fn choose_blueprint(requested_exists: bool, fallback_exists: Option<bool>) -> BlueprintChoice {
+    if requested_exists {
+        return BlueprintChoice::Requested;
+    }
+    match fallback_exists {
+        Some(true) => BlueprintChoice::Fallback,
+        _ => BlueprintChoice::Neither,
+    }
+}
+
 impl SpawnKind {
     /// Blueprint used when the scenario's asset key does not name a CARLA blueprint.
     fn default_blueprint(self) -> &'static str {
@@ -1886,30 +1913,47 @@ impl Coordinator {
 
     /// Pick a blueprint that CARLA will actually accept, falling back when the requested
     /// one is unknown. Resolved once per spawn, before any retry.
+    ///
+    /// The decision itself is [`choose_blueprint`]; this only performs the probes, because
+    /// `actor_builder` needs a live server and the policy is worth testing without one.
     fn resolve_blueprint_key(&mut self, requested: &str, kind: SpawnKind) -> Result<String> {
         let fallback = kind.default_blueprint();
 
         // The probe builder is dropped at the end of this statement, releasing the borrow
         // on `world` before the next one is taken.
-        if self.world.actor_builder(requested).is_ok() {
-            return Ok(requested.to_string());
+        let requested_exists = self.world.actor_builder(requested).is_ok();
+
+        // Probing the fallback is a server round trip, so it only happens when the answer
+        // can matter -- hence `None` rather than a fabricated `false`.
+        let (fallback_exists, fallback_error) = if requested_exists {
+            (None, None)
+        } else {
+            match self.world.actor_builder(fallback) {
+                Ok(_) => (Some(true), None),
+                Err(e) => (Some(false), Some(e.to_string())),
+            }
+        };
+
+        match choose_blueprint(requested_exists, fallback_exists) {
+            BlueprintChoice::Requested => Ok(requested.to_string()),
+            BlueprintChoice::Fallback => {
+                // SSv2 asset keys are not CARLA blueprint names in general. Where they
+                // happen to coincide the branch above passes them straight through; where
+                // they do not, falling back to the kind's default keeps the scenario
+                // running with a warning naming both. A real asset-key mapping table is
+                // config-driven and lands with phase 010.
+                tracing::warn!(
+                    "Blueprint '{requested}' is not a CARLA blueprint; falling back to \
+                     '{fallback}' for this {}",
+                    kind.label()
+                );
+                Ok(fallback.to_string())
+            }
+            BlueprintChoice::Neither => {
+                let detail = fallback_error.unwrap_or_else(|| "unknown blueprint".to_string());
+                eyre::bail!("neither '{requested}' nor '{fallback}' is a valid blueprint: {detail}")
+            }
         }
-
-        // SSv2 asset keys are not CARLA blueprint names in general. Where they happen to
-        // coincide this passes straight through; where they do not, falling back to the
-        // kind's default keeps the scenario running with a warning naming both. A real
-        // asset-key mapping table is config-driven and lands with phase 010.
-        tracing::warn!(
-            "Blueprint '{requested}' is not a CARLA blueprint; falling back to '{fallback}' \
-             for this {}",
-            kind.label()
-        );
-
-        self.world.actor_builder(fallback).map_err(|e| {
-            eyre::eyre!("neither '{requested}' nor '{fallback}' is a valid blueprint: {e}")
-        })?;
-
-        Ok(fallback.to_string())
     }
 
     /// Build a configured actor builder for an already-resolved blueprint.
@@ -2093,10 +2137,6 @@ mod tests {
     use super::*;
 
     /// Regression guard for gap 1. Enabling sync mode at Initialize deadlocks startup:
-    /// acb_bridge polls for its vehicle and needs CARLA free-running, but in sync mode
-    /// nothing advances until this bridge ticks, and this bridge does not tick until
-    /// SSv2 sends a frame, which SSv2 will not do until the ego exists.
-    #[test]
     /// The scenario's timeline must not move when substeps change: SSv2 asks for a frame
     /// of `step_time` and gets exactly that, however many ticks it is delivered in.
     #[test]
@@ -2114,9 +2154,16 @@ mod tests {
     #[test]
     fn zero_substeps_is_treated_as_one() {
         let step = 0.1_f64;
-        assert_eq!(step / 0_u32.max(1) as f64, step);
+        // Through a binding, so this exercises the clamp rather than const-folding to
+        // `step / 1.0` before it ever runs -- which is what the literal form did.
+        let substeps: u32 = 0;
+        assert_eq!(step / substeps.max(1) as f64, step);
     }
 
+    /// acb_bridge polls for its vehicle and needs CARLA free-running, but in sync mode
+    /// nothing advances until this bridge ticks, and this bridge does not tick until
+    /// SSv2 sends a frame, which SSv2 will not do until the ego exists.
+    #[test]
     fn frames_before_the_ego_spawns_do_not_tick() {
         assert_eq!(
             decide_frame_action(false, false),
@@ -2229,6 +2276,53 @@ mod tests {
             SpawnKind::MiscObject.entity_type(),
             Some(EntityType::MiscObject)
         );
+    }
+
+    /// An SSv2 asset key that happens to name a real CARLA blueprint passes through
+    /// unchanged. This is the only path that preserves what the scenario actually asked
+    /// for, so a regression here silently substitutes a different vehicle.
+    #[test]
+    fn a_known_asset_key_is_used_as_is() {
+        assert_eq!(choose_blueprint(true, None), BlueprintChoice::Requested);
+        // Whatever the fallback looks like, a usable request wins.
+        assert_eq!(
+            choose_blueprint(true, Some(true)),
+            BlueprintChoice::Requested
+        );
+        assert_eq!(
+            choose_blueprint(true, Some(false)),
+            BlueprintChoice::Requested
+        );
+    }
+
+    /// SSv2 asset keys are not CARLA blueprint names in general, so the common case is a
+    /// key CARLA has never heard of. That must not abort the scenario while the kind's
+    /// default is available.
+    #[test]
+    fn an_unknown_asset_key_falls_back_to_the_kind_default() {
+        assert_eq!(
+            choose_blueprint(false, Some(true)),
+            BlueprintChoice::Fallback
+        );
+    }
+
+    /// With neither usable there is nothing to spawn, and the caller must fail rather than
+    /// invent a substitute -- a scenario that silently spawns the wrong kind of actor is
+    /// worse than one that stops.
+    #[test]
+    fn an_unknown_key_with_an_unusable_fallback_is_an_error() {
+        assert_eq!(
+            choose_blueprint(false, Some(false)),
+            BlueprintChoice::Neither
+        );
+    }
+
+    /// `None` means the fallback was never probed. That only happens when the request
+    /// succeeded, so reaching the fallback branch with `None` is a caller bug; treating it
+    /// as "no blueprint" fails loudly instead of substituting one that was never checked.
+    #[test]
+    fn an_unprobed_fallback_is_not_assumed_to_work() {
+        assert_eq!(choose_blueprint(false, None), BlueprintChoice::Neither);
     }
 
     /// A pedestrian must not fall back to a car, nor a prop to a walker.

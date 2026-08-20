@@ -105,7 +105,13 @@ coincide they pass through, otherwise the kind default applies with a warning na
 - [x] Unit: only the ego is physics-driven, and only the ego carries a `role_name`
 - [x] Unit: each kind maps to its `EntityType` and to a same-family fallback blueprint
 - [x] Unit: longitudinal projection keeps its sign; jerk is a rate and stays finite
-- [ ] Unit: asset key → blueprint resolution, including fallback and unknown-key paths
+- [x] Unit: asset key → blueprint resolution, including fallback and unknown-key paths —
+      the decision is now `choose_blueprint`, split out of `resolve_blueprint_key` so it can
+      be tested without a server: `actor_builder` takes `&mut World` and needs a live CARLA,
+      which is what made the fallback and unknown-key paths untestable. Four cases covered —
+      a key CARLA knows passes through unchanged, an unknown key falls back to the kind
+      default, an unknown key with an unusable fallback is an error rather than a silent
+      substitution, and an unprobed fallback is never assumed to work.
 - [x] Integration: spawned pedestrian appears in CARLA and tracks its commanded pose
       — probe, re-verified 2026-08-08
 - [x] Integration: spawned misc object appears and stays put — probe, 2026-08-08
