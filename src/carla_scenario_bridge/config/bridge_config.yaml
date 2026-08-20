@@ -99,3 +99,22 @@ sensor_release:
   # bridge, which is every entity in a run with no Autoware. Long enough for a local round
   # trip, short enough not to matter to a scenario.
   timeout_ms: 300
+
+# CARLA ticks per SSv2 frame. 1 (the default) is the historical behaviour: one tick per
+# frame at the step time SSv2 asks for, 0.1 s in practice.
+#
+# Raising this divides the CARLA time step and ticks that many times per frame, so the
+# scenario's timeline is unchanged while control commands are picked up more often. Autoware
+# publishes control at 20 Hz on its own clock and nothing synchronises it to the frame, so a
+# command waits up to a full step before it can take effect -- measured at ~200 ms end to
+# end, of which one tick is irreducible. At 2 substeps that worst-case wait halves.
+#
+# Costs, before turning it on:
+#   - sensors configured to publish per frame rather than on a timer fire twice as often.
+#     The ego LiDAR is one (sensor_tick: 0.0), so its point clouds double to 20 Hz. That
+#     suits the sensor -- rotation_frequency is 20 Hz, so each scan becomes exactly one
+#     rotation instead of two -- but it doubles the point cloud rate into Autoware.
+#   - physics runs at the finer delta: more accurate, more expensive.
+#
+# See src/autoware_carla_bridge/docs/issues/016 for the latency measurements.
+substeps: 1

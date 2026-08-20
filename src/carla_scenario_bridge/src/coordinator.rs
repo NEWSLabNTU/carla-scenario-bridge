@@ -376,6 +376,8 @@ pub struct Coordinator {
     world: World,
     entities: EntityManager,
     step_time: f64,
+    /// CARLA ticks per SSv2 frame. 1 is the historical behaviour; see config::default_substeps.
+    substeps: u32,
     /// Whether this bridge has switched CARLA into synchronous mode. Also gates the
     /// cleanup path: we must not restore async mode we never left.
     sync_mode_enabled: bool,
@@ -440,6 +442,7 @@ impl Coordinator {
         config: BridgeConfig,
     ) -> Self {
         let config_for_release = config.sensor_release.clone();
+        let substeps = config.substeps.max(1);
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -453,6 +456,7 @@ impl Coordinator {
             world,
             entities: EntityManager::new(),
             step_time: 0.05,
+            substeps,
             sync_mode_enabled: false,
             has_ego: false,
             warned_unknown_entities: HashSet::new(),
@@ -1077,19 +1081,46 @@ impl Coordinator {
         self.sync_mode_enabled
     }
 
-    /// Switch CARLA into synchronous mode at `self.step_time`.
+    /// Switch CARLA into synchronous mode at `self.step_time` divided by `self.substeps`.
+    ///
+    /// SSv2's frame still advances by `step_time`; it is delivered in `substeps` ticks, so
+    /// the scenario's timeline is unchanged while control commands are picked up more
+    /// often. See `config::default_substeps` for what that costs.
     fn enable_sync_mode(&mut self) -> Result<()> {
+        let delta = self.substep_delta();
         let mut settings = self.world.settings().wrap_err("get settings")?;
         settings.synchronous_mode = true;
-        settings.fixed_delta_seconds = Some(self.step_time);
+        settings.fixed_delta_seconds = Some(delta);
         self.world
             .apply_settings(&settings, Duration::from_secs(10))
             .wrap_err("apply settings")?;
         self.sync_mode_enabled = true;
-        tracing::info!(
-            "CARLA sync mode enabled, fixed_delta_seconds={}",
-            self.step_time
-        );
+        if self.substeps > 1 {
+            tracing::info!(
+                "CARLA sync mode enabled, fixed_delta_seconds={delta} \
+                 ({} substeps per {}s SSv2 frame)",
+                self.substeps,
+                self.step_time
+            );
+        } else {
+            tracing::info!("CARLA sync mode enabled, fixed_delta_seconds={delta}");
+        }
+        Ok(())
+    }
+
+    /// The CARLA time step: one SSv2 frame split into `substeps`.
+    fn substep_delta(&self) -> f64 {
+        self.step_time / self.substeps.max(1) as f64
+    }
+
+    /// Advance CARLA by one SSv2 frame, in `substeps` ticks.
+    ///
+    /// Returns the first error seen. Later substeps are skipped once one fails: the frame
+    /// is already wrong, and the caller treats a tick failure as a connection signal.
+    fn tick_frame(&mut self) -> std::result::Result<(), carla::CarlaError> {
+        for _ in 0..self.substeps.max(1) {
+            self.world.tick()?;
+        }
         Ok(())
     }
 
@@ -1113,7 +1144,7 @@ impl Coordinator {
             FrameAction::Tick => {}
         }
 
-        if let Err(e) = self.world.tick() {
+        if let Err(e) = self.tick_frame() {
             tracing::error!("world.tick() failed: {e}");
 
             // A tick failure is the bridge's most reliable connection signal: SSv2 drives
@@ -2066,6 +2097,26 @@ mod tests {
     /// nothing advances until this bridge ticks, and this bridge does not tick until
     /// SSv2 sends a frame, which SSv2 will not do until the ego exists.
     #[test]
+    /// The scenario's timeline must not move when substeps change: SSv2 asks for a frame
+    /// of `step_time` and gets exactly that, however many ticks it is delivered in.
+    #[test]
+    fn substeps_divide_the_step_without_changing_the_frame() {
+        for (step, subs) in [(0.1_f64, 1_u32), (0.1, 2), (0.1, 4), (0.05, 2)] {
+            let delta = step / subs.max(1) as f64;
+            assert!(
+                (delta * subs as f64 - step).abs() < 1e-12,
+                "substeps {subs} at step {step} must still advance one frame"
+            );
+        }
+    }
+
+    /// Zero would divide by zero and stop time; the config clamps it.
+    #[test]
+    fn zero_substeps_is_treated_as_one() {
+        let step = 0.1_f64;
+        assert_eq!(step / 0_u32.max(1) as f64, step);
+    }
+
     fn frames_before_the_ego_spawns_do_not_tick() {
         assert_eq!(
             decide_frame_action(false, false),

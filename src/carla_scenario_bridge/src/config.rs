@@ -164,6 +164,31 @@ pub struct BridgeConfig {
     pub background_avs: Vec<BackgroundAv>,
     /// Channel for telling sensor bridges to release their sensors before a despawn.
     pub sensor_release: SensorReleaseConfig,
+    /// How many CARLA ticks to run per SSv2 frame. See `default_substeps`.
+    #[serde(default = "default_substeps")]
+    pub substeps: u32,
+}
+
+/// One CARLA tick per SSv2 frame -- the historical behaviour.
+///
+/// SSv2 asks for a step time (0.1 s in practice) and the bridge ticks CARLA once per frame
+/// at that delta. A control command therefore waits up to a full 100 ms for the next tick
+/// before it can take effect, because Autoware publishes at 20 Hz on its own clock and
+/// nothing synchronises the two. Raising this divides the delta and ticks that many times
+/// per frame, so SSv2's timeline is untouched while control is picked up more often: at 2,
+/// the worst-case wait halves to 50 ms.
+///
+/// It is not free. Every tick fires the sensors that publish per frame rather than on a
+/// timer, and the ego LiDAR is configured that way (`sensor_tick: 0.0`), so its point
+/// clouds arrive twice as often. That happens to suit it -- `rotation_frequency` is 20 Hz
+/// against a 10 Hz frame, so today each scan sweeps two rotations and at 2 substeps it
+/// sweeps exactly one, which is what the config comment asks for -- but it doubles the
+/// point cloud rate into Autoware. Physics also runs at the finer delta, which is more
+/// accurate and more expensive.
+///
+/// Default 1 so nothing changes unless asked. See acb `docs/issues/016`.
+fn default_substeps() -> u32 {
+    1
 }
 
 impl BridgeConfig {
