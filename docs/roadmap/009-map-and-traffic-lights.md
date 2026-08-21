@@ -585,3 +585,82 @@ So the full chain works: lanelet way ID → position match → OpenDRIVE sign ID
 
 **Still open**: whether *Autoware* reacts to a commanded signal. That needs
 `use_traffic_light_recognition=true` and a camera, so it needs rendering — gap 7 stays open.
+
+## The classifier was never loaded, and size was never the problem (2026-08-21)
+
+Two things were wrong at once, and the first hid the second.
+
+### The inference nodes were being killed mid-construction
+
+A full 215 m drive past a commanded red produced regions of interest on 27 of 139 samples
+and not one colour. Nothing downstream reported an error. Broken out by stage:
+
+```
+  class[-]        139   the classifier published nothing at all -- not UNKNOWN, silent
+  judged[empty]   134   fusion running, empty list
+  rois=1           27   the detector tracked the signal from x=302 to x=202
+```
+
+The container had reported the car classifier, the pedestrian classifier and the fine
+detector "still constructing" at 90 s, 125 s and 160 s, then `LOAD_FAILED` for all three at
+exactly 180 s -- the value of `--load-total-budget`. 86 of 89 composables came up and the
+stack declared itself started, so the only symptom was a perception pipeline publishing
+empty results forever. That reads as a recognition-quality problem and had been chased as
+one. The budget is now 600, play_launch's own default (csb `627f20b`); load failures went
+from three to zero and the classifier publishes again.
+
+Note the mitigation that was supposed to cover this had quietly died:
+`PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS` is not read by play_launch 0.9.0 at all. It
+belonged to a locally patched build and was silently ignored once that build was replaced.
+
+### Region size is not the limiting factor
+
+This section has argued that the lever left is the head's apparent size -- "a 0.451 m head
+subtends about 13 px at 30 m and 4 px at 100 m" -- and therefore focal length or approach
+distance. Measured directly on two runs that drove the whole route with the classifier
+loaded, that is wrong. Every region the detector emits, with the classifier's verdict for
+the same signal on the same timeline:
+
+```
+  run 1: 542 regions, height min 22  median 30  max 445 px
+  run 3: 546 regions, height min 22  median 29  max 441 px
+
+    distance    n    median h px   verdicts (run 3)
+     0-20     237      49          UNKNOWN=213  AMBER=15
+    20-40     118      29          UNKNOWN=115  GREEN=2  AMBER=1
+    40-60     104      26          UNKNOWN=96   GREEN=6  AMBER=2
+    60-80      87      25          UNKNOWN=80   GREEN=4  AMBER=3
+```
+
+The regions are 22 to 445 px tall, not 4 to 13. At 0 to 20 m the median region is **49 px**
+and the classifier still answers UNKNOWN on 213 of 237. A crop that size is not what defeats
+a MobileNetV2. The 13 px figure was computed from the bare head; the regions carry the
+detector's padding, which is why shrinking that padding made things strictly worse.
+
+So the remaining question is not how many pixels but what is in them. The next measurement
+is the crops themselves -- `scripts/roi_capture.py` already writes them -- to see whether
+the region is centred on the light and what colour the bulb actually renders as. This
+section's own note that a commanded red renders bright orange and comes back as AMBER is
+still the best candidate, and AMBER does appear in every distance band.
+
+### Fusion drops a colour the classifier did get right
+
+Run 3 produced two correct REDs, and neither reached the fused topic:
+
+```
+t+28s ego(275.1,-55.4) 4.2 m/s expect=1 rois=1 class[43763:RED] judged[empty] recognised[none]
+t+73s ego(109.6,-55.4) 0.0 m/s expect=1 rois=1 class[43763:RED] judged[empty] recognised[none]
+```
+
+`judged[empty]` on 136 of 139 samples, including both RED samples. The classifier reports
+against way ID 43763 while the scenario and the fused output speak in regulatory element
+43856, so an unmapped ID is the obvious suspect. This is a separate defect from the
+UNKNOWN rate and it is worth fixing first: it is cheap to check, and until it is fixed a
+perfect classifier would still produce nothing.
+
+### Two notes on method
+
+Both driving runs came from **freshly restarted** ego stacks, because a stalled ego makes a
+recognition count meaningless. Run 2 of the three still came up NEVER_MOVED on a fresh
+stack, which is more evidence that a first run is a strong tendency and not immunity
+(see acb 016).
