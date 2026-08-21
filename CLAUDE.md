@@ -62,6 +62,24 @@ All launch commands use `play_launch launch` (with `--web-addr` for the web UI),
 ### Use just build
 Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).
 
+### Never build or check with bare cargo
+
+carla-rust exposes a **different API per CARLA version**, selected by the `CARLA_VERSION`
+environment variable that the justfile sets to 0.9.16. Under 0.9.x a wheel's position is
+`WheelPhysicsControl::position`; under 0.10 the same field is `offset`. A bare
+`cargo build` or `cargo check` does not set the variable, so cargo silently selects the
+0.10 API and reports correct 0.9.16 code as "no field `position`".
+
+That error is convincing and wrong, and acting on it has already changed a correct field
+access into a broken one and back again. If a build error names a missing field on a
+carla-rust type, check `CARLA_VERSION` before believing it:
+
+```bash
+just build          # sets CARLA_VERSION=0.9.16
+just check          # same, so clippy sees the API the build uses
+CARLA_VERSION=0.9.16 cargo check    # if you must call cargo directly
+```
+
 ### Keep the system setuptools
 `--symlink-install` makes colcon run `setup.py develop --editable`, which setuptools removed
 in v80. A pip-installed setuptools in `~/.local` shadows the apt one (`python3-setuptools`,

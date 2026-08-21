@@ -141,6 +141,13 @@ check:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
+    # carla-rust exposes a different API per CARLA version, selected by CARLA_VERSION:
+    # 0.9.x has WheelPhysicsControl::position, 0.10 has offset. Without this export
+    # clippy compiles against 0.10 while `just build` and `just run` compile against
+    # 0.9.16, so `just check` can pass on code the real build rejects -- and can reject
+    # code the real build accepts, which is how a correct field access was "fixed" into
+    # a broken one and back again.
+    export CARLA_VERSION={{carla_version}}
     cargo +nightly fmt --check
     cargo clippy --all-targets -- -D warnings
 
@@ -149,6 +156,8 @@ test:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
+    # Same reason as `check`: tests must compile against the CARLA API the build uses.
+    export CARLA_VERSION={{carla_version}}
     cargo nextest run --no-tests pass --no-fail-fast
 
 # Run CI checks: build, check (format + clippy), and tests
