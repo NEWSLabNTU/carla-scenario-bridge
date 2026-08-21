@@ -213,7 +213,6 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # (~33 s of that is the engine build itself on a cold cache). At the default the
     # three inference nodes were killed seconds before they would have reported, and
     # the only symptom was a perception pipeline publishing empty results forever.
-    export PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS="${PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS:-180000}"
     # The ego and SSv2 share this domain; `just scenario` sets the same one. Not 0 --
     # see the ego_domain comment at the top of this file.
     export ROS_DOMAIN_ID={{ego_domain}}
@@ -245,13 +244,27 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     # host) can push a container's first LoadNode reply past the 30 s default;
     # a timed-out load falls into play_launch's awaiting-ComponentEvent limbo
     # and the member stays "pending" forever, silently missing ADAPI services.
-    # --load-total-budget 180: also the threshold for play_launch's
-    # lost-load rescue (ListNodes re-verification of composables stuck
-    # "Loading" with no response), so a lost load self-heals in ~3 min.
+    # --load-total-budget 600: this is the per-composable budget while a container is
+    # busy, and it is what actually kills the traffic-light inference nodes. At 180 the
+    # car classifier, the pedestrian classifier and the fine detector were reported
+    # "still constructing" at 90 s, 125 s and 160 s and then LOAD_FAILED at exactly
+    # 180 s -- three of 89 composables missing, with the rest of the stack healthy.
+    #
+    # The symptom is not an error anywhere downstream. The map-based detector still
+    # publishes regions of interest, fusion still publishes, and the classifier simply
+    # never publishes at all: a full 215 m drive past a commanded red produced regions
+    # on 27 of 139 samples and not one colour, because the node that assigns colours was
+    # never loaded. play_launch's own help names this case -- "raise for containers whose
+    # composable ctors block for minutes (e.g. TensorRT engine builds)" -- and 600 is its
+    # default.
+    #
+    # The cost is that a genuinely lost load self-heals in ten minutes rather than three.
+    # That is the right trade here: a lost load is rare and visible, while a silently
+    # missing classifier looks like a perception problem and has cost days.
     # Not exec: the trap above has to survive to clean up the API adaptors.
     play_launch launch --parser python --web-addr 0.0.0.0:8082 \
         --load-node-timeout 120 \
-        --load-total-budget 180 \
+        --load-total-budget 600 \
         csb_launch ego_av.launch.xml \
         map_path:="{{map_path}}" \
         carla_port:={{carla_port}} \
@@ -286,7 +299,6 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
     # (~33 s of that is the engine build itself on a cold cache). At the default the
     # three inference nodes were killed seconds before they would have reported, and
     # the only symptom was a perception pipeline publishing empty results forever.
-    export PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS="${PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS:-180000}"
     export ROS_DOMAIN_ID={{domain}}
     # Off the ego stack's web port; the concealer's own default is 8082.
     export PLAY_LAUNCH_WEB_ADDR=0.0.0.0:{{web_port}}
@@ -357,7 +369,6 @@ scenario scenario_file: _clear-stale-scenario
     # (~33 s of that is the engine build itself on a cold cache). At the default the
     # three inference nodes were killed seconds before they would have reported, and
     # the only symptom was a perception pipeline publishing empty results forever.
-    export PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS="${PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS:-180000}"
     # Must match `just ego-av`: the concealer reaches the ego over plain ROS, and a
     # scenario in another domain simply never finds it.
     export ROS_DOMAIN_ID={{ego_domain}}
@@ -381,7 +392,6 @@ e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc"):
     # (~33 s of that is the engine build itself on a cold cache). At the default the
     # three inference nodes were killed seconds before they would have reported, and
     # the only symptom was a perception pipeline publishing empty results forever.
-    export PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS="${PLAY_LAUNCH_COMPONENT_READY_TIMEOUT_MS:-180000}"
     export ROS_DOMAIN_ID={{ego_domain}}
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         csb_launch demo.launch.xml \
