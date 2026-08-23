@@ -8,11 +8,24 @@ use crate::proto::simulation_api_schema::{
     self as api, simulation_request, simulation_response, SimulationRequest, SimulationResponse,
 };
 
-/// How long the bridge waits for an SSv2 request before concluding the session is gone and
-/// giving CARLA back to itself. A running scenario steps at `step_time` (0.1 s by default),
-/// so ten seconds is two orders of magnitude beyond the normal gap and will not fire on a
-/// merely slow frame.
-const IDLE_BEFORE_ASYNC: Duration = Duration::from_secs(10);
+/// How long the bridge waits, after the ego is gone, before giving CARLA back to itself.
+///
+/// With no ego there is no session left to be deterministic for, so this can be short. A
+/// running scenario steps at `step_time` (0.1 s by default), so ten seconds is two orders
+/// of magnitude beyond a normal gap.
+const IDLE_BEFORE_ASYNC_NO_EGO: Duration = Duration::from_secs(10);
+
+/// The same, but while an ego still exists -- a last resort for a scenario that died
+/// without despawning anything.
+///
+/// This one must not fire on a pause, because restoring async hands the world to
+/// free-running physics: `fixed_delta_seconds` stops governing the step and the
+/// simulation advances at whatever rate the host manages, which is precisely what
+/// synchronous mode exists to prevent. SSv2 pauses routinely and legitimately -- Autoware
+/// initialisation alone runs to `initialize_duration`, 120 s by default -- so this sits
+/// well beyond any pause the protocol can produce. A hard-killed scenario still
+/// self-heals, just in five minutes rather than ten seconds.
+const IDLE_BEFORE_ASYNC_WITH_EGO: Duration = Duration::from_secs(300);
 
 pub struct ZmqServer {
     socket: zmq::Socket,
@@ -49,13 +62,18 @@ impl ZmqServer {
                     //
                     // Safe to do unprompted: if the session is merely slow, the next frame
                     // finds sync mode off and turns it back on (see decide_frame_action).
-                    if self.coordinator.sync_mode_enabled()
-                        && last_request.elapsed() > IDLE_BEFORE_ASYNC
-                    {
+                    let limit = if self.coordinator.has_ego() {
+                        IDLE_BEFORE_ASYNC_WITH_EGO
+                    } else {
+                        IDLE_BEFORE_ASYNC_NO_EGO
+                    };
+                    if self.coordinator.sync_mode_enabled() && last_request.elapsed() > limit {
                         tracing::warn!(
-                            "No SSv2 request for {:?} while CARLA is in synchronous mode; \
-                             restoring async so the world is not left frozen",
-                            IDLE_BEFORE_ASYNC
+                            "No SSv2 request for {:?} while CARLA is in synchronous mode \
+                             (ego present: {}); restoring async so the world is not left \
+                             frozen",
+                            limit,
+                            self.coordinator.has_ego()
                         );
                         self.coordinator.restore_async_mode();
                     }

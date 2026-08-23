@@ -1127,6 +1127,13 @@ impl Coordinator {
         }
     }
 
+    /// Whether an ego exists in this session. The idle watchdog uses it to tell a
+    /// finished scenario from one that is merely paused: SSv2 pauses routinely, for
+    /// `initialize_duration` alone, and a pause with a live ego must keep sync mode.
+    pub fn has_ego(&self) -> bool {
+        self.has_ego
+    }
+
     /// Whether this bridge currently holds CARLA in synchronous mode.
     ///
     /// The server loop uses this to notice a session that has gone away while sync mode is
