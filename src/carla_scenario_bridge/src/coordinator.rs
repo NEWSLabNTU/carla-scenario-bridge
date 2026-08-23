@@ -1555,6 +1555,16 @@ impl Coordinator {
     pub fn despawn_entity(&mut self, req: api::DespawnEntityRequest) -> api::DespawnEntityResponse {
         let name = &req.name;
 
+        // Whether this despawn removes the ego, read before the entry goes away. `has_ego`
+        // gates synchronous mode and the idle watchdog's threshold, and it used to be
+        // cleared only at Initialize -- so after a scenario despawned its ego the bridge
+        // still believed one existed, and the watchdog waited out the long "a scenario may
+        // merely be paused" timeout when the short one applied.
+        let was_ego = matches!(
+            self.entities.get(name).map(|e| e.entity_type),
+            Some(EntityType::Ego)
+        );
+
         match self.entities.remove(name) {
             Some(actor_id) => {
                 // Report failure when the actor could not be destroyed. This used to warn
@@ -1596,6 +1606,9 @@ impl Coordinator {
                                  treating as already destroyed"
                             );
                         }
+                    }
+                    if was_ego {
+                        self.has_ego = false;
                     }
                     Ok(())
                 })();
