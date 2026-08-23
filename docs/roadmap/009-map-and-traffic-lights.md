@@ -664,3 +664,65 @@ Both driving runs came from **freshly restarted** ego stacks, because a stalled 
 recognition count meaningless. Run 2 of the three still came up NEVER_MOVED on a fresh
 stack, which is more evidence that a first run is a strong tendency and not immunity
 (see acb 016).
+
+## The converter node never started, and the ID mapping was never wrong (2026-08-24)
+
+The previous section blamed an ID mismatch: the classifier reports against way 43763 while
+the fused output speaks in regulatory element 43856. The map is fine. Checked directly:
+
+```
+relation 43856  type=regulatory_element  subtype=traffic_light
+  member way 43763  role=refers
+way 43763  type=traffic_light  subtype=red_redYellow_green_yellow  height=1.221
+```
+
+The node that performs that mapping simply was not running.
+`traffic_light_multi_camera_fusion` converts each camera's tier4 `TrafficLightArray` (way
+IDs) into an `autoware_perception_msgs/TrafficLightGroupArray` (regulatory element IDs) on
+`internal/traffic_signals`, which is the arbiter's only perception input. Measured on a
+live stack:
+
+```
+  camera6/classification/traffic_signals   Subscription count: 0   <- nobody consumed it
+  internal/traffic_signals                 Publisher count:    0   <- nothing produced it
+  traffic_light_multi_camera_fusion        not in the node list
+```
+
+It aborted at startup:
+
+```
+terminate called after throwing an instance of 'rclcpp::exceptions::InvalidTopicNameError'
+  what(): Invalid topic name: ''camera6'/detection/rois'
+```
+
+Its generated parameters read `camera_namespaces: ["'camera6'"]` -- the quotes are part of
+the string. acb declares `[camera6]` unquoted, and the same launch file under plain
+`ros2 launch` starts fine, so this was play_launch, not Autoware and not our config.
+
+**Root cause, fixed upstream** (play_launch `0e21ad8`): ROS launch writes node parameters to
+a temp file, play_launch's dumper `yaml.safe_load`s it -- so the value is a real Python list
+-- and then rendered it with `str()`. `str(['camera6'])` is `"['camera6']"`, and the quotes
+survive into the spawned node. Reproduced without Autoware in a six-line launch file, and
+fixed by using the same `dump_yaml` that every other parameter path in that dumper already
+uses. It also fixes booleans, which `str()` rendered as Python's `True` where ROS wants
+`true`.
+
+Verified end to end after the fix:
+
+```
+  fusion node crashes                      0    (was "Exited without code")
+  parameter                        - camera6    (was - "'camera6'")
+  traffic_light_multi_camera_fusion  RUNNING
+  internal/traffic_signals         Publisher count:    1   (was 0)
+  camera6/classification/...       Subscription count: 1   (was 0)
+```
+
+So the chain is wired for the first time: classifier to fusion to arbiter to estimator to
+`/perception/traffic_light_recognition/traffic_signals`. That also explains the two correct
+REDs recorded above -- they were real, and had nowhere to go.
+
+**Still unmeasured.** Two runs since the fix both had the ego spawn and never engage, so
+neither produced a recognition sample. That is the failure acb 016 tracks, not a perception
+problem, and 009's own rule applies: read the ego trace before reading a recognition count.
+The rate with the chain complete is the next thing to measure, and it needs a run that
+drives.
