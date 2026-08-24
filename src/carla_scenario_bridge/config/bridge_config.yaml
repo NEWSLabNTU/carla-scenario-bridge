@@ -100,8 +100,16 @@ sensor_release:
   # trip, short enough not to matter to a scenario.
   timeout_ms: 300
 
-# CARLA ticks per SSv2 frame. 1 (the default) is the historical behaviour: one tick per
-# frame at the step time SSv2 asks for, 0.1 s in practice.
+# CARLA ticks per SSv2 frame. 2 is the default: the SSv2 frame is delivered in two CARLA
+# ticks at half the step, so the scenario's timeline is unchanged while sensors and control
+# are serviced twice as often. Set to 1 for the historical one-tick-per-frame behaviour.
+#
+# Why 2. The ego IMU fires once per tick, so at a 0.1 s frame its samples sit 100 ms apart
+# against gyro_odometer's 0.2 s tolerance -- one dropped sample trips it, and the resulting
+# localization wobble is what made every run after a stack's first fail about half the time.
+# Interleaved A/B across five stacks: later runs pass 7 of 7 real drives at 2 against 2 of 10
+# at 1, with lateral tracking spread 0.016-0.135 against 0.211-1.564 and no overlap
+# (p = 0.003). See src/autoware_carla_bridge/docs/issues/016.
 #
 # Raising this divides the CARLA time step and ticks that many times per frame, so the
 # scenario's timeline is unchanged while control commands are picked up more often. Autoware
@@ -117,4 +125,4 @@ sensor_release:
 #   - physics runs at the finer delta: more accurate, more expensive.
 #
 # See src/autoware_carla_bridge/docs/issues/016 for the latency measurements.
-substeps: 1
+substeps: 2
