@@ -726,3 +726,51 @@ neither produced a recognition sample. That is the failure acb 016 tracks, not a
 problem, and 009's own rule applies: read the ego trace before reading a recognition count.
 The rate with the chain complete is the next thing to measure, and it needs a run that
 drives.
+
+## The chain runs end to end, and the rate is finally measurable (2026-08-24)
+
+With the fusion node starting, a run that drove the whole route produced this:
+
+```
+  ego: DROVE, x 320 -> 105.0, max heading error 7.9 deg, yaw ratio 0.896
+
+  class[43763:*]      110 empty   25 UNKNOWN   2 GREEN     (way ID, from the classifier)
+  judged[43856:*]     110 empty   25 UNKNOWN   2 GREEN     (regulatory element, after fusion)
+  recognised[43856:*] 112 none    25 UNKNOWN   2 GREEN     (the fused output)
+  traffic_signals frames: 4271                              (was 0)
+  regions: 27 of 139 samples
+```
+
+Every classifier verdict now reaches `/perception/traffic_light_recognition/traffic_signals`
+against regulatory element 43856, the element the scenario commands. The way-to-regulatory
+mapping was never the problem, as the map check above showed; the node that performs it was
+absent, and with it present the ids line up exactly.
+
+**So gap 7 reduces to classification quality, and here is the first honest measurement of
+it.** For a signal the scenario holds red, on a healthy stack with an ego that drove the
+full 215 m: **UNKNOWN 25, GREEN 2, RED 0.** Not a rate of correct answers -- zero correct
+answers, with the two confident ones being the opposite colour. That is consistent with
+this phase's earlier note that a commanded red renders bright orange in CARLA, and it makes
+the crops the next thing to look at: `scripts/roi_capture.py` already writes them.
+
+### A regression of mine that contaminated three runs
+
+Three runs before this one had the ego spawn and never move, and I attributed them to acb
+016. They were mine. play_launch `0e21ad8` (my change) replaced `str()` with YAML encoding
+for parameter values to stop Python's repr leaking into lists; it also caught strings, and
+`robot_description` is an entire URDF document. YAML-quoted and escaped, it reached
+`robot_state_publisher` as an empty document, that node aborted with "Error document
+empty", `/robot_description` never published, and acb_bridge sat for 1814 s printing
+"Still waiting for Autoware... Expecting /robot_description topic with URDF data". No
+sensors, localization stuck at UNINITIALIZED, no route, no trajectory, no control.
+
+Bisected by log across the run history: `urdf_fail=0` in every run through 2026-08-21,
+`urdf_fail=1` in every run from 2026-08-23, when that commit was installed. Fixed in
+play_launch `3edd599`: strings pass through verbatim, only non-strings go through YAML,
+which keeps both the list fix that started this and the bool fix that came with it.
+
+Worth remembering as a diagnostic pattern rather than a one-off. The symptom was an ego
+that would not move, which is 016's signature, and nothing in the ego stack's own logs said
+"no URDF" -- the failing node exits, play_launch reports one member down out of ninety, and
+the stack declares itself started. `acb_bridge`'s "Still waiting for Autoware" line, with
+what it is waiting **for**, is the thing that names the cause.
