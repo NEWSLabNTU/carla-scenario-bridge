@@ -32,10 +32,6 @@
   <arg name="vehicle_name" default="hero" description="CARLA role_name of the ego vehicle" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
-  <!-- Whether the vehicle interface reports the measured front-wheel angle or echoes
-       the command. Exposed here so it can be A/B tested against lateral tracking
-       quality without editing acb; see acb docs/issues/009 and 016. -->
-  <arg name="report_measured_steering" default="false" />
   <arg name="vehicle_model" default="acb_vehicle" />
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
@@ -44,6 +40,11 @@
        closes, while the CARLA wheel measurably lags the command by ~0.5 s.
        Exposed here so the two can be compared; see acb docs/issues/016. -->
   <arg name="report_measured_steering" default="false" />
+  <!-- Trim on the steering command. 1.0 is right for the blueprints measured so far; the
+       Ackermann inverse acb applies comes from physics_control, so a blueprint whose tyres
+       or steering curve differ from its geometry can still under- or over-steer against it.
+       Calibrate against measured wheel angles, not scenario outcomes. -->
+  <arg name="steering_multiplier" default="1.0" />
   <!-- clustering = CPU-only rule-based lidar detection. This host shares its GPU;
        CARLA takes what headroom there is and centerpoint's TensorRT engine does
        not fit beside it. -->
@@ -76,6 +77,7 @@
     <arg name="vehicle_name" value="$(var vehicle_name)" />
     <arg name="publish_clock" value="false" />
     <arg name="report_measured_steering" value="$(var report_measured_steering)" />
+    <arg name="steering_multiplier" value="$(var steering_multiplier)" />
   </include>
 
   <!-- 3. The tier4 external API adaptor. SSv2's concealer calls
