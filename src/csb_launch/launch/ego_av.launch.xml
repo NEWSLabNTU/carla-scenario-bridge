@@ -50,6 +50,8 @@
        false as well, or Autoware's own prediction node publishes the same topic. -->
   <arg name="publish_ground_truth_objects" default="false" />
   <arg name="ground_truth_range_m" default="100.0" />
+  <arg name="accel_map_path" default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv" />
+  <arg name="brake_map_path" default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv" />
   <!-- clustering = CPU-only rule-based lidar detection. This host shares its GPU;
        CARLA takes what headroom there is and centerpoint's TensorRT engine does
        not fit beside it. -->
@@ -85,6 +87,8 @@
     <arg name="steering_multiplier" value="$(var steering_multiplier)" />
     <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)" />
     <arg name="ground_truth_range_m" value="$(var ground_truth_range_m)" />
+    <arg name="accel_map_path" value="$(var accel_map_path)" />
+    <arg name="brake_map_path" value="$(var brake_map_path)" />
   </include>
 
   <!-- 3. The tier4 external API adaptor. SSv2's concealer calls
