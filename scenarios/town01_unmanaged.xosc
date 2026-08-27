@@ -1,0 +1,139 @@
+<?xml version="1.0"?>
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-08-16T00:00:00+00:00" description="Town01 ego stops at an SSv2-commanded red, then proceeds on green" revMajor="1" revMinor="2" />
+	<ParameterDeclarations />
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town01" />
+	</RoadNetwork>
+	<Entities>
+		<ScenarioObject name="ego">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="Autoware">
+					<Properties>
+						<Property name="maxJerk" value="1.5" />
+						<Property name="minJerk" value="-1.5" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+	</Entities>
+	<Storyboard>
+		<Init>
+			<Actions>
+				<GlobalAction>
+					<InfrastructureAction>
+						<TrafficSignalAction>
+							<TrafficSignalStateAction name="43763" state="red" />
+						</TrafficSignalAction>
+					</InfrastructureAction>
+				</GlobalAction>
+				<Private entityRef="ego">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="320.0" y="-55.9" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+			</Actions>
+		</Init>
+		<Story name="town01_traffic_light">
+			<Act name="drive_act">
+				<ManeuverGroup maximumExecutionCount="1" name="ego_maneuvers">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="ego" />
+					</Actors>
+					<Maneuver name="end_conditions">
+						<Event name="success" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="reach_goal" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="ego" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<ReachPositionCondition tolerance="6.0">
+													<Position>
+														<WorldPosition x="88.4" y="-100.0" z="0.0" h="0" p="0" r="0" />
+													</Position>
+												</ReachPositionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="timeout" priority="parallel">
+							<Action name="exit_failure">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="timeout_condition" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="300" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+					<Maneuver name="turn_green">
+						<Event name="green" priority="overwrite">
+							<Action name="set_green">
+								<GlobalAction>
+									<InfrastructureAction>
+										<TrafficSignalAction>
+											<TrafficSignalStateAction name="43763" state="green" />
+										</TrafficSignalAction>
+									</InfrastructureAction>
+								</GlobalAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="green_time" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="150" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>

@@ -102,8 +102,15 @@ inspection.
 
 ### Bridge and launch
 
-- [ ] Ego stack launch moves to its own domain: `publish_clock:=true`, pilot enabled, same
-      file as background AVs with different config
+- [x] Ego stack launch moves to its own domain: `publish_clock:=true`, pilot enabled —
+      `EGO_MANAGED=false just ego-av` puts the stack in `ego_unmanaged_domain` (3), runs
+      `acb_pilot`'s `auto_drive` with the same node and parameters `background_av.launch.xml`
+      uses, and publishes its own `/clock`. Verified live: nodes `/acb_bridge`,
+      `/auto_drive` and the ADAPI set are in domain 3, and `/clock` there has exactly one
+      publisher. Kept in `ego_av.launch.xml` behind a `managed` switch rather than merged
+      into the background AV file: the two have diverged by a dozen arguments (accel/brake
+      maps, ground-truth objects, steering trim, lidar model, occupancy grid, API adaptor)
+      and merging them is a refactor with its own regression risk, separable from this
 - [ ] Delete the ego-domain `publish_clock:=false` special case from launch and docs
 - [ ] Bridge-side readiness/engage reporting: pilot failures surface as bridge errors
       naming the pilot (carried over from the original 012 draft)
@@ -121,9 +128,17 @@ inspection.
 - [x] Fork unit/launch test: `managed_ego:=true` is stock behavior — live on the rebased
       pin: a default run engages and drives (x 320 → 105.6, yaw ratio 0.944), so the patch
       series is inert when the parameter is left alone
-- [ ] Integration: unmanaged run starts NPC logic without any Autoware in SSv2's domain
-- [ ] Integration: ego autonomy action in an unmanaged run fails fast, message names the
-      parameter
+- [ ] Integration: unmanaged run starts NPC logic without any Autoware in SSv2's domain —
+      **half verified.** SSv2's domain is clean: with the ego stack in domain 3, domain 1
+      contains only `/simulation/*` and play_launch's own node, no Autoware and no
+      `acb_bridge`. The storyboard side is blocked below
+- [x] Integration: ego autonomy action in an unmanaged run fails fast, message names the
+      parameter — verified twice on live runs. `town01_traffic_light.xosc` carries an ego
+      `AcquirePositionAction`, which reaches `requestAcquirePosition` → `requestClearRoute`
+      → `clearRoute`, and the run aborts with: *"clearRoute cannot be requested because the
+      ego vehicle is not managed by scenario_simulator_v2 (the parameter managed_ego:=false
+      was given)."* The ego is spawned and despawned within half a second rather than
+      driving somewhere the scenario did not intend
 - [ ] End-to-end: ego in its own domain localizes, routes via pilot, drives to
       `exitSuccess`; every domain has exactly one `/clock` publisher, none silenced
 
@@ -149,3 +164,36 @@ inspection.
 - **SSv2's wall-time `/clock` question** (012 verify item) becomes moot for the ego domain
   but should still be answered before deleting clock special cases — background domains
   already publish their own.
+
+## Blocker: an unmanaged ego never localizes (2026-08-28)
+
+The unmanaged path is wired end to end and stops one step short of driving. With
+`managed_ego:=false`, a scenario carrying no ego routing action
+(`scenarios/town01_unmanaged.xosc`) no longer aborts — but the ego never moves, and the
+pilot exits:
+
+```
+  [auto_drive]  Localization state: UNINITIALIZED (no fresh pose yet)   (x120, every 5 s)
+  [auto_drive]  Localization did not reach INITIALIZED with a live pose within 600s
+```
+
+**Why this is specific to unmanaged runs.** In a managed run the concealer supplies the
+initial pose: `EgoEntity` calls `initialize(getMapPose())` with the pose SSv2 teleported the
+ego to. Inert, it supplies nothing, and nothing else takes over. Background AVs do not hit
+this because their scenario is a pilot goal file and their stack has always come up this
+way; the ego is the first vehicle to lose an initializer it used to depend on.
+
+Not a missing node: `/localization/util/pose_initializer` and
+`/localization/util/default_adapi/helpers/autoware_automatic_pose_initializer` are both
+running in domain 3, and `acb_pilot` has a `_reinitialize_localization` that calls
+`/api/localization/initialize` with an empty pose to force a GNSS estimate. Something in
+that chain does not converge for the ego stack. The next measurement is whether the pilot
+ever issues that call and what the service answers, then whether GNSS is being published
+with a usable fix in domain 3.
+
+`scenarios/ego_poses.yaml` carries only `goal_pose`. `acb_pilot`'s format also accepts
+`initial_pose` (see `config/example_poses.yaml`), which is the obvious thing to try first:
+give the ego's spawn pose explicitly rather than expecting GNSS to find it.
+
+Until this is resolved the remaining integration and end-to-end items cannot be run, since
+all of them need an unmanaged ego that actually drives.
