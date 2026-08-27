@@ -302,10 +302,10 @@ it entered the AND in this graph version.
       turns into a slow, confusing failure. *Documented (ssv2-launch-configuration.md,
       launch-file comments); no mechanical enforcement yet — needs a live run to pick a
       readiness check that actually gates.*
-- [ ] Scenario-end semantics checked: with no child process, SSv2 cannot kill Autoware on
-      exit; the ego stack persists across scenario runs. Verify the concealer's
-      stop-state reset actually returns the reused Autoware to a re-engageable state for
-      the next scenario (this is the upstream-intended flow, but it has never run here)
+- [x] Scenario-end semantics checked: with no child process, SSv2 cannot kill Autoware on
+      exit; the ego stack persists across scenario runs. Verified by the consecutive-run
+      pair below — the stack survived run 1's end and run 2 engaged on it, so the
+      stop-state reset does return it to a re-engageable state
 
 ### Delete the fork machinery
 
@@ -334,9 +334,22 @@ it entered the AND in this graph version.
 
 ### Tests
 
-- [ ] Integration: scenario run with `launch_autoware:=false` against a pre-launched stack
-      reaches the storyboard (conditions evaluate; sim time is not NaN)
-- [ ] Integration: two consecutive scenario runs against the same ego stack both engage
+- [x] Integration: scenario run with `launch_autoware:=false` against a pre-launched stack
+      reaches the storyboard (conditions evaluate; sim time is not NaN) — live, 2026-08-28:
+      operation mode AUTONOMOUS with control enabled, routing SET, localization
+      INITIALIZED, 2921 `control_cmd` messages commanding up to +4.345 m/s, and 1561
+      trajectories of 35–170 points at 4.17 m/s with the ego never more than 0.5 m off
+      one. The concealer routed and engaged an Autoware it did not launch
+- [x] Integration: two consecutive scenario runs against the same ego stack both engage —
+      live, 2026-08-28, one stack, no restart between them:
+
+      ```
+        run 1  ego 320.0 -> 269.6  control_cmd 2921  traj 1561  engaged
+        run 2  ego 320.0 -> 105.3  control_cmd 1831  traj 1791  engaged, drove the route
+      ```
+
+      Both reached AUTONOMOUS with routing SET, so the reused Autoware re-engages without a
+      restart — the upstream-intended reuse flow, exercised here for the first time
 - [ ] End-to-end: single-ego scenario reaches `exitSuccess` with `ps` showing Autoware only
       under our launch files, none under SSv2
 - [ ] Regression guard: SSv2 submodule pin is reachable on upstream (no local commits)
