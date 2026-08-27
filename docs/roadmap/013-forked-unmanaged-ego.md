@@ -68,8 +68,20 @@ release it stays out of tree is rebase work.
 Implemented 2026-08-08 on branch `managed-ego` (pushed to NEWSLabNTU), three commits off
 `8d48252fc`: `658ee8ef2` (plumbing), `4cd134103` (inert FOA + fast-fail), `8ba99162c`
 (gate + EgoEntity). Compiled clean (colcon Release, ROS humble + Autoware 1.5.0:
-concealer, traffic_simulator, openscenario_interpreter and deps). The submodule pin stays
-on `8d48252fc` until 012 ships and this branch is verified live.
+concealer, traffic_simulator, openscenario_interpreter and deps).
+
+**Rebased and pinned 2026-08-28.** 012 shipped the un-fork, which removed the two
+`launch.hpp` commits this series sat on, so the three commits were rebased onto
+`carla-compat-unforked` as **`managed-ego-unforked`** (`9ca1e7cd`, pushed to NEWSLabNTU) and
+the submodule now pins it. The rebase was clean despite both series touching
+`field_operator_application.cpp`. The fork's whole diff against upstream 25.0.22 is now
+eight files, +182/-78, and `concealer/launch.hpp` is byte-identical — every carried patch is
+behavioural and offerable upstream, which is what 012's restated criterion asked for.
+
+Verified live on the new pin: a **stock** run (`managed_ego` defaulting to `true`) still
+engages and drives — `VERDICT=DROVE`, x 320 → 105.6, yaw ratio 0.944. That is the
+"`managed_ego:=true` is stock behavior" test, exercised end to end rather than by
+inspection.
 
 - [x] `managed_ego` parameter through `scenario_test_runner.launch.py` → interpreter →
       `EgoEntity`, defaulting to `true` (stock behavior byte-for-byte)
@@ -106,7 +118,9 @@ on `8d48252fc` until 012 ships and this branch is verified live.
 
 ### Tests
 
-- [ ] Fork unit/launch test: `managed_ego:=true` is stock behavior
+- [x] Fork unit/launch test: `managed_ego:=true` is stock behavior — live on the rebased
+      pin: a default run engages and drives (x 320 → 105.6, yaw ratio 0.944), so the patch
+      series is inert when the parameter is left alone
 - [ ] Integration: unmanaged run starts NPC logic without any Autoware in SSv2's domain
 - [ ] Integration: ego autonomy action in an unmanaged run fails fast, message names the
       parameter
