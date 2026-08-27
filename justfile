@@ -190,6 +190,17 @@ carla-stop:
 carla-status:
     systemctl --user status "carla-run-{{carla_port}}" || true
 
+# Measure a CARLA blueprint's geometry and print it as Autoware vehicle_info parameters.
+#
+# Pass --write to update acb_vehicle_description's vehicle_info.param.yaml, --list to see the
+# available blueprints. Refuses to run while CARLA is in synchronous mode, because settling a
+# spawned car there would steal the tick from a running scenario.
+#
+# Usage: just vehicle-params [blueprint] [args...]
+#        just vehicle-params vehicle.audi.etron --write
+vehicle-params blueprint="vehicle.tesla.model3" *args:
+    "{{acb_src}}/scripts/extract_vehicle_params.py" {{blueprint}} --port {{carla_port}} {{args}}
+
 # Report whether CARLA is fit to run a scenario against, and why if not.
 carla-health:
     "{{acb_src}}/scripts/carla_health.py" --port {{carla_port}}
