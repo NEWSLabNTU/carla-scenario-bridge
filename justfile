@@ -190,11 +190,31 @@ carla-stop:
 carla-status:
     systemctl --user status "carla-run-{{carla_port}}" || true
 
+# Report whether CARLA is fit to run a scenario against, and why if not.
+carla-health:
+    "{{acb_src}}/scripts/carla_health.py" --port {{carla_port}}
+
+# Refuse to start a run against a CARLA that is missing or wedged.
+#
+# `pgrep CarlaUE4` is not enough, and neither is counting actors: a healthy server in
+# synchronous mode reports zero actors to a client that has seen no tick, which reads exactly
+# like a wedged one. That mistake cost two unnecessary restarts and a bogus entry in
+# docs/issues/017. carla_health.py reads the mode first and only trusts the census where it
+# means something.
+_require-carla:
+    #!/usr/bin/env bash
+    set -e
+    if ! "{{acb_src}}/scripts/carla_health.py" --port {{carla_port}}; then
+        echo "[just] Refusing to start: a run against a dead or wedged CARLA produces a full"
+        echo "[just] set of logs and a verdict that means nothing. See docs/issues/017."
+        exit 1
+    fi
+
 # Launch the ego's Autoware + acb_bridge in SSv2's ROS domain (no domain override here:
 # SSv2's concealer needs plain ROS reachability). Long-lived: start it once, BEFORE any
 # `just scenario`, and reuse it across scenario runs.
 # Usage: just ego-av [map_path]
-ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
+ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carla
     #!/usr/bin/env bash
     set -e
     # Three overlaid workspaces: base Autoware, then acb (acb_launch, sensor kit,
@@ -287,7 +307,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
 # waits for a fresh pose that never arrives. See docs/CHECKPOINT.md.
 #
 # Usage: just bg-av [vehicle_name] [domain] [web_port]
-bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name) goals=(project + "/scenarios/bg_av_1_poses.yaml"):
+bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name) goals=(project + "/scenarios/bg_av_1_poses.yaml"): _require-carla
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
@@ -354,7 +374,7 @@ _clear-stale-scenario:
     fi
 
 # Usage: just scenario /path/to/scenario.xosc
-scenario scenario_file: _clear-stale-scenario
+scenario scenario_file: _require-carla _clear-stale-scenario
     #!/usr/bin/env bash
     set -e
     # SSv2 no longer launches Autoware, but the interpreter still resolves the
