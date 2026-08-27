@@ -819,3 +819,54 @@ rather than guessing at a mounting change.
 RED 1, UNKNOWN 25, none 115. The single RED arrived at the moment it mattered, which is
 luck rather than reliability, and the stop is still mostly the traffic-signal module being
 conservative about a signal it has no confident state for.
+
+## Correction: it is the angle gate, not the field of view (2026-08-28)
+
+The section above concluded that the ego cannot see the light it waits at because the head
+is outside the camera's field of view, and this phase said the same earlier ("head now
+above the camera's FOV"). Measured, that is wrong.
+
+**The field of view is fine.** Camera6 sits at base_link + (0.9, 0, 2.0) with 0.86 deg of
+downward pitch -- acb resolves the mount from the sensor kit TF, where camera6 is at
+`sensor_kit_base_link` and `sensors_calibration.yaml` places that on the vehicle. Its
+74.5 deg horizontal FOV at 1280x720 is 46.3 deg vertical, so the half-angle is 23.2 deg.
+CARLA's own light boxes put the head top at z = 3.22 m, which from the stop pose is
+
+```
+  distance 2.7 m   head top 3.22 m   elevation +23.1 deg   half-FOV 23.2 deg
+```
+
+Inside, by a tenth of a degree. Marginal, but not the explanation.
+
+**What actually rejects the signal is `car_traffic_light_max_angle_range: 40.0`**, from
+camera6's map-based-detector parameter file. The detector skips a signal the ego is viewing
+from too far off its facing. Using the commanded signal's own map geometry -- way 43763,
+midpoint (103.0, -53.1) -- against the poses where projection was observed to work and to
+fail:
+
+```
+                 approach angles              at the stop (3.3 m)
+  facing   0 deg  1, 1, 4, 23 deg  (all <40)   45.0 deg  -> outside the gate
+  facing 180 deg  179, 176, 157 deg            135.0 deg -> would never project at all
+```
+
+Only the first is consistent with what the runs did: `expect=1` all the way down the
+approach and `expect=0` once stopped. The ego ends up 2.3 m short of the light and 2.3 m to
+its side, and that geometry is 45 deg off the facing -- five degrees past the limit.
+
+So the criterion is blocked by where the ego stops relative to the signal, not by the
+camera. Three ways out, in increasing order of honesty about what is being tested:
+
+* raise `car_traffic_light_max_angle_range` for this camera (45 deg would clear it, 60 deg
+  with margin) -- a one-line parameter change, and the quickest way to see the ego resume
+  on green;
+* stop further back, which is what a real stop line does: the angle falls to about 13 deg
+  at 10 m, so any stop line placed properly makes this a non-issue;
+* place the signal where the lane actually needs it, since 2.3 m of lateral offset at 2.3 m
+  of range is what makes the angle large in the first place.
+
+**A note on the facing convention.** `scripts/regenerate_light_geometry.py` documents the
+facing as `atan2(back - front) + 90 deg`, but the behaviour above only matches `- 90 deg`.
+Whichever the script writes, the detector's effective interpretation is the one that
+reproduces the observations, and that is a signal facing +x -- into the oncoming lane, as
+it should. Worth resolving before anyone regenerates the geometry again.
