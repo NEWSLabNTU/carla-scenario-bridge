@@ -6,7 +6,9 @@ over a single shared CARLA world.
 This document supersedes the parts of [architecture.md](architecture.md) that assume a
 single Autoware instance and a single ROS domain. Where the two disagree, this document wins.
 
-**Status**: design agreed 2026-07-28. Not yet implemented — see [Gaps](#gaps-between-this-design-and-the-code).
+**Status**: implemented and verified end to end on 2026-08-27 with two Autoware instances
+driving two CARLA vehicles at once — see [Verified two-instance run](#verified-two-instance-run).
+The gap table below is older than that run and marks what has since been closed.
 
 ## Scope
 
@@ -370,6 +372,72 @@ Three fixes were made in April 2026 and are absent from both repositories' histo
 sync mode, `publish_clock`, and the sensor-timestamp epoch. Each gets a test, so that losing
 the fix fails the build rather than resurfacing as a localization bug weeks later.
 
+
+## Verified two-instance run
+
+Run on 2026-08-27: one CARLA, one `carla_scenario_bridge`, and **two complete Autoware stacks**
+in separate ROS domains, each driving its own vehicle through its own `acb_bridge`.
+
+```
+just carla-start                     # one server, shared
+just run                             # csb: the only ticker, the only vehicle spawner
+just ego-av                          # Autoware + acb_bridge, ROS domain 1, web UI 8082
+just bg-av                           # Autoware + acb_bridge + pilot, domain 2, web UI 8083
+just scenario scenarios/town01_ego_drive.xosc
+```
+
+Both vehicles drove, under their own stacks, at the same time:
+
+```
+bg_av_1    start (230.0,-129.8) -> end (130.5,-129.4)  travelled 99.5 m  peak 5.03 m/s
+hero       start (190.8,-130.1) -> end (124.7,-129.7)  travelled 66.2 m  peak 3.99 m/s
+```
+
+`hero` is SSv2's scenario ego, routed by the scenario. `bg_av_1` is outside SSv2's model
+entirely: `csb` spawns it from `background_avs` in `bridge_config.yaml`, and its own Autoware
+drives it to the goal in `scenarios/bg_av_1_poses.yaml`.
+
+### Invariants, as measured
+
+| Invariant | Check | Result |
+|---|---|---|
+| 4. One `/clock` per domain | `ros2 topic info /clock` in each domain | 1 publisher in domain 1, 1 in domain 2 |
+| — One bridge per vehicle | `ros2 node list \| grep acb_bridge` | 1 in each domain |
+| — Domain isolation | SSv2's `openscenario_interpreter` | present in domain 1, absent in domain 2 |
+| — Per-vehicle status | `/vehicle/status/velocity_status` | published in domain 2 by that vehicle's own bridge |
+| 1. One ticker | CARLA in synchronous mode, driven only by csb | the run held its step rate; a second ticker would double-step |
+
+Domain 1 carried 211 nodes (ego Autoware, SSv2 and its bridge), domain 2 carried 180 (the
+background AV's Autoware and bridge). Two stacks plus CARLA used about 42 GB of RAM.
+
+### Operational constraints this run established
+
+**Give each stack its own `--log-dir`.** play_launch names a run directory by timestamp at
+one-second resolution, in the working directory. Two stacks whose setup finishes in the same
+second collide, and the loser dies several minutes in with
+
+```
+Error: unable to create directory play_log/2026-08-27_23-08-40
+Caused by: 0: File exists (os error 17)
+```
+
+Staggering the launches does not fix it — the collision is at the end of the parse phase, not
+at launch, and parse durations converge. The justfile now passes `--log-dir play_log/ego`,
+`play_log/bg-<vehicle>` and `play_log/scenario`, after which two stacks started in the same
+second both come up. Anything reading launch parameters back out of play_log gains one path
+component.
+
+**Restart `just bg-av` before every scenario run.** SSv2 restarts simulation time near zero
+each run, and a stack that has already seen a later clock stalls on the backward jump: its
+pilot waits for a fresh pose that never arrives. Measured on a second consecutive run without
+restarting, the background AV managed 3.3 m at 1.67 m/s where its first run covered 99.5 m at
+5.03 m/s. The ego stack is unaffected because SSv2 respawns its ego each run.
+
+**Start the bridge with a real detach.** `setsid` alone does not always create a new session,
+so a bridge started that way can be taken down with the shell that launched it. `setsid --fork`
+is reliable. This matters more than it sounds: nothing restarts `csb`, and a scenario run
+against a dead bridge spawns no ego at all while still producing a full set of logs.
+
 ## Gaps between this design and the code
 
 Verified against `carla-scenario-bridge@5890cae` and `autoware_carla_bridge@c3844bd`.
@@ -379,12 +447,12 @@ Verified against `carla-scenario-bridge@5890cae` and `autoware_carla_bridge@c384
 | 1 | ~~Sync mode enabled at `Initialize`, not deferred~~ **fixed** | `coordinator.rs` — `FrameAction` state machine | 1 |
 | 2 | ~~`/clock` published unconditionally; no `publish_clock` param~~ **fixed** | `acb_bridge/src/main.rs`, `acb_bridge.launch.xml` | 4 |
 | 3 | ~~Sensor stamps use `data.timestamp()` (CARLA server uptime)~~ **fixed** | `acb_bridge/src/bridge/sensor_bridge.rs`, 5 sites | — |
-| 4 | `lanelet2_map_path` ignored; no `load_world()` | `coordinator.rs::initialize` | — |
-| 5 | `update_traffic_lights` is a stub; CARLA cycling never frozen | `coordinator.rs:395` | 3 |
+| 4 | ~~`lanelet2_map_path` ignored; no `load_world()`~~ **fixed** | `coordinator.rs::load_scenario_map` | — |
+| 5 | ~~`update_traffic_lights` is a stub; CARLA cycling never frozen~~ **fixed** | `coordinator.rs::freeze_traffic_lights` | 3 |
 | 6 | `TrafficLightBridge` is dead code | `acb_bridge/src/bridge/trafficlight_bridge.rs` | 3 |
 | 7 | `use_traffic_light_recognition=false` | `acb_launch/launch/carla_simulator.launch.xml` | — |
 | 8 | Tick timeout counts toward disconnect after 3 strikes | `acb_bridge/src/main.rs:578` | — |
-| 9 | No background-AV support | `bridge_config.yaml`, `csb_launch` | — |
+| 9 | ~~No background-AV support~~ **fixed** | `bridge_config.yaml` `background_avs`, `csb_launch/background_av.launch.xml`, `just bg-av` | — |
 | 10 | `--web-addr 0.0.0.0:8082` hardcoded in the concealer patch | SSv2 `external/concealer/include/concealer/launch.hpp` | — |
 | 11 | Ego respawn unimplemented | `acb_bridge/src/main.rs:564` | — |
 

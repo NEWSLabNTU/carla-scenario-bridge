@@ -285,6 +285,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     play_launch launch --parser python --web-addr 0.0.0.0:8082 \
         --load-node-timeout 120 \
         --load-total-budget 600 \
+        --log-dir play_log/ego \
         csb_launch ego_av.launch.xml \
         map_path:="{{map_path}}" \
         carla_port:={{carla_port}} \
@@ -328,6 +329,7 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
     exec play_launch launch --parser python --web-addr 0.0.0.0:{{web_port}} \
         --load-node-timeout 120 \
         --load-total-budget 180 \
+        --log-dir play_log/bg-{{vehicle_name}} \
         csb_launch background_av.launch.xml \
         vehicle_name:={{vehicle_name}} \
         map_path:="{{map_path}}" \
@@ -398,6 +400,7 @@ scenario scenario_file: _require-carla _clear-stale-scenario
     # --parser python: scenario_test_runner.launch.py imports launch.actions the
     # Rust parser's embedded Python cannot resolve (EmitEvent)
     exec play_launch launch --parser python --web-addr 0.0.0.0:8081 \
+        --log-dir play_log/scenario \
         csb_launch carla_scenario.launch.xml \
         scenario:="{{scenario_file}}" \
         port:={{ssv2_port}}
