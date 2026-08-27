@@ -368,21 +368,32 @@ it entered the AND in this graph version.
       restart — the upstream-intended reuse flow, exercised here for the first time
 - [ ] End-to-end: single-ego scenario reaches `exitSuccess` with `ps` showing Autoware only
       under our launch files, none under SSv2
-- [ ] Regression guard: SSv2 submodule pin is reachable on upstream (no local commits)
+- [ ] ~~Regression guard: SSv2 submodule pin is reachable on upstream (no local commits)~~
+      **not achievable as written, and superseded.** The pin carries one local commit on
+      purpose: `Treat arrived_goal as a successful engage outcome`, which fixes a real race
+      where Autoware reaches the goal before the concealer's queued engage runs. The
+      guard that is worth having is narrower — *no local commit touches
+      `concealer/launch.hpp`* — since that file is what the un-fork was about. `git diff
+      --stat upstream/25.0.22` should name one file and it should not be that one
 
 ## Acceptance Criteria
 
 - [x] No process forked by SSv2 exists during a scenario run — live: both
       `openscenario_interpreter` and `openscenario_preprocessor` report **0 children** while
       a scenario is running
-- [ ] The SSv2 checkout carries zero local patches
-- [ ] Ego and background AV stacks share launch structure, differing only in domain and
+- [ ] ~~The SSv2 checkout carries zero local patches~~ **partially met, and worth
+      restating.** Zero *fork-machinery* patches: `launch.hpp` is byte-identical to
+      upstream. One behavioural patch remains by choice (`arrived_goal`), and 013 will add
+      its `managed_ego` series on top. "Zero patches" was the right goal while the only
+      patch was machinery we did not want; the goal now is that every carried patch is one
+      we would offer upstream (phase 005)
+- [x] Ego and background AV stacks share launch structure, differing only in domain and
       clock config
 - [ ] A scenario retains full expressiveness: ego routing from `.xosc`, engage-state
       conditions work
 - [x] Consecutive scenario runs reuse the ego stack without a restart — two runs, one
       stack, both engaged (320.0 → 269.6, then 320.0 → 105.3)
-- [ ] `just test` passes
+- [x] `just test` passes — 90 tests run, 90 passed, 1 skipped, on the un-forked pin
 
 ## Risks
 
