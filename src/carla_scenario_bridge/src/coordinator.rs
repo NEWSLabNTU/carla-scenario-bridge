@@ -257,7 +257,6 @@ impl SpawnLedger {
         self.ids.len()
     }
 
-    #[cfg(test)]
     fn contains(&self, actor_id: u32) -> bool {
         self.ids.contains(&actor_id)
     }
@@ -583,6 +582,116 @@ impl Coordinator {
                 None
             }
         }
+    }
+
+    /// Destroy vehicles left behind by a *previous* bridge process.
+    ///
+    /// `destroy_all_spawned` only knows what this process created. A bridge that was killed
+    /// -- or that segfaulted with the server -- leaves its vehicles in the world, and the
+    /// next bridge has no ledger entry for them. It then spawns its own `bg_av_1` next to
+    /// the old one, and the config's uniqueness rule (`role_name` identifies a vehicle,
+    /// because that is how acb_bridge finds it) is broken by two live actors answering to
+    /// one name.
+    ///
+    /// The spawn retry ladder made this worse rather than louder: the leftover occupies the
+    /// spawn point, CARLA refuses the spawn as a collision, and the ladder lifts the new
+    /// vehicle half a metre at a time until it fits -- dropping a car on top of a car and
+    /// reporting success. Reaping first is what makes the ladder mean "the ground is not
+    /// where we thought" again, rather than "something is already parked here".
+    ///
+    /// Only role names this bridge is configured to own are touched. Anything else in the
+    /// world belongs to somebody else -- a manually spawned vehicle, another tool's traffic
+    /// -- and is left alone.
+    fn reap_orphaned_vehicles(&mut self) {
+        let mut owned: Vec<String> = vec![self.config.ego.role_name.clone()];
+        owned.extend(
+            self.config
+                .background_avs
+                .iter()
+                .map(|av| av.role_name.clone()),
+        );
+
+        let actors = match self.world.actors() {
+            Ok(actors) => actors,
+            Err(e) => {
+                tracing::warn!("Could not list actors to look for orphans: {e}");
+                return;
+            }
+        };
+
+        let orphans: Vec<(u32, String)> = actors
+            .iter()
+            .filter(|actor| actor.type_id().starts_with("vehicle."))
+            .filter(|actor| !self.spawned_actors.contains(actor.id()))
+            .filter_map(|actor| {
+                let attrs = actor.attributes().ok()?;
+                let role = attrs
+                    .iter()
+                    .find(|a| a.id() == "role_name")
+                    .map(|a| a.value_string())?;
+                owned.contains(&role).then(|| (actor.id(), role))
+            })
+            .collect();
+
+        if orphans.is_empty() {
+            return;
+        }
+
+        tracing::warn!(
+            "Found {} vehicle(s) from a previous bridge process still in the world; \
+             destroying them so this run's spawn points are clear",
+            orphans.len()
+        );
+
+        for (actor_id, role) in orphans {
+            // Their acb_bridge may still be listening to sensors attached to them, exactly
+            // as for our own actors -- see the release protocol in issue 015.
+            self.announce_release(actor_id, &role);
+            match destroy_actor_in(&self.world, actor_id) {
+                Ok(()) => tracing::warn!("Destroyed orphaned '{role}' (actor {actor_id})"),
+                Err(e) => tracing::error!(
+                    "Could not destroy orphaned '{role}' (actor {actor_id}): {e}. \
+                     Its spawn point is still occupied, and this run may stack a vehicle on it."
+                ),
+            }
+        }
+    }
+
+    /// The vehicle sitting on a spawn point, if any, as (actor id, role name).
+    ///
+    /// Only used to explain a spawn that had to be lifted. Compares in the horizontal plane:
+    /// a vehicle blocking a spawn does so by standing on the same patch of road, whatever
+    /// its own z is.
+    fn vehicle_occupying(&self, x: f32, y: f32, _z: f32) -> Option<(u32, String)> {
+        /// Half a car length. Close enough to be the thing that refused the spawn.
+        const OCCUPIED_RADIUS_M: f32 = 2.5;
+
+        let actors = self.world.actors().ok()?;
+        // Bind the result before returning: the iterator borrows `actors`, so building it
+        // in tail position would drop the list while the temporary still holds the borrow.
+        let found = actors
+            .iter()
+            .filter(|actor| actor.type_id().starts_with("vehicle."))
+            .find_map(|actor| {
+                let t = actor.transform().ok()?;
+                let dx = t.location.x - x;
+                let dy = t.location.y - y;
+                if dx.hypot(dy) > OCCUPIED_RADIUS_M {
+                    return None;
+                }
+                let role = actor
+                    .attributes()
+                    .ok()
+                    .and_then(|attrs| {
+                        attrs
+                            .iter()
+                            .find(|a| a.id() == "role_name")
+                            .map(|a| a.value_string())
+                    })
+                    .unwrap_or_else(|| "?".to_string());
+                Some((actor.id(), role))
+            });
+        found
     }
 
     /// Give whoever attached sensors to `actor_id` a chance to stop them first.
@@ -1077,6 +1186,11 @@ impl Coordinator {
         // Take authority over the signals (invariant 3).
         self.freeze_traffic_lights();
 
+        // A previous bridge process may have died without tearing its vehicles down, and
+        // they sit on the spawn points this run needs. Reap them after the map is settled
+        // (a reload would have cleared them anyway) and before anything spawns.
+        self.reap_orphaned_vehicles();
+
         // Background AVs go in after the map (a reload would destroy them) and before the
         // ego, so their Autoware instances can be finding their vehicles while SSv2 is
         // still setting the scenario up.
@@ -1351,10 +1465,22 @@ impl Coordinator {
             match builder.spawn(candidate) {
                 Ok(a) => {
                     if attempt > 0 {
-                        tracing::info!(
-                            "Spawned '{name}' on attempt {} at z={z:.2} (commanded z={base_z:.2})",
-                            attempt + 1
-                        );
+                        // Lifting is meant for ground that sits higher than the pose says.
+                        // If something is parked on the commanded point instead, the lift
+                        // has put this vehicle on top of it, and the run needs to know which
+                        // actor rather than just that the first attempts failed.
+                        match self.vehicle_occupying(base_x, base_y, base_z) {
+                            Some((other_id, other_role)) => tracing::warn!(
+                                "Spawned '{name}' on attempt {} at z={z:.2} (commanded \
+                                 z={base_z:.2}) because actor {other_id} ('{other_role}') is \
+                                 already on that point -- '{name}' is now stacked above it",
+                                attempt + 1
+                            ),
+                            None => tracing::info!(
+                                "Spawned '{name}' on attempt {} at z={z:.2} (commanded z={base_z:.2})",
+                                attempt + 1
+                            ),
+                        }
                     }
                     spawn_loc = candidate_loc;
                     actor = Some(a);
