@@ -499,7 +499,9 @@ the run under test actually drove before reading anything into a silent pipeline
       commands, while CARLA held that signal red. The whole chain therefore works: SSv2 →
       csb → CARLA actor → camera → map projection → classifier → fusion. The rate is the
       problem, not the wiring: **1 RED, 2 AMBER, 104 UNKNOWN** in that run. See gap 7
-- [ ] Ego stops at an SSv2-commanded red in a full-stack run — **not earned.** The ego
+- [ ] Ego stops at an SSv2-commanded red in a full-stack run — **to be met over V2X, not
+      vision** (decision, 2026-08-28; see "Direction" below). Not earned by the camera
+      path: the ego
       does stop at the stop line, with `behavior: traffic-signal` and 0.35 m to go, but it
       stops the same way whatever the light says: SSv2 turned the signal green in CARLA
       mid-run (`GREENx1` on the ground-truth actor) and the ego sat there until the 300 s
@@ -870,3 +872,37 @@ facing as `atan2(back - front) + 90 deg`, but the behaviour above only matches `
 Whichever the script writes, the detector's effective interpretation is the one that
 reproduces the observations, and that is a signal facing +x -- into the oncoming lane, as
 it should. Worth resolving before anyone regenerates the geometry again.
+
+## Direction: the demo takes its signals over V2X (2026-08-28)
+
+Decision: stop chasing camera-based recognition as a prerequisite for this phase's last
+criterion, and feed the signal state to Autoware directly instead.
+
+The reasoning is that the two things were never the same test. "Can Autoware read this
+light off a CARLA render?" is a perception research question, and the measurements say it
+is a long way from settled -- for a light held red across full runs the fused topic
+reported RED once, AMBER once, and UNKNOWN twenty-four times, with region size already
+ruled out as the cause. "Does the ego stop at a red and resume on green?" is a behaviour
+question about SSv2, the bridge, and planning, and it is the one this phase's criterion
+actually asks. Holding the second hostage to the first has cost days and blocks everything
+downstream of it.
+
+The path already exists and needs no new plumbing in Autoware. `traffic_light_arbiter`
+takes two inputs and only one is in use:
+
+```
+  internal/traffic_signals   from multi-camera fusion (vision)   publishers: 1
+  external/traffic_signals   "topic from V2X"                    publishers: 0
+```
+
+csb knows the commanded state exactly -- SSv2 sends it every frame, and csb already
+resolves the lanelet regulatory element it belongs to, which is the ID space
+`TrafficLightGroupArray` uses. Publishing that on `external/traffic_signals`, behind a
+config flag defaulting off, gives a deterministic signal with no camera in the loop. It is
+the same shape as acb's ground-truth object publisher.
+
+**What this costs, stated plainly.** A criterion met this way demonstrates SSv2 to planning,
+not perception. Any write-up of it must say which path was used. Camera-based recognition
+stays open as gap 7 with its measurements intact -- the chain is proven end to end and the
+remaining problem is classification quality on CARLA's rendering, where a commanded red
+renders bright orange.
