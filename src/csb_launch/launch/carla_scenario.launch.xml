@@ -1,4 +1,7 @@
 <launch>
+  <arg name="managed_ego" default="true"
+       description="false: SSv2 does not drive the ego's autonomy (phase 013); acb_pilot does" />
+
   <!-- User-configurable arguments -->
   <arg name="scenario" description="Path to .xosc scenario file" />
   <arg name="port" default="5555" description="ZMQ port for adapter connection" />
@@ -34,6 +37,12 @@
 
     <!-- SSv2 orchestration -->
     <arg name="launch_autoware" value="false" />
+    <!-- managed_ego (NEWSLabNTU fork, phase 013). true keeps stock behaviour: the concealer
+         initializes, routes and engages the ego. false makes it inert, so nothing in SSv2
+         drives the ego and acb_pilot does it instead, exactly as for a background AV. The
+         fork also makes ego autonomy actions in the .xosc fail fast naming this parameter,
+         rather than time out after 180 s. -->
+    <arg name="managed_ego" value="$(var managed_ego)" />
     <arg name="launch_rviz" value="false" />
     <arg name="record" value="false" />
     <!-- play_launch serializes empty-string parameters as "-p name:=", which rcl

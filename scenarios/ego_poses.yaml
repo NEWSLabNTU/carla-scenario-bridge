@@ -1,0 +1,25 @@
+# Goal for the ego's pilot in an UNMANAGED run (acb_pilot auto_drive format, phase 013).
+#
+# With managed_ego:=false the concealer is inert, so nothing in SSv2 routes or engages the
+# ego -- acb_pilot does it, exactly as it does for every background AV. The goal therefore
+# has to live outside the scenario, and phase 013 accepts that cost explicitly ("ego goal
+# stated twice").
+#
+# This mirrors the AcquirePositionAction in scenarios/town01_traffic_light.xosc:
+#   <WorldPosition x="88.4" y="-100.0" z="0.0" h="-1.5708" .../>
+# h=-1.5708 rad is yaw -90 deg, so the ego finishes facing south (-y), which is the
+# direction of travel where that street turns. Quaternion from that yaw:
+#   qz = sin(h/2) = -0.7071, qw = cos(h/2) = 0.7071
+#
+# Keep the two in sync by hand. In a managed run the .xosc value is what applies and this
+# file is unused; in an unmanaged run the reverse. A scenario that carries an ego
+# AcquirePositionAction now fails fast naming managed_ego, so the divergence surfaces as an
+# error rather than as a vehicle quietly driving somewhere else.
+goal_pose:
+  x: 88.4
+  y: -100.0
+  z: 0.0
+  qx: 0.0
+  qy: 0.0
+  qz: -0.7071
+  qw: 0.7071

@@ -35,6 +35,31 @@
   <arg name="vehicle_model" default="acb_vehicle" />
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
+
+  <!-- managed=true  (default, phase 012): SSv2's concealer drives this ego's autonomy, so
+                     the stack must share SSv2's ROS domain and must NOT publish /clock,
+                     because SSv2 already does and a second publisher makes localization
+                     log backwards jumps.
+       managed=false (phase 013): the concealer is inert (`managed_ego:=false` on the fork),
+                     nothing in SSv2 routes or engages this ego, and the stack becomes an
+                     ordinary AV: its own domain, its own /clock, driven by acb_pilot from
+                     `goal_poses_file`. Domain and clock are then policy, not a special case.
+
+       The default preserves 012 exactly; nothing changes for a managed run. -->
+  <arg name="managed" default="true"
+       description="true: SSv2's concealer drives the ego. false: acb_pilot does, as for a background AV." />
+  <arg name="goal_poses_file" default=""
+       description="Ego goal in acb_pilot format. Required when managed:=false; unused otherwise." />
+  <arg name="pilot_timeout" default="600.0" />
+  <arg name="pilot_stabilize_seconds" default="15.0" />
+  <arg name="pilot_route_timeout" default="120.0" />
+  <!-- Derived from `managed` by `just ego-av`, which is the interface people use: a managed
+       ego must not publish /clock (SSv2 does), an unmanaged one must (nothing else will).
+       Left as an argument rather than computed here because the XML frontend has no
+       conditional expression, and duplicating the ten-argument acb_bridge include across two
+       <group> blocks to fake one would be worse than stating it. -->
+  <arg name="publish_clock" default="false"
+       description="false for a managed ego (SSv2 owns /clock), true for an unmanaged one" />
   <!-- Whether acb reports the wheel angle it measured, or echoes the command.
        Echoing (false, acb's default) leaves no actuator inside the loop MPC
        closes, while the CARLA wheel measurably lags the command by ~0.5 s.
@@ -76,13 +101,12 @@
     <arg name="launch_vehicle_interface" value="false" />
   </include>
 
-  <!-- 2. acb_bridge for the ego.
-       publish_clock=false: SSv2 owns /clock in this domain. -->
+  <!-- 2. acb_bridge for the ego. See `publish_clock` above for who owns the clock. -->
   <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
     <arg name="carla_address" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
     <arg name="vehicle_name" value="$(var vehicle_name)" />
-    <arg name="publish_clock" value="false" />
+    <arg name="publish_clock" value="$(var publish_clock)" />
     <arg name="report_measured_steering" value="$(var report_measured_steering)" />
     <arg name="steering_multiplier" value="$(var steering_multiplier)" />
     <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)" />
@@ -101,6 +125,21 @@
        loopback-unicast CycloneDDS configs), while a standalone adaptor process
        was matched promptly. Cause not yet understood - suspected discovery
        scaling on a host with lo-multicast disabled. -->
+  <!-- 4. The pilot, for unmanaged runs only. It stands in for the concealer exactly as it
+       does in every background AV's domain: waits for localization, sets the route from
+       `goal_poses_file`, engages. In a managed run the concealer does this and the pilot
+       must not run, since two things engaging one ego is the same class of mistake as two
+       /clock publishers. -->
+  <group unless="$(var managed)">
+    <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen">
+      <param name="poses_file" value="$(var goal_poses_file)" />
+      <param name="timeout" value="$(var pilot_timeout)" />
+      <param name="stabilize_seconds" value="$(var pilot_stabilize_seconds)" />
+      <param name="route_timeout" value="$(var pilot_route_timeout)" />
+      <param name="use_sim_time" value="true" />
+    </node>
+  </group>
+
   <arg name="launch_api_adaptor" default="false" />
   <group if="$(var launch_api_adaptor)">
     <include file="$(find-pkg-share autoware_iv_external_api_adaptor)/launch/external_api_adaptor.launch.py" />

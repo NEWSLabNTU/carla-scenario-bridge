@@ -11,6 +11,10 @@ map_name := env_var_or_default('MAP_NAME', 'Town01')
 # a stray node there joins the scenario's graph without anyone asking. Background AVs get
 # 2 and up (see `just bg-av`).
 ego_domain := env_var_or_default('EGO_ROS_DOMAIN_ID', '1')
+# Where an UNMANAGED ego lives (phase 013). With the concealer inert nothing in SSv2 talks
+# to this stack, so it leaves SSv2's domain and SSv2's contains only SSv2. Distinct from
+# SSv2 (1) and from bg_av_1 (2) so all three can run at once.
+ego_unmanaged_domain := env_var_or_default('EGO_UNMANAGED_ROS_DOMAIN_ID', '3')
 data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
 project := justfile_directory()
 acb_src := justfile_directory() + '/src/autoware_carla_bridge'
@@ -225,7 +229,13 @@ _require-ego-stack:
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    export ROS_DOMAIN_ID={{ego_domain}}
+    # Look where the ego actually is. An unmanaged ego lives in its own domain, so checking
+    # SSv2's would find nothing and refuse a run that was correctly set up.
+    if [ "${EGO_MANAGED:-true}" = "true" ]; then
+        export ROS_DOMAIN_ID={{ego_domain}}
+    else
+        export ROS_DOMAIN_ID={{ego_unmanaged_domain}}
+    fi
     if ! "{{project}}/scripts/ego_stack_health.py"; then
         echo "[just] Refusing to start: run \`just ego-av\` first and wait for"
         echo "[just] 'Startup complete'. See phase 012, startup order."
@@ -245,6 +255,8 @@ _require-carla:
 # SSv2's concealer needs plain ROS reachability). Long-lived: start it once, BEFORE any
 # `just scenario`, and reuse it across scenario runs.
 # Usage: just ego-av [map_path]
+#   EGO_MANAGED=false EGO_GOAL_POSES_FILE=... just ego-av   -> unmanaged (phase 013):
+#   own domain, own /clock, driven by acb_pilot instead of SSv2's concealer.
 ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carla
     #!/usr/bin/env bash
     set -e
@@ -258,15 +270,31 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # play_launch forks a process per composable node and SIGKILLs it if it has not
-    # reported ready within this window. The default is 30 s, and Autoware's traffic
-    # light classifier needs ~45 s to construct even with its TensorRT engine cached
-    # (~33 s of that is the engine build itself on a cold cache). At the default the
-    # three inference nodes were killed seconds before they would have reported, and
-    # the only symptom was a perception pipeline publishing empty results forever.
-    # The ego and SSv2 share this domain; `just scenario` sets the same one. Not 0 --
-    # see the ego_domain comment at the top of this file.
-    export ROS_DOMAIN_ID={{ego_domain}}
+    # Domain follows `managed`. A managed ego must share SSv2's domain -- the concealer
+    # talks plain ROS and a stack anywhere else is invisible to it. An unmanaged ego is
+    # driven by its own pilot and has no reason to be there, so it gets a domain of its
+    # own and SSv2's contains only SSv2 (phase 013). Not 0 either way; see the ego_domain
+    # comment at the top of this file.
+    # Env vars, not recipe parameters: just's parameters are positional, so
+    # `just ego-av managed=false` assigns "managed=false" to map_path and silently runs a
+    # managed stack against a nonexistent map. EGO_MANAGED cannot be passed by accident.
+    managed="${EGO_MANAGED:-true}"
+    goal_poses_file="${EGO_GOAL_POSES_FILE:-}"
+    if [ "$managed" = "true" ]; then
+        export ROS_DOMAIN_ID={{ego_domain}}
+        clock=false      # SSv2 publishes /clock in its domain; a second publisher makes
+                         # localization log backwards jumps.
+    else
+        export ROS_DOMAIN_ID={{ego_unmanaged_domain}}
+        clock=true       # No SSv2 here, so without this the domain has no clock at all.
+        if [ -z "$goal_poses_file" ]; then
+            echo "[just] EGO_MANAGED=false needs EGO_GOAL_POSES_FILE: with the concealer" >&2
+            echo "[just] inert, acb_pilot routes the ego and exits fatally on an empty file." >&2
+            echo "[just] Try: EGO_MANAGED=false \\" >&2
+            echo "[just]      EGO_GOAL_POSES_FILE=\$PWD/scenarios/ego_poses.yaml just ego-av" >&2
+            exit 1
+        fi
+    fi
     # --parser python: play_launch's Rust parser fails on tier4_perception_component
     # (KeyError 'front_overhang' evaluating its Python sub-launches)
     # The API adaptors run as their own processes: inside the big launch the
@@ -320,6 +348,9 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         csb_launch ego_av.launch.xml \
         map_path:="{{map_path}}" \
         carla_port:={{carla_port}} \
+        managed:=$managed \
+        publish_clock:=$clock \
+        goal_poses_file:="$goal_poses_file" \
         report_measured_steering:="${REPORT_MEASURED_STEERING:-false}" \
         steering_multiplier:="${STEERING_MULTIPLIER:-1.0}" \
         publish_ground_truth_objects:="${GROUND_TRUTH_OBJECTS:-false}" \
@@ -426,12 +457,16 @@ scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     # the only symptom was a perception pipeline publishing empty results forever.
     # Must match `just ego-av`: the concealer reaches the ego over plain ROS, and a
     # scenario in another domain simply never finds it.
+    # Same toggle as `just ego-av` reads, and for the same reason it is an env var there.
+    # An unmanaged ego lives in its own domain, so SSv2 no longer shares one with it.
+    managed="${EGO_MANAGED:-true}"
     export ROS_DOMAIN_ID={{ego_domain}}
     # --parser python: scenario_test_runner.launch.py imports launch.actions the
     # Rust parser's embedded Python cannot resolve (EmitEvent)
     exec play_launch launch --parser python --web-addr 0.0.0.0:8081 \
         --log-dir play_log/scenario \
         csb_launch carla_scenario.launch.xml \
+        managed_ego:=$managed \
         scenario:="{{scenario_file}}" \
         port:={{ssv2_port}}
 
