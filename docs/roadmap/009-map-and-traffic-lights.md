@@ -774,3 +774,48 @@ that would not move, which is 016's signature, and nothing in the ego stack's ow
 "no URDF" -- the failing node exits, play_launch reports one member down out of ninety, and
 the stack declares itself started. `acb_bridge`'s "Still waiting for Autoware" line, with
 what it is waiting **for**, is the thing that names the cause.
+
+## End to end, and what stops it finishing (2026-08-27)
+
+First full run of the demo on a clean stack -- everything rebuilt from head, `substeps: 2`,
+no URDF failure, no fusion crash, no orphans:
+
+```
+  ego: DROVE, x 320 -> 105.2 (215 m), max heading error 5.4 deg, yaw ratio 0.880
+  traffic_signals frames: 4404
+  t+69s ego(108.3,-55.4) 1.8 m/s  class[43763:RED] judged[43856:RED] recognised[43856:RED]
+  ego stops at x=105.3 and holds from t+73 to the end of the run
+```
+
+**The chain works end to end.** SSv2 commands the signal red, csb sets it on the CARLA
+actor, the camera sees it, the map-based detector projects it, the classifier reads RED,
+fusion maps way 43763 to regulatory element 43856, and the ego -- driving itself the whole
+215 m -- slows and stops at the signal. That is the demo.
+
+**It does not finish, and the reason is geometry, not perception.** The scenario turns the
+signal green at sim 150 s, and CARLA's own actor state confirms the change (the census goes
+from GREENx12,REDx24 to GREENx13,REDx23). The ego never moves again. After t+150:
+
+```
+  rois:      0 of 67 samples
+  expect:    0        <- the map-based detector does not even project the signal
+  class:     empty x67    recognised: none x67
+```
+
+`expect=0` is the tell. That is the projection from the map alone, before any image
+processing, so the signal is not in the camera's field of view at all. The ego stops about
+4 m short of the stop line and the head is above the frame from there, which this phase
+already noted when it observed that "closer" has a hard limit. So the ego cannot see the
+light it is waiting for, and no amount of classifier work will change that.
+
+**That makes the last criterion a camera-geometry problem.** The ego stops at a commanded
+red and now genuinely recognises one, so the first half is earned. Resuming on green needs
+the signal to remain visible from the stop line: a camera pitched up, a wider vertical FOV,
+or a stop line placed where the current camera can still see the head. Worth measuring
+first -- the pitch and FOV needed to keep a head at that height in frame from 4 m short --
+rather than guessing at a mounting change.
+
+**The recognition rate is still poor and is now a second-order problem.** In the same run:
+RED 1, UNKNOWN 25, none 115. The single RED arrived at the moment it mattered, which is
+luck rather than reliability, and the stop is still mostly the traffic-signal module being
+conservative about a signal it has no confident state for.
