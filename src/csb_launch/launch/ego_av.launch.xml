@@ -45,6 +45,11 @@
        or steering curve differ from its geometry can still under- or over-steer against it.
        Calibrate against measured wheel angles, not scenario outcomes. -->
   <arg name="steering_multiplier" default="1.0" />
+  <!-- Report CARLA's actors as perception output instead of running the LiDAR pipeline.
+       For debugging planning or control without perception in the loop. Set `perception`
+       false as well, or Autoware's own prediction node publishes the same topic. -->
+  <arg name="publish_ground_truth_objects" default="false" />
+  <arg name="ground_truth_range_m" default="100.0" />
   <!-- clustering = CPU-only rule-based lidar detection. This host shares its GPU;
        CARLA takes what headroom there is and centerpoint's TensorRT engine does
        not fit beside it. -->
@@ -78,6 +83,8 @@
     <arg name="publish_clock" value="false" />
     <arg name="report_measured_steering" value="$(var report_measured_steering)" />
     <arg name="steering_multiplier" value="$(var steering_multiplier)" />
+    <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)" />
+    <arg name="ground_truth_range_m" value="$(var ground_truth_range_m)" />
   </include>
 
   <!-- 3. The tier4 external API adaptor. SSv2's concealer calls

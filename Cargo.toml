@@ -17,7 +17,11 @@ carla = "0.14.0"
 # uncaught TimeoutExceptions when CARLA died mid-run, terminating this process before its
 # reconnect logic could act. (Earlier: 575f6aa added Debug on generated enums and
 # *_from_ffi_ref accessors, which World::ground_projection needs.)
-carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "68aef48" }
+# bd9c7b3 stops an empty FFI container from aborting the process: slice::from_raw_parts
+# rejects a null pointer even at length zero, and an actor with no attributes -- or a lidar
+# frame with no returns -- produced exactly that. The abort does not unwind, so a caller
+# cannot defend against it.
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "bd9c7b3" }
 
 [profile.dev-release]
 inherits = "release"

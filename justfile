@@ -269,7 +269,9 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
         map_path:="{{map_path}}" \
         carla_port:={{carla_port}} \
         report_measured_steering:="${REPORT_MEASURED_STEERING:-false}" \
-        steering_multiplier:="${STEERING_MULTIPLIER:-1.0}"
+        steering_multiplier:="${STEERING_MULTIPLIER:-1.0}" \
+        publish_ground_truth_objects:="${GROUND_TRUTH_OBJECTS:-false}" \
+        ground_truth_range_m:="${GROUND_TRUTH_RANGE_M:-100.0}"
 
 # Launch one background AV's Autoware + acb_bridge + pilot in its own ROS domain.
 # The bridge spawns the vehicle (see background_avs in bridge_config.yaml); this brings up
