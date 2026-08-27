@@ -212,6 +212,26 @@ carla-health:
 # like a wedged one. That mistake cost two unnecessary restarts and a bogus entry in
 # docs/issues/017. carla_health.py reads the mode first and only trusts the census where it
 # means something.
+# Refuse to start a scenario before the ego's Autoware is up.
+#
+# With launch_autoware:=false the concealer attaches to an Autoware it did not launch, and
+# its constructor queues a ChangeToStop against an ADAPI service with a 180 s timeout. Start
+# a scenario too early and the run does not fail fast: it evaluates nothing and dies three
+# minutes later with an AutowareError naming a service rather than the ordering mistake.
+_require-ego-stack:
+    #!/usr/bin/env bash
+    set -e
+    source "{{autoware_setup}}"
+    source "{{acb_src}}/install/setup.bash"
+    source "{{project}}/install/setup.bash"
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    export ROS_DOMAIN_ID={{ego_domain}}
+    if ! "{{project}}/scripts/ego_stack_health.py"; then
+        echo "[just] Refusing to start: run \`just ego-av\` first and wait for"
+        echo "[just] 'Startup complete'. See phase 012, startup order."
+        exit 1
+    fi
+
 _require-carla:
     #!/usr/bin/env bash
     set -e
@@ -330,15 +350,12 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
     # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain
     # 1000 in it is what keeps domain 1's unicast ports out of domain 0's range.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # play_launch forks a process per composable node and SIGKILLs it if it has not
-    # reported ready within this window. The default is 30 s, and Autoware's traffic
-    # light classifier needs ~45 s to construct even with its TensorRT engine cached
-    # (~33 s of that is the engine build itself on a cold cache). At the default the
-    # three inference nodes were killed seconds before they would have reported, and
-    # the only symptom was a perception pipeline publishing empty results forever.
     export ROS_DOMAIN_ID={{domain}}
-    # Off the ego stack's web port; the concealer's own default is 8082.
-    export PLAY_LAUNCH_WEB_ADDR=0.0.0.0:{{web_port}}
+    # --web-addr keeps this stack's UI off the port the ego's Autoware already took.
+    # There used to be a PLAY_LAUNCH_WEB_ADDR export here as well: it existed only so the
+    # concealer's patched launch.hpp could pass an address when SSv2 forked Autoware
+    # itself. With launch_autoware:=false the concealer launches nothing, so nothing reads
+    # it -- the flag below is what actually sets the port. See phase 012, gap 10.
     exec play_launch launch --parser python --web-addr 0.0.0.0:{{web_port}} \
         --load-node-timeout 120 \
         --load-total-budget 180 \
@@ -389,7 +406,7 @@ _clear-stale-scenario:
     fi
 
 # Usage: just scenario /path/to/scenario.xosc
-scenario scenario_file: _require-carla _clear-stale-scenario
+scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     #!/usr/bin/env bash
     set -e
     # SSv2 no longer launches Autoware, but the interpreter still resolves the

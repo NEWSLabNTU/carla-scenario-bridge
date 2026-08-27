@@ -121,16 +121,18 @@ asks. `acb_bridge` in this domain runs with `publish_clock:=false`, because SSv2
 **3. Start the background AV's stack** in its own domain (`D1`, i.e. `ROS_DOMAIN_ID=2`):
 
 ```bash
-ROS_DOMAIN_ID=2 PLAY_LAUNCH_WEB_ADDR=0.0.0.0:8083 \
-  play_launch launch csb_launch background_av.launch.xml \
+ROS_DOMAIN_ID=2 \
+  play_launch launch --web-addr 0.0.0.0:8083 csb_launch background_av.launch.xml \
       vehicle_name:=bg_av_1 \
       map_path:=$PWD/data/carla-autoware-bridge/Town01 \
       goal_poses_file:=$PWD/scenarios/bg_av_1_poses.yaml
 ```
 
 `publish_clock` is `true` here — there is no SSv2 in this domain, so without it there would
-be no simulation clock at all. `PLAY_LAUNCH_WEB_ADDR` keeps the web UI off the port the ego's
-Autoware already took.
+be no simulation clock at all. `--web-addr` keeps the web UI off the port the ego's Autoware
+already took. (This was a `PLAY_LAUNCH_WEB_ADDR` environment variable while the concealer
+still forked Autoware and needed to pass the address through its patched `launch.hpp`; with
+`launch_autoware:=false` nothing reads it, so the flag says it directly.)
 
 `goal_poses_file` feeds this domain's pilot (`acb_pilot`'s `auto_drive`), which replaces the
 concealer here: it waits for localization, sets the route, and engages. The file is in
@@ -453,7 +455,7 @@ Verified against `carla-scenario-bridge@5890cae` and `autoware_carla_bridge@c384
 | 7 | `use_traffic_light_recognition=false` | `acb_launch/launch/carla_simulator.launch.xml` | — |
 | 8 | Tick timeout counts toward disconnect after 3 strikes | `acb_bridge/src/main.rs:578` | — |
 | 9 | ~~No background-AV support~~ **fixed** | `bridge_config.yaml` `background_avs`, `csb_launch/background_av.launch.xml`, `just bg-av` | — |
-| 10 | `--web-addr 0.0.0.0:8082` hardcoded in the concealer patch | SSv2 `external/concealer/include/concealer/launch.hpp` | — |
+| 10 | ~~`--web-addr 0.0.0.0:8082` hardcoded in the concealer patch~~ **closed** — the concealer no longer launches anything (`launch_autoware:=false`), so `launch.hpp` is never called and the address it hardcoded is unreachable | SSv2 `external/concealer/include/concealer/launch.hpp` | — |
 | 11 | Ego respawn unimplemented | `acb_bridge/src/main.rs:564` | — |
 
 Gaps 1, 2 and 3 were regressions of work that was done and lost, not new features. Fixed

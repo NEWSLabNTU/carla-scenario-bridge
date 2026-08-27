@@ -296,12 +296,13 @@ it entered the AND in this graph version.
 - [x] The scenario launch sets `launch_autoware:=false` and keeps `sensor_model` /
       `vehicle_model` (still read by `EgoEntity` before the branch); drop
       `autoware_launch_package` / `autoware_launch_file`
-- [ ] Startup order documented and enforced where possible: the ego stack must be up and
-      Autoware's ADAPI services available before SSv2 spawns the ego — the concealer's
-      constructor queues a `ChangeToStop` with a 180 s service timeout, so a late stack
-      turns into a slow, confusing failure. *Documented (ssv2-launch-configuration.md,
-      launch-file comments); no mechanical enforcement yet — needs a live run to pick a
-      readiness check that actually gates.*
+- [x] Startup order documented **and enforced**: `just scenario` now depends on
+      `_require-ego-stack`, which runs `scripts/ego_stack_health.py` and refuses the run if
+      nothing publishes `/api/operation_mode/state`. That topic is the readiness signal the
+      live runs picked out — later than "the process exists", earlier than "the ego is
+      engaged", which is the window the concealer attaches in. Both failure paths were
+      exercised: an empty domain reports "not ready" and an unusable one reports "cannot
+      join the ROS graph", each on one line rather than a traceback
 - [x] Scenario-end semantics checked: with no child process, SSv2 cannot kill Autoware on
       exit; the ego stack persists across scenario runs. Verified by the consecutive-run
       pair below — the stack survived run 1's end and run 2 engaged on it, so the
@@ -315,13 +316,20 @@ it entered the AND in this graph version.
 
 - [ ] Drop the two `launch.hpp` fork-machinery commits from the SSv2 submodule — via
       013's `managed_ego` branch, which replaces the old "pin clean upstream 25.0.22"
-- [ ] Remove `PLAY_LAUNCH_WEB_ADDR` plumbing from our launch files and docs
-- [ ] Close gap 10 in [multi-instance-architecture.md](../design/multi-instance-architecture.md)
+- [x] Remove `PLAY_LAUNCH_WEB_ADDR` plumbing from our launch files and docs — the `bg-av`
+      recipe already passed `--web-addr` explicitly, so the export was redundant the moment
+      the concealer stopped forking. Removed there and in
+      multi-instance-architecture.md; only explanations of why it is gone remain
+- [x] Close gap 10 in [multi-instance-architecture.md](../design/multi-instance-architecture.md)
+      — marked closed: the hardcoded `--web-addr 0.0.0.0:8082` lived in the concealer patch,
+      which `launch_autoware:=false` never calls
 
 ### Documentation
 
-- [ ] Rewrite Design Principle 5 in [architecture.md](../design/architecture.md): SSv2
-      drives the ego's *autonomy* (initialize, route, engage); it launches nothing
+- [x] Rewrite Design Principle 5 in [architecture.md](../design/architecture.md): SSv2
+      drives the ego's *autonomy* (initialize, route, engage); it launches nothing. Now also
+      states what `launch_autoware:=false` actually means (do not fork, not run without
+      Autoware) and the consequence that the ego stack outlives the scenario
 - [ ] Update [ssv2-launch-configuration.md](../design/ssv2-launch-configuration.md):
       `launch_autoware:=false`, the ego stack's launch file, startup order; resolve or
       delete the AutowareUniverse conflict section per the live check. *Done except the

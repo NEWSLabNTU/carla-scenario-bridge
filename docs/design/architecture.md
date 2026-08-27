@@ -68,9 +68,27 @@ All `AttachSensor` requests return `Success=false`. CARLA's own sensors (GPU lid
 
 CARLA's built-in traffic light cycling is frozen. The adapter maps SSv2 lanelet signal IDs to CARLA `TrafficLight` actors and sets their states per `UpdateTrafficLights` commands.
 
-### 5. SSv2 Drives Autoware Lifecycle
+### 5. SSv2 Drives Autoware's Autonomy, Not Its Lifecycle
 
-SSv2's `FieldOperatorApplication` (concealer) launches Autoware, initializes localization, sets routes, and engages autonomous mode. This replaces the `auto_drive.py` pilot script from `autoware_carla_bridge`.
+SSv2's `FieldOperatorApplication` (concealer) initializes localization, sets routes, and
+engages autonomous mode. It **launches nothing**: the scenario runs with
+`launch_autoware:=false`, and every Autoware stack — the ego's and each background AV's — is
+brought up by our own launch files before the scenario starts.
+
+`launch_autoware:=false` means "do not fork", not "run without Autoware". `EgoEntity`
+inherits the concealer as a base class, so it is always constructed; the parameter decides
+only whether the constructor gets a real child pid or `0`. Every subscription, service
+client and state machine stays wired, which is why the concealer can drive a stack it did
+not start. That is the configuration upstream intends for reusing one Autoware across
+scenarios.
+
+The consequence worth stating: **the ego stack outlives the scenario.** SSv2 has no child
+process to kill, so a run ends without tearing Autoware down, and the next run re-engages
+the same stack. Verified live — two consecutive scenarios on one stack both reached
+AUTONOMOUS with a route set and drove (phase 012).
+
+This replaces the `auto_drive.py` pilot script from `autoware_carla_bridge` for the ego.
+Background AVs keep their own pilot, since SSv2 does not know about them.
 
 SSv2's `AutowareUniverse` (concealer) must be **disabled** for vehicle status topics, since `autoware_carla_bridge` publishes them from real CARLA state. The `simulate_localization` parameter must be `false` so Autoware runs its real GNSS->NDT pipeline.
 
