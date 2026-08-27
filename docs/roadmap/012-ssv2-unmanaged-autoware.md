@@ -314,8 +314,12 @@ it entered the AND in this graph version.
 > "pin clean upstream" no longer applies. The `launch.hpp` fork-machinery commits still
 > get dropped, but via 013's branch (rebased without them), not a clean-upstream pin.
 
-- [ ] Drop the two `launch.hpp` fork-machinery commits from the SSv2 submodule — via
-      013's `managed_ego` branch, which replaces the old "pin clean upstream 25.0.22"
+- [x] Drop the two `launch.hpp` fork-machinery commits from the SSv2 submodule — done on
+      a new fork branch `carla-compat-unforked` (`4bb48c98`), rebased onto upstream 25.0.22
+      keeping only `Treat arrived_goal as a successful engage outcome`. Both dropped commits
+      touched `concealer/launch.hpp` and nothing else, so the diff against upstream is now
+      one file, `field_operator_application.cpp`, +7 lines. Pushed as a new branch rather
+      than a rewrite of `carla-compat`
 - [x] Remove `PLAY_LAUNCH_WEB_ADDR` plumbing from our launch files and docs — the `bg-av`
       recipe already passed `--web-addr` explicitly, so the export was redundant the moment
       the concealer stopped forking. Removed there and in
@@ -330,15 +334,19 @@ it entered the AND in this graph version.
       drives the ego's *autonomy* (initialize, route, engage); it launches nothing. Now also
       states what `launch_autoware:=false` actually means (do not fork, not run without
       Autoware) and the consequence that the ego stack outlives the scenario
-- [ ] Update [ssv2-launch-configuration.md](../design/ssv2-launch-configuration.md):
-      `launch_autoware:=false`, the ego stack's launch file, startup order; resolve or
-      delete the AutowareUniverse conflict section per the live check. *Done except the
-      conflict section, which waits on the live check.*
-- [ ] Update the roles table and startup sequence in
-      [multi-instance-architecture.md](../design/multi-instance-architecture.md)
-- [ ] Record the reuse semantics: one long-lived ego stack across scenario runs, reset to
-      stop state between them. *Recorded in ssv2-launch-configuration.md; the reset flow
-      itself is still unverified (see Launch item above).*
+- [x] Update [ssv2-launch-configuration.md](../design/ssv2-launch-configuration.md):
+      `launch_autoware:=false`, the ego stack's launch file, startup order; the
+      AutowareUniverse conflict section is **resolved by measurement** — during a live run
+      all three `/vehicle/status/*` topics have exactly one publisher, `acb_bridge`, while
+      the concealer is constructed and driving autonomy. The mitigations are deleted
+- [x] Update the roles table and startup sequence in
+      [multi-instance-architecture.md](../design/multi-instance-architecture.md) — step 4
+      now brings up every Autoware including the ego's, the ordering guard is named, and
+      the roles table says the stacks are all launched by us and differ only in who drives
+      the autonomy
+- [x] Record the reuse semantics: one long-lived ego stack across scenario runs, reset to
+      stop state between them. The reset flow is no longer unverified — two consecutive runs
+      on one stack both engaged and drove
 
 ### Tests
 
@@ -364,13 +372,16 @@ it entered the AND in this graph version.
 
 ## Acceptance Criteria
 
-- [ ] No process forked by SSv2 exists during a scenario run
+- [x] No process forked by SSv2 exists during a scenario run — live: both
+      `openscenario_interpreter` and `openscenario_preprocessor` report **0 children** while
+      a scenario is running
 - [ ] The SSv2 checkout carries zero local patches
 - [ ] Ego and background AV stacks share launch structure, differing only in domain and
       clock config
 - [ ] A scenario retains full expressiveness: ego routing from `.xosc`, engage-state
       conditions work
-- [ ] Consecutive scenario runs reuse the ego stack without a restart
+- [x] Consecutive scenario runs reuse the ego stack without a restart — two runs, one
+      stack, both engaged (320.0 → 269.6, then 320.0 → 105.3)
 - [ ] `just test` passes
 
 ## Risks

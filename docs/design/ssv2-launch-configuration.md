@@ -166,20 +166,32 @@ SSv2's `AutowareUniverse` (concealer node, part of `EgoEntity`) publishes vehicl
 | `/vehicle/status/gear_status`     | Echoes Autoware cmd | From CARLA state      |
 | `/vehicle/status/control_mode`    | Internal            | Internal              |
 
-### Mitigation Strategy
+### Resolved: the conflict does not occur (measured 2026-08-28)
 
-**Phase 2 approach: Accept dual publishers.** Both publish to the same topics; Autoware subscribes and receives whichever message arrives. Since both are publishing at similar rates with similar data (the bridge reflects actual CARLA state, concealer reflects its model), this is unlikely to cause issues in practice.
+**There is only ever one publisher.** Measured during a live run with the ego spawned and
+the concealer attached, on the un-forked configuration (`launch_autoware:=false`):
 
-> **Caveat.** The two publishers agree only while CARLA physics and the concealer's bicycle
-> model agree — and their divergence is exactly what a scenario is meant to detect. Accepting
-> this is a Phase 2 expedient, not a resting state. Tracked in
-> [multi-instance-architecture.md](multi-instance-architecture.md#known-conflict-autowareuniverse-vehicle-status).
+```
+  /vehicle/status/velocity_status   Publisher count: 1   Node name: acb_bridge
+  /vehicle/status/steering_status   Publisher count: 1   Node name: acb_bridge
+  /vehicle/status/gear_status       Publisher count: 1   Node name: acb_bridge
+```
 
-**If issues arise**: Remap AutowareUniverse topics by modifying SSv2's launch to add a namespace prefix to the concealer node.
+The concealer is constructed — `/simulation/concealer_user` is in the node list — and it
+still drives the ego's autonomy. It simply does not publish vehicle status here, so the
+dual-publisher problem this section was written for never materialises, and the mitigations
+below it are unnecessary.
 
-**Long term**: Disable AutowareUniverse entirely. This requires either:
-- A fork of SSv2 with a `launch_concealer:=false` option
-- A wrapper launch file that skips the concealer node
+The table above is kept because it documents what `AutowareUniverse` *would* publish, which
+is what makes the measurement worth stating rather than assuming. Should a future
+configuration reintroduce a second publisher, the divergence to watch for is unchanged:
+CARLA physics and a bicycle model agree right up until the moment a scenario is trying to
+detect that they do not.
+
+One caveat on how to check this. A `ros2 topic info -v` taken after the scenario ends, or
+against a stale daemon, will report publishers that are gone or attribute them to the wrong
+node — an earlier attempt at this measurement named a node that was not even running. Query
+during a live run, with `--no-daemon`.
 - Contributing upstream to SSv2
 
 ### Localization Topics

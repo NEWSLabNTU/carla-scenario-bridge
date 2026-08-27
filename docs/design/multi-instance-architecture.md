@@ -61,6 +61,13 @@ session nobody wants. `just ego-av` and `just scenario` both export `ego_domain`
 | Scenario NPC / pedestrian / misc | SSv2 teleport via `csb_bridge` | `csb_bridge`, on `Spawn*Entity` | yes, through sensors | yes |
 | Background AV | PhysX, driven by Autoware `Dk` | `csb_bridge`, from config at `Initialize` | yes, through sensors | **no** |
 
+"Spawned by" is about the CARLA *actor*. The **Autoware stacks are all launched by us** —
+`just ego-av` for the ego's, `just bg-av` for each background AV's — and none by SSv2, which
+runs with `launch_autoware:=false` (phase 012). The ego's stack is therefore no different in
+lifecycle from a background AV's: started before the scenario, reused across scenarios, and
+never torn down by SSv2. What still differs is *who drives the autonomy*: the concealer for
+the ego, `acb_pilot` for each background AV.
+
 ### Consequence: background AVs are invisible to SSv2
 
 SSv2's collision detection, `ReachPositionCondition`, `DistanceCondition` and the rest do not
@@ -248,7 +255,9 @@ managed Autoware exists in the same host.
 1. CARLA server up
 2. csb_bridge up          -> connect, bind ZMQ. Does NOT touch world settings yet
 3. acb_bridge D0..Dn up   -> each waits for /robot_description in its own domain
-4. Autoware D1..Dn up     -> background AV stacks, via launch
+4. Autoware D0..Dn up     -> EVERY stack, ego included, via our launch files.
+                             `just ego-av` for D0, `just bg-av` for the rest.
+                             SSv2 launches none of them (launch_autoware:=false).
 5. SSv2 up -> Initialize(lanelet2_map_path, step_time)
      csb: resolve town from lanelet2_map_path, load_world() if different
      csb: enumerate + freeze all traffic lights, build lanelet <-> actor map
@@ -262,6 +271,17 @@ managed Autoware exists in the same host.
 9. Concealer (D0) initialises localization, sets route, engages
    Background pilots do the same in D1..Dn
 ```
+
+Step 4 changed with phase 012. The ego's Autoware used to be forked by SSv2's concealer
+during step 9; it is now brought up with every other stack, before SSv2 starts. The ordering
+is enforced rather than trusted: `just scenario` refuses to start unless
+`/api/operation_mode/state` has a publisher (`_require-ego-stack`). Without that check the
+failure is slow and points at the wrong thing — the concealer queues a `ChangeToStop` with a
+180 s service timeout, so a late stack means three minutes of evaluating nothing and then an
+`AutowareError` naming a service.
+
+The ego stack also **outlives the scenario**: with no child process, SSv2 cannot tear it
+down, and consecutive runs re-engage the same stack (verified live, phase 012).
 
 Step 8 is load-bearing. Enabling sync mode at `Initialize` deadlocks: `acb_bridge` polls
 `world.actors()` to discover its vehicle, and in sync mode CARLA does not advance until
