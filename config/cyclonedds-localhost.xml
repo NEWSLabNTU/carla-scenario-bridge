@@ -10,7 +10,7 @@
 
   Kept minimal: interface pinning via the 0.10-safe <NetworkInterfaceAddress>,
   no per-interface attributes. MaxAutoParticipantIndex bounds the unicast port
-  probe range; every composable node takes an index; the full stack runs ~170.
+  probe range; every process takes an index, and the full stack runs ~200.
 -->
 <CycloneDDS xmlns="https://cdds.io/config">
   <Domain Id="any">
@@ -20,7 +20,29 @@
     </General>
     <Discovery>
       <ParticipantIndex>auto</ParticipantIndex>
-      <MaxAutoParticipantIndex>300</MaxAutoParticipantIndex>
+      <MaxAutoParticipantIndex>450</MaxAutoParticipantIndex>
+      <!-- 300 was not enough and failed obscurely. Every process takes an index, and the
+           ego stack alone runs ~158 `component_node` processes plus its bridge, the
+           scenario stack and the interpreter. Attaching one more node -- a probe, an
+           `ros2 topic echo` -- then fails with
+
+             Failed to find a free participant index for domain 1
+             rmw_create_node: failed to create domain, error Error
+             RCLError: error creating node: rcl node's rmw handle is invalid
+
+           only the first line of which says what is wrong, and rclpy shows the last.
+           Measured at the point of failure: 600 ports in use across 8410-9009, which is
+           exactly 300 indices at ParticipantGain 2.
+
+           The ceiling is the next domain's base. With DomainGain 1000, domain d starts at
+           7400 + 1000d and its participant ports run from base + 10 to base + 11 + 2N, so
+           N must stay under 494 for domain 1 to keep clear of domain 2's 9400. 450 leaves
+           headroom at both ends.
+
+           Every participant must agree on this number. Cyclone's unicast discovery probes
+           peer ports for indices 0..MaxAutoParticipantIndex, so a process that joins with
+           a higher cap than the running stack can take an index the stack never probes,
+           and stays invisible to it. Changing this means restarting everything. -->
       <!-- Two-domain runs: the default DomainGain (250) puts domain 1's port base
            at 7650, inside domain 0's unicast range once MaxAutoParticipantIndex
            is 300 (ports up to ~8021). A second stack on domain 1 then occupies
