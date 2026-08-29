@@ -261,11 +261,72 @@ here -- the scenario stack now disappears on its own when the run ends:
     shutting down the launch
 ```
 
-## Open: an unmanaged run that drove once did not arrive twice after
+## The non-arrival, taken apart (2026-08-30)
 
-The 2026-08-29 acceptance run reached the goal in about 97 s of driving. Two later runs of
-the same scenario on fresh stacks engaged correctly and then drove for 568 s without
-arriving, ending on SSv2's global timeout. The pilot reported `route_state=2, op_mode=2`
-throughout, so this is the ego driving and not arriving rather than anything failing to
-start -- the same shape as acb issue 016. Not investigated here; the phase's criteria were
-met on the run that passed, and this is recorded so the variance is not forgotten.
+The 2026-08-29 acceptance run reached the goal in about 97 s of driving; the two runs after
+it engaged correctly and then drove for 568 s without arriving. That turned out to be three
+separate things, two of them mine and neither of them the ego failing to drive.
+
+**1. The machine was starved.** An orphaned `carla_manual_control` from the cockpit work
+two days earlier was burning **nine cores**, and had been for 50 hours -- I had killed its
+`ros2 run` wrapper and never noticed the GUI child survived it (`ppid == 1`). Load average
+was 68 on 32 cores, and the interpreter was logging *"Your machine is not powerful enough
+to run the scenario at the specified frame rate (10 Hz)"* continuously. After reaping it,
+load fell to 3-11 and the ego stack came up in 4.5 minutes instead of 9. The orphan check
+in CLAUDE.md missed it because that `awk` filter lists component_node, zenohd and friends
+by name, and `carla_manual_co` is not among them.
+
+**2. CARLA was wedged.** The server had been up 45 hours and reported **zero actors** on
+Town01 -- not even traffic lights or a spectator. `systemctl --user restart
+carla-run-2000.service` brought back 173 actors and 36 lights. The bridge that had been
+talking to it ignored SIGTERM and needed SIGKILL, which is its own small finding: a bridge
+whose CARLA has gone away does not shut down cleanly.
+
+**3. The pilot drove the wrong vehicle.** This is the real defect. A scenario stack killed
+mid-run leaves its ego actor in CARLA -- SSv2 despawns nothing on SIGTERM -- and the next
+ego stack's pilot finds that vehicle's GNSS, localizes to it, routes it, engages it, and
+spends its whole budget on it. Measured on the failing run: the pilot reported
+`Localization: INITIALIZED at (104.51, -55.37)` -- the stale ego's position, not the spawn
+point at (320, -55.9) -- then "Driving..." for 564 s. The real scenario started eight
+minutes later, despawned the stale ego and spawned the ego the run was about, and nothing
+was left to drive it. From outside this looks exactly like an ego that drove for ten
+minutes and never arrived.
+
+Reproduced deliberately by spawning a hero at the stale position before starting the stack:
+the pilot localized to it at (104.64, -55.38), as predicted.
+
+Fixed in acb: the pilot now notices its vehicle being despawned (GNSS stops) and starts
+over from the acquisition step, bounded by `spawn_timeout`. A despawn within 15 m of the
+goal is treated as arrival instead -- a scenario despawns its ego the moment it scores the
+run, which is *before* the pilot can observe `route_state=ARRIVED`, and the first version of
+this fix turned every successful run into a 1800 s wait.
+
+**Verified.** With the machine quiet, CARLA restarted and no stale ego, an unmanaged run
+reached the goal: the ego drove x 320 through the turn to CARLA (88.3, 94.5), 5.5 m from
+the goal and inside the scenario's 6 m `ReachPositionCondition`, and the junit came back
+`failures="0" errors="0"`.
+
+## Open: localization can diverge from GNSS by 170 m
+
+A later run on a fresh stack stopped 193 m short and sat still with the pilot reporting
+`route_state=2, op_mode=2`. Autoware was not failing to drive -- it was deliberately
+holding, commanding `velocity: 0.0, acceleration: -3.4`. The reason is that it believed it
+was somewhere else:
+
+| source | pose |
+|---|---|
+| CARLA (truth) | (275.8, -54.0) |
+| `/sensing/gnss/pose_with_covariance` | (274.2, -53.6) |
+| `/localization/kinematic_state` (EKF) | **(105.07, -55.13)** |
+
+GNSS is right and the EKF is 170 m behind it. `/api/planning/velocity_factors` then reports
+`behavior: route-obstacle` at (96.1, -56.0), 9 m ahead of where it wrongly thinks the car
+is, so planning stops for a phantom. The pilot had already logged
+`Localization: INITIALIZED at (147.63, -55.61)` at the start of that run -- a position from
+the *previous* run, on a stack that had just been started -- and the estimate then moved
+backwards along the road (147 -> 105) while the real vehicle moved forwards (320 -> 275).
+
+That is the shape of acb issue 016, now with a signature precise enough to test against:
+**EKF disagrees with GNSS by a road-segment-sized distance on a repetitive straight map,
+and planning stops for an obstacle at the phantom position.** Not investigated further
+here.

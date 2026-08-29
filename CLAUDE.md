@@ -118,6 +118,24 @@ scenario stack, and the bridge. Killing the `play_launch` that owns a stack does
 always take its children with it, so repeated start/stop cycles silently accumulate
 orphans that hold ports and memory.
 
+**The scenario stack now ends itself.** SSv2 declares `scenario_test_runner` with
+`on_exit=ShutdownOnce()` -- "this process is required; when it exits, take the launch with
+it" -- and play_launch used to discard that handler, so every finished run left its
+interpreter, preprocessor and visualization alive. That is what had scenario stacks being
+found hours later (one interpreter was still spinning 40 hours after its scenario passed),
+and it is why the interpreter's own watchdog kept reporting `main ... unresponsive`: an
+idle deactivated node blocks in `spin_once()` with nothing left to do. Fixed in play_launch
+`779d68e`; a scenario stack started with a play_launch at or after that commit disappears
+on its own when the run ends, and its log says so:
+
+```
+[node:/simulation/scenario_test_runner] exited (code 0) and was declared on_exit=Shutdown:
+    shutting down the launch
+```
+
+**The ego stack does not** -- nothing in it is declared required -- so `just ego-av` still
+has to be stopped deliberately, and everything below still applies to it.
+
 Before a run, know what is already up:
 
 ```bash
@@ -142,11 +160,26 @@ ps -eo pid,etimes,args --no-headers | grep carla_scenario_bridge | grep -v grep
 just run &      # the only thing that starts one
 ```
 
-After stopping a stack, reap what outlived it. Orphans show up as `ppid == 1`:
+After stopping a stack, reap what outlived it. This is now mostly the ego stack's
+business -- a scenario stack that ended on its own leaves nothing -- but a stack killed by
+hand mid-run still can. Orphans show up as `ppid == 1`:
 
 ```bash
 ps -eo pid,ppid,etimes,comm --no-headers | awk '$2==1 && ($4=="component_node" ||
-    $4=="add_two_ints_se" || $4=="zenohd" || $4=="carla_scenario_")'
+    $4=="add_two_ints_se" || $4=="zenohd" || $4=="carla_scenario_" ||
+    $4=="carla_manual_co" || $4=="auto_drive" || $4=="acb_bridge")'
+```
+
+A name-based list only finds what is on it. A `carla_manual_control` left over from the
+cockpit work survived the kill of its `ros2 run` wrapper and spent **50 hours burning nine
+cores**, and this check walked straight past it because its `comm` was not listed. Load
+average was 68 on 32 cores, the interpreter logged "your machine is not powerful enough"
+continuously, and an ego stack took nine minutes to come up instead of four. So read the
+top of `ps` as well, not just the list:
+
+```bash
+ps -eo pcpu,pid,etimes,comm --no-headers --sort=-pcpu | head
+uptime          # load should be well under the core count between runs
 ```
 
 Kill those by pid. Leave the CARLA server alone unless it is actually wedged -- it costs
