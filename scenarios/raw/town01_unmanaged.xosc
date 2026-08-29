@@ -93,7 +93,7 @@
 								<ConditionGroup>
 									<Condition name="timeout_condition" delay="0" conditionEdge="none">
 										<ByValueCondition>
-											<SimulationTimeCondition value="300" rule="greaterThan" />
+											<SimulationTimeCondition value="600" rule="greaterThan" />
 										</ByValueCondition>
 									</Condition>
 								</ConditionGroup>

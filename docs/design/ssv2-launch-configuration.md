@@ -60,7 +60,8 @@ map from the `.xosc`'s `LogicFile`.
 SSv2's `FieldOperatorApplication` (concealer) no longer launches Autoware as a child
 process. `ego_av.launch.xml` brings up the same launch file the concealer used to fork —
 `acb_launch/carla_simulator.launch.xml` — together with the ego's `acb_bridge`
-(`publish_clock:=false`), mirroring `background_av.launch.xml`. That launch file carries
+(`publish_clock:=false` when the ego is managed and therefore shares SSv2's domain; `true`
+when it is not), mirroring `background_av.launch.xml`. That launch file carries
 the CARLA-specific settings a stock `autoware_launch/planning_simulator.launch.xml` lacks:
 - `use_sim_time=true` globally
 - `system_run_mode=logging_simulation` (disables pose_initializer stop check)
@@ -146,9 +147,10 @@ SSv2 sends UpdateFrame
 `world.tick()` blocks until CARLA completes the step, so clock publishing is naturally ordered. The bridge must be in passive `wait_for_tick_or_timeout()` mode (not calling `world.tick()` itself). This is the default when `demo_scenario.py` is not running.
 
 > **`/clock` ownership.** SSv2's `traffic_simulator` publishes `/clock` in its own domain. So
-> in the ego's domain `acb_bridge` must be launched with `publish_clock:=false` — two
-> publishers cause "Detected jump back in time. Clearing TF buffer" in NDT and EKF. In
-> background-AV domains there is no SSv2, so `acb_bridge` publishes `/clock` itself. See
+> any `acb_bridge` sharing that domain must be launched with `publish_clock:=false` — two
+> publishers cause "Detected jump back in time. Clearing TF buffer" in NDT and EKF. That is
+> the managed ego's case, and only that case: background-AV domains have no SSv2, and
+> neither does an unmanaged ego's, so those bridges publish `/clock` themselves. See
 > [multi-instance-architecture.md](multi-instance-architecture.md#clock-ownership).
 >
 > Related: sensor messages must be stamped from the node's ROS clock, never from

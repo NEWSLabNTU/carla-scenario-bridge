@@ -16,7 +16,14 @@ What counts as ready is the thing the concealer actually needs: the ADAPI operat
 topic being published. That is later than "the process exists" and earlier than "the ego is
 engaged", which is the window the concealer expects to attach in.
 
-    ROS_DOMAIN_ID=1 scripts/ego_stack_health.py [--timeout 10]
+An unmanaged ego needs one more thing. With the concealer inert nothing in SSv2
+routes or engages it -- `acb_pilot`'s `auto_drive` is the only thing that does, and it is
+an ordinary node that can exit on its own (it has a deadline, and it fails if no vehicle
+ever appears). If it is already gone when a scenario starts, the ego spawns, sits still,
+and the run dies at the storyboard's timeout naming nothing. `--require-pilot` turns that
+into a refusal that names the pilot.
+
+    ROS_DOMAIN_ID=1 scripts/ego_stack_health.py [--timeout 10] [--require-pilot]
 """
 
 import argparse
@@ -27,6 +34,10 @@ import sys
 # API layer is up rather than merely the launch having been started.
 REQUIRED_TOPIC = "/api/operation_mode/state"
 
+# The node `acb_pilot`'s auto_drive entry point creates. Only required for an
+# unmanaged ego, where it stands in for the concealer.
+PILOT_NODE = "auto_drive"
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -35,6 +46,12 @@ def main() -> int:
         type=float,
         default=10.0,
         help="seconds to wait for the topic to appear with a live publisher",
+    )
+    ap.add_argument(
+        "--require-pilot",
+        action="store_true",
+        help="also require acb_pilot's auto_drive node (an unmanaged ego has no other "
+        "way to be routed or engaged)",
     )
     args = ap.parse_args()
 
@@ -59,8 +76,19 @@ def main() -> int:
         deadline = time.time() + args.timeout
         while time.time() < deadline:
             if node.count_publishers(REQUIRED_TOPIC) > 0:
+                if args.require_pilot and PILOT_NODE not in (
+                    n for n, _ns in node.get_node_names_and_namespaces()
+                ):
+                    print(
+                        f"[ego-health] not ready: the ADAPI is up but {PILOT_NODE} is "
+                        "not running. An unmanaged ego is routed and engaged only by "
+                        "acb_pilot; without it the ego would spawn and never move. "
+                        "Check the pilot's log under play_log/ego/*/node/auto_drive."
+                    )
+                    return 1
                 print(f"[ego-health] ok: {REQUIRED_TOPIC} has a publisher; "
-                      "the ego stack's ADAPI is up")
+                      "the ego stack's ADAPI is up"
+                      + (f", and {PILOT_NODE} is running" if args.require_pilot else ""))
                 return 0
             rclpy.spin_once(node, timeout_sec=0.2)
         print(f"[ego-health] not ready: nothing publishes {REQUIRED_TOPIC} after "

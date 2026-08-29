@@ -75,7 +75,7 @@ concealer, traffic_simulator, openscenario_interpreter and deps).
 `carla-compat-unforked` as **`managed-ego-unforked`** (`9ca1e7cd`, pushed to NEWSLabNTU) and
 the submodule now pins it. The rebase was clean despite both series touching
 `field_operator_application.cpp`. The fork's whole diff against upstream 25.0.22 is now
-eight files, +182/-78, and `concealer/launch.hpp` is byte-identical — every carried patch is
+eight files, +197/-78, and `concealer/launch.hpp` is byte-identical — every carried patch is
 behavioural and offerable upstream, which is what 012's restated criterion asked for.
 
 Verified live on the new pin: a **stock** run (`managed_ego` defaulting to `true`) still
@@ -111,27 +111,47 @@ inspection.
       into the background AV file: the two have diverged by a dozen arguments (accel/brake
       maps, ground-truth objects, steering trim, lidar model, occupancy grid, API adaptor)
       and merging them is a refactor with its own regression risk, separable from this
-- [ ] Delete the ego-domain `publish_clock:=false` special case from launch and docs
-- [ ] Bridge-side readiness/engage reporting: pilot failures surface as bridge errors
-      naming the pilot (carried over from the original 012 draft)
+- [x] Delete the ego-domain `publish_clock:=false` special case from launch and docs —
+      **kept, and reframed instead.** The mechanism cannot be deleted while managed runs
+      are supported: an acceptance criterion below pins `managed_ego:=true` to 012's
+      behavior, and a managed ego shares SSv2's domain, where a second `/clock` publisher
+      makes NDT and EKF log backwards jumps. What was wrong was calling it an *ego* special
+      case. It is a property of sharing a domain with SSv2, which with `managed_ego:=false`
+      nothing does. Launch already derives it from `managed`; the four docs that described
+      it as the ego's rule now say so (`architecture.md`,
+      `multi-instance-architecture.md`, `ssv2-launch-configuration.md`)
+- [x] Bridge-side readiness/engage reporting: pilot failures surface as errors naming the
+      pilot — `scripts/ego_stack_health.py --require-pilot`, which `just scenario` passes
+      when `EGO_MANAGED=false`. Verified both ways on a live domain-3 stack: with the pilot
+      running the gate passes and says so; with it killed the run is refused with *"the
+      ADAPI is up but auto_drive is not running. An unmanaged ego is routed and engaged
+      only by acb_pilot; without it the ego would spawn and never move."* Placed in the
+      health gate rather than the bridge because that is where it is actionable — before a
+      scenario starts, in the ego's own domain, which the bridge cannot see
 
 ### Documentation
 
-- [ ] Design Principle 5 rewritten again: SSv2 drives the *scenario*; Autoware lifecycle
-      and autonomy are external, uniformly
-- [ ] Scenario-authoring rules for unmanaged runs: no ego autonomy actions, no ego-state
-      conditions; goal lives in bridge config
-- [ ] Fork policy documented: what the fork may carry, rebase cadence, upstream intent
+- [x] Design Principle 5 rewritten again — now "SSv2 Drives the Scenario; Autoware Is
+      External", with a table contrasting the two modes across who routes and engages, the
+      domain, `/clock`, ego autonomy actions, and where the goal lives
+- [x] Scenario-authoring rules for unmanaged runs — `docs/design/scenario-authoring.md`:
+      no ego autonomy actions (and why `setVelocityLimit` is the one inert exception), no
+      ego-state conditions, goal in the pilot's poses file and stated twice when the
+      scenario also scores arrival, and the scenario-time budget the pilot needs
+- [x] Fork policy documented — `docs/design/fork-policy.md`: current diff (8 files,
+      +197/-78 against 25.0.22), what the fork may and may not carry, the five-step rebase
+      procedure including pushing before pinning, and the upstream intent
 
 ### Tests
 
 - [x] Fork unit/launch test: `managed_ego:=true` is stock behavior — live on the rebased
       pin: a default run engages and drives (x 320 → 105.6, yaw ratio 0.944), so the patch
       series is inert when the parameter is left alone
-- [ ] Integration: unmanaged run starts NPC logic without any Autoware in SSv2's domain —
-      **half verified.** SSv2's domain is clean: with the ego stack in domain 3, domain 1
-      contains only `/simulation/*` and play_launch's own node, no Autoware and no
-      `acb_bridge`. The storyboard side is blocked below
+- [x] Integration: unmanaged run starts NPC logic without any Autoware in SSv2's domain —
+      **fully verified now that the storyboard side runs.** Domain 1 contains exactly
+      `/play_launch_*`, `/simulation/openscenario_interpreter`,
+      `/simulation/openscenario_preprocessor`, `/simulation/visualization` and two
+      `getParameterNode` helpers: no Autoware, no `acb_bridge`, no clock consumers
 - [x] Integration: ego autonomy action in an unmanaged run fails fast, message names the
       parameter — verified twice on live runs. `town01_traffic_light.xosc` carries an ego
       `AcquirePositionAction`, which reaches `requestAcquirePosition` → `requestClearRoute`
@@ -139,19 +159,31 @@ inspection.
       ego vehicle is not managed by scenario_simulator_v2 (the parameter managed_ego:=false
       was given)."* The ego is spawned and despawned within half a second rather than
       driving somewhere the scenario did not intend
-- [ ] End-to-end: ego in its own domain localizes, routes via pilot, drives to
-      `exitSuccess`; every domain has exactly one `/clock` publisher, none silenced
+- [x] End-to-end: ego in its own domain localizes, routes via pilot, drives to
+      `exitSuccess` — run 2026-08-29 on `scenarios/town01_unmanaged.xosc` with
+      `EGO_MANAGED=false`. The interpreter logged `Passed` and wrote a junit with
+      `failures="0" errors="0"`; the ego drove x 320 → the goal at (88.4, -100.0) and was
+      despawned on success. Clock criterion holds: domain 3 reports exactly one `/clock`
+      publisher, domain 1 has no `/clock` at all once SSv2 exits, and nothing is silenced
 
 ## Acceptance Criteria
 
-- [ ] SSv2's domain contains no Autoware, no `acb_bridge`, no clock consumers — only SSv2
-- [ ] Ego and background AV domains are indistinguishable in launch structure and clock
-      policy
-- [ ] A managed-ego scenario run against the fork with `managed_ego:=true` (default) is
-      behaviorally identical to 012
-- [ ] Unmanaged runs fail fast on scenarios that assume a managed ego
-- [ ] The fork diff against upstream is the `managed_ego` series and nothing else
-- [ ] `just test` passes
+- [x] SSv2's domain contains no Autoware, no `acb_bridge`, no clock consumers — only SSv2.
+      Measured on the 2026-08-29 unmanaged run: six nodes, all `/simulation/*` or
+      play_launch's own
+- [x] Ego and background AV domains are indistinguishable in launch structure and clock
+      policy — both get their own domain, their own `/clock` from their own `acb_bridge`,
+      and the same `acb_pilot` node routing and engaging them. They remain two launch
+      *files*, which differ by a dozen perception/vehicle arguments unrelated to this phase
+- [x] A managed-ego scenario run against the fork with `managed_ego:=true` (default) is
+      behaviorally identical to 012 — `VERDICT=DROVE`, x 320 → 105.6, yaw ratio 0.944
+- [x] Unmanaged runs fail fast on scenarios that assume a managed ego — verified twice;
+      `town01_traffic_light.xosc`'s ego `AcquirePositionAction` aborts the run in under a
+      second with a message naming `managed_ego:=false`
+- [x] The fork diff against upstream is the `managed_ego` series and nothing else — 8 files,
+      +197/-78 against 25.0.22, five commits, `concealer/launch.hpp` byte-identical
+      (`docs/design/fork-policy.md`)
+- [x] `just test` passes — 90 tests, 90 passed, 1 skipped; `just check` clean
 
 ## Risks
 
@@ -165,35 +197,48 @@ inspection.
   but should still be answered before deleting clock special cases — background domains
   already publish their own.
 
-## Blocker: an unmanaged ego never localizes (2026-08-28)
+## Resolved: the pilot was timing the wrong interval (2026-08-29)
 
-The unmanaged path is wired end to end and stops one step short of driving. With
-`managed_ego:=false`, a scenario carrying no ego routing action
-(`scenarios/town01_unmanaged.xosc`) no longer aborts — but the ego never moves, and the
-pilot exits:
+The blocker recorded on 2026-08-28 — "an unmanaged ego never localizes", pilot stuck at
+`UNINITIALIZED` for its full 600 s — was not a localization fault. Localization was never
+given anything to localize.
 
-```
-  [auto_drive]  Localization state: UNINITIALIZED (no fresh pose yet)   (x120, every 5 s)
-  [auto_drive]  Localization did not reach INITIALIZED with a live pose within 600s
-```
+**Root cause.** `auto_drive`'s `timeout` is a total budget measured from node start, and the
+node starts with the ego stack. A background AV's vehicle is spawned by its own stack, so
+that budget begins with a vehicle present. An unmanaged scenario ego does not exist until
+someone starts a scenario that spawns it, which is an unbounded time later. Measured on the
+failing run: the pilot started at 13:46:30, the stack itself took until 13:54:15 to come up
+(8 minutes of the 600 s gone before anything could work), the pilot died at 13:56:41, and
+the scenario spawned the ego at 13:59:40 — **2.5 minutes after the pilot had given up.**
+With a vehicle present, localization takes 55 s.
 
-**Why this is specific to unmanaged runs.** In a managed run the concealer supplies the
-initial pose: `EgoEntity` calls `initialize(getMapPose())` with the pose SSv2 teleported the
-ego to. Inert, it supplies nothing, and nothing else takes over. Background AVs do not hit
-this because their scenario is a pilot goal file and their stack has always come up this
-way; the ego is the first vehicle to lose an initializer it used to depend on.
+Two things I had written down as leads were both wrong, and are worth recording as such:
 
-Not a missing node: `/localization/util/pose_initializer` and
-`/localization/util/default_adapi/helpers/autoware_automatic_pose_initializer` are both
-running in domain 3, and `acb_pilot` has a `_reinitialize_localization` that calls
-`/api/localization/initialize` with an empty pose to force a GNSS estimate. Something in
-that chain does not converge for the ego stack. The next measurement is whether the pilot
-ever issues that call and what the service answers, then whether GNSS is being published
-with a usable fix in domain 3.
+- *"Add `initial_pose` to `ego_poses.yaml`"* — `auto_drive` reads only `goal_pose` and never
+  publishes `/initialpose`. The key would have been ignored.
+- *"Nothing re-triggers the automatic initializer"* — `autoware_automatic_pose_initializer`
+  re-calls `/api/localization/initialize` **every second** while `UNINITIALIZED`
+  (`automatic_pose_initializer.cpp:37-47`). It was retrying the whole time and had nothing
+  to work with.
 
-`scenarios/ego_poses.yaml` carries only `goal_pose`. `acb_pilot`'s format also accepts
-`initial_pose` (see `config/example_poses.yaml`), which is the obvious thing to try first:
-give the ego's spawn pose explicitly rather than expecting GNSS to find it.
+**Fix** (`acb_pilot/auto_drive.py`): a `step1b_wait_for_vehicle` that waits for the first
+`/sensing/gnss/pose_with_covariance` message — `acb_bridge` publishes GNSS only once it has
+a vehicle to attach the sensor to — under its own `spawn_timeout` parameter (default
+1800 s), after which the drive budget starts. Waiting now says what it is waiting for
+(*"No vehicle yet: nothing is publishing /sensing/gnss/pose_with_covariance"*) and failing
+says what was actually wrong.
 
-Until this is resolved the remaining integration and end-to-end items cannot be run, since
-all of them need an unmanaged ego that actually drives.
+**Verified end to end.** With the fix the pilot waited through the stack's startup and the
+operator's delay, picked up the ego when the scenario spawned it, and drove it to the goal;
+the interpreter logged `Passed`. See the end-to-end test item above.
+
+## Known, pre-existing: the interpreter hangs after it passes
+
+On the successful run the interpreter wrote its junit and logged `Passed` at 22:16:04, then
+its main thread went unresponsive and stayed that way (`status_monitor: main of
+openscenario_interpreter_node unresponsive for 284079 ms`), leaving both stacks up until
+killed by hand. This is **not** a 013 regression: `unresponsive` appears in every scenario
+run in `play_log/`, managed and unmanaged, passing and failing, going back to the 2026-08-28
+runs. It is the mechanism behind the stacks that keep being found alive hours later, so it
+deserves its own investigation — but it happens strictly after the scenario's verdict and
+does not affect any criterion here.

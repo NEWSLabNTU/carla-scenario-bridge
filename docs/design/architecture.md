@@ -68,27 +68,35 @@ All `AttachSensor` requests return `Success=false`. CARLA's own sensors (GPU lid
 
 CARLA's built-in traffic light cycling is frozen. The adapter maps SSv2 lanelet signal IDs to CARLA `TrafficLight` actors and sets their states per `UpdateTrafficLights` commands.
 
-### 5. SSv2 Drives Autoware's Autonomy, Not Its Lifecycle
+### 5. SSv2 Drives the Scenario; Autoware Is External
 
-SSv2's `FieldOperatorApplication` (concealer) initializes localization, sets routes, and
-engages autonomous mode. It **launches nothing**: the scenario runs with
-`launch_autoware:=false`, and every Autoware stack — the ego's and each background AV's — is
-brought up by our own launch files before the scenario starts.
+SSv2 **launches nothing**. Every Autoware stack — the ego's and each background AV's — is
+brought up by our own launch files before the scenario starts, and outlives it. SSv2 has no
+child process to kill, so a run ends without tearing Autoware down and the next run reuses
+the same stack. Verified live: two consecutive scenarios on one stack both drove
+(phase 012).
 
-`launch_autoware:=false` means "do not fork", not "run without Autoware". `EgoEntity`
-inherits the concealer as a base class, so it is always constructed; the parameter decides
-only whether the constructor gets a real child pid or `0`. Every subscription, service
-client and state machine stays wired, which is why the concealer can drive a stack it did
-not start. That is the configuration upstream intends for reusing one Autoware across
-scenarios.
+Whether SSv2 drives the ego's *autonomy* is now a choice, made per run by `managed_ego`:
 
-The consequence worth stating: **the ego stack outlives the scenario.** SSv2 has no child
-process to kill, so a run ends without tearing Autoware down, and the next run re-engages
-the same stack. Verified live — two consecutive scenarios on one stack both reached
-AUTONOMOUS with a route set and drove (phase 012).
+| | `managed_ego:=true` (default) | `managed_ego:=false` |
+|---|---|---|
+| Who routes and engages the ego | SSv2's `FieldOperatorApplication` (concealer) | `acb_pilot`'s `auto_drive`, as for every background AV |
+| Ego's `ROS_DOMAIN_ID` | SSv2's, because the concealer talks plain ROS | its own, like any other AV |
+| `/clock` in that domain | SSv2 publishes it; `acb_bridge` runs `publish_clock:=false` | `acb_bridge` publishes it |
+| Ego autonomy actions in the `.xosc` | honored | hard error naming the parameter |
+| Ego goal | the scenario's `AcquirePositionAction` | the pilot's poses file |
 
-This replaces the `auto_drive.py` pilot script from `autoware_carla_bridge` for the ego.
-Background AVs keep their own pilot, since SSv2 does not know about them.
+`managed_ego:=true` is upstream behavior and phase 012's. `launch_autoware:=false` means
+"do not fork", not "run without Autoware": `EgoEntity` inherits the concealer as a base
+class, so it is always constructed and every subscription, service client and state machine
+stays wired — which is why the concealer can drive a stack it did not start.
+
+`managed_ego:=false` (phase 013, carried on the NEWSLabNTU fork) makes that base class inert
+instead. Nothing in SSv2 then touches the ego's autonomy, so **every** Autoware in the
+system is launched, routed and engaged the same way, and SSv2's domain contains only SSv2.
+The cost is that the ego's goal is stated in the pilot's poses file rather than the
+scenario, and ego-state conditions never fire; see
+[scenario-authoring.md](scenario-authoring.md) for the rules that follow from this.
 
 SSv2's `AutowareUniverse` (concealer) must be **disabled** for vehicle status topics, since `autoware_carla_bridge` publishes them from real CARLA state. The `simulate_localization` parameter must be `false` so Autoware runs its real GNSS->NDT pipeline.
 
@@ -147,7 +155,7 @@ Both processes connect to the same CARLA server. Responsibilities are split:
 | Sensor data -> ROS 2 | No | Yes |
 | Vehicle status -> ROS 2 | No | Yes |
 | Control commands -> CARLA | No | Yes (actuation_cmd -> apply_control) |
-| Clock publishing | No | Domain-dependent — see [multi-instance-architecture.md](multi-instance-architecture.md#clock-ownership). SSv2 owns `/clock` in the ego's domain, so `acb_bridge` must be launched there with `publish_clock:=false` |
+| Clock publishing | No | Domain-dependent — see [multi-instance-architecture.md](multi-instance-architecture.md#clock-ownership). Whoever shares a domain with SSv2 yields `/clock` to it: with `managed_ego:=true` that is the ego's domain, and `acb_bridge` is launched there with `publish_clock:=false`. With `managed_ego:=false` no stack shares SSv2's domain and every `acb_bridge` publishes its own |
 | Traffic light control | Yes (freeze + set_state) | No |
 | CARLA world.tick() | Yes (via UpdateFrame) | No (passive wait_for_tick) |
 

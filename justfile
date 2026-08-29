@@ -249,12 +249,16 @@ _require-ego-stack:
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     # Look where the ego actually is. An unmanaged ego lives in its own domain, so checking
     # SSv2's would find nothing and refuse a run that was correctly set up.
+    # An unmanaged ego has no concealer to route or engage it, so the pilot is not
+    # optional there and the gate checks for it too.
+    require_pilot=""
     if [ "${EGO_MANAGED:-true}" = "true" ]; then
         export ROS_DOMAIN_ID={{ego_domain}}
     else
         export ROS_DOMAIN_ID={{ego_unmanaged_domain}}
+        require_pilot="--require-pilot"
     fi
-    if ! "{{project}}/scripts/ego_stack_health.py"; then
+    if ! "{{project}}/scripts/ego_stack_health.py" $require_pilot; then
         echo "[just] Refusing to start: run \`just ego-av\` first and wait for"
         echo "[just] 'Startup complete'. See phase 012, startup order."
         exit 1

@@ -123,7 +123,8 @@ just e2e scenarios/town01_ego_drive.xosc   # exports ROS_DOMAIN_ID=1 itself
 
 `csb_bridge` loads the map, spawns `bg_av_1` at `Initialize`, then spawns the ego when SSv2
 asks. `acb_bridge` in this domain runs with `publish_clock:=false`, because SSv2 owns
-`/clock` here.
+`/clock` here. This applies to a **managed** ego, which shares SSv2's domain by necessity;
+an unmanaged one gets its own domain and publishes its own clock like any background AV.
 
 **3. Start the background AV's stack** in its own domain (`D1`, i.e. `ROS_DOMAIN_ID=2`):
 
@@ -212,7 +213,7 @@ Changes required, all small and all additive:
 
 | Change | Why |
 |---|---|
-| `publish_clock` bool parameter | Invariant 4. False in `D0` where SSv2 publishes `/clock`; true in `D1..Dn` where nothing else does |
+| `publish_clock` bool parameter | Invariant 4. False wherever SSv2 shares the domain — `D0` with a managed ego — and true everywhere else, which with `managed_ego:=false` is every AV domain including the ego's |
 | Clock epoch offset | Background domains have no SSv2, so `/clock` must start near zero rather than at CARLA server uptime |
 | Sensor stamps from `node.get_clock().now()` | `data.timestamp()` is CARLA server uptime; SSv2's `/clock` starts at 0. Currently wrong at 5 sites in `sensor_bridge.rs` |
 | Tick-wait timeout is not a disconnect | See [Failure modes](#failure-modes) |
