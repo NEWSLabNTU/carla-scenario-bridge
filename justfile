@@ -340,6 +340,22 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # The cost is that a genuinely lost load self-heals in ten minutes rather than three.
     # That is the right trade here: a lost load is rare and visible, while a silently
     # missing classifier looks like a perception problem and has cost days.
+    # A ROS launch argument cannot carry an empty value -- `goal_poses_file:=` is rejected
+    # as "malformed launch argument", and the failure comes minutes in, after the whole
+    # parse. The launch file already declares a default for it, so pass the argument only
+    # when there is something to pass. A managed run leaves it unset, which is why this
+    # broke `just ego-av` outright rather than only the unmanaged path.
+    optional_args=()
+    if [ -n "$goal_poses_file" ]; then
+        optional_args+=(goal_poses_file:="$goal_poses_file")
+    fi
+    # The pedal maps have the same trap from the other direction: these use ${VAR-default}
+    # rather than ${VAR:-default}, so `ACCEL_MAP_PATH= just ego-av` passes an empty value
+    # and fails the same way. The bridge spells "off" as `none`, so map empty onto that.
+    accel_map="${ACCEL_MAP_PATH-$(ros2 pkg prefix --share acb_vehicle_description)/config/accel_map.csv}"
+    brake_map="${BRAKE_MAP_PATH-$(ros2 pkg prefix --share acb_vehicle_description)/config/brake_map.csv}"
+    accel_map="${accel_map:-none}"
+    brake_map="${brake_map:-none}"
     # Not exec: the trap above has to survive to clean up the API adaptors.
     play_launch launch --parser python --web-addr 0.0.0.0:8082 \
         --load-node-timeout 120 \
@@ -350,13 +366,13 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         carla_port:={{carla_port}} \
         managed:=$managed \
         publish_clock:=$clock \
-        goal_poses_file:="$goal_poses_file" \
         report_measured_steering:="${REPORT_MEASURED_STEERING:-false}" \
         steering_multiplier:="${STEERING_MULTIPLIER:-1.0}" \
         publish_ground_truth_objects:="${GROUND_TRUTH_OBJECTS:-false}" \
         ground_truth_range_m:="${GROUND_TRUTH_RANGE_M:-100.0}" \
-        accel_map_path:="${ACCEL_MAP_PATH-$(ros2 pkg prefix --share acb_vehicle_description)/config/accel_map.csv}" \
-        brake_map_path:="${BRAKE_MAP_PATH-$(ros2 pkg prefix --share acb_vehicle_description)/config/brake_map.csv}"
+        accel_map_path:="$accel_map" \
+        brake_map_path:="$brake_map" \
+        "${optional_args[@]}"
 
 # Launch one background AV's Autoware + acb_bridge + pilot in its own ROS domain.
 # The bridge spawns the vehicle (see background_avs in bridge_config.yaml); this brings up
