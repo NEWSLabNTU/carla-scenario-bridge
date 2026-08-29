@@ -213,15 +213,22 @@ vehicle-params blueprint="vehicle.tesla.model3" *args:
 #
 # Usage: just acceptance [scenario] [runs]
 #        just acceptance scenarios/town01_ego_drive.xosc 3
-acceptance scenario=(project + "/scenarios/town01_ego_drive.xosc") runs="1" domain=ego_domain:
+# For an unmanaged ego (phase 013), bring the stack up that way first and pass EGO_MANAGED:
+#   EGO_MANAGED=false EGO_GOAL_POSES_FILE=$PWD/scenarios/ego_poses.yaml just ego-av
+#   EGO_MANAGED=false just acceptance $PWD/scenarios/town01_unmanaged.xosc
+acceptance scenario=(project + "/scenarios/town01_ego_drive.xosc") runs="1" domain="":
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    python3 "{{acb_src}}/scripts/acceptance.py" \
-        --scenario "{{scenario}}" --runs {{runs}} --domain {{domain}}
+    args=(--scenario "{{scenario}}" --runs {{runs}})
+    # Match the stack: an unmanaged ego lives in its own domain, and the scenario has to be
+    # launched the same way or SSv2 routes an ego that is not listening.
+    [ "${EGO_MANAGED:-true}" = "false" ] && args+=(--unmanaged)
+    [ -n "{{domain}}" ] && args+=(--domain "{{domain}}")
+    python3 "{{acb_src}}/scripts/acceptance.py" "${args[@]}"
 
 # Report whether CARLA is fit to run a scenario against, and why if not.
 carla-health:
