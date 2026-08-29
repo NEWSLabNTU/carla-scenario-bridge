@@ -205,6 +205,24 @@ carla-status:
 vehicle-params blueprint="vehicle.tesla.model3" *args:
     "{{acb_src}}/scripts/extract_vehicle_params.py" {{blueprint}} --port {{carla_port}} {{args}}
 
+# Run a scenario against a live stack and judge it, with the reasons attached.
+#
+# Needs `just run` and `just ego-av` already up -- it judges a stack, it does not build one.
+# Checks the scenario's own verdict, that the ego actually drove somewhere, that no node died,
+# and reports non-OK diagnostics. Exit status is 0 only if every run passed every check.
+#
+# Usage: just acceptance [scenario] [runs]
+#        just acceptance scenarios/town01_ego_drive.xosc 3
+acceptance scenario=(project + "/scenarios/town01_ego_drive.xosc") runs="1" domain=ego_domain:
+    #!/usr/bin/env bash
+    set -e
+    source "{{autoware_setup}}"
+    source "{{acb_src}}/install/setup.bash"
+    source "{{project}}/install/setup.bash"
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    python3 "{{acb_src}}/scripts/acceptance.py" \
+        --scenario "{{scenario}}" --runs {{runs}} --domain {{domain}}
+
 # Report whether CARLA is fit to run a scenario against, and why if not.
 carla-health:
     "{{acb_src}}/scripts/carla_health.py" --port {{carla_port}}
