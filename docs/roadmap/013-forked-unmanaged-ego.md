@@ -232,13 +232,40 @@ says what was actually wrong.
 operator's delay, picked up the ego when the scenario spawned it, and drove it to the goal;
 the interpreter logged `Passed`. See the end-to-end test item above.
 
-## Known, pre-existing: the interpreter hangs after it passes
+## Fixed: the interpreter outliving its verdict (2026-08-29)
 
-On the successful run the interpreter wrote its junit and logged `Passed` at 22:16:04, then
-its main thread went unresponsive and stayed that way (`status_monitor: main of
-openscenario_interpreter_node unresponsive for 284079 ms`), leaving both stacks up until
-killed by hand. This is **not** a 013 regression: `unresponsive` appears in every scenario
-run in `play_log/`, managed and unmanaged, passing and failing, going back to the 2026-08-28
-runs. It is the mechanism behind the stacks that keep being found alive hours later, so it
-deserves its own investigation — but it happens strictly after the scenario's verdict and
-does not affect any criterion here.
+On the successful run the interpreter wrote its junit and logged `Passed` at 22:16:04,
+then went unresponsive and stayed up until killed by hand (`status_monitor: main of
+openscenario_interpreter_node unresponsive for 284079 ms`). It was not a 013 regression --
+`unresponsive` appears in every run in `play_log/`, managed and unmanaged, passing and
+failing -- and it is the mechanism behind stacks found alive hours later, one of them 40.
+
+It was not an interpreter deadlock either. `openscenario_interpreter_node`'s main loop is
+`while (rclcpp::ok()) { status_monitor.touch(); executor.spin_once(); }`, and `spin_once()`
+takes no timeout, so an idle deactivated node blocks in `rcl_wait` and its own watchdog
+calls that "unresponsive". Nothing was wrong with it; nothing had told it to stop.
+
+The cause was in **play_launch**, not SSv2 and not this repo. SSv2 declares
+`scenario_test_runner` with `on_exit=ShutdownOnce()` -- the launch idiom for "this process
+is required; when it exits, take the whole launch with it" -- and play_launch discarded
+`on_exit` handlers at dump time, warning once that only respawn was supported. So the
+orchestrator exited 0 (its `status` file reads `0`; the other three nodes have no `status`
+at all) and nothing tore the rest down.
+
+Fixed in play_launch `779d68e` (issue 0025): handlers are carried through the dump, matched
+on canonical member ids, and honoured with the same teardown the signal path uses. Verified
+here -- the scenario stack now disappears on its own when the run ends:
+
+```
+[node:/simulation/scenario_test_runner] exited (code 0) and was declared on_exit=Shutdown:
+    shutting down the launch
+```
+
+## Open: an unmanaged run that drove once did not arrive twice after
+
+The 2026-08-29 acceptance run reached the goal in about 97 s of driving. Two later runs of
+the same scenario on fresh stacks engaged correctly and then drove for 568 s without
+arriving, ending on SSv2's global timeout. The pilot reported `route_state=2, op_mode=2`
+throughout, so this is the ego driving and not arriving rather than anything failing to
+start -- the same shape as acb issue 016. Not investigated here; the phase's criteria were
+met on the run that passed, and this is recorded so the variance is not forgotten.
