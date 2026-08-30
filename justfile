@@ -378,6 +378,10 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     if [ -n "$goal_poses_file" ]; then
         optional_args+=(goal_poses_file:="$goal_poses_file")
     fi
+    # CONTROL_TRACE_PATH writes per-stage control latency as CSV; see acb's control_trace.
+    if [ -n "${CONTROL_TRACE_PATH:-}" ]; then
+        optional_args+=(control_trace_path:="$CONTROL_TRACE_PATH")
+    fi
     # The pedal maps have the same trap from the other direction: these use ${VAR-default}
     # rather than ${VAR:-default}, so `ACCEL_MAP_PATH= just ego-av` passes an empty value
     # and fails the same way. The bridge spells "off" as `none`, so map empty onto that.
