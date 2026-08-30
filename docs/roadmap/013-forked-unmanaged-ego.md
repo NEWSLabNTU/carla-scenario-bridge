@@ -306,7 +306,7 @@ reached the goal: the ego drove x 320 through the turn to CARLA (88.3, 94.5), 5.
 the goal and inside the scenario's 6 m `ReachPositionCondition`, and the junit came back
 `failures="0" errors="0"`.
 
-## Open: localization diverges from GNSS, in about one run in four
+## Open: localization diverges from GNSS -- once, on a stale build, not since
 
 A run on 2026-08-30 stopped 193 m short and sat still with the pilot reporting
 `route_state=2, op_mode=2`. Autoware was not failing to drive -- it was deliberately
@@ -336,7 +336,25 @@ on every run (acb `be15963`), and four judged unmanaged runs give:
 | 2 | 1.27 m | 214.8 m | 185.6 m |
 | 3 | **32.19 m** | 34.3 m | 134.8 m |
 
-So roughly **one run in four**, on the numbers so far. The median is what separates the two
+That was **one run in four** -- but every one of those runs was made against the
+`acb_bridge` binary that turned out to be three days stale (see the section below). Repeated
+on a rebuilt stack, the fault did not appear:
+
+| run (rebuilt acb) | median gap | max gap | longitudinal |
+|---|---|---|---|
+| 1 | 1.21 m | 2.2 m | 0.385 |
+| 2 | 0.47 m | 25.3 m | 0.235 |
+| 3 | 1.37 m | 238.6 m | 0.235 |
+| 4 | 0.52 m | 215.2 m | 0.385 |
+
+**Zero faults in four.** That is not proof it is fixed -- four runs cannot distinguish "gone"
+from "one in ten" -- but the one-in-four rate does not survive, and it should not be quoted.
+What does survive is the healthy range: 0.47 to 1.54 m across every run on either build,
+which is what `MAX_LOCALIZATION_GAP` is bracketed against at the healthy end. The fault end
+of that bracket (32.19 m) comes from a stale-build run and is the weakest number in it.
+
+The max column is the reason the check is on the median and says so twice: three of these
+four healthy runs peaked above 25 m and two above 200 m, while converging. The median is what separates the two
 populations; the max does not, because a healthy run legitimately peaks above 200 m while
 localization converges. A mis-localized run is wrong *steadily* instead -- run 3's median
 sits against a barely larger max.
@@ -373,6 +391,13 @@ rebuilding acb and changing nothing else, the same scenario on the same machine 
 
 Twelve times better, and inside the limit with room to spare. The only remaining failure on
 that run is the scenario's own verdict, which is 009's open traffic-light criterion.
+
+**And it uncovered a real difference the stale build had been masking.** With both modes on
+the rebuilt bridge, managed measures 0.051 while four unmanaged runs measure 0.235, 0.235,
+0.385 and 0.385 -- five to seven times worse, and two of the four still over the 0.35 limit.
+Before the rebuild both modes read ~0.6 and looked identical. Why an unmanaged ego tracks
+worse is unexplained; it publishes its own `/clock` where a managed one consumes SSv2's,
+which is the most obvious difference between the two paths and not yet tested as the cause.
 
 **This casts doubt on the numbers above it.** The four unmanaged runs, and therefore the
 "one in four" localization rate and the 32.19 m median that bracketed
