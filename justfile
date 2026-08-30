@@ -230,6 +230,25 @@ acceptance scenario=(project + "/scenarios/town01_ego_drive.xosc") runs="1" doma
     [ -n "{{domain}}" ] && args+=(--domain "{{domain}}")
     python3 "{{acb_src}}/scripts/acceptance.py" "${args[@]}"
 
+# Generate an Autoware point cloud map from the town CARLA currently has loaded.
+#
+# Takes CARLA over: it switches the server to synchronous mode with rendering off, spawns
+# LiDARs, teleports them across every spawn point, and restores the settings afterwards. So
+# stop the bridge and any scenario first, or it will fight them for the tick.
+#
+# Writes pointcloud_map.pcd only. A usable map directory also needs lanelet2_map.osm,
+# map_config.yaml and map_projector_info.yaml, which come from the map conversion tooling or
+# from an existing map for the same town.
+#
+# Usage: just pcd-gen [out_dir] [extra args...]
+#        just pcd-gen /tmp/Town01 --voxel-size 0.1
+pcd-gen out_dir *args:
+    #!/usr/bin/env bash
+    set -e
+    source "{{autoware_setup}}"
+    source "{{acb_src}}/install/setup.bash"
+    ros2 run carla_pcd_gen carla_pcd_gen --map-dir "{{out_dir}}" {{args}}
+
 # Report whether CARLA is fit to run a scenario against, and why if not.
 carla-health:
     "{{acb_src}}/scripts/carla_health.py" --port {{carla_port}}
