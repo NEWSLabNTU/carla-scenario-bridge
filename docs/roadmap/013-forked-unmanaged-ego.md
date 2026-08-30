@@ -306,9 +306,9 @@ reached the goal: the ego drove x 320 through the turn to CARLA (88.3, 94.5), 5.
 the goal and inside the scenario's 6 m `ReachPositionCondition`, and the junit came back
 `failures="0" errors="0"`.
 
-## Open: localization can diverge from GNSS by 170 m
+## Open: localization diverges from GNSS, in about one run in four
 
-A later run on a fresh stack stopped 193 m short and sat still with the pilot reporting
+A run on 2026-08-30 stopped 193 m short and sat still with the pilot reporting
 `route_state=2, op_mode=2`. Autoware was not failing to drive -- it was deliberately
 holding, commanding `velocity: 0.0, acceleration: -3.4`. The reason is that it believed it
 was somewhere else:
@@ -321,12 +321,41 @@ was somewhere else:
 
 GNSS is right and the EKF is 170 m behind it. `/api/planning/velocity_factors` then reports
 `behavior: route-obstacle` at (96.1, -56.0), 9 m ahead of where it wrongly thinks the car
-is, so planning stops for a phantom. The pilot had already logged
-`Localization: INITIALIZED at (147.63, -55.61)` at the start of that run -- a position from
-the *previous* run, on a stack that had just been started -- and the estimate then moved
-backwards along the road (147 -> 105) while the real vehicle moved forwards (320 -> 275).
+is, so planning stops for a phantom. The estimate had started that run at (147.63, -55.61)
+-- a position from the *previous* run, on a stack that had just been started -- and then
+moved backwards along the road (147 -> 105) while the real vehicle moved forwards
+(320 -> 275).
 
-That is the shape of acb issue 016, now with a signature precise enough to test against:
-**EKF disagrees with GNSS by a road-segment-sized distance on a repetitive straight map,
-and planning stops for an obstacle at the phantom position.** Not investigated further
-here.
+**It is now measured rather than described.** `acceptance.py` compares the EKF against GNSS
+on every run (acb `be15963`), and four judged unmanaged runs give:
+
+| run | median gap | max gap | travelled |
+|---|---|---|---|
+| A | 1.53 m | 42.9 m | 170.6 m |
+| 1 | 0.62 m | 214.0 m | 0.9 m |
+| 2 | 1.27 m | 214.8 m | 185.6 m |
+| 3 | **32.19 m** | 34.3 m | 134.8 m |
+
+So roughly **one run in four**, on the numbers so far. The median is what separates the two
+populations; the max does not, because a healthy run legitimately peaks above 200 m while
+localization converges. A mis-localized run is wrong *steadily* instead -- run 3's median
+sits against a barely larger max.
+
+Cross-track was healthy in every one of these runs, including run 3 (0.274 m) and the 170 m
+failure (0.019 m). That is the trap this check exists for: the trajectory is planned from
+the same wrong pose the vehicle is tracking, so the ego follows its plan faithfully to
+somewhere the run is not about.
+
+Not diagnosed further here. The shape -- an estimate that latches onto a previous run's
+position on a repetitive straight map -- points at NDT converging to the wrong segment,
+but that is a hypothesis, not a measurement.
+
+## Also open: longitudinal tracking is failing every unmanaged run
+
+Every one of the four runs above failed the harness's longitudinal check, measuring 0.531
+to 0.626 m/s^2 against a 0.35 limit whose comment records healthy runs at 0.064 to 0.142.
+That is four times the worst previously-healthy value, consistently, and it is not the
+localization fault: run 1 and run 2 had healthy localization and still measured 0.596 and
+0.531. Either something regressed in the control path, these runs were made on a machine
+still busier than the ones the limit was set from, or the unmanaged path differs from the
+managed one in a way that matters. Unpicked.
