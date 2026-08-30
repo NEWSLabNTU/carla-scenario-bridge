@@ -62,6 +62,31 @@ All launch commands use `play_launch launch` (with `--web-addr` for the web UI),
 ### Use just build
 Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).
 
+**And rebuild acb after pulling, not just this repo.** The ego stack runs out of
+`src/autoware_carla_bridge/install/`, which `just build` here does not touch -- it is a
+separate colcon workspace with its own `just build`. A pull that moves the acb submodule
+leaves the old binaries in place and the stack keeps running them, silently.
+
+This is not cosmetic. An `acb_bridge` three days stale measured longitudinal tracking at
+**0.618 m/s^2** against a 0.35 limit; rebuilding acb and changing nothing else took the
+same scenario, on the same machine, to **0.051**. Twelve times better, and every run in
+between had been failing for a reason that looked like a control regression and was a build
+artefact. Worse, the numbers still *look* plausible -- the ego drives, the scenario runs,
+only a threshold notices -- so nothing announces it.
+
+```bash
+git submodule update --init --recursive
+(cd src/autoware_carla_bridge && just build)   # the ego stack's actual binaries
+just build                                      # this repo
+```
+
+Check the binary against the source when a measurement surprises you:
+
+```bash
+ls -l src/autoware_carla_bridge/install/acb_bridge/lib/acb_bridge/acb_bridge
+(cd src/autoware_carla_bridge && git log -1 --format='%h %ad' --date=short)
+```
+
 ### Never build or check with bare cargo
 
 carla-rust exposes a **different API per CARLA version**, selected by the `CARLA_VERSION`

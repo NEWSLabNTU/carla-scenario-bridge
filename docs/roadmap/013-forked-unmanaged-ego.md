@@ -350,12 +350,37 @@ Not diagnosed further here. The shape -- an estimate that latches onto a previou
 position on a repetitive straight map -- points at NDT converging to the wrong segment,
 but that is a hypothesis, not a measurement.
 
-## Also open: longitudinal tracking is failing every unmanaged run
+## Closed: longitudinal tracking was a stale build, not a regression
 
-Every one of the four runs above failed the harness's longitudinal check, measuring 0.531
-to 0.626 m/s^2 against a 0.35 limit whose comment records healthy runs at 0.064 to 0.142.
-That is four times the worst previously-healthy value, consistently, and it is not the
-localization fault: run 1 and run 2 had healthy localization and still measured 0.596 and
-0.531. Either something regressed in the control path, these runs were made on a machine
-still busier than the ones the limit was set from, or the unmanaged path differs from the
-managed one in a way that matters. Unpicked.
+Every one of the four unmanaged runs above failed the harness's longitudinal check at 0.531
+to 0.626 m/s^2, against a 0.35 limit whose comment records healthy runs at 0.064 to 0.142.
+Because it failed on *every* run, every unmanaged verdict read FAIL regardless of what else
+happened -- which made the harness useless for judging them, including the localization
+check added alongside.
+
+One managed run settled the first question: **0.618 m/s^2**, indistinguishable from the
+unmanaged runs. So not the unmanaged path.
+
+The cause was `acb_bridge`, built 2026-08-27 and three days stale. The ego stack runs out of
+`src/autoware_carla_bridge/install/`, a separate colcon workspace that this repo's
+`just build` does not touch, so pulling the submodule left the old binaries running. After
+rebuilding acb and changing nothing else, the same scenario on the same machine measured:
+
+| | longitudinal | cross-track | localization |
+|---|---|---|---|
+| stale acb build | 0.618 | 0.003 | 1.53 |
+| rebuilt acb | **0.051** | 0.009 | 1.54 |
+
+Twelve times better, and inside the limit with room to spare. The only remaining failure on
+that run is the scenario's own verdict, which is 009's open traffic-light criterion.
+
+**This casts doubt on the numbers above it.** The four unmanaged runs, and therefore the
+"one in four" localization rate and the 32.19 m median that bracketed
+`MAX_LOCALIZATION_GAP`, were all measured against the same stale bridge. The healthy
+medians (0.62-1.53) match what the rebuilt stack measures (1.54), so the healthy end of the
+bracket stands; whether the *fault* still occurs at that rate on a current build is
+unmeasured. Re-running the unmanaged batch on a rebuilt stack is the next thing this phase
+needs.
+
+Recorded in CLAUDE.md as a build-hygiene rule, because nothing announces it: the ego drives,
+the scenario runs, and only a threshold notices.
