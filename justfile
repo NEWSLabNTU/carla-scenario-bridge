@@ -167,6 +167,152 @@ test:
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
 
+# Two Autoware stacks, one scenario, end to end. RECORD=1 for a screencast.
+two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
+    #!/usr/bin/env bash
+    set -u
+    # What "two Autoware" means here: the ego's stack and one background AV's, each a full
+    # Autoware in its OWN ROS domain with its own acb_bridge and its own /clock. SSv2 knows
+    # only about the ego -- background AVs are spawned by csb_bridge from bridge_config.yaml
+    # and are invisible to the scenario, whose collision and ReachPosition conditions never
+    # see them. So the second Autoware is real traffic rather than scenery.
+    #
+    # Usage: just two-av [scenario_file]
+    #        EGO_MANAGED=false just two-av    # unmanaged ego (phase 013)
+    #        KEEP_STACKS=1 just two-av        # leave both stacks up afterwards
+    #        RECORD=1 just two-av             # screencast to play_log/two-av/two-av.mp4
+    #
+    # The steps below exist because doing this by hand goes wrong the same four ways every
+    # time: a stale vehicle the next pilot latches onto, a bridge nobody restarted, a
+    # scenario started before a stack is up, and stacks left running afterwards.
+    managed="${EGO_MANAGED:-true}"
+    if [ "$managed" = "true" ]; then ego_dom={{ego_domain}}; else ego_dom={{ego_unmanaged_domain}}; fi
+    logs="{{project}}/play_log/two-av"
+    mkdir -p "$logs"
+    rec_display="${RECORD_DISPLAY:-:1}"
+    launch_rviz=$([ "${RECORD:-0}" = "1" ] && echo true || echo false)
+    echo "[two-av] ego domain $ego_dom ($([ "$managed" = true ] && echo managed || echo unmanaged)), background AV domain 2"
+
+    # Kill the whole process group of each stack, not the launcher alone: play_launch's
+    # children outlive it often enough that CLAUDE.md has a section about it.
+    ego_pg=""; bg_pg=""
+    cleanup() {
+        if [ "${KEEP_STACKS:-0}" = "1" ]; then
+            echo "[two-av] KEEP_STACKS=1, leaving both stacks up"
+            return
+        fi
+        echo "[two-av] stopping stacks"
+        for pg in $bg_pg $ego_pg; do kill -TERM -"$pg" 2>/dev/null || true; done
+        sleep 15
+        for pg in $bg_pg $ego_pg; do kill -KILL -"$pg" 2>/dev/null || true; done
+    }
+    trap cleanup EXIT INT TERM
+
+    # A vehicle left behind by a killed run is the single most expensive thing to miss: the
+    # next pilot localizes to it, routes it, engages it, and spends its whole budget driving
+    # a car this run is not about. See acb 195467a.
+    "{{project}}/scripts/clear_stale_vehicles.py" --port {{carla_port}} || {
+        echo "[two-av] could not clear the world; refusing to start a run in it"
+        exit 1
+    }
+
+    # The bridge is not part of any launch file and nothing restarts it between runs.
+    if ! pgrep -x carla_scenario_ >/dev/null 2>&1; then
+        echo "[two-av] no bridge running; starting one"
+        setsid just run > "$logs/bridge.log" 2>&1 &
+        sleep 20
+    fi
+    pgrep -x carla_scenario_ >/dev/null || { echo "[two-av] bridge failed to start; see $logs/bridge.log"; exit 1; }
+
+    # One stack at a time, deliberately. Starting both together was tried and does not
+    # work: each Autoware loads three TensorRT inference nodes (the traffic-light
+    # classifiers and fine detector, plus lidar_centerpoint on the background AV) that take
+    # ~45 s each to construct on a warm engine cache, and two stacks building them at once
+    # pushed both past their load budget. Both sat at "composable 88/89 loaded (1 pending)"
+    # until the wait expired, with the pending members every time being exactly those
+    # inference nodes. Serial costs a few more minutes and finishes.
+    wait_for_stack() {
+        local name="$1" deadline=$((SECONDS + 1200))
+        until grep -q "Startup complete" "$logs/$name.log" 2>/dev/null; do
+            if [ $SECONDS -gt $deadline ]; then
+                echo "[two-av] $name stack did not come up within 1200s; see $logs/$name.log"
+                grep -oE "waiting on [0-9]+ member\(s\): [^.]*" "$logs/$name.log" | tail -1
+                return 1
+            fi
+            sleep 10
+        done
+        echo "[two-av] $name stack up at $(date +%T)"
+    }
+
+    echo "[two-av] starting the ego stack (several minutes)"
+    setsid env EGO_MANAGED="$managed" EGO_GOAL_POSES_FILE="{{project}}/scenarios/ego_poses.yaml" \
+        LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
+        just ego-av > "$logs/ego.log" 2>&1 &
+    ego_pg=$!
+    wait_for_stack ego || exit 1
+
+    echo "[two-av] starting the background AV stack"
+    setsid just bg-av > "$logs/bg.log" 2>&1 &
+    bg_pg=$!
+    wait_for_stack bg || exit 1
+
+    # Each stack has to be able to drive before a scenario is worth starting. The ego gate
+    # also requires its pilot when unmanaged, because nothing else would route it.
+    EGO_MANAGED="$managed" just _require-ego-stack || exit 1
+
+    # RECORD=1 grabs the display the ego stack's RViz is drawing on. RViz has to come from
+    # INSIDE that stack (LAUNCH_RVIZ=1 above): a standalone `rviz2 -d autoware.rviz` cannot
+    # load the config at all, because the config's VehicleModel display needs vehicle
+    # parameters the stack's launch provides -- it fails with "Statically typed parameter
+    # 'wheel_radius' must be initialized" and falls back to a bare 450x250 window, which is
+    # exactly what the first recorded attempt captured.
+    #
+    # RECORDING CHANGES THE RESULT ON THIS MACHINE, so do not record a run you intend to
+    # judge. RViz renders through llvmpipe on the VNC display -- Mesa software rasterizing,
+    # not the RTX 5090 sitting next to it, which CARLA has -- and costs ~4 cores on its own.
+    # Measured: without recording, load ~5 and the scenario passed with both AVs reaching
+    # their goals; with recording, load 59 on 32 cores, 134 "machine is not powerful enough
+    # to run at 10 Hz" warnings from the interpreter, and the run died on the storyboard's
+    # own 300 s timeout with the background AV still sitting at its spawn point.
+    # VirtualGL is installed (`vglrun`, also `-d egl`) but did not engage for rviz2 here --
+    # it stayed on llvmpipe and in neither case appeared in `nvidia-smi`. Getting RViz onto
+    # the GPU is the fix and is not done.
+    rec_pid=""
+    stop_recording() {
+        # SIGINT, not SIGKILL: mp4 writes its index when the muxer closes, and a killed
+        # ffmpeg leaves a file no player will open.
+        [ -n "$rec_pid" ] && kill -INT -"$rec_pid" 2>/dev/null && sleep 5
+        [ -n "$rec_pid" ] && echo "[two-av] screencast: $logs/two-av.mp4"
+    }
+    if [ "${RECORD:-0}" = "1" ]; then
+        geom=$(DISPLAY="$rec_display" xdpyinfo 2>/dev/null | awk '/dimensions:/ {print $2; exit}')
+        if [ -z "$geom" ]; then
+            echo "[two-av] RECORD=1 but display $rec_display is not usable; skipping the screencast"
+        else
+            echo "[two-av] recording $rec_display ($geom) to $logs/two-av.mp4"
+            setsid ffmpeg -y -f x11grab -video_size "$geom" -framerate 8 -i "$rec_display.0" \
+                -vf scale=1280:-2 -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p \
+                "$logs/two-av.mp4" > "$logs/ffmpeg.log" 2>&1 &
+            rec_pid=$!
+        fi
+    fi
+
+    echo "[two-av] running $(basename "{{scenario_file}}")"
+    rm -f /tmp/scenario_test_runner/result.junit.xml
+    EGO_MANAGED="$managed" just scenario "{{scenario_file}}" 2>&1 | tail -5 || true
+
+    stop_recording
+    if [ -f /tmp/scenario_test_runner/result.junit.xml ]; then
+        if grep -q 'failures="0" errors="0"' /tmp/scenario_test_runner/result.junit.xml; then
+            echo "[two-av] scenario PASSED"
+        else
+            echo "[two-av] scenario FAILED -- junit:"
+            sed -n "1,6p" /tmp/scenario_test_runner/result.junit.xml
+        fi
+    else
+        echo "[two-av] no junit written: the run did not reach a verdict"
+    fi
+
 # Run the CARLA scenario bridge adapter only
 run:
     #!/usr/bin/env bash
@@ -419,6 +565,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         managed:=$managed \
         publish_clock:=$clock \
         report_measured_steering:="${REPORT_MEASURED_STEERING:-false}" \
+        launch_rviz:="${LAUNCH_RVIZ:-false}" \
         steering_multiplier:="${STEERING_MULTIPLIER:-1.0}" \
         publish_ground_truth_objects:="${GROUND_TRUTH_OBJECTS:-false}" \
         ground_truth_range_m:="${GROUND_TRUTH_RANGE_M:-100.0}" \
