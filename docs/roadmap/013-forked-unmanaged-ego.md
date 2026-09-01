@@ -394,10 +394,40 @@ that run is the scenario's own verdict, which is 009's open traffic-light criter
 
 **And it uncovered a real difference the stale build had been masking.** With both modes on
 the rebuilt bridge, managed measures 0.051 while four unmanaged runs measure 0.235, 0.235,
-0.385 and 0.385 -- five to seven times worse, and two of the four still over the 0.35 limit.
-Before the rebuild both modes read ~0.6 and looked identical. Why an unmanaged ego tracks
-worse is unexplained; it publishes its own `/clock` where a managed one consumes SSv2's,
-which is the most obvious difference between the two paths and not yet tested as the cause.
+0.385 and 0.385. Before the rebuild both modes read ~0.6 and looked identical. A later
+unmanaged run measured 0.171 and passed, so the gap is nearer threefold than sevenfold and
+noisier than four runs can pin down -- but it is there.
+
+### The `/clock` hypothesis, tested (2026-09-01)
+
+The suspicion was that an unmanaged ego tracks worse because `acb_bridge` publishes its
+`/clock` (there is no SSv2 in that domain) while a managed ego consumes SSv2's, and acb had
+measured that bridge's main loop at 13.9 Hz -- a coarser clock than SSv2's. Measured with
+`scripts/clock_probe.py`, 120 s in each mode during a live run:
+
+| | publisher | rate | sim step median | mean | max | jitter |
+|---|---|---|---|---|---|---|
+| managed (D1) | SSv2 interpreter | 10.01 Hz | 99.97 ms | 100.01 ms | 125.09 ms | none to speak of |
+| unmanaged (D3) | `acb_bridge` | 14.60 Hz | 50.00 ms | 67.79 ms | 100.00 ms | bimodal |
+
+**The hypothesis is refuted as stated.** The unmanaged clock is not coarser -- it is *finer*
+(50 ms steps against 100 ms) and *faster* (14.6 Hz against 10). The mode with the coarser
+clock is the one that tracks better. Neither clock ever went backwards or repeated an
+instant.
+
+What the numbers do show is a difference in *regularity*, which is a different claim and
+still untested as a cause. SSv2's clock is a metronome: median 99.97 and mean 100.01 ms are
+the same number. The bridge's is bimodal -- a median of 50 ms with a mean of 67.79 and a
+max of 100 means it emits mostly single CARLA ticks (`fixed_delta` is 50 ms) and sometimes
+two coalesced into one message. The mean puts that fraction at **0.356**: about a third of
+its clock messages carry a doubled step.
+
+That follows directly from the loop rate acb documented. The bridge publishes one clock per
+main-loop iteration and the loop turns at ~14 Hz, so it cannot deliver CARLA's 20 Hz ticks
+one at a time and has to coalesce roughly a third of them. So the finding is not "the clock
+is too slow" but "the clock arrives in uneven steps, by exactly the amount the loop rate
+predicts". Whether a controller differentiating on simulation time is hurt by that is the
+next thing to test, and is not established here.
 
 **This casts doubt on the numbers above it.** The four unmanaged runs, and therefore the
 "one in four" localization rate and the 32.19 m median that bracketed
