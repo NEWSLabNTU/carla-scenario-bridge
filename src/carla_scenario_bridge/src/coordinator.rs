@@ -657,6 +657,52 @@ impl Coordinator {
         }
     }
 
+    /// Destroy sensors whose vehicle is gone.
+    ///
+    /// CARLA keeps ticking a sensor after its parent dies, so an orphaned LiDAR ray-casts on
+    /// every frame forever. They accumulate: twenty-one were found on one server, from bridges
+    /// that had been killed outright rather than shut down, since a process that is SIGKILLed
+    /// never gets to release anything. Clearing them took a stack that had been failing three
+    /// runs in a row back to passing, though with three runs either side that is an
+    /// observation rather than a proven cause.
+    ///
+    /// Only parentless ones are touched. A sensor attached to a live vehicle belongs to
+    /// whichever bridge created it, and the release protocol in issue 015 exists precisely so
+    /// that this process does not destroy those behind its owner's back.
+    fn reap_parentless_sensors(&mut self) {
+        let actors = match self.world.actors() {
+            Ok(actors) => actors,
+            Err(e) => {
+                tracing::warn!("Could not list actors to look for orphaned sensors: {e}");
+                return;
+            }
+        };
+
+        let orphans: Vec<u32> = actors
+            .iter()
+            .filter(|actor| actor.type_id().starts_with("sensor."))
+            // `parent()` returns a Result whose Ok is the Option. A failure to read it is
+            // not evidence of an orphan, so only a definite None counts.
+            .filter(|actor| matches!(actor.parent(), Ok(None)))
+            .map(|actor| actor.id())
+            .collect();
+
+        if orphans.is_empty() {
+            return;
+        }
+
+        tracing::warn!(
+            "Found {} sensor(s) whose vehicle is gone; destroying them so they stop being \
+             ticked every frame",
+            orphans.len()
+        );
+        for actor_id in orphans {
+            if let Err(e) = destroy_actor_in(&self.world, actor_id) {
+                tracing::warn!("Could not destroy orphaned sensor {actor_id}: {e}");
+            }
+        }
+    }
+
     /// The vehicle sitting on a spawn point, if any, as (actor id, role name).
     ///
     /// Only used to explain a spawn that had to be lifted. Compares in the horizontal plane:
@@ -1190,6 +1236,10 @@ impl Coordinator {
         // they sit on the spawn points this run needs. Reap them after the map is settled
         // (a reload would have cleared them anyway) and before anything spawns.
         self.reap_orphaned_vehicles();
+        // Separately, and not from the tail of the call above: that function returns early
+        // when it finds no orphaned vehicles, which is the common case, so anything appended
+        // to it never runs.
+        self.reap_parentless_sensors();
 
         // Background AVs go in after the map (a reload would destroy them) and before the
         // ego, so their Autoware instances can be finding their vehicles while SSv2 is
