@@ -73,6 +73,7 @@
   <!-- Report CARLA's actors as perception output instead of running the LiDAR pipeline.
        For debugging planning or control without perception in the loop. Set `perception`
        false as well, or Autoware's own prediction node publishes the same topic. -->
+  <arg name="seed_localization_on_attach" default="true" />
   <arg name="publish_ground_truth_objects" default="false" />
   <arg name="ground_truth_range_m" default="100.0" />
   <arg name="control_trace_path" default="" />
@@ -110,6 +111,7 @@
     <arg name="publish_clock" value="$(var publish_clock)" />
     <arg name="report_measured_steering" value="$(var report_measured_steering)" />
     <arg name="steering_multiplier" value="$(var steering_multiplier)" />
+    <arg name="seed_localization_on_attach" value="$(var seed_localization_on_attach)" />
     <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)" />
     <arg name="ground_truth_range_m" value="$(var ground_truth_range_m)" />
     <arg name="control_trace_path" value="$(var control_trace_path)" />

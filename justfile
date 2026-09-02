@@ -568,6 +568,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         launch_rviz:="${LAUNCH_RVIZ:-false}" \
         steering_multiplier:="${STEERING_MULTIPLIER:-1.0}" \
         publish_ground_truth_objects:="${GROUND_TRUTH_OBJECTS:-false}" \
+        seed_localization_on_attach:="${SEED_LOCALIZATION:-true}" \
         ground_truth_range_m:="${GROUND_TRUTH_RANGE_M:-100.0}" \
         accel_map_path:="$accel_map" \
         brake_map_path:="$brake_map" \
