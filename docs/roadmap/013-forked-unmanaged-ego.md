@@ -426,8 +426,37 @@ That follows directly from the loop rate acb documented. The bridge publishes on
 main-loop iteration and the loop turns at ~14 Hz, so it cannot deliver CARLA's 20 Hz ticks
 one at a time and has to coalesce roughly a third of them. So the finding is not "the clock
 is too slow" but "the clock arrives in uneven steps, by exactly the amount the loop rate
-predicts". Whether a controller differentiating on simulation time is hurt by that is the
-next thing to test, and is not established here.
+predicts".
+
+### The regularity claim, tested by fixing it (2026-09-03)
+
+`wait_for_tick_or_timeout` returns the *newest* frame rather than the next one, so the
+frames a slow iteration jumps over are simply lost. acb `cf53fe9` fills them in: the frame
+counter says how many were missed and `delta_seconds` gives their spacing, so the times are
+exact rather than interpolated, capped at four to survive the frame jump across a paused
+simulation. The clock became what it should always have been:
+
+| unmanaged `/clock` | rate | sim step median | mean | max |
+|---|---|---|---|---|
+| before (per loop iteration) | 14.60 Hz | 50.00 ms | 67.79 ms | 100.00 ms |
+| after (per CARLA frame) | 19.92 Hz | 50.00 ms | 50.00 ms | 50.00 ms |
+
+Uniform, at the server's own rate, with no doubled steps left.
+
+**Tracking improved, and did not close the gap.** The best unmanaged run before the change
+measured 0.171 m/s^2 (the batch before it, 0.235-0.385); after, 0.110 -- the best unmanaged
+figure recorded. A managed ego on the same build measured 0.062. So clock irregularity was
+*a* contributor worth about a third of the excess, and something else accounts for the
+remaining ~1.8x.
+
+Weaker than it looks, and worth saying: one clean run per condition. Two follow-up runs were
+second runs on the same stack and hit the second-run failure -- one ego travelled 0.2 m, the
+other never moved -- so they measure nothing about tracking. Getting a second clean point
+costs a fresh stack each time, which is the second-run problem taxing every experiment here.
+
+Managed runs are untouched by construction: the new path is inside `if params.publish_clock`,
+false when SSv2 owns the clock, and a managed run on the new build measured 10.01 Hz and
+100 ms steps exactly as before.
 
 **This casts doubt on the numbers above it.** The four unmanaged runs, and therefore the
 "one in four" localization rate and the 32.19 m median that bracketed
