@@ -485,12 +485,39 @@ The command rate did not fall to 11 Hz either -- it was 18.25 -- so control does
 follow the clock, and the tidy correlation between command rate and error that the first
 three rows suggest is broken by the fourth.
 
-**So the difference is not in how simulation time is delivered.** What still distinguishes
-the two modes is that in a managed run SSv2 both publishes `/clock` *and* drives CARLA's
-ticks, so sensor stamps and clock advance in lockstep; in an unmanaged run the bridge
-publishes a clock derived from frames it merely observes, while SSv2 drives the ticks from
-another domain. Decimation made that decoupling worse, which fits. The next test is to
-measure the skew between vehicle-status stamps and `/clock` in both modes; it is not done.
+**So the difference is not in how simulation time is delivered.**
+
+**Nor is it stamp-to-clock coupling (2026-09-05).** The proposal above -- that a managed run
+keeps stamps and clock in lockstep because SSv2 both publishes the clock and drives the
+ticks, while an unmanaged one decouples them -- is measurable, and is wrong in the direction
+it predicted. Measured as stamp minus the newest clock value at arrival, over 120 s of
+driving in each mode:
+
+| `/vehicle/status/velocity_status` | clock period | median | mean | range | stamped ahead |
+|---|---|---|---|---|---|
+| unmanaged | 50.6 ms | +0.0 ms | +1.8 | -0.0 .. +50.0 | 3.6% |
+| managed | 100.0 ms | +0.0 ms | -1.4 | -102.2 .. +100.7 | 14.9% |
+
+The **unmanaged** stream is the tightly coupled one: stamps sit exactly on the clock, inside
+a single period, almost never ahead of it. The managed stream scatters across a full period
+in both directions and is stamped ahead four times as often. Whatever makes a managed ego
+track better, it is not that its inputs are better aligned to its clock.
+
+Worth recording from the same runs, so nobody reads these as faults later: Autoware's own
+`/localization/kinematic_state` is stamped ahead of the clock about half the time in both
+modes (median +98.5 ms managed, +0.0 unmanaged), which is an EKF publishing a prediction;
+and GNSS in the managed run sits consistently behind, median -52.7 ms and never once ahead.
+
+### Where this leaves the gap
+
+Three candidates eliminated by measurement -- the metric's window, the clock's rate and
+regularity, and stamp-to-clock coupling. The remaining lead is the one thing that changes
+with mode and has not been controlled for: **command bandwidth**. An unmanaged ego issues
+`control_cmd` at 21 Hz against a managed one's 11, and the harness compares a commanded
+acceleration against a delivered one derived over ~333 ms. A faster-changing command stream
+compared against a slower-moving derivative will read as worse tracking whether or not the
+vehicle is following any worse. Smoothing the command to the derivative's own bandwidth
+before differencing would settle it, and is the next thing to try.
 
 (The bursty row is a bug worth recording rather than hiding: the first decimation attempt
 left the skipped frames unrecorded, so the catch-up path re-published exactly what had been
