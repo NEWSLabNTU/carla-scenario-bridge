@@ -3,7 +3,7 @@ use carla::geom::{Location, Rotation, Transform};
 use eyre::{Result, WrapErr};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::{BackgroundAv, BridgeConfig, SensorReleaseConfig};
 use crate::map_resolver::{lanelet_map_file, town_from_map_path};
@@ -447,6 +447,9 @@ pub struct Coordinator {
     /// an optimisation, and a scenario that cannot announce still runs (noisily). See
     /// `sensor_release`.
     sensor_release: Option<SensorReleaseNotifier>,
+    /// Seconds to hold a freshly spawned ego while its bridge settles localization onto it.
+    /// Zero disables the wait. See `warm_up_localization`.
+    localization_warmup: f64,
     /// Every CARLA actor this bridge created and has not confirmed destroyed.
     ///
     /// Deliberately separate from `EntityManager`, which is a name lookup that gets
@@ -515,6 +518,7 @@ impl Coordinator {
             warned_unknown_entities: HashSet::new(),
             warned_traffic_lights: false,
             sensor_release: Self::bind_sensor_release(&config_for_release),
+            localization_warmup: config_for_release.localization_warmup_s,
             spawned_actors: SpawnLedger::default(),
             froze_traffic_lights: FreezeGuard::default(),
             consecutive_carla_failures: 0,
@@ -1298,6 +1302,82 @@ impl Coordinator {
         self.has_ego
     }
 
+    /// Hold a freshly spawned ego still until its bridge says localization is on it.
+    ///
+    /// Autoware routes from whatever pose it has, within a couple of seconds of the spawn.
+    /// On every run after the first that pose belongs to the previous run -- measured at
+    /// 92 to 99 m away -- and a route planned from it can survive the correction and leave
+    /// the ego holding position for the rest of the run. Moving the estimate onto the new
+    /// vehicle costs about 7 s of Autoware's own pipeline, which cannot be shortened from
+    /// either bridge: a confident covariance on the seed measured 9.4 s against the loose
+    /// one's 7.8 s, so the delay is not a search width. The only remaining option is not to
+    /// start the scenario yet.
+    ///
+    /// Ticking here is safe -- SSv2's client does a plain blocking `recv` with no timeout
+    /// set, so a slow reply costs patience rather than a failed run -- but under a managed
+    /// ego it is **not sufficient**, which is why this defaults to off.
+    ///
+    /// CARLA frames are not the only clock in play. Autoware runs on simulation time, and
+    /// under a managed ego it is SSv2 that publishes `/clock` -- the very process this is
+    /// holding. So while this waits, CARLA advances and Autoware does not: NDT and the EKF
+    /// never run, and the estimate never moves. Measured: with a 30 s wait, the bridge
+    /// reported the estimate seated six seconds *after* the wait gave up, on the clock that
+    /// SSv2 resumed the moment it was answered. A 90 s wait timed out in full.
+    ///
+    /// It is kept because it is correct for an unmanaged ego, where acb_bridge publishes
+    /// `/clock` itself and the world genuinely keeps running while this waits.
+    fn warm_up_localization(&mut self, actor_id: u32) {
+        let Some(config_seconds) = self
+            .sensor_release
+            .as_ref()
+            .map(|_| self.localization_warmup)
+            .filter(|s| *s > 0.0)
+        else {
+            return;
+        };
+
+        // Ticking needs synchronous mode, which is otherwise switched on by the first
+        // UpdateFrame after the ego appears. Doing it here is the same transition, earlier.
+        if !self.sync_mode_enabled {
+            if let Err(e) = self.enable_sync_mode() {
+                tracing::warn!(
+                    "Localization warm-up skipped: could not enter sync mode ({e:#})"
+                );
+                return;
+            }
+        }
+
+        let timeout = Duration::from_secs_f64(config_seconds);
+        let started = Instant::now();
+        let frame = Duration::from_secs_f64(self.step_time.max(0.01));
+        loop {
+            if let Some(notifier) = &self.sensor_release {
+                if notifier.seated(actor_id) {
+                    tracing::info!(
+                        "Localization seated on ego actor {actor_id} after {:.1}s;                          starting the scenario",
+                        started.elapsed().as_secs_f64()
+                    );
+                    return;
+                }
+            }
+            if started.elapsed() >= timeout {
+                tracing::warn!(
+                    "No bridge reported localization seated on ego actor {actor_id} within                      {:.0}s; starting anyway. If a bridge is attached, the run may route                      from the previous run's pose -- see acb docs/issues/022.",
+                    timeout.as_secs_f64()
+                );
+                return;
+            }
+            if let Err(e) = self.tick_frame() {
+                tracing::warn!("Localization warm-up stopped: tick failed ({e})");
+                return;
+            }
+            // Paced at about real time: Autoware converges on the wall clock, not on
+            // simulation time, so ticking as fast as the server allows would race the
+            // sensor pipeline rather than feed it.
+            std::thread::sleep(frame);
+        }
+    }
+
     /// Whether this bridge currently holds CARLA in synchronous mode.
     ///
     /// The server loop uses this to notice a session that has gone away while sync mode is
@@ -1635,6 +1715,7 @@ impl Coordinator {
             // Releases the sync-mode gate: from the next UpdateFrame onward this bridge
             // owns the tick. See FrameAction.
             self.has_ego = true;
+            self.warm_up_localization(actor_id);
         }
 
         tracing::info!(

@@ -73,6 +73,17 @@ pub struct SensorReleaseConfig {
     pub notify_endpoint: String,
     /// Our PULL socket; sensor bridges PUSH acknowledgements to it.
     pub ack_endpoint: String,
+    /// How long to hold a freshly spawned ego before letting the scenario start, waiting
+    /// for its bridge to report localization seated on it. Zero disables the wait.
+    ///
+    /// Autoware routes within a couple of seconds of the spawn, from whatever pose it has,
+    /// and on every run after the first that pose is the previous run's -- about 95 m away.
+    /// Moving the estimate onto the new vehicle takes about 7 s of Autoware's own pipeline
+    /// and cannot be shortened from either bridge, so the only way not to route from a
+    /// stale pose is not to start yet. Generous by default because a cold stack, where
+    /// Autoware initializes from GNSS rather than from a seed, is slower than a warm one.
+    #[serde(default = "default_localization_warmup_s")]
+    pub localization_warmup_s: f64,
     /// How long to wait for an acknowledgement before despawning anyway.
     ///
     /// Paid once per despawned entity that nobody acknowledges, so it trades scenario
@@ -88,6 +99,7 @@ impl Default for SensorReleaseConfig {
             notify_endpoint: "tcp://127.0.0.1:5556".to_string(),
             ack_endpoint: "tcp://127.0.0.1:5557".to_string(),
             timeout_ms: 300,
+            localization_warmup_s: default_localization_warmup_s(),
         }
     }
 }
@@ -167,6 +179,21 @@ pub struct BridgeConfig {
     /// How many CARLA ticks to run per SSv2 frame. See `default_substeps`.
     #[serde(default = "default_substeps")]
     pub substeps: u32,
+}
+
+/// Off, because under a managed ego it cannot work -- see `warm_up_localization`.
+///
+/// Waiting here holds SSv2 at the spawn, and under a managed ego SSv2 is what publishes
+/// `/clock`. Autoware runs on simulation time, so a stopped clock stops NDT and the EKF
+/// with it, and the estimate this waits for can never arrive. Measured exactly that way:
+/// the bridge reported the estimate seated **six seconds after** a 30 s wait gave up, on
+/// the clock SSv2 resumed once it was answered. A 90 s wait then timed out in full.
+///
+/// It is left in place, and defaults to off rather than being deleted, because it is
+/// correct for an *unmanaged* ego, where acb_bridge owns `/clock` and the world keeps
+/// running while this waits. Set a positive number there.
+fn default_localization_warmup_s() -> f64 {
+    0.0
 }
 
 /// One CARLA tick per SSv2 frame -- the historical behaviour.

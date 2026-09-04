@@ -114,6 +114,22 @@ impl SensorReleaseNotifier {
             }
         }
     }
+
+    /// Has a bridge reported its localization estimate seated on `actor_id`?
+    ///
+    /// Non-blocking, and drains whatever else is queued while looking. That is safe only
+    /// because seating is asked about at spawn, when no release acknowledgement can be in
+    /// flight -- the two phases never overlap for one actor.
+    pub fn seated(&self, actor_id: u32) -> bool {
+        let expected = format!("seated {actor_id}");
+        loop {
+            match self.acks.recv_string(zmq::DONTWAIT) {
+                Ok(Ok(frame)) if frame.trim() == expected => return true,
+                Ok(_) => continue,
+                Err(_) => return false, // nothing queued right now
+            }
+        }
+    }
 }
 
 #[cfg(test)]
