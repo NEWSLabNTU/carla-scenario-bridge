@@ -449,6 +449,54 @@ figure recorded. A managed ego on the same build measured 0.062. So clock irregu
 *a* contributor worth about a third of the excess, and something else accounts for the
 remaining ~1.8x.
 
+### What the remaining gap is NOT (2026-09-04)
+
+Two candidates were testable. Both are eliminated, which is worth more than another guess.
+
+**Not the metric.** `acceptance.py` differentiates delivered acceleration over four velocity
+samples rather than a fixed duration, so it is rate-sensitive in principle -- and if the two
+modes published at different rates they would not be measured the same way. They do not:
+`velocity_status` runs at ~14 Hz in *both*, because it follows the bridge loop, which the
+clock change never touched. The four-sample window therefore spans ~333 ms either way, and
+computing the error over a fixed 0.30 s window instead changes nothing:
+
+| | 4-sample window | fixed 0.30 s window |
+|---|---|---|
+| managed | 0.038 | 0.038 |
+| unmanaged | 0.159 | 0.156 |
+
+**Not the clock.** `control_cmd` really does follow clock granularity -- 11.03 Hz against
+SSv2's 10 Hz clock, 21.43 Hz against the bridge's 20 Hz one -- which makes "Autoware
+recomputes twice as often" the obvious next explanation. So the bridge grew
+`ACB_CLOCK_DECIMATE` (default 1, no behavioural change) and was run at 2, giving a clock of
+10.02 Hz with median, mean and max sim steps all exactly 100.00 ms: indistinguishable from
+SSv2's, by every measure taken.
+
+Tracking got **three times worse**, not better:
+
+| condition | clock | `control_cmd` | longitudinal | drove |
+|---|---|---|---|---|
+| managed (SSv2 clock) | 10 Hz uniform | 11.03 Hz | **0.038** | 215.9 m |
+| unmanaged, per frame | 20 Hz uniform | 21.43 Hz | 0.159 | 214.8 m |
+| unmanaged, bursty clock | 20 Hz in pairs | 26.01 Hz | 0.207 | 234.8 m |
+| unmanaged, decimated | **10 Hz uniform** | 18.25 Hz | **0.519** | 48.6 m |
+
+The command rate did not fall to 11 Hz either -- it was 18.25 -- so control does not simply
+follow the clock, and the tidy correlation between command rate and error that the first
+three rows suggest is broken by the fourth.
+
+**So the difference is not in how simulation time is delivered.** What still distinguishes
+the two modes is that in a managed run SSv2 both publishes `/clock` *and* drives CARLA's
+ticks, so sensor stamps and clock advance in lockstep; in an unmanaged run the bridge
+publishes a clock derived from frames it merely observes, while SSv2 drives the ticks from
+another domain. Decimation made that decoupling worse, which fits. The next test is to
+measure the skew between vehicle-status stamps and `/clock` in both modes; it is not done.
+
+(The bursty row is a bug worth recording rather than hiding: the first decimation attempt
+left the skipped frames unrecorded, so the catch-up path re-published exactly what had been
+skipped and produced a 20 Hz clock delivered in pairs. Fixed, and it is why the hook records
+skipped frames.)
+
 Weaker than it looks, and worth saying: one clean run per condition. Two follow-up runs were
 second runs on the same stack and hit the second-run failure -- one ego travelled 0.2 m, the
 other never moved -- so they measure nothing about tracking. Getting a second clean point
