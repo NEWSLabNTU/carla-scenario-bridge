@@ -565,11 +565,30 @@ Worth stating plainly: the per-frame clock fix (acb `cf53fe9`) improved tracking
 the clock's irregularity **and** pushed the command rate further past the drain capacity at
 the same time. Both are true, and the first outweighed the second.
 
-**The fix is less queueing, not more throughput.** Only the newest command matters to an
-actuator, so the control subscription should be drained to its latest message each iteration
-and the backlog discarded, rather than one message consumed per iteration while the rest
-age. acb `e053d66` already established that `SpinOptions::default()` is the wrong instrument
--- in rclrs 0.7 it waits out the full timeout and made the loop slower.
+**Fixed, and the gap is closed (acb `7e899ab`).** The pump now takes all the ready work
+under a 1 ms bound instead of one callback per iteration. `SpinOptions::default()` had been
+tried once and rejected, but at a 10 ms timeout -- rclrs 0.7 waits out the whole timeout
+rather than returning on an empty queue, so an idle pump cost 10.68 ms and the loop fell to
+12.7 Hz. The waiting was the problem, not the draining; at 1 ms an idle pump costs about
+that against a ~82 ms loop period.
+
+| unmanaged | published | applied | reaching CARLA | age at application | longitudinal |
+|---|---|---|---|---|---|
+| one per loop | 19.27 Hz | 13.50 Hz | 70% | median 500 ms, p95 650 | 0.101-0.138 |
+| drained | 20.55 Hz | **18.05 Hz** | **88%** | median **50 ms**, p95 150 | **0.040, 0.041** |
+
+A managed ego, which never saturated, is unaffected: 0.038 against a prior range of
+0.038-0.047. So an unmanaged ego now measures 0.040-0.041 against a managed ego's 0.038 --
+the same, where it had been three times worse. Loop rate is unchanged at 12.0 Hz and the
+pump costs 1.07 ms, so nothing was traded away for it.
+
+One correction worth carrying, because it nearly became a false conclusion. The trace's
+`pumped` column was the literal `1`, not a count. In a CSV that is indistinguishable from a
+measurement of "one callback per iteration", and it cannot disagree with the assumption it
+appears to confirm -- it was cited here as evidence before anyone noticed. It is now
+counted, and it shows the change working: a mean of 1.27 commands applied per iteration and
+a maximum of 8 on the unmanaged run, against 0.77 and 2 on a managed one that was never
+behind.
 
 (The bursty row is a bug worth recording rather than hiding: the first decimation attempt
 left the skipped frames unrecorded, so the catch-up path re-published exactly what had been
