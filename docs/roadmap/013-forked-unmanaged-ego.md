@@ -508,16 +508,44 @@ Worth recording from the same runs, so nobody reads these as faults later: Autow
 modes (median +98.5 ms managed, +0.0 unmanaged), which is an EKF publishing a prediction;
 and GNSS in the managed run sits consistently behind, median -52.7 ms and never once ahead.
 
-### Where this leaves the gap
+### Not command bandwidth either -- and the gap is real (2026-09-06)
 
-Three candidates eliminated by measurement -- the metric's window, the clock's rate and
-regularity, and stamp-to-clock coupling. The remaining lead is the one thing that changes
-with mode and has not been controlled for: **command bandwidth**. An unmanaged ego issues
-`control_cmd` at 21 Hz against a managed one's 11, and the harness compares a commanded
-acceleration against a delivered one derived over ~333 ms. A faster-changing command stream
-compared against a slower-moving derivative will read as worse tracking whether or not the
-vehicle is following any worse. Smoothing the command to the derivative's own bandwidth
-before differencing would settle it, and is the next thing to try.
+The last measurement-artefact explanation. The harness scores commanded against delivered
+acceleration, where delivered is a derivative over ~200 ms of velocity -- a low-pass filter
+-- while the command is not filtered at all. An unmanaged ego commands at 21 Hz and a
+managed one at 11, so the unmanaged command carries content the derivative cannot show, and
+that difference would be scored as tracking error regardless of the vehicle.
+
+Scored one recording three ways in each mode (`probe_command_bandwidth.py`):
+
+| | `control_cmd` | raw | matched | decimated to 11 Hz |
+|---|---|---|---|---|
+| managed | 11.05 Hz | 0.046 | 0.047 | 0.043 |
+| unmanaged | 21.21 Hz | 0.138 | 0.129 | 0.140 |
+
+`matched` averages the command over the same window the derivative spans, so both signals
+carry the same bandwidth. It moves managed by +2% and unmanaged by -7%, taking the ratio
+from 3.0x to 2.7x. Subsampling the unmanaged commands to the managed rate changes nothing.
+Bandwidth is worth at most a tenth of the excess.
+
+Speed is not it either, and this pair happens to control for it: managed peaked at 5.03 m/s
+against unmanaged's 5.02, with 0.047 against 0.138.
+
+**So the conclusion flips.** Four candidates are eliminated -- the metric's window, the
+clock's rate and regularity, stamp-to-clock coupling, and command bandwidth -- and none of
+them is measurement. An unmanaged ego really does track its commanded acceleration about
+three times worse than a managed one.
+
+### What to try next
+
+Transport, not signal -- a different claim from the bandwidth one just refuted. This
+bridge's main loop turns at ~14 Hz and `spin_once` runs one callback per iteration, which
+acb `e053d66` measured as a drain capacity of ~13.9 callbacks a second shared across five
+subscriptions. At 11 Hz of control commands that keeps up; at 21 Hz it cannot, so commands
+queue behind other traffic or are dropped and the vehicle acts on stale ones. That predicts
+a measurable gap between commands received and commands applied, and an age at application
+that grows with rate. `probe_control_chain.py` and `control_trace.rs` already exist to
+measure both.
 
 (The bursty row is a bug worth recording rather than hiding: the first decimation attempt
 left the skipped frames unrecorded, so the catch-up path re-published exactly what had been
