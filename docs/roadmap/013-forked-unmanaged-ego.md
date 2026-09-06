@@ -536,16 +536,40 @@ clock's rate and regularity, stamp-to-clock coupling, and command bandwidth -- a
 them is measurement. An unmanaged ego really does track its commanded acceleration about
 three times worse than a managed one.
 
-### What to try next
+### Answer: the bridge drops a third of the commands (2026-09-06)
 
-Transport, not signal -- a different claim from the bandwidth one just refuted. This
-bridge's main loop turns at ~14 Hz and `spin_once` runs one callback per iteration, which
-acb `e053d66` measured as a drain capacity of ~13.9 callbacks a second shared across five
-subscriptions. At 11 Hz of control commands that keeps up; at 21 Hz it cannot, so commands
-queue behind other traffic or are dropped and the vehicle acts on stale ones. That predicts
-a measurable gap between commands received and commands applied, and an age at application
-that grows with rate. `probe_control_chain.py` and `control_trace.rs` already exist to
-measure both.
+Measured with acb's control trace against a probe counting what Autoware published, 150 s of
+driving per mode:
+
+| | published | applied | reaching CARLA | age at application | loop |
+|---|---|---|---|---|---|
+| unmanaged | 19.27 Hz | 13.50 Hz | **70%** | median **500 ms**, p95 650 | 12.14 Hz |
+| managed | 11.19 Hz | 10.37 Hz | **93%** | median **0 ms** | 11.91 Hz |
+
+The bridge's drain capacity is ~12 Hz: `spin_once` runs at most one callback per iteration
+and the loop turns every ~82 ms. The trace confirms it directly -- callbacks pumped per
+iteration is 1 at both the median and the maximum, in both modes.
+
+A managed ego publishes 11.19 Hz, under that ceiling: nothing queues and commands are
+applied with zero median staleness. An unmanaged ego publishes 19.27 Hz, well over it:
+**30% of commands never reach CARLA**, and those that do arrive **half a second late** -- a
+standing backlog of about nine command periods. A vehicle acting on half-second-old
+acceleration commands tracks them worse, and that is the whole of the 3x difference.
+
+It also explains why the modes differ at all, which none of the four eliminated candidates
+did. Autoware's control timer runs on simulation time, so the `/clock` rate sets the command
+rate: SSv2's 10 Hz clock gives 11 Hz of commands, the bridge's per-frame 20 Hz clock gives
+19-21 Hz. One saturates the bridge and the other does not.
+
+Worth stating plainly: the per-frame clock fix (acb `cf53fe9`) improved tracking by removing
+the clock's irregularity **and** pushed the command rate further past the drain capacity at
+the same time. Both are true, and the first outweighed the second.
+
+**The fix is less queueing, not more throughput.** Only the newest command matters to an
+actuator, so the control subscription should be drained to its latest message each iteration
+and the backlog discarded, rather than one message consumed per iteration while the rest
+age. acb `e053d66` already established that `SpinOptions::default()` is the wrong instrument
+-- in rclrs 0.7 it waits out the full timeout and made the loop slower.
 
 (The bursty row is a bug worth recording rather than hiding: the first decimation attempt
 left the skipped frames unrecorded, so the catch-up path re-published exactly what had been
