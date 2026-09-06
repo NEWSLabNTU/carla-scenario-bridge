@@ -232,6 +232,43 @@ says what was actually wrong.
 operator's delay, picked up the ego when the scenario spawned it, and drove it to the goal;
 the interpreter logged `Passed`. See the end-to-end test item above.
 
+## Diagnosed: the degenerate managed failure (2026-09-06)
+
+A managed run failed about one time in three with a signature so consistent it looked like
+an artefact: peak 0.00 m/s, travelled 0.0 m, and cross-track **235.545 m** to three decimals
+every time. Reproduced on the third attempt of a deliberate hunt and caught by
+`probe_stall_state.py`, which dumps the routing state whenever the ego stands still too long:
+
+```
+pose        (319.92, -55.92), speed 0.000, never moved this run
+route       SET
+mode        AUTONOMOUS
+trajectory  11 points, (88.35, -99.00) .. (88.35, -100.00)
+distance    pose -> trajectory 235.5 m
+```
+
+Autoware is engaged and believes it has a route. The trajectory is a one-metre stub sitting
+at the goal, 235 m from the vehicle, so there is nothing to follow where the ego actually is.
+
+`/api/routing/route` gives the cause directly: its **start pose is (105.62, -55.39)** --
+where the *previous* run stopped, at the traffic light -- while this run's ego spawned at
+(320, -55.9). The route was planned from the pose the last run left behind and never
+re-planned. That is acb issue 022, now confirmed from the route's own start field instead of
+inferred from behaviour.
+
+Both puzzling features fall out of that. The cross-track score is constant because 235.5 m
+is simply the distance from the spawn to the goal -- it was never measuring driving. And the
+intermittency is a race: whether localization has re-seated onto the newly spawned ego
+before SSv2's concealer sets the route.
+
+**Not fixed.** csb's `localization_warmup_s` holds a new ego until its estimate is seated,
+which is the right shape, but it is off for a managed ego by construction: SSv2 publishes
+`/clock` there, so holding SSv2 stops the very clock the estimate needs in order to move.
+For a managed run the wait has to happen where the route is set, or Autoware has to reject a
+route whose start is 235 m from the current pose. Until then, the acceptance harness could
+compare the route's start against the ego's pose and name this failure instead of reporting
+"ego never drove".
+
 ## Fixed: the interpreter outliving its verdict (2026-08-29)
 
 On the successful run the interpreter wrote its junit and logged `Passed` at 22:16:04,
