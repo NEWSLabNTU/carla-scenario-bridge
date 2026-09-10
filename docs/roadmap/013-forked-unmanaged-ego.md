@@ -265,9 +265,29 @@ before SSv2's concealer sets the route.
 which is the right shape, but it is off for a managed ego by construction: SSv2 publishes
 `/clock` there, so holding SSv2 stops the very clock the estimate needs in order to move.
 For a managed run the wait has to happen where the route is set, or Autoware has to reject a
-route whose start is 235 m from the current pose. Until then, the acceptance harness could
-compare the route's start against the ego's pose and name this failure instead of reporting
-"ego never drove".
+route whose start is far from the current pose.
+
+**But it is now detected** (acb `d1a1350`). The harness compares the route's start against
+the closest the ego ever came to it -- closest rather than current, since a healthy ego
+starts on its route and then drives away from it. Bracketed over three runs on one stack:
+
+| run | ego drove | route-start gap | check |
+|---|---|---|---|
+| healthy | 213.9 m | 0.0 m | quiet |
+| stale route | 162.5 m | 162.5 m | fires |
+| degenerate | 0.0 m | 214.1 m | fires |
+
+The failing gaps are the distance from this run's spawn back to where the previous run
+stopped, which is the mechanism expressed as a number. A run that hits this now says so:
+
+```
+- the route was planned from a pose the ego never occupied (closest approach 214.1 m,
+  limit 25.0): a route left over from a previous run, never re-planned -- acb issue 022
+```
+
+Worth keeping distinct from cross-track, which scored 235.5 m on the same failures. That is
+the distance to the stale *trajectory*, which sits at the goal; this is the distance to the
+stale route's *start*. Two symptoms, one cause, and neither of them named it before.
 
 ## Fixed: the interpreter outliving its verdict (2026-08-29)
 
