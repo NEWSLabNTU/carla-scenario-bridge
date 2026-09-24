@@ -38,6 +38,23 @@ rate on 0.9.16; acb follows ticks with `wait_for_tick_or_timeout`, which drops f
 complete while it is busy — a candidate cause of the ego LiDAR falling to 10 Hz with two
 stacks.
 
+## Decisions (2026-09-25)
+
+- **Ego origin is the rear axle**, Autoware's `base_link` convention. Today acb publishes
+  `base_link` at the CARLA actor origin (`autoware.rs:608-613`, no offset), so the offset is
+  not only bridge↔SSv2 but acb↔Autoware: planner stop distances, pure-pursuit lookahead and
+  sensor TFs all assume rear axle. acb derives the offset from CARLA's rear wheel positions
+  (`WheelPhysicsControl::position`, 0.9.16); the bridge applies SSv2's `bounding_box.center`
+  for ego readback and NPC teleports. Both must agree; the measurement below checks that.
+- **CARLA collisions are diagnostic only.** The collision sensor on the ego logs every event
+  and the run ends with a mismatch summary against SSv2's CollisionCondition. SSv2 stays
+  the verdict; there is no protocol slot to hand it a CARLA collision anyway. NPC colliders
+  stay on: disabling them blinds the ray-cast LiDAR.
+- **Detection-sensor knobs are unsupported**, and documented as such. Perception-fault
+  scenarios (`isClairvoyant`, noise, delay) are out of scope; CARLA's value here is real
+  Autoware perception.
+- **Order**: pose measurement, then 009's traffic-light publisher, then the hardening batch.
+
 ## Work Items
 
 Measurement first for the three big ones. No fix lands before its number is known.
@@ -48,6 +65,10 @@ Measurement first for the three big ones. No fix lands before its number is know
       actor transform and `Vehicle::bounding_box`, report the along-axis delta
 - [ ] Measure the ego side: compare the pose the bridge returns in `UpdateEntityStatus` with
       the rear-axle pose SSv2 expects, on a straight and in a turn
+- [ ] Measure acb's side: `base_link` in `/carla/ground_truth/odom` against the CARLA rear
+      wheel positions; expected delta ≈ half the wheelbase
+- [ ] acb publishes `base_link` at the rear axle (pose, `/tf`, ground truth) and shifts
+      sensor TFs accordingly; offset read from CARLA wheel physics, not hard-coded
 - [ ] Apply `bounding_box.center` in `ros_pose_to_carla_transform` and its inverse; walkers
       and misc objects get their own offsets (walker capsule origin ~0.9 m)
 - [ ] Re-run `town01_two_av.xosc` and `town01_pedestrian.xosc`; the follow distance and stop
@@ -59,8 +80,8 @@ Measurement first for the three big ones. No fix lands before its number is know
       SSv2 name and the SSv2 frame
 - [ ] Run a scenario with a deliberate NPC cut-in that clips the ego; record whether SSv2's
       CollisionCondition and the CARLA sensor agree
-- [ ] Decide and document the policy: NPC colliders disabled against the ego, or CARLA
-      collisions reported to SSv2, or both. Record the choice in the design doc
+- [ ] End-of-run summary: CARLA collision events vs SSv2 CollisionCondition outcomes, with
+      the SSv2 frame of each; mismatches logged at WARN. Policy is diagnostic only (above)
 
 ### NPC motion (gap 5)
 
@@ -103,8 +124,8 @@ Measurement first for the three big ones. No fix lands before its number is know
 - **Traffic-light state to Autoware (gap 1)**: 009's decision, tracked there.
 - **Blueprint by subtype / bbox (gap 9)**: 008's territory; the offset work above is its
   prerequisite.
-- **Detection-sensor knobs (gap 11)**: needs a decision on whether acb's ground-truth
-  publisher should take noise and delay parameters at all. Not before 009 closes.
+- **Detection-sensor knobs (gap 11)**: unsupported by decision (above). Add the statement
+  to `docs/design/scenario-authoring.md` so scenario authors do not expect them to work.
 - **Arrows, flashing (gap 14)**: CARLA 0.9.16 has no arrow bulbs; only representable on the
   V2X path from gap 1.
 - **Weather / TimeOfDay (gap 15)**: no protocol slot and SSv2's own interpreter no-ops it.

@@ -84,7 +84,9 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
   `coordinate_conversion.rs` apply no offset. Expected effect: NPC meshes ~1.5 m behind their
   SSv2 pose, and the ego pose reported back to SSv2 ~1.5 m off in the opposite sense. **Not yet
   measured.** Every distance-based condition (cut-in gaps, TimeHeadway, following distance) is
-  suspect until it is.
+  suspect until it is. The same offset exists on the Autoware side: acb publishes `base_link`
+  at the CARLA actor origin (`acb_bridge/src/autoware.rs:608-613`), where Autoware assumes the
+  rear axle. Decision 2026-09-25: rear axle everywhere ([roadmap 014](../roadmap/014-feature-completeness.md)).
 - **Lane position.** SSv2 re-canonicalises the ego pose from CARLA onto lanelet2; CARLA works
   in OpenDRIVE. Any misregistration between the two maps appears as lane-matching failures.
 
