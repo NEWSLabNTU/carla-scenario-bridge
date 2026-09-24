@@ -28,6 +28,7 @@ what unblocks what.
 - [011: Robustness](011-robustness.md) — tick timeouts, ego respawn, duplicate-publisher hazards
 - [012: SSv2-Unmanaged Autoware](012-ssv2-unmanaged-autoware.md) — SSv2 stops *launching* Autoware (`launch_autoware:=false` against our externally-launched ego stack); kills the last SSv2 patch. Spike done 2026-08-08
 - [013: Unmanaged Ego on the Fork](013-forked-unmanaged-ego.md) — `managed_ego:=false` patch on the NEWSLabNTU fork; ego gets its own domain, pilot, and clock like every background AV
+- [014: Feature Completeness](014-feature-completeness.md) — pose reference-point offset, collision truth, NPC velocity, and a hardening batch from the 2026-09-25 audit ([design/ssv2-feature-completeness.md](../design/ssv2-feature-completeness.md))
 
 ### Why this order
 
@@ -117,6 +118,9 @@ Per-phase state:
    fix (both on its main), SSv2 `carla-compat` arrived_goal patch, carla-fork
    exception containment and the IMU owner guard.
 5. **009 / 008 / 013** in whatever order the above unblocks.
+6. **014 measurements** — the pose reference-point delta and the collision-sensor
+   comparison are cheap to measure on any live stack and decide whether every distance
+   condition so far has been off by ~1.5 m. Measure before trusting more thresholds.
 
 Gaps 1-3 from the design doc are fixed (deferred sync mode, `/clock` ownership,
 sensor-timestamp epochs). Gaps 4-11 are distributed across 009, 010 and 011.
