@@ -61,12 +61,25 @@ Measurement first for the three big ones. No fix lands before its number is know
 
 ### Pose reference point (gap 2)
 
-- [ ] Measure: spawn one NPC at a known lanelet pose with `Center x="1.5"`, read the CARLA
-      actor transform and `Vehicle::bounding_box`, report the along-axis delta
-- [ ] Measure the ego side: compare the pose the bridge returns in `UpdateEntityStatus` with
-      the rear-axle pose SSv2 expects, on a straight and in a turn
-- [ ] Measure acb's side: `base_link` in `/carla/ground_truth/odom` against the CARLA rear
-      wheel positions; expected delta ≈ half the wheelbase
+- [x] Measure: spawn one NPC at a known lanelet pose with `Center x="1.5"`, read the CARLA
+      actor transform and `Vehicle::bounding_box`, report the along-axis delta —
+      **2026-09-25, `scripts/pose_offset_probe.py`, Town01 (320, −129.8) heading 180°:**
+      the bridge puts the CARLA actor origin exactly on the SSv2 pose (Δ along heading
+      0.000 m at spawn and again after an `UpdateEntityStatus` teleport). On
+      `vehicle.tesla.model3` the rear axle is **1.386 m behind** that origin (front axle
+      +1.618 m, wheelbase 3.005 m, bbox centre +0.029 m, length 4.79 m). SSv2 models the same
+      entity as a 4.5 m body from −0.75 m to +3.75 m of its origin; CARLA renders it from
+      −2.37 m to +2.42 m. Net: the mesh sits 1.39 m behind SSv2's model, and for two
+      same-lane vehicles the real bumper gap is ≈2.9 m larger than the gap SSv2 computes
+      (1.33 m front-overhang error on the follower + 1.62 m rear-overhang error on the leader)
+- [x] Measure the ego side: the `UpdateEntityStatus` reply returns the actor origin
+      unchanged (readback == actor origin, Δ 0.000 m), so SSv2 takes the vehicle centre as
+      the rear axle: it believes the ego is 1.386 m further along than its rear axle is.
+      Turn case not measured separately; the offset is a rigid body-frame translation, so a
+      straight suffices
+- [x] Measure acb's side: acb reads the same actor transform for `base_link`, so its
+      `base_link` is 1.386 m ahead of the rear axle on this blueprint (from the rear wheel
+      positions in `get_physics_control()`; not re-measured over ROS)
 - [ ] acb publishes `base_link` at the rear axle (pose, `/tf`, ground truth) and shifts
       sensor TFs accordingly; offset read from CARLA wheel physics, not hard-coded
 - [ ] Apply `bounding_box.center` in `ros_pose_to_carla_transform` and its inverse; walkers

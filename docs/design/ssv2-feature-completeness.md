@@ -81,10 +81,13 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
 - **Pose reference point.** Scenario vehicles declare `BoundingBox/Center x="1.5"` (e.g.
   `scenarios/town01_two_av.xosc:13`): the SSv2 entity origin is the rear axle. A CARLA vehicle's
   origin is near its bbox centre. `ros_pose_to_carla_transform` (C:2399) and
-  `coordinate_conversion.rs` apply no offset. Expected effect: NPC meshes ~1.5 m behind their
-  SSv2 pose, and the ego pose reported back to SSv2 ~1.5 m off in the opposite sense. **Not yet
-  measured.** Every distance-based condition (cut-in gaps, TimeHeadway, following distance) is
-  suspect until it is. The same offset exists on the Autoware side: acb publishes `base_link`
+  `coordinate_conversion.rs` apply no offset. **Measured 2026-09-25** (`scripts/pose_offset_probe.py`):
+  the bridge maps the SSv2 pose to the CARLA actor origin 1:1 (Δ 0.000 m on spawn, teleport and
+  ego readback), and on `vehicle.tesla.model3` the rear axle is 1.386 m behind that origin
+  (wheelbase 3.005 m). So NPC meshes sit 1.39 m behind their SSv2 model and SSv2 takes the ego's
+  centre for its rear axle. For two same-lane vehicles the real bumper gap is ≈2.9 m larger than
+  SSv2's computed gap, so every distance-based condition so far has been conservative by that
+  much. The same offset exists on the Autoware side: acb publishes `base_link`
   at the CARLA actor origin (`acb_bridge/src/autoware.rs:608-613`), where Autoware assumes the
   rear axle. Decision 2026-09-25: rear axle everywhere ([roadmap 014](../roadmap/014-feature-completeness.md)).
 - **Lane position.** SSv2 re-canonicalises the ego pose from CARLA onto lanelet2; CARLA works
