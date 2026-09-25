@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::coordinate_conversion::OriginOffset;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntityType {
     Ego,
@@ -16,6 +18,10 @@ pub enum EntityType {
 pub struct Entity {
     pub entity_type: EntityType,
     pub carla_actor_id: u32,
+    /// The scenario-declared `bounding_box.center` (x, y), fixed at spawn. Every pose that
+    /// crosses between SSv2 and CARLA for this entity is shifted by it -- see
+    /// [`OriginOffset`].
+    pub origin_offset: OriginOffset,
 }
 
 #[derive(Debug, Default)]
@@ -28,12 +34,19 @@ impl EntityManager {
         Self::default()
     }
 
-    pub fn insert(&mut self, name: String, entity_type: EntityType, carla_actor_id: u32) {
+    pub fn insert(
+        &mut self,
+        name: String,
+        entity_type: EntityType,
+        carla_actor_id: u32,
+        origin_offset: OriginOffset,
+    ) {
         self.entities.insert(
             name,
             Entity {
                 entity_type,
                 carla_actor_id,
+                origin_offset,
             },
         );
     }

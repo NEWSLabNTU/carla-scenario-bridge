@@ -155,7 +155,13 @@ def main():
             for s in rr.update_entity_status.status:
                 if s.name == "ego_probe":
                     t = ego.get_transform()
-                    print(f"  ego readback to SSv2: ({s.pose.position.x:.3f},{s.pose.position.y:.3f},{s.pose.position.z:.3f}); CARLA actor ({t.location.x:.3f},{-t.location.y:.3f} ROS-y,{t.location.z:.3f}) -> readback == actor origin")
+                    print(f"  ego readback to SSv2: ({s.pose.position.x:.3f},{s.pose.position.y:.3f},{s.pose.position.z:.3f}); CARLA actor ({t.location.x:.3f},{-t.location.y:.3f} ROS-y,{t.location.z:.3f})")
+                    # ROS frame: heading a.h, so along = d . (cos h, sin h)
+                    rdx, rdy = s.pose.position.x - a.x, s.pose.position.y - a.y
+                    r_along = rdx * math.cos(a.h) + rdy * math.sin(a.h)
+                    r_across = -rdx * math.sin(a.h) + rdy * math.cos(a.h)
+                    print(f"  ego readback - commanded: along heading = {r_along:+.3f} m, across = {r_across:+.3f} m (0 = readback is the SSv2 entity origin)")
+                    results["ego_readback_minus_commanded"] = r_along
 
     print("\nSUMMARY (positive = CARLA actor origin is ahead of the SSv2 pose along heading)")
     for k, v in results.items(): print(f"  {k}: {v:+.3f} m")

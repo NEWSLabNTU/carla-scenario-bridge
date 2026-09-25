@@ -82,8 +82,11 @@ Measurement first for the three big ones. No fix lands before its number is know
       positions in `get_physics_control()`; not re-measured over ROS)
 - [ ] acb publishes `base_link` at the rear axle (pose, `/tf`, ground truth) and shifts
       sensor TFs accordingly; offset read from CARLA wheel physics, not hard-coded
-- [ ] Apply `bounding_box.center` in `ros_pose_to_carla_transform` and its inverse; walkers
-      and misc objects get their own offsets (walker capsule origin ~0.9 m)
+- [x] Apply `bounding_box.center` in `ros_pose_to_carla_transform` and its inverse —
+      done 2026-09-25: `OriginOffset` stored per entity at spawn, applied on spawn, teleport
+      and ego-pose overwrite, undone in the ego readback. Probe after: NPC and ego actor
+      origins +1.500 m along heading from the SSv2 pose, ego readback − commanded = 0.000 m.
+      x/y only; the walker z question stays in the hardening batch below
 - [ ] Re-run `town01_two_av.xosc` and `town01_pedestrian.xosc`; the follow distance and stop
       distance in the logs move by the measured delta and nothing else changes
 

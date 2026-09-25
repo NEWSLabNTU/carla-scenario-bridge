@@ -386,11 +386,11 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
     commanded_z.max(FALLBACK_SPAWN_Z)
 }
 
-use crate::coordinate_conversion;
+use crate::coordinate_conversion::{self, OriginOffset};
 use crate::entity_manager::{EntityManager, EntityType};
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
-use crate::proto::traffic_simulator_msgs;
+use crate::proto::traffic_simulator_msgs::{self, BoundingBox};
 use crate::sensor_release::SensorReleaseNotifier;
 
 /// What an `UpdateFrame` should do, given how far startup has progressed.
@@ -1034,6 +1034,9 @@ impl Coordinator {
                 &av.role_name,
                 &asset_key,
                 Some(&pose),
+                // Not an SSv2 entity: its pose comes from bridge_config and already names
+                // the CARLA actor origin, so nothing is shifted.
+                OriginOffset::default(),
                 SpawnKind::BackgroundAv,
                 Some(&av.role_name),
             );
@@ -1526,14 +1529,22 @@ impl Coordinator {
         name: &str,
         asset_key: &str,
         pose: Option<&Pose>,
+        origin_offset: OriginOffset,
         kind: SpawnKind,
         role_name: Option<&str>,
     ) -> ProtoResult {
-        tracing::info!("Spawn {}: name={name}, asset_key={asset_key}", kind.label());
+        tracing::info!(
+            "Spawn {}: name={name}, asset_key={asset_key}, origin offset \
+             (bounding_box.center)=({:.3}, {:.3}) m",
+            kind.label(),
+            origin_offset.x,
+            origin_offset.y
+        );
 
-        // Convert pose from ROS to CARLA frame
+        // Convert pose from ROS to CARLA frame, moving it from the SSv2 entity origin to
+        // the CARLA actor origin (see OriginOffset).
         let mut carla_transform = match pose {
-            Some(pose) => ros_pose_to_carla_transform(pose),
+            Some(pose) => ros_pose_to_carla_transform(pose, origin_offset),
             None => Transform {
                 location: Location {
                     x: 0.0,
@@ -1708,7 +1719,7 @@ impl Coordinator {
         // SpawnKind::entity_type. Everything else SSv2 knows about is registered.
         if let Some(entity_type) = kind.entity_type() {
             self.entities
-                .insert(name.to_string(), entity_type, actor_id);
+                .insert(name.to_string(), entity_type, actor_id, origin_offset);
         }
 
         if kind == SpawnKind::Ego {
@@ -1749,10 +1760,16 @@ impl Coordinator {
         // Only the ego carries a role_name: acb_bridge finds its vehicle by it, and an NPC
         // tagged the same would be picked up as if it were an Autoware vehicle.
         let role_name = (kind == SpawnKind::Ego).then(|| self.config.ego.role_name.clone());
+        let origin_offset = origin_offset_of(
+            req.parameters
+                .as_ref()
+                .and_then(|p| p.bounding_box.as_ref()),
+        );
         let result = self.spawn_entity(
             &name,
             &req.asset_key,
             req.pose.as_ref(),
+            origin_offset,
             kind,
             role_name.as_deref(),
         );
@@ -1775,10 +1792,16 @@ impl Coordinator {
         // pose every frame, so a controller would be a second authority over the same
         // actor (invariant 5). The walker is spawned kinematic and teleported, exactly
         // like an NPC vehicle.
+        let origin_offset = origin_offset_of(
+            req.parameters
+                .as_ref()
+                .and_then(|p| p.bounding_box.as_ref()),
+        );
         let result = self.spawn_entity(
             &name,
             &req.asset_key,
             req.pose.as_ref(),
+            origin_offset,
             SpawnKind::Pedestrian,
             None,
         );
@@ -1797,10 +1820,16 @@ impl Coordinator {
             .map(|p| p.name.clone())
             .unwrap_or_default();
 
+        let origin_offset = origin_offset_of(
+            req.parameters
+                .as_ref()
+                .and_then(|p| p.bounding_box.as_ref()),
+        );
         let result = self.spawn_entity(
             &name,
             &req.asset_key,
             req.pose.as_ref(),
+            origin_offset,
             SpawnKind::MiscObject,
             None,
         );
@@ -1901,12 +1930,15 @@ impl Coordinator {
 
             // Copy out what we need so the immutable borrow of `entities` ends here --
             // the unknown-entity path below needs `&mut self` for the warn-once set.
-            let entity_info = self
-                .entities
-                .get(name)
-                .map(|e| (e.carla_actor_id, e.entity_type == EntityType::Ego));
+            let entity_info = self.entities.get(name).map(|e| {
+                (
+                    e.carla_actor_id,
+                    e.entity_type == EntityType::Ego,
+                    e.origin_offset,
+                )
+            });
 
-            let (actor_id, is_ego) = match entity_info {
+            let (actor_id, is_ego, origin_offset) = match entity_info {
                 Some(v) => v,
                 None => {
                     // Echo the requested pose back unchanged.
@@ -1942,7 +1974,7 @@ impl Coordinator {
 
             if is_ego && !req.overwrite_ego_status {
                 // Read ego pose from CARLA physics
-                match self.read_actor_state(actor_id) {
+                match self.read_actor_state(actor_id, origin_offset) {
                     Some((pose, action_status)) => {
                         updated.push(api::UpdatedEntityStatus {
                             name: name.clone(),
@@ -1962,7 +1994,7 @@ impl Coordinator {
             } else {
                 // NPC or ego overwrite: set transform from SSv2 pose
                 if let Some(pose) = entity_status.pose.as_ref() {
-                    let transform = ros_pose_to_carla_transform(pose);
+                    let transform = ros_pose_to_carla_transform(pose, origin_offset);
                     if let Err(e) = self.set_actor_transform(actor_id, &transform) {
                         // A failed teleport used to warn and still report success, so SSv2
                         // went on believing the NPC had moved -- the same silent divergence
@@ -1972,7 +2004,8 @@ impl Coordinator {
                     }
                 }
 
-                // Echo back the same pose
+                // Echo back the same pose. It is SSv2's own entity-origin pose, never read
+                // back from CARLA, so there is no origin offset to undo here.
                 updated.push(api::UpdatedEntityStatus {
                     name: name.clone(),
                     action_status: entity_status.action_status.clone(),
@@ -2286,6 +2319,7 @@ impl Coordinator {
     fn read_actor_state(
         &mut self,
         actor_id: u32,
+        origin_offset: OriginOffset,
     ) -> Option<(Pose, traffic_simulator_msgs::ActionStatus)> {
         let actors = self.world.actors().ok()?;
         let actor = actors.find(actor_id).ok()??;
@@ -2295,7 +2329,7 @@ impl Coordinator {
         let av = actor.angular_velocity().ok()?;
         let acc = actor.acceleration().ok()?;
 
-        let pose = coordinate_conversion::carla_to_ros_pose(
+        let mut pose = coordinate_conversion::carla_to_ros_pose(
             t.location.x,
             t.location.y,
             t.location.z,
@@ -2303,6 +2337,24 @@ impl Coordinator {
             t.rotation.pitch,
             t.rotation.yaw,
         );
+
+        // CARLA reports the actor origin (body centre); SSv2 expects the entity origin its
+        // scenario declared (the rear axle for vehicles). Undo the spawn-time shift.
+        //
+        // Twist and accel are left as CARLA reports them at the body centre. Longitudinal
+        // speed is the same at every point of a rigid body, but lateral velocity at the rear
+        // axle differs by yaw_rate × offset.x; that is deliberately not corrected yet.
+        if let Some(position) = pose.position.as_mut() {
+            let ros_yaw = -(t.rotation.yaw as f64).to_radians();
+            let (x, y) = coordinate_conversion::actor_origin_to_entity_origin(
+                position.x,
+                position.y,
+                ros_yaw,
+                origin_offset,
+            );
+            position.x = x;
+            position.y = y;
+        }
 
         let (vx, vy, vz) = coordinate_conversion::carla_to_ros_velocity(v.x, v.y, v.z);
         let (wx, wy, wz) = coordinate_conversion::carla_to_ros_angular_velocity(av.x, av.y, av.z);
@@ -2396,8 +2448,29 @@ impl Coordinator {
     }
 }
 
-fn ros_pose_to_carla_transform(pose: &Pose) -> Transform {
-    let (cx, cy, cz, cr, cp, cyaw) = coordinate_conversion::ros_pose_to_carla(pose);
+/// The origin offset an SSv2 entity declares: its `bounding_box.center` x and y. Absent or
+/// zero (pedestrians and misc objects usually) means the SSv2 and CARLA origins coincide.
+///
+/// The declaration is trusted over CARLA's geometry. Vehicles declare 1.5 m, while
+/// `vehicle.tesla.model3`'s rear axle is 1.386 m behind its origin; the 0.11 m residual is a
+/// blueprint-fidelity matter (roadmap 014, gap 9), not something this shift should absorb.
+fn origin_offset_of(bounding_box: Option<&BoundingBox>) -> OriginOffset {
+    bounding_box
+        .and_then(|b| b.center.as_ref())
+        .map(|c| OriginOffset { x: c.x, y: c.y })
+        .unwrap_or_default()
+}
+
+/// Convert an SSv2 pose to the CARLA transform of its actor: shifted by `origin_offset`
+/// from the entity origin to the actor origin in the ROS frame, then Y-flipped.
+fn ros_pose_to_carla_transform(pose: &Pose, origin_offset: OriginOffset) -> Transform {
+    let mut shifted = *pose;
+    if let (Some(p), Some(q)) = (shifted.position.as_mut(), pose.orientation.as_ref()) {
+        let (_, _, yaw) = coordinate_conversion::quaternion_to_euler(q.x, q.y, q.z, q.w);
+        (p.x, p.y) =
+            coordinate_conversion::entity_origin_to_actor_origin(p.x, p.y, yaw, origin_offset);
+    }
+    let (cx, cy, cz, cr, cp, cyaw) = coordinate_conversion::ros_pose_to_carla(&shifted);
     Transform {
         location: Location {
             x: cx as f32,
@@ -2742,7 +2815,7 @@ mod tests {
             ("npc_1", EntityType::Vehicle, 11),
             ("bg_av_1", EntityType::Vehicle, 12),
         ] {
-            entities.insert(name.to_string(), kind, actor_id);
+            entities.insert(name.to_string(), kind, actor_id, OriginOffset::default());
             ledger.record(actor_id);
         }
 
@@ -2813,6 +2886,41 @@ mod tests {
 
     /// Whatever the message says, it must never be empty -- SSv2 surfaces this text and a
     /// bare failure with no reason is what phase 006 exists to eliminate.
+    /// The probe's pose: Town01 (320, -129.8) heading 180 deg with a rear-axle origin. The
+    /// CARLA actor must land 1.5 m further along -x, and the offset is applied before the
+    /// Y-flip, so CARLA y is just the negated ROS y.
+    #[test]
+    fn an_ssv2_pose_lands_the_actor_ahead_of_its_rear_axle() {
+        let pose = Pose {
+            position: Some(geometry_msgs::Point {
+                x: 320.0,
+                y: -129.8,
+                z: 0.0,
+            }),
+            orientation: Some(geometry_msgs::Quaternion {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+                w: 0.0,
+            }),
+        };
+        let bbox = BoundingBox {
+            center: Some(geometry_msgs::Point {
+                x: 1.5,
+                y: 0.0,
+                z: 0.9,
+            }),
+            dimensions: None,
+        };
+        let t = ros_pose_to_carla_transform(&pose, origin_offset_of(Some(&bbox)));
+        assert!((t.location.x - 318.5).abs() < 1e-3, "{:?}", t.location);
+        assert!((t.location.y - 129.8).abs() < 1e-3, "{:?}", t.location);
+        assert_eq!(t.location.z, 0.0);
+
+        let untouched = ros_pose_to_carla_transform(&pose, origin_offset_of(None));
+        assert!((untouched.location.x - 320.0).abs() < 1e-3);
+    }
+
     #[test]
     fn rejections_always_explain_themselves() {
         let result = sensor_not_supported();
