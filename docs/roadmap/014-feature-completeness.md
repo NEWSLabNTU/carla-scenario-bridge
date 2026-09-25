@@ -80,15 +80,43 @@ Measurement first for the three big ones. No fix lands before its number is know
 - [x] Measure acb's side: acb reads the same actor transform for `base_link`, so its
       `base_link` is 1.386 m ahead of the rear axle on this blueprint (from the rear wheel
       positions in `get_physics_control()`; not re-measured over ROS)
-- [ ] acb publishes `base_link` at the rear axle (pose, `/tf`, ground truth) and shifts
-      sensor TFs accordingly; offset read from CARLA wheel physics, not hard-coded
+- [x] acb publishes `base_link` at the rear axle (pose, `/tf`, ground truth) and shifts
+      sensor TFs accordingly; offset read from CARLA wheel physics, not hard-coded —
+      done 2026-09-25 (acb, uncommitted pin until pushed). acb logs
+      `base_link (rear-axle centre) at (-1.386, 0.000, 0.000) m`; sensors declared 0.900 m
+      ahead of base_link attach at −0.486 m from the actor origin. Stationary EKF error
+      against the rear axle 0.046–0.085 m (1.3 m against the origin before); moving 0.32–0.41 m
+      ahead of truth, which is estimator latency at ~4 m/s, not a reference-point error
 - [x] Apply `bounding_box.center` in `ros_pose_to_carla_transform` and its inverse —
       done 2026-09-25: `OriginOffset` stored per entity at spawn, applied on spawn, teleport
       and ego-pose overwrite, undone in the ego readback. Probe after: NPC and ego actor
       origins +1.500 m along heading from the SSv2 pose, ego readback − commanded = 0.000 m.
       x/y only; the walker z question stays in the hardening batch below
 - [ ] Re-run `town01_two_av.xosc` and `town01_pedestrian.xosc`; the follow distance and stop
-      distance in the logs move by the measured delta and nothing else changes
+      distance in the logs move by the measured delta and nothing else changes —
+      **partly done 2026-09-25 on newslab-server139** (two_av needs a second Autoware stack,
+      not yet run here). `town01_ego_drive.xosc` passes before and after (34.7 → 31.7 s sim).
+      `town01_pedestrian.xosc`: the walker stop moved from 5.84 m to **4.66 m** front-bumper
+      gap (Δ 1.18 m, against 1.386 expected; the hold is 58 s both times), so the geometry
+      moved as predicted. But the scenario **fails by timeout in both runs**: after the hold
+      the ego pulls away while the walker is still ~1.7 m from its centreline, stops again
+      level with the walker (bumper 0.97 m / 2.58 m past it) and never moves for the
+      remaining ~200 s. 008 recorded this scenario passing on the previous host. Not a
+      reference-point problem; tracked as its own item below
+
+### Pedestrian scenario stalls after the hold (found 2026-09-25)
+
+`town01_pedestrian.xosc` times out on newslab-server139 with and without the acb fix: the
+ego holds ~58 s for the crossing walker, resumes while the walker is still ~1.7 m from its
+centreline, stops again beside it and stays stopped ~200 s. Ground-truth CSVs:
+scratchpad `baseline/pedestrian_gt.csv` and `postfix/pedestrian_gt.csv` (this session).
+Perception counted 0–6 objects during the run. Host load was ~32 on 32 cores.
+
+- [ ] Reproduce on a quiet host; if it passes there, this is capacity (roadmap README
+      priority 2), not planning
+- [ ] If it reproduces: read the crosswalk / obstacle-stop module decisions around the
+      resume (planning debug topics), and whether the walker is still a tracked object when
+      the ego stops the second time
 
 ### Collision truth (gap 3)
 
