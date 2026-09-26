@@ -62,10 +62,18 @@ All launch commands use `play_launch launch` (with `--web-addr` for the web UI),
 ### Use just build
 Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).
 
-**And rebuild acb after pulling, not just this repo.** The ego stack runs out of
-`src/autoware_carla_bridge/install/`, which `just build` here does not touch -- it is a
-separate colcon workspace with its own `just build`. A pull that moves the acb submodule
-leaves the old binaries in place and the stack keeps running them, silently.
+**And rebuild both workspaces after an acb change, in this order: acb's, then this one.**
+`just ego-av` sources three overlays -- Autoware, `src/autoware_carla_bridge/install/`, then
+this repo's `install/` -- and the last one wins. Because `just build` here runs colcon with
+`--base-paths src`, it compiles the acb packages too, so the `acb_bridge` the stack actually
+executes is `install/acb_bridge/lib/acb_bridge/acb_bridge` **in this repo** (verified from
+`/proc/<pid>/cmdline`, 2026-09-25). Rebuilding only the acb workspace changes nothing the
+stack runs; rebuilding only this repo works until someone rebuilds acb and wonders why it
+had no effect. A pull that moves the acb submodule leaves the old binaries in place either
+way, and the stack keeps running them, silently.
+
+Stop the ego stack before `just build` here: with it running, colcon fails at the install
+step with `Failed to copy binary: acb_bridge: Text file busy` after compiling everything.
 
 This is not cosmetic. An `acb_bridge` three days stale measured longitudinal tracking at
 **0.618 m/s^2** against a 0.35 limit; rebuilding acb and changing nothing else took the
@@ -76,15 +84,18 @@ only a threshold notices -- so nothing announces it.
 
 ```bash
 git submodule update --init --recursive
-(cd src/autoware_carla_bridge && just build)   # the ego stack's actual binaries
-just build                                      # this repo
+(cd src/autoware_carla_bridge && just build)   # acb's own workspace
+just build                                      # this repo: the overlay the stack runs
 ```
 
-Check the binary against the source when a measurement surprises you:
+Check the binary against the source when a measurement surprises you -- both copies, and
+the one the live process actually loaded:
 
 ```bash
-ls -l src/autoware_carla_bridge/install/acb_bridge/lib/acb_bridge/acb_bridge
+ls -l install/acb_bridge/lib/acb_bridge/acb_bridge \
+      src/autoware_carla_bridge/install/acb_bridge/lib/acb_bridge/acb_bridge
 (cd src/autoware_carla_bridge && git log -1 --format='%h %ad' --date=short)
+tr '\0' '\n' < /proc/$(pgrep -f 'acb_bridge/acb_bridge' | head -1)/cmdline | head -1
 ```
 
 ### Never build or check with bare cargo
@@ -230,3 +241,36 @@ setsid just scenario "$SCENARIO" > run.log 2>&1 &
 SPID=$!
 kill -TERM -$SPID        # the whole tree, and only that tree
 ```
+
+The justfile itself has one of these: `_clear-stale-scenario` runs `pgrep -f
+scenario_test_runner` and SIGKILLs every match before a scenario starts. A shell that is
+waiting on `/tmp/scenario_test_runner/result.junit.xml` has that string on its command line
+and dies with the stale processes. Keep the string out of any long-lived command line (read
+the path from a variable set in a different process, or wait on the play_launch log instead).
+
+### Talking to the stack from outside a launch
+
+Every ROS tool that must see the ego stack -- `scripts/ego_stack_health.py`, `ros2 topic`,
+probes -- needs the same DDS transport the stack uses, or discovery silently finds nothing
+and the health check reports "nothing publishes /api/operation_mode/state" on a healthy
+stack:
+
+```bash
+source /opt/autoware/1.5.0/setup.bash
+export CYCLONEDDS_URI="file://$PWD/config/cyclonedds-localhost.xml" ROS_DOMAIN_ID=1
+scripts/ego_stack_health.py
+```
+
+`pgrep -x` matches `comm`, which the kernel truncates to 15 characters:
+`pgrep -x CarlaUE4-Linux-Shipping` finds nothing while CARLA runs. Use `pgrep -f` with a
+pattern the calling shell does not contain, or `ps -eo comm` and match the prefix.
+
+### CARLA on a host that is not the checkpoint's
+
+`third_party/carla/run.sh` assumes `~/Downloads/CARLA_0.9.16` and a `DISPLAY` you own; the
+`carla-run-<port>` unit fails itself if RPC is not up in 180 s. A first launch on a new host
+took 120 s to serve RPC on this hardware, and with restart overhead the unit never came up.
+Pass `CARLA_DIR=... DISPLAY=:N just carla-start`, and if the unit keeps restarting, launch
+`./CarlaUE4.sh -quality-level=Low -carla-rpc-port=2000 -nosound -RenderOffScreen` directly
+under `setsid` and wait. Any X display works for offscreen Vulkan rendering, GLX or not; a
+private one is `setsid /opt/TurboVNC/bin/Xvnc :4 -SecurityTypes None`.
