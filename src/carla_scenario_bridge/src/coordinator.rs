@@ -772,6 +772,10 @@ impl Coordinator {
     /// Only role names this bridge is configured to own are touched. Anything else in the
     /// world belongs to somebody else -- a manually spawned vehicle, another tool's traffic
     /// -- and is left alone.
+    ///
+    /// That includes background AVs the config declares but this run did not enable: a
+    /// `bg_av_1` left by a previous bridge started with `CSB_BACKGROUND_AVS=all` is exactly
+    /// the undriven car in the ego's lane that the opt-in default exists to prevent.
     fn reap_orphaned_vehicles(&mut self) {
         let mut owned: Vec<String> = vec![self.config.ego.role_name.clone()];
         owned.extend(
@@ -780,6 +784,7 @@ impl Coordinator {
                 .iter()
                 .map(|av| av.role_name.clone()),
         );
+        owned.extend(self.config.disabled_background_avs.iter().cloned());
 
         let actors = match self.world.actors() {
             Ok(actors) => actors,
@@ -1207,6 +1212,17 @@ impl Coordinator {
     /// reported loudly.
     fn spawn_background_avs(&mut self) {
         if self.config.background_avs.is_empty() {
+            // Opt-in since the default flipped to none. Say so once per scenario when the
+            // config declares some, so a two-AV run started against a bridge that was not
+            // asked for them is visible in the bridge log rather than just missing a car.
+            if !self.config.disabled_background_avs.is_empty() {
+                tracing::info!(
+                    "No background AVs spawned; declared but not enabled: {} (start the \
+                     bridge with {}=all to spawn them)",
+                    self.config.disabled_background_avs.join(", "),
+                    crate::config::BACKGROUND_AVS_ENV
+                );
+            }
             return;
         }
 
@@ -1247,7 +1263,8 @@ impl Coordinator {
                 tracing::warn!(
                     "Background AV '{}' spawned at ({:.1}, {:.1}, yaw {:.0} deg): an undriven \
                      background AV blocks the lane it is spawned in. If no Autoware stack is \
-                     running in ROS domain {:?} for it, set {}=none.",
+                     running in ROS domain {:?} for it, restart the bridge without {} \
+                     (background AVs are opt-in).",
                     av.role_name,
                     av.spawn_pose.x,
                     av.spawn_pose.y,

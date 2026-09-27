@@ -217,12 +217,21 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     }
 
     # The bridge is not part of any launch file and nothing restarts it between runs.
+    # Background AVs are opt-in (CSB_BACKGROUND_AVS unset = none), so this run -- the one
+    # that brings up bg_av_1's stack -- is what asks for them.
     if ! pgrep -x carla_scenario_ >/dev/null 2>&1; then
-        echo "[two-av] no bridge running; starting one"
-        setsid just run > "$logs/bridge.log" 2>&1 &
+        echo "[two-av] no bridge running; starting one with CSB_BACKGROUND_AVS=all"
+        setsid env CSB_BACKGROUND_AVS=all just run > "$logs/bridge.log" 2>&1 &
         sleep 20
     fi
     pgrep -x carla_scenario_ >/dev/null || { echo "[two-av] bridge failed to start; see $logs/bridge.log"; exit 1; }
+    # A bridge left running by a single-ego session spawns no bg_av_1, and its stack would
+    # then wait for a vehicle that never appears. Refuse rather than run a one-AV "two-av".
+    just _bridge-spawns bg_av_1 || {
+        echo "[two-av] the running bridge does not spawn bg_av_1; restart it with"
+        echo "[two-av]   CSB_BACKGROUND_AVS=all just run"
+        exit 1
+    }
 
     # One stack at a time, deliberately. Starting both together was tried and does not
     # work: each Autoware loads three TensorRT inference nodes (the traffic-light
@@ -325,9 +334,11 @@ run:
     # (it holds the DDS xml) but has no bridge config in it, so the run silently comes up
     # with no background AVs and no blueprint aliases.
     export CSB_CONFIG_DIR="${CSB_CONFIG_DIR:-{{project}}/src/carla_scenario_bridge/config}"
-    # CSB_BACKGROUND_AVS (all | none | role_name,...) is inherited as-is: set it to `none`
-    # when no background-AV stack is running, or the undriven car blocks the ego's lane.
-    # See background_avs in bridge_config.yaml.
+    # CSB_BACKGROUND_AVS (all | none | role_name,...) is inherited as-is. Unset means none:
+    # background AVs are opt-in, because nothing but their own stack drives them and an
+    # undriven one parks in the ego's lane. `just two-av` sets it to `all`; by hand,
+    # `CSB_BACKGROUND_AVS=all just run` alongside `just bg-av`. See background_avs in
+    # bridge_config.yaml.
     cargo run \
         --manifest-path "{{project}}/src/carla_scenario_bridge/Cargo.toml"
 
@@ -584,7 +595,9 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
 # Launch one background AV's Autoware + acb_bridge + pilot in its own ROS domain.
 # The bridge spawns the vehicle (see background_avs in bridge_config.yaml); this brings up
 # the stack that drives it. Long-lived, like `just ego-av`, and startable before or after
-# the scenario -- only CARLA has to be up first.
+# the scenario -- only CARLA has to be up first. Background AVs are opt-in: the bridge
+# spawns this vehicle only if it was started with CSB_BACKGROUND_AVS=all (or a list naming
+# it), and this recipe warns when the running bridge was not.
 #
 #
 # Domains start at 2: 1 belongs to the ego and SSv2, and 0 is left free so that a stray
@@ -598,6 +611,11 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
 bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name) goals=(project + "/scenarios/bg_av_1_poses.yaml"): _require-carla
     #!/usr/bin/env bash
     set -e
+    if pgrep -x carla_scenario_ >/dev/null 2>&1 && ! just _bridge-spawns {{vehicle_name}}; then
+        echo "[bg-av] WARNING: the running bridge does not spawn {{vehicle_name}} -- this stack"
+        echo "[bg-av] will wait for a vehicle that never appears. Restart the bridge with"
+        echo "[bg-av]   CSB_BACKGROUND_AVS=all just run"
+    fi
     source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
@@ -619,6 +637,22 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
         map_path:="{{map_path}}" \
         goal_poses_file:="{{goals}}" \
         carla_port:={{carla_port}}
+
+# Succeed if a running bridge spawns background AV `vehicle_name`, judged from the
+# CSB_BACKGROUND_AVS in its environment (unset/blank/none = none, all, or a role_name list).
+# Background AVs are opt-in, so a bridge started by a single-ego session spawns none.
+_bridge-spawns vehicle_name:
+    #!/usr/bin/env bash
+    for p in $(pgrep -x carla_scenario_); do
+        sel=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^CSB_BACKGROUND_AVS=//p' | tr -d ' ')
+        case "$sel" in
+            [Aa][Ll][Ll]) exit 0 ;;
+        esac
+        case ",$sel," in
+            *",{{vehicle_name}},"*) exit 0 ;;
+        esac
+    done
+    exit 1
 
 # Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already
 # be up; SSv2 no longer launches Autoware)

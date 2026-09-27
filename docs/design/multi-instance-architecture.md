@@ -115,10 +115,11 @@ background_avs:
 `role_name` must be unique — it is how each `acb_bridge` finds its own vehicle, and a
 duplicate is rejected at startup.
 
-**2. Start the bridge and the scenario** in the ego's domain (`D0`, i.e. `ROS_DOMAIN_ID=1`):
+**2. Start the bridge and the scenario** in the ego's domain (`D0`, i.e. `ROS_DOMAIN_ID=1`),
+with background AVs switched on -- they are opt-in:
 
 ```bash
-just e2e scenarios/town01_ego_drive.xosc   # exports ROS_DOMAIN_ID=1 itself
+CSB_BACKGROUND_AVS=all just e2e scenarios/town01_ego_drive.xosc   # exports ROS_DOMAIN_ID=1 itself
 ```
 
 `csb_bridge` loads the map, spawns `bg_av_1` at `Initialize`, then spawns the ego when SSv2
@@ -129,12 +130,15 @@ an unmanaged one gets its own domain and publishes its own clock like any backgr
 Nothing in `csb_bridge` drives `bg_av_1`: until its own stack (step 3) is up it sits at its
 spawn pose, in the lane it was placed in, and a scenario ego in that lane stops behind it. On
 2026-09-27 that failed `town01_pedestrian.xosc` three times and was misread as a planner
-stall. So the set of background AVs is selectable per run through `CSB_BACKGROUND_AVS`, read
-once at bridge startup: `all` (the default, also when unset), `none`, or a comma-separated
-list of `role_name`s (names the config does not declare are warned about and ignored). The
-bridge logs the enabled set at startup and a WARN naming the pose for each one it spawns at
-`Initialize`. On a host with no background stack, start the bridge with
-`CSB_BACKGROUND_AVS=none just run`.
+stall. So background AVs are **opt-in**: `background_avs` in the config declares them, and
+`CSB_BACKGROUND_AVS`, read once at bridge startup, selects which to spawn -- `none` (the
+default, also when unset or empty), `all`, or a comma-separated list of `role_name`s (names
+the config does not declare are warned about and ignored). A plain `just run` is a
+single-ego run; the two-domain workflow asks explicitly, `CSB_BACKGROUND_AVS=all just run`,
+and `just two-av` does that itself (and refuses to run against an already-running bridge
+that does not spawn `bg_av_1`; `just bg-av` warns in the same case). The bridge logs one
+startup line with the enabled set and how to enable the rest, an INFO at each `Initialize`
+naming declared-but-disabled AVs, and a WARN naming the pose for each one it does spawn.
 
 **3. Start the background AV's stack** in its own domain (`D1`, i.e. `ROS_DOMAIN_ID=2`):
 
@@ -413,7 +417,7 @@ in separate ROS domains, each driving its own vehicle through its own `acb_bridg
 
 ```
 just carla-start                     # one server, shared
-just run                             # csb: the only ticker, the only vehicle spawner
+CSB_BACKGROUND_AVS=all just run      # csb: the only ticker, the only vehicle spawner
 just ego-av                          # Autoware + acb_bridge, ROS domain 1, web UI 8082
 just bg-av                           # Autoware + acb_bridge + pilot, domain 2, web UI 8083
 just scenario scenarios/town01_ego_drive.xosc

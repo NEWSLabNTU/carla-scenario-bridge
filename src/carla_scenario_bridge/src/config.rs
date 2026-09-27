@@ -172,8 +172,16 @@ pub struct BridgeConfig {
     pub blueprint_map: HashMap<String, String>,
     /// Map directory name to CARLA town, for maps not named after their town.
     pub map_alias: HashMap<String, String>,
-    /// Additional Autoware instances. Empty means a plain single-ego run.
+    /// Additional Autoware instances *enabled for this run*. Empty means a plain single-ego
+    /// run. After [`BridgeConfig::apply_env_overrides`] this holds only the ones
+    /// [`BACKGROUND_AVS_ENV`] selected -- none unless it asks for them.
     pub background_avs: Vec<BackgroundAv>,
+    /// Role names the file declares under `background_avs` that this run does not spawn,
+    /// because [`BACKGROUND_AVS_ENV`] did not select them. Filled by
+    /// [`BridgeConfig::apply_env_overrides`]; kept so every `Initialize` can say what it is
+    /// leaving out instead of silently spawning fewer vehicles than the config lists.
+    #[serde(skip)]
+    pub disabled_background_avs: Vec<String>,
     /// Channel for telling sensor bridges to release their sensors before a despawn.
     pub sensor_release: SensorReleaseConfig,
     /// How many CARLA ticks to run per SSv2 frame. See `default_substeps`.
@@ -265,16 +273,68 @@ impl BridgeConfig {
         if let Some(port) = env_port("SSV2_PORT") {
             self.ssv2.port = port;
         }
-        if let Ok(raw) = std::env::var(BACKGROUND_AVS_ENV) {
-            let selection = BackgroundAvSelection::parse(&raw);
-            let unknown = selection.apply(&mut self.background_avs);
-            for name in unknown {
-                tracing::warn!(
-                    "{BACKGROUND_AVS_ENV} names '{name}', which bridge_config.yaml does not \
-                     declare; ignored"
-                );
-            }
+        let raw = std::env::var(BACKGROUND_AVS_ENV).ok();
+        self.select_background_avs(raw.as_deref());
+    }
+
+    /// Narrow `background_avs` to what [`BACKGROUND_AVS_ENV`] selects (`raw` is its value,
+    /// `None` when unset), recording the rest in `disabled_background_avs`.
+    ///
+    /// Separate from [`Self::apply_env_overrides`] so it can be tested without mutating the
+    /// process environment.
+    pub fn select_background_avs(&mut self, raw: Option<&str>) {
+        let selection = BackgroundAvSelection::from_env_value(raw);
+        let declared: Vec<String> = self
+            .background_avs
+            .iter()
+            .map(|a| a.role_name.clone())
+            .collect();
+        let unknown = selection.apply(&mut self.background_avs);
+        for name in unknown {
+            tracing::warn!(
+                "{BACKGROUND_AVS_ENV} names '{name}', which bridge_config.yaml does not \
+                 declare; ignored"
+            );
         }
+        self.disabled_background_avs = declared
+            .into_iter()
+            .filter(|n| !self.background_avs.iter().any(|a| &a.role_name == n))
+            .collect();
+    }
+
+    /// The one startup line saying which background AVs this run spawns, and how to get
+    /// the others. `raw` is the value of [`BACKGROUND_AVS_ENV`], `None` when unset.
+    pub fn background_av_summary(&self, raw: Option<&str>) -> String {
+        let source = match raw {
+            Some(v) if !v.trim().is_empty() => format!("{BACKGROUND_AVS_ENV}={}", v.trim()),
+            _ => format!("{BACKGROUND_AVS_ENV} unset, default none"),
+        };
+        let enabled: Vec<String> = self
+            .background_avs
+            .iter()
+            .map(|a| match a.ros_domain_id {
+                Some(d) => format!("{} (domain {d})", a.role_name),
+                None => a.role_name.clone(),
+            })
+            .collect();
+        let mut line = if enabled.is_empty() {
+            format!("Background AVs: none enabled ({source}; single-ego run)")
+        } else {
+            format!(
+                "Background AVs enabled ({source}): {}. Each one is spawned at every \
+                 Initialize and parks in its lane unless its own stack (`just bg-av`) drives it",
+                enabled.join(", ")
+            )
+        };
+        if !self.disabled_background_avs.is_empty() {
+            line.push_str(&format!(
+                ". Declared but not spawned: {}; to spawn them, start the bridge with \
+                 `{BACKGROUND_AVS_ENV}=all just run` (or a role_name list) and bring up their \
+                 stacks with `just bg-av` -- `just two-av` does both",
+                self.disabled_background_avs.join(", ")
+            ));
+        }
+        line
     }
 
     /// Reject configurations that would misbehave in ways that are hard to diagnose later.
@@ -315,41 +375,54 @@ impl BridgeConfig {
 
 /// Which of the configured background AVs to spawn. Read from the environment at startup.
 ///
-/// A background AV is spawned at every `Initialize`, but nothing in this bridge drives it:
-/// its own Autoware stack in its own ROS domain does. On a host where that stack is not
-/// running the car just parks at its spawn pose, in whatever lane it was placed in --
-/// `town01_pedestrian.xosc` failed three times on exactly that, the ego stopped 8 m behind
-/// an undriven `bg_av_1`, and it was misread as a planner stall. So the operator can switch
-/// them off per run without editing the checked-in config.
+/// **Opt-in: unset means none.** A background AV is spawned at every `Initialize`, but
+/// nothing in this bridge drives it: its own Autoware stack in its own ROS domain does. On a
+/// host where that stack is not running the car just parks at its spawn pose, in whatever
+/// lane it was placed in -- `town01_pedestrian.xosc` failed three times on exactly that, the
+/// ego stopped 8 m behind an undriven `bg_av_1`, and it was misread as a planner stall.
+/// Spawning them by default made the checked-in config break scenarios on every host without
+/// the background stack, so the run that brings that stack up (`just two-av`, or a manual
+/// `just bg-av`) has to ask: `CSB_BACKGROUND_AVS=all just run`.
 pub const BACKGROUND_AVS_ENV: &str = "CSB_BACKGROUND_AVS";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackgroundAvSelection {
-    /// Spawn everything the config lists (the default, and what an unset variable means).
+    /// Spawn everything the config lists.
     All,
-    /// Spawn none of them.
+    /// Spawn none of them (the default, and what an unset or blank variable means).
     None,
     /// Spawn only these role names.
     Only(Vec<String>),
 }
 
 impl BackgroundAvSelection {
+    /// The selection for a value of [`BACKGROUND_AVS_ENV`], `None` when it is unset.
+    /// Unset means [`Self::None`]: background AVs are opt-in.
+    pub fn from_env_value(raw: Option<&str>) -> Self {
+        raw.map_or(Self::None, Self::parse)
+    }
+
     /// `all`, `none`, or a comma-separated list of role names. Case-insensitive keywords,
     /// whitespace around entries ignored, empty entries dropped. An empty value means
-    /// `all`: an exported-but-blank variable should not silently remove vehicles.
+    /// `none`, the same as unset: an exported-but-blank variable is not a request for
+    /// vehicles, and spawning undriven ones is the failure this default exists to avoid.
     pub fn parse(raw: &str) -> Self {
         let trimmed = raw.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
-            return Self::All;
-        }
-        if trimmed.eq_ignore_ascii_case("none") {
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
             return Self::None;
+        }
+        if trimmed.eq_ignore_ascii_case("all") {
+            return Self::All;
         }
         let mut names: Vec<String> = Vec::new();
         for name in trimmed.split(',').map(str::trim).filter(|n| !n.is_empty()) {
             if !names.iter().any(|n| n == name) {
                 names.push(name.to_string());
             }
+        }
+        if names.is_empty() {
+            // Only separators, e.g. ",": nothing was named, so nothing is selected.
+            return Self::None;
         }
         Self::Only(names)
     }
@@ -404,7 +477,7 @@ mod tests {
 
     #[test]
     fn background_av_selection_all_keeps_everything() {
-        for raw in ["all", "ALL", "  all ", ""] {
+        for raw in ["all", "ALL", "  all "] {
             let sel = BackgroundAvSelection::parse(raw);
             assert_eq!(sel, BackgroundAvSelection::All, "{raw:?}");
             let mut avs = two_avs();
@@ -415,7 +488,7 @@ mod tests {
 
     #[test]
     fn background_av_selection_none_removes_everything() {
-        for raw in ["none", "None", " none\n"] {
+        for raw in ["none", "None", " none\n", "", "  ", " , "] {
             let sel = BackgroundAvSelection::parse(raw);
             assert_eq!(sel, BackgroundAvSelection::None, "{raw:?}");
             let mut avs = two_avs();
@@ -445,6 +518,74 @@ mod tests {
         let mut avs = two_avs();
         assert_eq!(sel.apply(&mut avs), vec!["nope".to_string()]);
         assert!(avs.is_empty());
+    }
+
+    fn config_with_two_avs() -> BridgeConfig {
+        let yaml = "background_avs:\n  - role_name: bg_av_1\n    ros_domain_id: 2\n    \
+                    spawn_pose: {x: 1.0}\n  - role_name: bg_av_2\n    spawn_pose: {x: 2.0}\n";
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    /// The regression: an unset variable used to mean `all`, so the checked-in config
+    /// parked `bg_av_1` in the ego's lane on every host without a background stack.
+    #[test]
+    fn background_avs_are_opt_in_when_the_variable_is_unset() {
+        assert_eq!(
+            BackgroundAvSelection::from_env_value(None),
+            BackgroundAvSelection::None
+        );
+        let mut config = config_with_two_avs();
+        config.select_background_avs(None);
+        assert!(config.background_avs.is_empty());
+        assert_eq!(config.disabled_background_avs, ["bg_av_1", "bg_av_2"]);
+    }
+
+    #[test]
+    fn a_blank_variable_is_the_default_too() {
+        let mut config = config_with_two_avs();
+        config.select_background_avs(Some("  "));
+        assert!(config.background_avs.is_empty());
+        assert_eq!(config.disabled_background_avs, ["bg_av_1", "bg_av_2"]);
+    }
+
+    #[test]
+    fn asking_for_them_spawns_them() {
+        let mut config = config_with_two_avs();
+        config.select_background_avs(Some("all"));
+        assert_eq!(names(&config.background_avs), ["bg_av_1", "bg_av_2"]);
+        assert!(config.disabled_background_avs.is_empty());
+
+        let mut config = config_with_two_avs();
+        config.select_background_avs(Some("bg_av_2"));
+        assert_eq!(names(&config.background_avs), ["bg_av_2"]);
+        assert_eq!(config.disabled_background_avs, ["bg_av_1"]);
+    }
+
+    #[test]
+    fn the_startup_line_says_what_is_enabled_and_how_to_enable_the_rest() {
+        let mut config = config_with_two_avs();
+        config.select_background_avs(None);
+        let line = config.background_av_summary(None);
+        assert!(line.contains("none enabled"), "{line}");
+        assert!(
+            line.contains("CSB_BACKGROUND_AVS unset, default none"),
+            "{line}"
+        );
+        assert!(line.contains("bg_av_1, bg_av_2"), "{line}");
+        assert!(line.contains("CSB_BACKGROUND_AVS=all just run"), "{line}");
+
+        let mut config = config_with_two_avs();
+        config.select_background_avs(Some("all"));
+        let line = config.background_av_summary(Some("all"));
+        assert!(line.contains("enabled (CSB_BACKGROUND_AVS=all)"), "{line}");
+        assert!(line.contains("bg_av_1 (domain 2), bg_av_2"), "{line}");
+        assert!(!line.contains("Declared but not spawned"), "{line}");
+
+        // A config with no background AVs has nothing to offer.
+        let mut config: BridgeConfig = serde_yaml::from_str("{}").unwrap();
+        config.select_background_avs(None);
+        let line = config.background_av_summary(None);
+        assert!(!line.contains("Declared but not spawned"), "{line}");
     }
 
     #[test]

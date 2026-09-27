@@ -119,6 +119,12 @@ host always had the background stack up, so it drove away before the ego arrived
       background AV naming the lane it blocks — `fc8e10f`
 - [x] Re-run `town01_pedestrian.xosc` with `CSB_BACKGROUND_AVS=none` — **PASS**
       2026-09-27 (`failures="0"`, 310 s wall, collision summary: no collisions)
+- [x] Default flipped: background AVs are **opt-in**. Unset (or blank) `CSB_BACKGROUND_AVS`
+      now means `none`, so a plain `just run` no longer parks `bg_av_1` in the ego's lane on
+      a host without the domain-2 stack. `just two-av` starts its bridge with `all` and
+      refuses a running bridge that does not spawn `bg_av_1`; `just bg-av` warns in that case.
+      One startup INFO line names the enabled set and how to enable the rest; each
+      `Initialize` logs declared-but-disabled AVs. Unit tests in `config.rs`
 
 ### Collision truth (gap 3)
 
