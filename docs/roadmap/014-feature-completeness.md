@@ -115,9 +115,10 @@ host always had the background stack up, so it drove away before the ego arrived
 
 - [x] Reproduce on a quiet host — reproduced at load ~15; not capacity
 - [x] Read the planner's decision — `route-obstacle`, object = `bg_av_1`
-- [ ] Bridge: `CSB_BACKGROUND_AVS=all|none|<list>` override and a WARN per spawned
-      background AV naming the lane it blocks (in progress)
-- [ ] Re-run `town01_pedestrian.xosc` with `CSB_BACKGROUND_AVS=none`; expect PASS
+- [x] Bridge: `CSB_BACKGROUND_AVS=all|none|<list>` override and a WARN per spawned
+      background AV naming the lane it blocks — `fc8e10f`
+- [x] Re-run `town01_pedestrian.xosc` with `CSB_BACKGROUND_AVS=none` — **PASS**
+      2026-09-27 (`failures="0"`, 310 s wall, collision summary: no collisions)
 
 ### Collision truth (gap 3)
 
@@ -154,11 +155,13 @@ host always had the background stack up, so it drove away before the ego arrived
       after teleport, 0.951 at spawn: half the walker under the road); `walker_lift` stored at
       spawn and added per teleport, now 0.930 — `ddf64d7`. **Regression found 2026-09-27**: the
       lift is added to SSv2's commanded z, and the scenario sends z=0.3, so the walker's feet
-      sit 0.30 m above the road. Fix in progress: ground under x/y (cached per walker) + lift
+      sit 0.30 m above the road. Fixed in `fc8e10f`: ground under x/y (map lookup, cached until the walker
+      moves 2 m) + lift; feet at 0.000 m after every teleport
 - [x] `/control/control_mode_request` service in acb (AUTONOMOUS→ok, MANUAL→fail, matching
       stock; live 2026-09-27: `{mode: 1}` → true, `{mode: 4}` → false). Caveat: acb does not
       spin its executor while waiting for the hero, so calls made before the ego spawns sit
-      unanswered until discovery — small follow-up in acb `wait_for_vehicle`;
+      unanswered until discovery — fixed in acb `7040b2d` (the waits pump the executor);
+      live check pending;
       stock `autoware_universe.cpp:52`)
 - [x] Second `is_ego` rejected; unknown entity in `UpdateEntityStatus` rejected, not echoed;
       (both verified by probe, `ddf64d7`); the MANUAL-overwrite case needs a ControlModeReport
