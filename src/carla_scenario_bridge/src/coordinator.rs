@@ -386,6 +386,7 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
     commanded_z.max(FALLBACK_SPAWN_Z)
 }
 
+use crate::collision_monitor::CollisionMonitor;
 use crate::coordinate_conversion::{self, OriginOffset};
 use crate::entity_manager::{EntityManager, EntityType};
 use crate::proto::geometry_msgs::{self, Pose};
@@ -613,6 +614,9 @@ pub struct Coordinator {
     warned_arrow_shapes: bool,
     /// Bridge configuration: ego role name, blueprint map, background AVs.
     config: BridgeConfig,
+    /// CARLA's view of the ego's collisions, logged beside SSv2's verdict and never fed
+    /// into it (roadmap 014, gap 3). See `collision_monitor`.
+    collision_monitor: CollisionMonitor,
 }
 
 impl Coordinator {
@@ -626,6 +630,7 @@ impl Coordinator {
     ) -> Self {
         let config_for_release = config.sensor_release.clone();
         let substeps = config.substeps.max(1);
+        let collision_monitor_enabled = config.collision_monitor_enabled();
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -653,6 +658,7 @@ impl Coordinator {
             settle_frames: HashMap::new(),
             accel_history: HashMap::new(),
             walker_lift: HashMap::new(),
+            collision_monitor: CollisionMonitor::new(collision_monitor_enabled),
         }
     }
 
@@ -883,12 +889,32 @@ impl Coordinator {
         }
     }
 
+    /// Log the collisions CARLA reported since the last drain, named by SSv2 entity.
+    fn drain_collisions(&mut self) {
+        let entities = &self.entities;
+        self.collision_monitor
+            .drain(|id| entities.name_of_actor(id).map(str::to_owned));
+    }
+
+    /// Stop and destroy the ego's collision sensor and log the run's summary. A no-op when
+    /// none is attached. Must run before the ego is destroyed -- see
+    /// `CollisionMonitor::finish_run`.
+    fn finish_collision_monitor(&mut self) {
+        let entities = &self.entities;
+        self.collision_monitor
+            .finish_run(|id| entities.name_of_actor(id).map(str::to_owned));
+    }
+
     /// Destroy every actor this bridge created that is still alive.
     ///
     /// Best effort throughout: CARLA may already be gone, and an actor that has vanished on
     /// its own is a success -- the requested end state holds either way. Never panics, so it
     /// is safe on the shutdown path.
     pub fn destroy_all_spawned(&mut self) -> TeardownReport {
+        // Our own collision sensor goes before the ego it is attached to, and its run's
+        // summary is logged while the entity names can still be resolved.
+        self.finish_collision_monitor();
+
         // The ledger drives the loop; the world only supplies the destroyer. Split this way
         // so the bookkeeping half is reachable from a unit test, which a Coordinator (and
         // therefore a live CARLA world) is not.
@@ -1442,6 +1468,7 @@ impl Coordinator {
         self.settle_frames.clear();
         self.accel_history.clear();
         self.walker_lift.clear();
+        self.collision_monitor.reset_frames();
 
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
         // EntityManager first is what used to orphan them: the map was the only record of
@@ -1659,6 +1686,10 @@ impl Coordinator {
     }
 
     pub fn update_frame(&mut self, _req: api::UpdateFrameRequest) -> api::UpdateFrameResponse {
+        // Stamp this frame's collisions with this frame's number, and log last frame's.
+        self.collision_monitor.next_frame();
+        self.drain_collisions();
+
         match decide_frame_action(self.sync_mode_enabled, self.has_ego) {
             FrameAction::WaitForEgo => {
                 // CARLA is still free-running so acb_bridge can find its vehicle. Ticking
@@ -1974,6 +2005,7 @@ impl Coordinator {
             // Releases the sync-mode gate: from the next UpdateFrame onward this bridge
             // owns the tick. See FrameAction.
             self.has_ego = true;
+            self.collision_monitor.attach(&mut self.world, &actor, name);
             self.warm_up_localization(actor_id);
         }
 
@@ -2106,6 +2138,11 @@ impl Coordinator {
             self.entities.get(name).map(|e| e.entity_type),
             Some(EntityType::Ego)
         );
+
+        if was_ego {
+            // Our collision sensor before the ego it rides on; logs the run's summary.
+            self.finish_collision_monitor();
+        }
 
         match self.entities.remove(name) {
             Some(actor_id) => {

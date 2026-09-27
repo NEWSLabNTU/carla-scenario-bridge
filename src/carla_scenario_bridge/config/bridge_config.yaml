@@ -100,6 +100,20 @@ sensor_release:
   # trip, short enough not to matter to a scenario.
   timeout_ms: 300
 
+# CARLA's view of the ego's collisions (roadmap 014, gap 3). Default true.
+#
+# Attaches a sensor.other.collision to the ego at spawn. Every contact is logged at WARN --
+# at most once a second per other actor, with the SSv2 frame, the other actor's SSv2 name
+# (or CARLA type and id), and the normal impulse -- and at the end of the run (ego despawn
+# or the next Initialize) an INFO table lists each other actor's first frame, contact count
+# and max impulse.
+#
+# DIAGNOSTIC ONLY. SSv2's CollisionCondition stays the verdict and nothing here fails a
+# request. SSv2 judges collisions from declared bounding boxes; CARLA from PhysX colliders
+# (NPCs are kinematic but keep theirs), so the two can disagree. SSv2 does not report its
+# verdict to the simulator, so compare the summary against the run's JUnit result by hand.
+collision_monitor: true
+
 # CARLA ticks per SSv2 frame. 2 is the default: the SSv2 frame is delivered in two CARLA
 # ticks at half the step, so the scenario's timeline is unchanged while sensors and control
 # are serviced twice as often. Set to 1 for the historical one-tick-per-frame behaviour.

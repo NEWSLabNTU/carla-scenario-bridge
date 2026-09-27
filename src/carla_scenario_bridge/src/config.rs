@@ -179,6 +179,10 @@ pub struct BridgeConfig {
     /// How many CARLA ticks to run per SSv2 frame. See `default_substeps`.
     #[serde(default = "default_substeps")]
     pub substeps: u32,
+    /// Attach a `sensor.other.collision` to the ego and log what CARLA's physics thinks
+    /// it hit (roadmap 014, gap 3). Diagnostic only: never changes SSv2's verdict. Unset
+    /// means on -- read it through [`BridgeConfig::collision_monitor_enabled`].
+    pub collision_monitor: Option<bool>,
 }
 
 /// Off, because under a managed ego it cannot work -- see `warm_up_localization`.
@@ -285,6 +289,12 @@ impl BridgeConfig {
         }
 
         Ok(())
+    }
+
+    /// Whether to run the ego collision monitor. Defaults to on: it costs one sensor that
+    /// only fires on contact, and the disagreement it exposes is otherwise invisible.
+    pub fn collision_monitor_enabled(&self) -> bool {
+        self.collision_monitor.unwrap_or(true)
     }
 
     /// CARLA blueprint for an SSv2 asset key, if the config maps it.
@@ -444,6 +454,16 @@ background_avs:
             config.map_alias.get("kashiwanoha").map(String::as_str),
             Some("Town01")
         );
+    }
+
+    #[test]
+    fn the_collision_monitor_defaults_on_and_can_be_turned_off() {
+        let config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        assert!(config.collision_monitor_enabled());
+        assert!(BridgeConfig::default().collision_monitor_enabled());
+        let config: BridgeConfig =
+            serde_yaml::from_str("collision_monitor: false\n").expect("parses");
+        assert!(!config.collision_monitor_enabled());
     }
 
     /// A malformed file must not silently fall back to defaults -- the operator believes

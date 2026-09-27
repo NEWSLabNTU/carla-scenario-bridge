@@ -59,6 +59,15 @@ impl EntityManager {
         self.entities.get(name)
     }
 
+    /// The SSv2 name of the entity backed by a CARLA actor, if any. A linear scan: a
+    /// scenario has a handful of entities, and this is only asked when something collides.
+    pub fn name_of_actor(&self, carla_actor_id: u32) -> Option<&str> {
+        self.entities
+            .iter()
+            .find(|(_, e)| e.carla_actor_id == carla_actor_id)
+            .map(|(name, _)| name.as_str())
+    }
+
     pub fn clear(&mut self) {
         self.entities.clear();
     }
