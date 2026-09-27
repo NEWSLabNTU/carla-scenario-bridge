@@ -53,6 +53,15 @@ map_alias: {}
 #
 # This bridge spawns the vehicle. Bringing up the matching Autoware and acb_bridge in the
 # right ROS domain is launch's job -- see csb_launch/launch/background_av.launch.xml.
+#
+# Nothing in this bridge drives a background AV. Without its own stack running it parks at
+# spawn_pose in the ego's lane, and the ego stops behind it (town01_pedestrian.xosc failed
+# three times that way, read as a planner stall). Select per run, without editing this
+# file, with CSB_BACKGROUND_AVS at bridge startup:
+#   all        (default, also when unset or empty) spawn every entry below
+#   none       spawn none of them
+#   a,b        spawn only these role_names; names not listed here are warned about and ignored
+# e.g. `CSB_BACKGROUND_AVS=none just run` on a host with no domain-2 stack.
 background_avs:
   - role_name: "bg_av_1"
     # Background AVs start at domain 2: the ego and SSv2 share domain 1, and domain 0 is

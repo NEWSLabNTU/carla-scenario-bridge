@@ -43,10 +43,18 @@ fn main() -> Result<()> {
     tracing::info!("  SSv2:   tcp://*:{ssv2_port}");
     tracing::info!("  Config: {}", config_dir.display());
     tracing::info!("  Ego role_name: {}", config.ego.role_name);
+    let bg_env = std::env::var(config::BACKGROUND_AVS_ENV).unwrap_or_else(|_| "all".into());
     if config.background_avs.is_empty() {
-        tracing::info!("  Background AVs: none (single-ego run)");
+        tracing::info!(
+            "  Background AVs: none enabled ({}={bg_env}; single-ego run)",
+            config::BACKGROUND_AVS_ENV
+        );
     } else {
-        tracing::info!("  Background AVs: {}", config.background_avs.len());
+        tracing::info!(
+            "  Background AVs enabled ({}={bg_env}): {}",
+            config::BACKGROUND_AVS_ENV,
+            config.background_avs.len()
+        );
         for av in &config.background_avs {
             tracing::info!("    - {} (domain {:?})", av.role_name, av.ros_domain_id);
         }

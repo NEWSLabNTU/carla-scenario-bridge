@@ -494,6 +494,37 @@ fn walker_lift(bbox_center_z: f32, bbox_extent_z: f32) -> f32 {
     (bbox_extent_z - bbox_center_z).max(0.0)
 }
 
+/// How far a walker may move from where its ground height was last looked up before it is
+/// looked up again. A waypoint lookup is one RPC; per walker per frame at 20 Hz that is too
+/// many for a height that changes by centimetres over a few metres of road.
+const WALKER_GROUND_REFRESH_M: f32 = 2.0;
+
+/// A walker's height bookkeeping: its fixed origin-above-feet lift, and the last ground
+/// lookup (`x`, `y`, and the road z there -- `None` when CARLA had no lane nearby).
+#[derive(Debug, Clone, Copy, Default)]
+struct WalkerHeight {
+    lift: f32,
+    ground: Option<(f32, f32, Option<f32>)>,
+}
+
+/// Whether a walker commanded to (`x`, `y`) needs a fresh ground lookup, given where the
+/// last one was made. Always on the first teleport; afterwards only once it has moved
+/// more than [`WALKER_GROUND_REFRESH_M`] from that point.
+fn walker_ground_is_stale(last: Option<(f32, f32)>, x: f32, y: f32) -> bool {
+    match last {
+        None => true,
+        Some((lx, ly)) => (x - lx).hypot(y - ly) > WALKER_GROUND_REFRESH_M,
+    }
+}
+
+/// CARLA origin z for a walker. SSv2's own z for a pedestrian is the scenario author's
+/// number (0.3 in town01_pedestrian.xosc), not the road: adding the lift to it floated the
+/// walker's feet 0.30 m above the road. So the ground under the walker wins, and the
+/// commanded z is used only when there is no ground to be had.
+fn walker_origin_z(ground_z: Option<f32>, commanded_z: f32, lift: f32) -> f32 {
+    ground_z.unwrap_or(commanded_z) + lift
+}
+
 /// Why a vehicle spawn must be refused because an ego already exists, if it must.
 fn second_ego_rejection(is_ego: bool, existing_ego: Option<&str>, name: &str) -> Option<String> {
     match (is_ego, existing_ego) {
@@ -597,10 +628,10 @@ pub struct Coordinator {
     /// Recent raw acceleration samples per actor, for the reporting-side smoothing
     /// (see ACCEL_SMOOTHING_FRAMES).
     accel_history: HashMap<u32, VecDeque<(f64, f64, f64)>>,
-    /// Per walker actor: metres from the ground to the CARLA actor origin. SSv2 poses a
-    /// pedestrian at its feet; a CARLA walker's origin is its capsule centre. See
-    /// [`walker_lift`].
-    walker_lift: HashMap<u32, f32>,
+    /// Per walker actor: metres from the ground to the CARLA actor origin (SSv2 poses a
+    /// pedestrian at its feet; a CARLA walker's origin is its capsule centre, see
+    /// [`walker_lift`]), and the cached ground height under it (see [`WalkerHeight`]).
+    walker_height: HashMap<u32, WalkerHeight>,
     /// Directory holding per-map config, e.g. the traffic light signal mapping.
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
@@ -657,7 +688,7 @@ impl Coordinator {
             previous_longitudinal_accel: HashMap::new(),
             settle_frames: HashMap::new(),
             accel_history: HashMap::new(),
-            walker_lift: HashMap::new(),
+            walker_height: HashMap::new(),
             collision_monitor: CollisionMonitor::new(collision_monitor_enabled),
         }
     }
@@ -694,7 +725,7 @@ impl Coordinator {
         self.previous_longitudinal_accel.remove(&actor_id);
         self.settle_frames.remove(&actor_id);
         self.accel_history.remove(&actor_id);
-        self.walker_lift.remove(&actor_id);
+        self.walker_height.remove(&actor_id);
     }
 
     /// Bind the release channel, or explain why we are not using one.
@@ -1004,7 +1035,7 @@ impl Coordinator {
             self.previous_longitudinal_accel.clear();
             self.settle_frames.clear();
             self.accel_history.clear();
-            self.walker_lift.clear();
+            self.walker_height.clear();
             self.sync_mode_enabled = false;
             // The reloaded world's lights are CARLA's own again, so we owe no unfreeze.
             self.froze_traffic_lights.mark_restored();
@@ -1209,6 +1240,20 @@ impl Coordinator {
                     av.role_name,
                     av.ros_domain_id,
                     av.goal_pose.map(|p| (p.x, p.y))
+                );
+                // Nothing in this bridge drives it. Without its own stack running it parks
+                // at the spawn pose, and a scenario ego in that lane stops behind it --
+                // which reads as a planner stall (roadmap 014, town01_pedestrian).
+                tracing::warn!(
+                    "Background AV '{}' spawned at ({:.1}, {:.1}, yaw {:.0} deg): an undriven \
+                     background AV blocks the lane it is spawned in. If no Autoware stack is \
+                     running in ROS domain {:?} for it, set {}=none.",
+                    av.role_name,
+                    av.spawn_pose.x,
+                    av.spawn_pose.y,
+                    av.spawn_pose.yaw,
+                    av.ros_domain_id,
+                    crate::config::BACKGROUND_AVS_ENV
                 );
             } else {
                 tracing::error!(
@@ -1467,7 +1512,7 @@ impl Coordinator {
         self.previous_longitudinal_accel.clear();
         self.settle_frames.clear();
         self.accel_history.clear();
-        self.walker_lift.clear();
+        self.walker_height.clear();
         self.collision_monitor.reset_frames();
 
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
@@ -1930,10 +1975,12 @@ impl Coordinator {
             // is its capsule centre. CARLA seats a walker on the ground at spawn (measured:
             // origin 0.951 m up on Town01), but every teleport after that took SSv2's z
             // unchanged and sank the walker to its waist (origin z = 0.000). Remember the
-            // lift here; update_entity_status adds it to every teleport.
+            // lift here; update_entity_status puts the origin that far above the ground
+            // under each teleport (see walker_teleport_z).
             let bb = actor.bounding_box();
             let lift = walker_lift(bb.transform.location.z, bb.extent.z);
-            self.walker_lift.insert(actor_id, lift);
+            self.walker_height
+                .insert(actor_id, WalkerHeight { lift, ground: None });
             tracing::debug!("Walker '{name}' origin sits {lift:.3} m above its feet");
         }
 
@@ -2259,8 +2306,8 @@ impl Coordinator {
                 // NPC or ego overwrite: set transform from SSv2 pose
                 if let Some(pose) = entity_status.pose.as_ref() {
                     let mut transform = ros_pose_to_carla_transform(pose, origin_offset);
-                    if let Some(lift) = self.walker_lift.get(&actor_id) {
-                        transform.location.z += *lift;
+                    if let Some(z) = self.walker_teleport_z(actor_id, &transform.location) {
+                        transform.location.z = z;
                     }
                     // Pose only. SSv2's twist (action_status) is not passed on: CARLA accepts
                     // set_target_velocity and WalkerControl here, but a physics-off actor
@@ -2463,6 +2510,36 @@ impl Coordinator {
     }
 
     // --- Private helpers ---
+
+    /// Origin z for a walker teleport to `commanded`, or `None` if `actor_id` is no walker.
+    ///
+    /// Ignores the commanded z (see [`walker_origin_z`]) and uses the road under the
+    /// commanded x/y, looked up again only once the walker has moved
+    /// [`WALKER_GROUND_REFRESH_M`] from the last lookup.
+    fn walker_teleport_z(&mut self, actor_id: u32, commanded: &Location) -> Option<f32> {
+        let height = *self.walker_height.get(&actor_id)?;
+        let last = height.ground.map(|(x, y, _)| (x, y));
+        let ground_z = if walker_ground_is_stale(last, commanded.x, commanded.y) {
+            let z = self.ground_height_at(commanded);
+            if let Some(entry) = self.walker_height.get_mut(&actor_id) {
+                entry.ground = Some((commanded.x, commanded.y, z));
+            }
+            z
+        } else {
+            height.ground.and_then(|(_, _, z)| z)
+        };
+        Some(walker_origin_z(ground_z, commanded.z, height.lift))
+    }
+
+    /// Road height under `location`, from the nearest driving-lane waypoint; `None` when
+    /// there is no lane nearby or CARLA will not answer.
+    fn ground_height_at(&self, location: &Location) -> Option<f32> {
+        let map = self.world.map().ok()?;
+        match map.waypoint_at(location) {
+            Ok(Some(waypoint)) => Some(waypoint.transform().location.z),
+            _ => None,
+        }
+    }
 
     /// Height to spawn at for a commanded location.
     ///
@@ -3267,5 +3344,27 @@ mod tests {
         // A box whose centre is already above the origin needs less.
         assert!((walker_lift(0.9, 0.93) - 0.03).abs() < 1e-6);
         assert_eq!(walker_lift(1.0, 0.5), 0.0);
+    }
+
+    /// One lookup on the first teleport, then only after moving more than 2 m from it.
+    #[test]
+    fn walker_ground_is_looked_up_again_only_after_moving() {
+        assert!(walker_ground_is_stale(None, 300.0, -129.8));
+        let last = Some((300.0, -129.8));
+        assert!(!walker_ground_is_stale(last, 300.0, -129.8));
+        assert!(!walker_ground_is_stale(last, 299.5, -129.8));
+        assert!(!walker_ground_is_stale(last, 298.5, -128.5)); // 1.9 m diagonally
+        assert!(walker_ground_is_stale(last, 297.9, -129.8));
+        assert!(walker_ground_is_stale(last, 290.0, -129.8));
+    }
+
+    /// The ground wins over SSv2's z; the commanded z is only the no-ground fallback.
+    #[test]
+    fn walker_origin_is_ground_plus_lift_whatever_ssv2_sends() {
+        // town01_pedestrian.xosc: z = 0.3 commanded, road at 0.0, lift 0.93.
+        assert!((walker_origin_z(Some(0.0), 0.3, 0.93) - 0.93).abs() < 1e-6);
+        assert!((walker_origin_z(Some(0.12), 5.0, 0.93) - 1.05).abs() < 1e-6);
+        // No lane nearby: fall back to the commanded feet height.
+        assert!((walker_origin_z(None, 0.3, 0.93) - 1.23).abs() < 1e-6);
     }
 }

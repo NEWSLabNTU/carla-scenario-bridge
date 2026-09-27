@@ -126,6 +126,16 @@ asks. `acb_bridge` in this domain runs with `publish_clock:=false`, because SSv2
 `/clock` here. This applies to a **managed** ego, which shares SSv2's domain by necessity;
 an unmanaged one gets its own domain and publishes its own clock like any background AV.
 
+Nothing in `csb_bridge` drives `bg_av_1`: until its own stack (step 3) is up it sits at its
+spawn pose, in the lane it was placed in, and a scenario ego in that lane stops behind it. On
+2026-09-27 that failed `town01_pedestrian.xosc` three times and was misread as a planner
+stall. So the set of background AVs is selectable per run through `CSB_BACKGROUND_AVS`, read
+once at bridge startup: `all` (the default, also when unset), `none`, or a comma-separated
+list of `role_name`s (names the config does not declare are warned about and ignored). The
+bridge logs the enabled set at startup and a WARN naming the pose for each one it spawns at
+`Initialize`. On a host with no background stack, start the bridge with
+`CSB_BACKGROUND_AVS=none just run`.
+
 **3. Start the background AV's stack** in its own domain (`D1`, i.e. `ROS_DOMAIN_ID=2`):
 
 ```bash

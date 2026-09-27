@@ -265,6 +265,16 @@ impl BridgeConfig {
         if let Some(port) = env_port("SSV2_PORT") {
             self.ssv2.port = port;
         }
+        if let Ok(raw) = std::env::var(BACKGROUND_AVS_ENV) {
+            let selection = BackgroundAvSelection::parse(&raw);
+            let unknown = selection.apply(&mut self.background_avs);
+            for name in unknown {
+                tracing::warn!(
+                    "{BACKGROUND_AVS_ENV} names '{name}', which bridge_config.yaml does not \
+                     declare; ignored"
+                );
+            }
+        }
     }
 
     /// Reject configurations that would misbehave in ways that are hard to diagnose later.
@@ -303,6 +313,69 @@ impl BridgeConfig {
     }
 }
 
+/// Which of the configured background AVs to spawn. Read from the environment at startup.
+///
+/// A background AV is spawned at every `Initialize`, but nothing in this bridge drives it:
+/// its own Autoware stack in its own ROS domain does. On a host where that stack is not
+/// running the car just parks at its spawn pose, in whatever lane it was placed in --
+/// `town01_pedestrian.xosc` failed three times on exactly that, the ego stopped 8 m behind
+/// an undriven `bg_av_1`, and it was misread as a planner stall. So the operator can switch
+/// them off per run without editing the checked-in config.
+pub const BACKGROUND_AVS_ENV: &str = "CSB_BACKGROUND_AVS";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BackgroundAvSelection {
+    /// Spawn everything the config lists (the default, and what an unset variable means).
+    All,
+    /// Spawn none of them.
+    None,
+    /// Spawn only these role names.
+    Only(Vec<String>),
+}
+
+impl BackgroundAvSelection {
+    /// `all`, `none`, or a comma-separated list of role names. Case-insensitive keywords,
+    /// whitespace around entries ignored, empty entries dropped. An empty value means
+    /// `all`: an exported-but-blank variable should not silently remove vehicles.
+    pub fn parse(raw: &str) -> Self {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("all") {
+            return Self::All;
+        }
+        if trimmed.eq_ignore_ascii_case("none") {
+            return Self::None;
+        }
+        let mut names: Vec<String> = Vec::new();
+        for name in trimmed.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            if !names.iter().any(|n| n == name) {
+                names.push(name.to_string());
+            }
+        }
+        Self::Only(names)
+    }
+
+    /// Keep only the selected background AVs. Returns the requested names the config does
+    /// not declare, so the caller can warn about them.
+    pub fn apply(&self, avs: &mut Vec<BackgroundAv>) -> Vec<String> {
+        match self {
+            Self::All => Vec::new(),
+            Self::None => {
+                avs.clear();
+                Vec::new()
+            }
+            Self::Only(names) => {
+                let unknown = names
+                    .iter()
+                    .filter(|n| !avs.iter().any(|av| &av.role_name == *n))
+                    .cloned()
+                    .collect();
+                avs.retain(|av| names.iter().any(|n| n == &av.role_name));
+                unknown
+            }
+        }
+    }
+}
+
 fn env_port(name: &str) -> Option<u16> {
     let raw = std::env::var(name).ok()?;
     match raw.parse() {
@@ -317,6 +390,62 @@ fn env_port(name: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn two_avs() -> Vec<BackgroundAv> {
+        let yaml = "background_avs:\n  - role_name: bg_av_1\n    spawn_pose: {x: 1.0}\n  \
+                    - role_name: bg_av_2\n    spawn_pose: {x: 2.0}\n";
+        let config: BridgeConfig = serde_yaml::from_str(yaml).unwrap();
+        config.background_avs
+    }
+
+    fn names(avs: &[BackgroundAv]) -> Vec<&str> {
+        avs.iter().map(|a| a.role_name.as_str()).collect()
+    }
+
+    #[test]
+    fn background_av_selection_all_keeps_everything() {
+        for raw in ["all", "ALL", "  all ", ""] {
+            let sel = BackgroundAvSelection::parse(raw);
+            assert_eq!(sel, BackgroundAvSelection::All, "{raw:?}");
+            let mut avs = two_avs();
+            assert!(sel.apply(&mut avs).is_empty());
+            assert_eq!(names(&avs), ["bg_av_1", "bg_av_2"]);
+        }
+    }
+
+    #[test]
+    fn background_av_selection_none_removes_everything() {
+        for raw in ["none", "None", " none\n"] {
+            let sel = BackgroundAvSelection::parse(raw);
+            assert_eq!(sel, BackgroundAvSelection::None, "{raw:?}");
+            let mut avs = two_avs();
+            assert!(sel.apply(&mut avs).is_empty());
+            assert!(avs.is_empty());
+        }
+    }
+
+    #[test]
+    fn background_av_selection_list_keeps_only_named() {
+        let sel = BackgroundAvSelection::parse(" bg_av_2 , ,bg_av_2");
+        assert_eq!(sel, BackgroundAvSelection::Only(vec!["bg_av_2".into()]));
+        let mut avs = two_avs();
+        assert!(sel.apply(&mut avs).is_empty());
+        assert_eq!(names(&avs), ["bg_av_2"]);
+    }
+
+    #[test]
+    fn background_av_selection_unknown_names_are_reported_and_ignored() {
+        let sel = BackgroundAvSelection::parse("bg_av_1,bg_av_9");
+        let mut avs = two_avs();
+        assert_eq!(sel.apply(&mut avs), vec!["bg_av_9".to_string()]);
+        assert_eq!(names(&avs), ["bg_av_1"]);
+
+        // Only unknown names: nothing spawns, and every name is reported.
+        let sel = BackgroundAvSelection::parse("nope");
+        let mut avs = two_avs();
+        assert_eq!(sel.apply(&mut avs), vec!["nope".to_string()]);
+        assert!(avs.is_empty());
+    }
 
     #[test]
     fn an_empty_config_is_all_defaults() {

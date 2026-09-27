@@ -325,6 +325,9 @@ run:
     # (it holds the DDS xml) but has no bridge config in it, so the run silently comes up
     # with no background AVs and no blueprint aliases.
     export CSB_CONFIG_DIR="${CSB_CONFIG_DIR:-{{project}}/src/carla_scenario_bridge/config}"
+    # CSB_BACKGROUND_AVS (all | none | role_name,...) is inherited as-is: set it to `none`
+    # when no background-AV stack is running, or the undriven car blocks the ego's lane.
+    # See background_avs in bridge_config.yaml.
     cargo run \
         --manifest-path "{{project}}/src/carla_scenario_bridge/Cargo.toml"
 
