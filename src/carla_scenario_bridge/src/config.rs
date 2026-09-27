@@ -187,6 +187,10 @@ pub struct BridgeConfig {
     /// How many CARLA ticks to run per SSv2 frame. See `default_substeps`.
     #[serde(default = "default_substeps")]
     pub substeps: u32,
+    /// Target CARLA tick length in seconds. When set, the ticks per SSv2 frame follow the
+    /// frame's step time -- `round(step_time / carla_tick_seconds)`, at least 1 -- and
+    /// `substeps` is ignored. See [`ticks_per_frame`].
+    pub carla_tick_seconds: Option<f64>,
     /// Attach a `sensor.other.collision` to the ego and log what CARLA's physics thinks
     /// it hit (roadmap 014, gap 3). Diagnostic only: never changes SSv2's verdict. Unset
     /// means on -- read it through [`BridgeConfig::collision_monitor_enabled`].
@@ -228,6 +232,22 @@ fn default_localization_warmup_s() -> f64 {
 /// Default 1 so nothing changes unless asked. See acb `docs/issues/016`.
 fn default_substeps() -> u32 {
     1
+}
+
+/// CARLA ticks per SSv2 frame of `step_time`.
+///
+/// The CARLA tick is what the sensors are tuned to, not the SSv2 frame: the ego LiDAR fires
+/// once per tick (`sensor_tick: 0.0`) with `rotation_frequency` 20 Hz, so it sweeps exactly
+/// one rotation only at a 0.05 s tick, and the IMU's spacing against gyro_odometer's 0.2 s
+/// tolerance is the tick too. A fixed `substeps` ties that to SSv2's frame rate: 2 is right
+/// at 10 Hz and gives a 0.025 s tick -- half-rotation scans at 40 Hz -- at 20 Hz. With
+/// `carla_tick_seconds` the tick stays put and the frame rate only decides how often SSv2
+/// (and the /clock it publishes) advances.
+pub fn ticks_per_frame(step_time: f64, substeps: u32, carla_tick_seconds: Option<f64>) -> u32 {
+    match carla_tick_seconds {
+        Some(tick) if tick > 0.0 && step_time > 0.0 => (step_time / tick).round().max(1.0) as u32,
+        _ => substeps.max(1),
+    }
 }
 
 impl BridgeConfig {

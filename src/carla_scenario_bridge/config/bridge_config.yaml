@@ -151,3 +151,11 @@ collision_monitor: true
 #
 # See src/autoware_carla_bridge/docs/issues/016 for the latency measurements.
 substeps: 2
+
+# Target CARLA tick, which takes precedence over `substeps`: the bridge ticks
+# round(step_time / carla_tick_seconds) times per SSv2 frame (at least once), so the tick
+# stays 0.05 s whatever global_frame_rate SSv2 runs at -- 2 ticks per frame at 10 Hz, 1 at
+# 20 Hz. The ego LiDAR fires per tick at a 20 Hz rotation, so a 0.05 s tick is one full
+# sweep per scan; a fixed `substeps: 2` at 20 Hz would give 0.025 s ticks and half-rotation
+# scans at 40 Hz. Remove this line to go back to the fixed `substeps` above.
+carla_tick_seconds: 0.05

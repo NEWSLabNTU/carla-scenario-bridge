@@ -583,7 +583,8 @@ pub struct Coordinator {
     world: World,
     entities: EntityManager,
     step_time: f64,
-    /// CARLA ticks per SSv2 frame. 1 is the historical behaviour; see config::default_substeps.
+    /// CARLA ticks per SSv2 frame, for the current `step_time`. Recomputed whenever the step
+    /// changes; see [`crate::config::ticks_per_frame`].
     substeps: u32,
     /// Whether this bridge has switched CARLA into synchronous mode. Also gates the
     /// cleanup path: we must not restore async mode we never left.
@@ -660,7 +661,7 @@ impl Coordinator {
         config: BridgeConfig,
     ) -> Self {
         let config_for_release = config.sensor_release.clone();
-        let substeps = config.substeps.max(1);
+        let substeps = crate::config::ticks_per_frame(0.05, config.substeps, config.carla_tick_seconds);
         let collision_monitor_enabled = config.collision_monitor_enabled();
         Self {
             map_aliases: config.map_alias.clone(),
@@ -1489,6 +1490,7 @@ impl Coordinator {
         );
 
         self.step_time = req.step_time;
+        self.update_ticks_per_frame();
 
         // Deliberately NOT enabling synchronous mode here -- see FrameAction. CARLA must
         // keep free-running until the ego exists, or acb_bridge can never discover it.
@@ -1730,6 +1732,24 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Re-derive the ticks per frame from the current step time and log a change.
+    fn update_ticks_per_frame(&mut self) {
+        let ticks = crate::config::ticks_per_frame(
+            self.step_time,
+            self.config.substeps,
+            self.config.carla_tick_seconds,
+        );
+        if ticks != self.substeps {
+            tracing::info!(
+                "CARLA ticks per SSv2 frame: {} -> {ticks} (step_time={}s, CARLA tick {}s)",
+                self.substeps,
+                self.step_time,
+                self.step_time / ticks as f64
+            );
+            self.substeps = ticks;
+        }
+    }
+
     /// The CARLA timing for the current step: one SSv2 frame split into `substeps` ticks,
     /// each with short PhysX substeps. See [`sync_timing`].
     fn sync_timing(&self) -> SyncTiming {
@@ -1799,6 +1819,7 @@ impl Coordinator {
         req: api::UpdateStepTimeRequest,
     ) -> api::UpdateStepTimeResponse {
         self.step_time = req.simulation_step_time;
+        self.update_ticks_per_frame();
 
         // Before sync mode is on, just remember the value. Applying fixed_delta_seconds
         // while still async would pin CARLA to a fixed timestep without a ticker, which
@@ -2881,6 +2902,22 @@ mod tests {
                 "substeps {subs} at step {step} must still advance one frame"
             );
         }
+    }
+
+    /// A 0.05 s CARLA tick at every frame rate SSv2 is run at, and `substeps` only as the
+    /// fallback when no tick is configured.
+    #[test]
+    fn ticks_per_frame_keep_the_carla_tick_fixed() {
+        use crate::config::ticks_per_frame;
+        let tick = Some(0.05);
+        assert_eq!(ticks_per_frame(0.1, 2, tick), 2);
+        assert_eq!(ticks_per_frame(0.05, 2, tick), 1);
+        assert_eq!(ticks_per_frame(0.2, 1, tick), 4);
+        assert_eq!(ticks_per_frame(1.0 / 30.0, 2, tick), 1);
+        assert_eq!(ticks_per_frame(0.025, 2, tick), 1);
+        assert_eq!(ticks_per_frame(0.1, 2, None), 2);
+        assert_eq!(ticks_per_frame(0.1, 0, None), 1);
+        assert_eq!(ticks_per_frame(0.1, 3, Some(0.0)), 3);
     }
 
     /// Zero would divide by zero and stop time; the config clamps it.
