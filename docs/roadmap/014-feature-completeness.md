@@ -120,37 +120,51 @@ Perception counted 0–6 objects during the run. Host load was ~32 on 32 cores.
 
 ### Collision truth (gap 3)
 
-- [ ] Attach `sensor.other.collision` to the ego; log every event with the other actor's
-      SSv2 name and the SSv2 frame
+- [x] Attach `sensor.other.collision` to the ego; log every event with the other actor's
+      SSv2 name and the SSv2 frame — `078ea9f`; live 2026-09-27 (`scratchpad/measure/collision_probe.py`): sensor attached at
+      ego spawn, one WARN at first contact (SSv2 frame 11), one INFO summary at the ego
+      despawn, no `sensor.other.collision` left in the world. CARLA prints
+      `attempting to unsubscribe from stream but sensor wasn't listening` on the stop before
+      destroy; harmless, not chased
 - [ ] Run a scenario with a deliberate NPC cut-in that clips the ego; record whether SSv2's
       CollisionCondition and the CARLA sensor agree
-- [ ] End-of-run summary: CARLA collision events vs SSv2 CollisionCondition outcomes, with
+- [x] End-of-run summary: CARLA collision events vs SSv2 CollisionCondition outcomes, with
       the SSv2 frame of each; mismatches logged at WARN. Policy is diagnostic only (above)
 
 ### NPC motion (gap 5)
 
-- [ ] `set_target_velocity` from `action_status.twist` on every teleported vehicle
-- [ ] `WalkerControl` speed from the same on every walker, so the walk cycle plays
+- [ ] ~~`set_target_velocity` from `action_status.twist` on every teleported vehicle~~ —
+      **measured 2026-09-27: CARLA ignores it on a physics-off actor** (`get_velocity()` stays
+      0.000; the same control with physics on reads 1.504 m/s). Per-frame velocity needs the
+      actor's physics on, which conflicts with teleport-driven placement; needs a design, not
+      a call. NPCs stay kinematic
+- [ ] ~~`WalkerControl` speed from the same on every walker, so the walk cycle plays~~ —
+      same finding: accepted by CARLA, no motion while physics is off
 - [ ] Check acb's ground-truth object velocity source; if it reads CARLA, it now agrees with
       SSv2
 
 ### Hardening batch (gaps 4, 6, 10, 12, 13, 16)
 
-- [ ] `update_step_time` uses `substep_delta()` in the sync-mode branch
-- [ ] `max_substep_delta_time = 0.002` and `max_substeps = ceil(substep_delta / 0.002)` in
+- [x] `update_step_time` uses `substep_delta()` in the sync-mode branch — `ddf64d7`;
+      probe after UpdateStepTime(0.05): fixed_delta 0.025 (was 0.05)
+- [x] `max_substep_delta_time = 0.002` and `max_substeps = ceil(substep_delta / 0.002)` in
       the world settings; before/after IMU yaw-rate at standstill recorded
-- [ ] Pedestrian z after the first `UpdateEntityStatus`: verified, offset applied if wrong
-- [ ] `/control/control_mode_request` service in acb (AUTONOMOUS→ok, MANUAL→fail, matching
+- [x] Pedestrian z after the first `UpdateEntityStatus`: verified wrong (origin at 0.000
+      after teleport, 0.951 at spawn: half the walker under the road); `walker_lift` stored at
+      spawn and added per teleport, now 0.930 — `ddf64d7`
+- [x] `/control/control_mode_request` service in acb (AUTONOMOUS→ok, MANUAL→fail, matching
       stock `autoware_universe.cpp:52`)
-- [ ] Second `is_ego` rejected; unknown entity in `UpdateEntityStatus` rejected, not echoed;
+- [x] Second `is_ego` rejected; unknown entity in `UpdateEntityStatus` rejected, not echoed;
+      (both verified by probe, `ddf64d7`); the MANUAL-overwrite case needs a ControlModeReport
+      subscription the bridge has no ROS node for — dropped;
       `overwrite_ego_status` also honored when ControlModeReport is MANUAL
-- [ ] `set_{green,yellow,red}_time(99999)` on every mapped light as backup to
+- [x] `set_{green,yellow,red}_time(99999)` on every light (mapped or not) as backup to
       `freeze_all_traffic_lights`
 
 ### acb tick following (gap 7)
 
 - [ ] Measure: ego LiDAR `ros2 topic hz` with one stack and with two, before any change
-- [ ] Replace `wait_for_tick_or_timeout` with an `on_tick` callback feeding a queue; drain to
+- [x] Replace `wait_for_tick_or_timeout` with an `on_tick` callback feeding a queue; drain to
       newest, warn on skipped frames
 - [ ] Re-measure; the two-stack number is the acceptance
 
