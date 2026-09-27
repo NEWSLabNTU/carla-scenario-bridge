@@ -161,7 +161,7 @@ host always had the background stack up, so it drove away before the ego arrived
       stock; live 2026-09-27: `{mode: 1}` → true, `{mode: 4}` → false). Caveat: acb does not
       spin its executor while waiting for the hero, so calls made before the ego spawns sit
       unanswered until discovery — fixed in acb `7040b2d` (the waits pump the executor);
-      live check pending;
+      live 2026-09-27: answered in 1 s with no hero spawned;
       stock `autoware_universe.cpp:52`)
 - [x] Second `is_ego` rejected; unknown entity in `UpdateEntityStatus` rejected, not echoed;
       (both verified by probe, `ddf64d7`); the MANUAL-overwrite case needs a ControlModeReport
