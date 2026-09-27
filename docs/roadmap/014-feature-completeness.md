@@ -197,15 +197,35 @@ by 10 % at 20 km/h, 15–17 % at 40 and 25–27 % at 80. Wheel slew is ~150 °/s
 
 - [x] Measure: commanded tire angle vs `get_wheel_steer_angle` across the range at 0, 20,
       40 km/h — done (table above)
-- [ ] Compensate in acb: read `steering_curve` from `physics_control` at adoption and
+- [x] Compensate in acb: read `steering_curve` from `physics_control` at adoption and
       divide the steer command by `curve(v_kmh)`, clamped to ±1, so the achieved angle equals
       the commanded one at every speed. Chosen over flattening the curve with
       `apply_physics_control`, which rebuilds the vehicle's physics at spawn; the residual is
       only the clamp at large angles above ~60 km/h, irrelevant for Autoware's commands
-- [ ] Verify: repeat the speed sweep through acb's command path (or a lateral-tracking
-      scenario), expect achieved/commanded = 1.00 ± 0.02 at 20 and 40 km/h
+- [x] Verify: achieved/commanded through acb — done 2026-09-27 (acb `88224c9`,
+      `scratchpad/steercheck`): median **0.999** [IQR 0.998–1.000] over 30 samples at
+      10.8–14.7 km/h, against 1.06–1.08 for achieved/(commanded × curve(v)), i.e. the
+      compensation is what closed it. Only pull-away manoeuvres ≤16 km/h were available
+      (see the traffic-light finding below); a check at 20–40 km/h through a real turn is
+      still open
 - [ ] Steer rate limit and first-order lag in acb config, default off, values from SSv2
       #1849 as the documented starting point (20 °/s, τ=0.2 s) — unchanged, still optional
+
+### Traffic-light scenario stalls between lights (found 2026-09-27)
+
+`town01_traffic_light.xosc` times out: the ego drives west in stop-and-go segments, ~30 s
+stopped every ~50 m (x = 276, 222, 173, 118), then parks at (104.0, −55.4), 16 m before the
+turn, after the scheduled green. Two things changed at once: the hardening batch now holds
+every light's phase (`hold_light_phases`, all 36 lights frozen at whatever state they had)
+and this host's GPU rebuilt the traffic-light TensorRT engines, so camera recognition may
+now classify lights that used to come back UNKNOWN. The stop positions look like
+intersections. Untested hypothesis: the ego obeys lights frozen red that no scenario
+command ever sets.
+
+- [ ] During a run, dump `/perception/traffic_light_recognition/traffic_signals` at each
+      stop and the CARLA state of the nearest light; compare with what SSv2 commanded
+- [ ] If frozen-red is the cause: freeze unmapped/uncommanded lights GREEN (or OFF) instead
+      of holding their current phase, and say so in 009
 
 ### Deferred, with reasons
 
