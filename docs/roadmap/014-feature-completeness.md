@@ -184,12 +184,28 @@ host always had the background stack up, so it drove away before the ego arrived
 
 ### Steering (gap 8)
 
-- [ ] Measure: commanded tire angle vs `get_wheel_steer_angle` across the range at 0, 20,
-      40 km/h
-- [ ] Flatten `VehiclePhysicsControl.steering_curve` to 1.0 at spawn if the measurement
-      shows speed dependence
+Measured 2026-09-27 on `vehicle.tesla.model3` (`scripts/steering_probe.py`, raw data in
+`docs/measurements/steering_tesla_model3_0916.csv`): the 0.9.16 command is **linear** —
+inner wheel = 70° × cmd with 0.00° residual, outer wheel by Ackermann (47.4° at full lock;
+that is the "45.5°" autoware_universe #13276 saw, not a squared input). TIER IV's sqrt fix is
+a Chaos/0.10 matter and does not apply here. What does apply is `steering_curve`
+(0→1.0, 20→0.9, 60→0.8, 120→0.7 km/h): the achieved angle equals the standstill angle times
+the curve interpolated at the actual speed, to within 0.003, and acb's model
+(`vehicle_control.rs:52-95`, exact at standstill) ignores it. The ego therefore under-steers
+by 10 % at 20 km/h, 15–17 % at 40 and 25–27 % at 80. Wheel slew is ~150 °/s (full lock in
+0.47 s); acb does not model it and Autoware's command rate makes that moot.
+
+- [x] Measure: commanded tire angle vs `get_wheel_steer_angle` across the range at 0, 20,
+      40 km/h — done (table above)
+- [ ] Compensate in acb: read `steering_curve` from `physics_control` at adoption and
+      divide the steer command by `curve(v_kmh)`, clamped to ±1, so the achieved angle equals
+      the commanded one at every speed. Chosen over flattening the curve with
+      `apply_physics_control`, which rebuilds the vehicle's physics at spawn; the residual is
+      only the clamp at large angles above ~60 km/h, irrelevant for Autoware's commands
+- [ ] Verify: repeat the speed sweep through acb's command path (or a lateral-tracking
+      scenario), expect achieved/commanded = 1.00 ± 0.02 at 20 and 40 km/h
 - [ ] Steer rate limit and first-order lag in acb config, default off, values from SSv2
-      #1849 as the documented starting point (20 °/s, τ=0.2 s)
+      #1849 as the documented starting point (20 °/s, τ=0.2 s) — unchanged, still optional
 
 ### Deferred, with reasons
 
