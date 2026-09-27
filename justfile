@@ -558,7 +558,11 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     accel_map="${accel_map:-none}"
     brake_map="${brake_map:-none}"
     # Not exec: the trap above has to survive to clean up the API adaptors.
-    play_launch launch --parser python --web-addr 0.0.0.0:8082 \
+    # --enforce-rules off: play_launch 0.12 defaults to `warn`, which turns on LD_PRELOAD
+    # interception of every DDS take and logs each event at DEBUG into play_launch.log and
+    # interception/events.jsonl. With no contract files to enforce that is pure overhead, and
+    # on 2026-09-27 one 50-minute ego stack wrote 169 GB of it and filled the disk.
+    play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8082 \
         --load-node-timeout 120 \
         --load-total-budget 600 \
         --log-dir play_log/ego \
@@ -606,7 +610,7 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
     # concealer's patched launch.hpp could pass an address when SSv2 forked Autoware
     # itself. With launch_autoware:=false the concealer launches nothing, so nothing reads
     # it -- the flag below is what actually sets the port. See phase 012, gap 10.
-    exec play_launch launch --parser python --web-addr 0.0.0.0:{{web_port}} \
+    exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:{{web_port}} \
         --load-node-timeout 120 \
         --load-total-budget 180 \
         --log-dir play_log/bg-{{vehicle_name}} \
@@ -682,7 +686,7 @@ scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     export ROS_DOMAIN_ID={{ego_domain}}
     # --parser python: scenario_test_runner.launch.py imports launch.actions the
     # Rust parser's embedded Python cannot resolve (EmitEvent)
-    exec play_launch launch --parser python --web-addr 0.0.0.0:8081 \
+    exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8081 \
         --log-dir play_log/scenario \
         csb_launch carla_scenario.launch.xml \
         managed_ego:=$managed \
@@ -703,7 +707,7 @@ e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc"):
     # three inference nodes were killed seconds before they would have reported, and
     # the only symptom was a perception pipeline publishing empty results forever.
     export ROS_DOMAIN_ID={{ego_domain}}
-    exec play_launch launch --web-addr 0.0.0.0:8080 \
+    exec play_launch launch --enforce-rules off --web-addr 0.0.0.0:8080 \
         csb_launch demo.launch.xml \
         scenario:="{{scenario_file}}" \
         carla_port:={{carla_port}} \

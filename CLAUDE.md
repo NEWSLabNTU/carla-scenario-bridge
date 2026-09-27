@@ -265,6 +265,20 @@ scripts/ego_stack_health.py
 `pgrep -x CarlaUE4-Linux-Shipping` finds nothing while CARLA runs. Use `pgrep -f` with a
 pattern the calling shell does not contain, or `ps -eo comm` and match the prefix.
 
+### play_launch interception fills the disk
+
+play_launch 0.12 defaults to `--enforce-rules warn`, which enables LD_PRELOAD interception
+of every DDS take in every node and logs each event at DEBUG to `play_launch.log` plus
+`interception/events.jsonl`. One 50-minute ego stack wrote **169 GB** of it on 2026-09-27
+and took the volume to 0 bytes free, which then failed a colcon install and a git checkout
+mid-way. There are no contract files in this workspace, so nothing is enforced either way.
+Every `play_launch launch` in the justfile now passes `--enforce-rules off`; keep it on any
+new invocation, and if `df` moves faster than a build explains, look at `play_log/*/` first:
+
+```bash
+du -sh play_log/ego/*/play_launch.log play_log/ego/*/interception 2>/dev/null | sort -rh | head
+```
+
 ### CARLA on a host that is not the checkpoint's
 
 `third_party/carla/run.sh` assumes `~/Downloads/CARLA_0.9.16` and a `DISPLAY` you own; the
