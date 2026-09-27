@@ -11,6 +11,14 @@
        it must cover localization + routing + the diagnostics gate converging on
        this slow host, not just "init". -->
   <arg name="initialize_duration" default="480" description="Autoware init-through-engage budget in seconds" />
+  <!-- Simulated seconds per real second. Below 1 the frame loop still runs at
+       global_frame_rate but each frame advances step_time = factor / frame_rate, so the
+       world (CARLA physics included) moves slower than wall time; with
+       clock_follows_simulation_time /clock slows by the same factor. Useful to reproduce
+       an overloaded host deterministically. -->
+  <arg name="global_real_time_factor" default="1.0" description="SSv2 real-time factor" />
+  <arg name="clock_follows_simulation_time" default="true"
+       description="false: SSv2's /clock carries wall time (stock behaviour); see below" />
 
   <!-- The ego's Autoware is NOT launched from here. launch_autoware:=false makes SSv2's
        concealer connect to the Autoware already running in this ROS domain — bring it up
@@ -30,9 +38,28 @@
     <!-- use_sim_time deliberately left at SSv2's default (false). With true, the
          interpreter's ROS clock waits for /clock — which only SSv2 itself would
          publish after activation — and main() blocks forever before the scenario
-         starts. SSv2's /clock then carries wall time; the ego domain's Autoware
-         (use_sim_time=true) consumes it together with sensor stamps from the same
-         clock, which is consistent. -->
+         starts. SSv2's own nodes therefore keep running on wall time. -->
+    <!-- clock_follows_simulation_time (NEWSLabNTU fork): the /clock SSv2 publishes is
+         (wall time when the interpreter initializes) + simulated elapsed time (frames x
+         step_time), never below the last /clock an earlier scenario published, instead of
+         wall time. CARLA physics advances one step_time per SSv2 frame, so when the frame
+         loop falls behind real time a wall-time /clock made the ego domain's Autoware
+         (use_sim_time=true) integrate simulated speeds over wall seconds: the EKF ran tens of
+         metres ahead and rejected NDT. With this, Autoware's time passes at the rate the
+         simulated world moves. -->
+    <arg name="clock_follows_simulation_time" value="$(var clock_follows_simulation_time)" />
+    <!-- publish_conventional_traffic_signals (NEWSLabNTU fork): publish the commanded
+         state of every conventional signal as TrafficLightGroupArray (regulatory element
+         ids) on /perception/traffic_light_recognition/external/traffic_signals, merged with
+         any V2I signals, stamped in the /clock time base. Stock SSv2 only delivers
+         conventional signals through simple_sensor_simulator's pseudo detector, which this
+         setup does not run, so without it traffic_light_arbiter never learns the state and
+         planning holds at every signalled stop line. This is the V2X path decided in
+         docs/roadmap/009-map-and-traffic-lights.md, "Direction: the demo takes its
+         signals over V2X (2026-08-28)". It reaches Autoware directly because a managed ego
+         shares SSv2's ROS domain; an unmanaged ego (its own domain) would need this topic
+         relayed across domains. -->
+    <arg name="publish_conventional_traffic_signals" value="true" />
 
 
     <!-- SSv2 orchestration -->
@@ -56,6 +83,7 @@
          so a slow sim starves them (obstacle_segmentation observed at 0.3 Hz wall)
          and autonomous mode never becomes available. -->
     <arg name="global_frame_rate" value="10" />
+    <arg name="global_real_time_factor" value="$(var global_real_time_factor)" />
 
     <!-- User-configurable pass-through -->
     <arg name="scenario" value="$(var scenario)" />

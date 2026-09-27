@@ -148,8 +148,12 @@ host always had the background stack up, so it drove away before the ego arrived
       a call. NPCs stay kinematic
 - [ ] ~~`WalkerControl` speed from the same on every walker, so the walk cycle plays~~ —
       same finding: accepted by CARLA, no motion while physics is off
-- [ ] Check acb's ground-truth object velocity source; if it reads CARLA, it now agrees with
-      SSv2
+- [x] acb's ground-truth objects read `actor.velocity()`, so every teleported NPC was published
+      as stationary. acb `028d8a8` estimates each actor's twist from its snapshot pose on
+      simulation time (arc-corrected; reset on first sight, id reuse, despawn, gaps > 1 s and
+      implausible jumps) and keeps CARLA's own twist whenever it is non-zero. Unit-tested;
+      **live check still open** (ground-truth objects are off by default:
+      `GROUND_TRUTH_OBJECTS=true just ego-av`)
 
 ### Hardening batch (gaps 4, 6, 10, 12, 13, 16)
 
@@ -213,25 +217,67 @@ by 10 % at 20 km/h, 15–17 % at 40 and 25–27 % at 80. Wheel slew is ~150 °/s
       10.8–14.7 km/h, against 1.06–1.08 for achieved/(commanded × curve(v)), i.e. the
       compensation is what closed it. Only pull-away manoeuvres ≤16 km/h were available
       (see the traffic-light finding below); a check at 20–40 km/h through a real turn is
-      still open
+      closed 2026-09-28 below
+- [x] Verify at 30 km/h through a steady turn (acb standalone in domain 7, δ = 0.06 rad,
+      `scratchpad/steer30`): compensation on **1.0000** [IQR 1.0000–1.0000] over 123 samples at
+      28.4–30.4 km/h; off **0.8763** against curve(30.2) = 0.8745; A/B 1.141 against 1/curve
+      1.1435
 - [ ] Steer rate limit and first-order lag in acb config, default off, values from SSv2
       #1849 as the documented starting point (20 °/s, τ=0.2 s) — unchanged, still optional
 
-### Traffic-light scenario stalls between lights (found 2026-09-27)
+### Traffic-light scenario stalls between lights (found 2026-09-27, fixed 2026-09-28)
 
-`town01_traffic_light.xosc` times out: the ego drives west in stop-and-go segments, ~30 s
-stopped every ~50 m (x = 276, 222, 173, 118), then parks at (104.0, −55.4), 16 m before the
-turn, after the scheduled green. Two things changed at once: the hardening batch now holds
-every light's phase (`hold_light_phases`, all 36 lights frozen at whatever state they had)
-and this host's GPU rebuilt the traffic-light TensorRT engines, so camera recognition may
-now classify lights that used to come back UNKNOWN. The stop positions look like
-intersections. Untested hypothesis: the ego obeys lights frozen red that no scenario
-command ever sets.
+`town01_traffic_light.xosc` timed out stop-and-go and parked at signal 43763's stop line.
+The held light phases were not the cause. **Autoware never received any signal state.**
+Every `traffic_light_recognition` topic was empty for the whole run, so the traffic_light
+module treated the signal as UNKNOWN and held its stop, while CARLA did turn green at
+t = 150 s. Stock SSv2 delivers conventional signals only through simple_sensor_simulator's
+pseudo detector, which this setup does not run, and 009's V2X decision (2026-08-28) was
+never implemented.
 
-- [ ] During a run, dump `/perception/traffic_light_recognition/traffic_signals` at each
-      stop and the CARLA state of the nearest light; compare with what SSv2 commanded
-- [ ] If frozen-red is the cause: freeze unmapped/uncommanded lights GREEN (or OFF) instead
-      of holding their current phase, and say so in 009
+- [x] SSv2 fork `2cddfac4d`, `publish_conventional_traffic_signals`: commanded conventional
+      state merged with V2I into one `TrafficLightGroupArray` per cycle on
+      `external/traffic_signals` (regulatory-element ids, 43856 for way 43763), on in
+      `carla_scenario.launch.xml`. Live: `43856:RED`, then GREEN at sim 150, and planning
+      follows it
+- [x] **The time base was wrong too.** SSv2's `/clock` carried wall time; when its frame loop
+      fell behind (0.26–0.5× under load) Autoware integrated simulated speeds over wall
+      seconds, the EKF ran +53 m ahead and rejected NDT. Fork `2cddfac4d`,
+      `clock_follows_simulation_time`: `/clock` = start + frames × step_time, start =
+      max(wall now, last `/clock` this domain saw), so it never moves back across scenarios.
+      Live: /clock/CARLA 0.999 at factor 1, 0.493 at factor 0.5 with 0 NDT time-validation
+      errors
+- [x] **Stale route, older and intermittent.** The concealer requested the route 41–92 ms
+      after the EKF re-activated, and the EKF publishes only on a /clock tick. When no tick
+      fell in that gap, mission_planner planned from the previous scenario's pose (seen:
+      (88.9, −131.1) with the ego at (190.7, −130.1)); the ego weaved and once hit a wall.
+      The same stale routes appear in logs from before the clock change. Fork `7908d82d0`:
+      `initialize()` holds the task queue until `/localization/kinematic_state` is newer than
+      the pre-init estimate and within 1.0 m / 0.2 rad of the initial pose, 10 s timeout with
+      a named error. Live 2026-09-28: traffic_light → ego_drive × 4, **8/8 pass**; the wait
+      triggered in 6 runs (100 ms, then the correct pose)
+- [x] **No brake at low speed.** `build_longitudinal_maps.py` drops brake samples below 5 m/s
+      and fills 0–4 m/s by copying, so the brake map's no-pedal row claims −2.55 m/s² where
+      coasting is −0.28…−1.51. acb used that row as the throttle/brake boundary, so a −2.5
+      stop from 2 m/s got pedal 0 and decelerated at −0.7…−0.9, and control_validator's
+      acceleration check tripped the MRM. acb `87f8346`: the boundary is the measured coasting
+      line and the brake covers the excess. Live: acceleration-error onsets while driving 11 → 1
+      over 8 runs
+- [ ] Re-measure the brake map below 5 m/s so the increment workaround is not needed
+- [ ] MRM churn that remains while driving, about one blip per run and no failures:
+      `control_validation_latency` 11 and `control_validation_max_distance_deviation` 8 in 8
+      runs. Nearly everything else fires in the first 60 s of a scenario (re-initialization
+      and teleport, before engage). Candidate: the 0.1 s /clock step; `global_frame_rate` 20
+      doubled /clock, EKF and control rates in a trial but doubled point-cloud load
+- [ ] Unmanaged ego (its own domain) gets neither signals nor the sim clock; both would need
+      relaying across domains
+
+### Ego twist at base_link (fixed 2026-09-28)
+
+- [x] acb `028d8a8`: odometry, ground truth and VelocityReport now carry the rear axle's
+      velocity (v + ω × r in the body frame), not the actor origin's. Live, 30 km/h turn:
+      `lateral_velocity` −0.0311 m/s against CARLA's rear axle −0.0310 (origin +0.201);
+      `heading_rate` 0.1674 = CARLA yaw rate
 
 ### Deferred, with reasons
 
