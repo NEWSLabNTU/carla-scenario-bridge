@@ -268,11 +268,25 @@ never implemented.
       line and the brake covers the excess. Live: acceleration-error onsets while driving 11 → 1
       over 8 runs
 - [ ] Re-measure the brake map below 5 m/s so the increment workaround is not needed
-- [ ] MRM churn that remains while driving, about one blip per run and no failures:
-      `control_validation_latency` 11 and `control_validation_max_distance_deviation` 8 in 8
-      runs. Nearly everything else fires in the first 60 s of a scenario (re-initialization
-      and teleport, before engage). Candidate: the 0.1 s /clock step; `global_frame_rate` 20
-      doubled /clock, EKF and control rates in a trial but doubled point-cloud load
+- [x] MRM churn while driving: **fixed 2026-09-28, 69 → 0 driving MRM onsets over 7 runs.**
+      The two control_validator checks that showed up next to it were never the trigger:
+      neither is wired into the diagnostic graph. `latency` (`now − control_cmd.stamp`
+      against 0.01 s) only fired 0–0.3 s *after* an MRM began, on the emergency operator's
+      stale stamp; `max_distance_deviation` is the MPC's 5 s open-loop prediction drifting
+      1.0–1.25 m in 90° turns at ~3 m/s while the real lateral error was 0.08–0.20 m -- an
+      Autoware artifact, harmless. 26 of 27 real triggers were NDT `scan_matching_status`
+      WARN "Couldn't interpolate pose": acb truncated CARLA's f64 time to ns, so scans sat
+      1 ns after the EKF pose on the same /clock tick; NDT drops poses stamped before the scan
+      it just matched, emptied its buffer, and failed every other scan (32 %). Any WARN makes
+      autonomous mode unavailable, so mrm_handler went to EMERGENCY_STOP. The per-tick offset
+      re-learn also flipped by a frame (74 duplicate scan stamps per run). acb `d28fe01`:
+      CARLA time rounded to the microsecond, offset = mode of the last 100 readings (a jump
+      over 0.5 s is a new scenario). After: NDT failures 0.2 % (run edges only), duplicate
+      stamps ≤ 5, 7/7 pass, no validator threshold changed
+- [x] SSv2 stepped at 20 Hz with the CARLA tick held at 0.05 s (`carla_tick_seconds` in
+      bridge_config.yaml: ticks per frame follow the step, 2 at 10 Hz, 1 at 20 Hz) --
+      `97f0295`. /clock in 0.05 s steps; 9/9 pass. It did not change the MRM counts (the
+      cause was the stamps above), but it halves the fresh-pose wait (100 → 60 ms)
 - [ ] Unmanaged ego (its own domain) gets neither signals nor the sim clock; both would need
       relaying across domains
 
