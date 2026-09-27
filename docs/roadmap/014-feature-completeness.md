@@ -104,19 +104,20 @@ Measurement first for the three big ones. No fix lands before its number is know
       remaining ~200 s. 008 recorded this scenario passing on the previous host. Not a
       reference-point problem; tracked as its own item below
 
-### Pedestrian scenario stalls after the hold (found 2026-09-25)
+### Pedestrian scenario stalls after the hold (found 2026-09-25, root-caused 2026-09-27)
 
-`town01_pedestrian.xosc` times out on newslab-server139 with and without the acb fix: the
-ego holds ~58 s for the crossing walker, resumes while the walker is still ~1.7 m from its
-centreline, stops again beside it and stays stopped ~200 s. Ground-truth CSVs:
-scratchpad `baseline/pedestrian_gt.csv` and `postfix/pedestrian_gt.csv` (this session).
-Perception counted 0–6 objects during the run. Host load was ~32 on 32 cores.
+`town01_pedestrian.xosc` timed out three times on newslab-server139. The second stop was
+never about the walker: `/api/planning/velocity_factors` said `route-obstacle`, and
+`obstacle_stop` named an object at (231.8, −129.8) — **`bg_av_1`**, the background AV the
+bridge spawns from `bridge_config.yaml` at (230, −129.8) in the ego's lane at every
+Initialize. With no domain-2 stack to drive it, it is a parked car 8 m ahead. The earlier
+host always had the background stack up, so it drove away before the ego arrived.
 
-- [ ] Reproduce on a quiet host; if it passes there, this is capacity (roadmap README
-      priority 2), not planning
-- [ ] If it reproduces: read the crosswalk / obstacle-stop module decisions around the
-      resume (planning debug topics), and whether the walker is still a tracked object when
-      the ego stops the second time
+- [x] Reproduce on a quiet host — reproduced at load ~15; not capacity
+- [x] Read the planner's decision — `route-obstacle`, object = `bg_av_1`
+- [ ] Bridge: `CSB_BACKGROUND_AVS=all|none|<list>` override and a WARN per spawned
+      background AV naming the lane it blocks (in progress)
+- [ ] Re-run `town01_pedestrian.xosc` with `CSB_BACKGROUND_AVS=none`; expect PASS
 
 ### Collision truth (gap 3)
 
@@ -151,8 +152,13 @@ Perception counted 0–6 objects during the run. Host load was ~32 on 32 cores.
       the world settings; before/after IMU yaw-rate at standstill recorded
 - [x] Pedestrian z after the first `UpdateEntityStatus`: verified wrong (origin at 0.000
       after teleport, 0.951 at spawn: half the walker under the road); `walker_lift` stored at
-      spawn and added per teleport, now 0.930 — `ddf64d7`
+      spawn and added per teleport, now 0.930 — `ddf64d7`. **Regression found 2026-09-27**: the
+      lift is added to SSv2's commanded z, and the scenario sends z=0.3, so the walker's feet
+      sit 0.30 m above the road. Fix in progress: ground under x/y (cached per walker) + lift
 - [x] `/control/control_mode_request` service in acb (AUTONOMOUS→ok, MANUAL→fail, matching
+      stock; live 2026-09-27: `{mode: 1}` → true, `{mode: 4}` → false). Caveat: acb does not
+      spin its executor while waiting for the hero, so calls made before the ego spawns sit
+      unanswered until discovery — small follow-up in acb `wait_for_vehicle`;
       stock `autoware_universe.cpp:52`)
 - [x] Second `is_ego` rejected; unknown entity in `UpdateEntityStatus` rejected, not echoed;
       (both verified by probe, `ddf64d7`); the MANUAL-overwrite case needs a ControlModeReport
@@ -163,10 +169,15 @@ Perception counted 0–6 objects during the run. Host load was ~32 on 32 cores.
 
 ### acb tick following (gap 7)
 
-- [ ] Measure: ego LiDAR `ros2 topic hz` with one stack and with two, before any change
+- [x] Measure: ego LiDAR `ros2 topic hz` with one stack — after the change, one stack:
+      `/sensing/lidar/top/pointcloud_before_sync` 20.00 Hz (19.96–20.10, n=31), 22 of
+      6385 frames skipped over a 300 s run; moving pose error vs rear axle fell
+      0.324 → **0.102 m** (less publish latency). Before-change one-stack number not taken;
+      the two-stack baseline is 10 Hz (roadmap README)
 - [x] Replace `wait_for_tick_or_timeout` with an `on_tick` callback feeding a queue; drain to
       newest, warn on skipped frames
-- [ ] Re-measure; the two-stack number is the acceptance
+- [ ] Re-measure with two stacks; that number is the acceptance (needs the background
+      stack on this host)
 
 ### Steering (gap 8)
 
