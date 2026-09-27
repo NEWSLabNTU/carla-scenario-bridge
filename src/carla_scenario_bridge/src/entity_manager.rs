@@ -62,4 +62,40 @@ impl EntityManager {
     pub fn clear(&mut self) {
         self.entities.clear();
     }
+
+    /// The name of the ego entity, if one is registered.
+    pub fn ego_name(&self) -> Option<&str> {
+        self.entities
+            .iter()
+            .find(|(_, e)| e.entity_type == EntityType::Ego)
+            .map(|(name, _)| name.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_ego_is_found_by_type_not_by_name() {
+        let mut m = EntityManager::new();
+        assert_eq!(m.ego_name(), None);
+        m.insert(
+            "npc".into(),
+            EntityType::Vehicle,
+            1,
+            OriginOffset::default(),
+        );
+        m.insert(
+            "walker".into(),
+            EntityType::Pedestrian,
+            2,
+            OriginOffset::default(),
+        );
+        assert_eq!(m.ego_name(), None);
+        m.insert("Ego".into(), EntityType::Ego, 3, OriginOffset::default());
+        assert_eq!(m.ego_name(), Some("Ego"));
+        m.remove("Ego");
+        assert_eq!(m.ego_name(), None);
+    }
 }

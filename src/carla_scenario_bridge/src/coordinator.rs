@@ -421,6 +421,128 @@ fn decide_frame_action(sync_mode_enabled: bool, has_ego: bool) -> FrameAction {
     }
 }
 
+/// Green, yellow and red phase length set on every light while frozen: a day, so no light
+/// completes a phase during any scenario. See `hold_light_phases`.
+const HOLD_PHASE_SECONDS: f32 = 99_999.0;
+
+/// Longest PhysX substep the bridge lets CARLA take, in seconds.
+///
+/// CARLA's default is 0.01 s. On 0.9.16 that shows up as phantom yaw rate -- up to 0.9 °/s
+/// in the IMU and in `get_angular_velocity` on a vehicle standing still; 0.002 s brings it
+/// to about 0.003 °/s (tier4, autoware_universe PR #13406, measured on 0.9.16). The ego's
+/// IMU feeds Autoware's EKF, so the phantom rate is a heading drift the ego never had.
+const MAX_PHYSICS_SUBSTEP_DELTA: f64 = 0.002;
+
+/// CARLA's ceiling on `max_substeps` (the UE physics setting is clamped to 16).
+const CARLA_MAX_PHYSICS_SUBSTEPS: u64 = 16;
+
+/// CARLA's own physics-substep defaults, put back when the bridge hands the world back.
+const CARLA_DEFAULT_MAX_SUBSTEP_DELTA: f64 = 0.01;
+const CARLA_DEFAULT_MAX_SUBSTEPS: u64 = 10;
+
+/// The world-settings timing for synchronous mode: one CARLA tick per bridge substep, and
+/// the physics substepping inside that tick.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SyncTiming {
+    fixed_delta_seconds: f64,
+    max_substep_delta_time: f64,
+    max_substeps: u64,
+}
+
+/// Timing for an SSv2 frame of `step_time` delivered in `substeps` CARLA ticks.
+///
+/// `max_substeps = ceil(delta / 0.002)`. When that would exceed CARLA's 16 (a CARLA tick
+/// longer than 32 ms, e.g. a 0.05 s step with one substep), the count is clamped and the
+/// substep length is stretched to `delta / 16` instead: CARLA requires
+/// `max_substep_delta_time * max_substeps >= fixed_delta_seconds`, and the tick length is
+/// the one thing that must not change.
+fn sync_timing(step_time: f64, substeps: u32) -> SyncTiming {
+    let delta = step_time / substeps.max(1) as f64;
+    // The small epsilon keeps 0.02 / 0.002 = 10.000000000000002 from rounding up to 11.
+    let wanted = ((delta / MAX_PHYSICS_SUBSTEP_DELTA) - 1e-9).ceil().max(1.0) as u64;
+    if wanted <= CARLA_MAX_PHYSICS_SUBSTEPS {
+        SyncTiming {
+            fixed_delta_seconds: delta,
+            max_substep_delta_time: MAX_PHYSICS_SUBSTEP_DELTA,
+            max_substeps: wanted,
+        }
+    } else {
+        SyncTiming {
+            fixed_delta_seconds: delta,
+            max_substep_delta_time: delta / CARLA_MAX_PHYSICS_SUBSTEPS as f64,
+            max_substeps: CARLA_MAX_PHYSICS_SUBSTEPS,
+        }
+    }
+}
+
+/// Write `timing` into CARLA settings for synchronous mode.
+fn apply_sync_timing(settings: &mut carla::rpc::EpisodeSettings, timing: SyncTiming) {
+    settings.synchronous_mode = true;
+    settings.fixed_delta_seconds = Some(timing.fixed_delta_seconds);
+    settings.substepping = true;
+    settings.max_substep_delta_time = timing.max_substep_delta_time;
+    settings.max_substeps = timing.max_substeps;
+}
+
+/// Height of a walker's CARLA origin above its feet, from its bounding box (centre height
+/// relative to the origin, and half-height). The box bottom is at
+/// `origin + center_z - extent_z`; putting that on the ground puts the origin at
+/// `ground + extent_z - center_z`. For CARLA walkers the box is centred on the origin, so
+/// this is the capsule half-height (~0.9 m).
+fn walker_lift(bbox_center_z: f32, bbox_extent_z: f32) -> f32 {
+    (bbox_extent_z - bbox_center_z).max(0.0)
+}
+
+/// Why a vehicle spawn must be refused because an ego already exists, if it must.
+fn second_ego_rejection(is_ego: bool, existing_ego: Option<&str>, name: &str) -> Option<String> {
+    match (is_ego, existing_ego) {
+        (true, Some(existing)) => Some(format!(
+            "Cannot spawn '{name}' as ego: ego '{existing}' already exists, and this backend \
+             supports one ego per scenario"
+        )),
+        _ => None,
+    }
+}
+
+/// The overall result of an `UpdateEntityStatus`.
+///
+/// An entity the bridge does not know fails the request, naming it. It used to be echoed
+/// back, which told SSv2 the entity was exactly where it asked -- the same silent success
+/// that once let a pedestrian scenario pass with no pedestrian. The stock backend
+/// (simple_sensor_simulator) throws on an unknown name and SSv2 throws on `success=false`,
+/// so this is the stock semantics.
+fn entity_status_result(unknown: &[String], teleport_failures: &[String]) -> ProtoResult {
+    let mut problems = Vec::new();
+    if !unknown.is_empty() {
+        problems.push(format!(
+            "unknown entit{} {} (not spawned through this bridge, or already despawned)",
+            if unknown.len() == 1 { "y" } else { "ies" },
+            unknown
+                .iter()
+                .map(|n| format!("'{n}'"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !teleport_failures.is_empty() {
+        problems.push(format!(
+            "failed to apply the commanded pose to {} entit{} ({})",
+            teleport_failures.len(),
+            if teleport_failures.len() == 1 {
+                "y"
+            } else {
+                "ies"
+            },
+            teleport_failures.join("; ")
+        ));
+    }
+    if problems.is_empty() {
+        proto_ok()
+    } else {
+        proto_err(format!("UpdateEntityStatus: {}", problems.join("; ")))
+    }
+}
+
 pub struct Coordinator {
     /// Kept so the bridge can rebuild `world` after a CARLA outage.
     client: Client,
@@ -436,10 +558,8 @@ pub struct Coordinator {
     sync_mode_enabled: bool,
     /// Whether an ego vehicle has been spawned. See [`FrameAction`].
     has_ego: bool,
-    /// Entity names already reported as unknown by `update_entity_status`. SSv2 sends
-    /// status every frame, so without this a desync would emit one warning per frame.
-    warned_unknown_entities: HashSet<String>,
-    /// Whether `update_traffic_lights` has already logged its rejection. Same reason.
+    /// Whether `update_traffic_lights` has already logged its rejection. SSv2 sends
+    /// states every frame, so it must warn once.
     warned_traffic_lights: bool,
     /// Announces despawns to sensor bridges so they can stop listening first.
     ///
@@ -459,6 +579,9 @@ pub struct Coordinator {
     /// Whether this bridge froze CARLA's traffic lights, so shutdown only unfreezes what
     /// it actually froze. Set by phase 009 when freezing lands (invariant 3).
     froze_traffic_lights: FreezeGuard,
+    /// Each light's own phase durations (actor id, green, yellow, red), saved before
+    /// [`HOLD_PHASE_SECONDS`] overwrote them, so unfreezing gives the server its cycle back.
+    held_light_timings: Vec<(u32, f32, f32, f32)>,
     /// Consecutive CARLA operation failures, used to decide the connection is gone.
     consecutive_carla_failures: u32,
     /// Last longitudinal acceleration seen per actor, so jerk can be differenced across
@@ -473,6 +596,10 @@ pub struct Coordinator {
     /// Recent raw acceleration samples per actor, for the reporting-side smoothing
     /// (see ACCEL_SMOOTHING_FRAMES).
     accel_history: HashMap<u32, VecDeque<(f64, f64, f64)>>,
+    /// Per walker actor: metres from the ground to the CARLA actor origin. SSv2 poses a
+    /// pedestrian at its feet; a CARLA walker's origin is its capsule centre. See
+    /// [`walker_lift`].
+    walker_lift: HashMap<u32, f32>,
     /// Directory holding per-map config, e.g. the traffic light signal mapping.
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
@@ -515,16 +642,17 @@ impl Coordinator {
             substeps,
             sync_mode_enabled: false,
             has_ego: false,
-            warned_unknown_entities: HashSet::new(),
             warned_traffic_lights: false,
             sensor_release: Self::bind_sensor_release(&config_for_release),
             localization_warmup: config_for_release.localization_warmup_s,
             spawned_actors: SpawnLedger::default(),
             froze_traffic_lights: FreezeGuard::default(),
+            held_light_timings: Vec::new(),
             consecutive_carla_failures: 0,
             previous_longitudinal_accel: HashMap::new(),
             settle_frames: HashMap::new(),
             accel_history: HashMap::new(),
+            walker_lift: HashMap::new(),
         }
     }
 
@@ -560,6 +688,7 @@ impl Coordinator {
         self.previous_longitudinal_accel.remove(&actor_id);
         self.settle_frames.remove(&actor_id);
         self.accel_history.remove(&actor_id);
+        self.walker_lift.remove(&actor_id);
     }
 
     /// Bind the release channel, or explain why we are not using one.
@@ -849,9 +978,11 @@ impl Coordinator {
             self.previous_longitudinal_accel.clear();
             self.settle_frames.clear();
             self.accel_history.clear();
+            self.walker_lift.clear();
             self.sync_mode_enabled = false;
             // The reloaded world's lights are CARLA's own again, so we owe no unfreeze.
             self.froze_traffic_lights.mark_restored();
+            self.held_light_timings.clear();
             tracing::info!("Map '{town}' loaded");
         }
 
@@ -1080,6 +1211,7 @@ impl Coordinator {
                     "CARLA traffic light cycling frozen; SSv2 is now the only writer. \
                      Signals the scenario does not command hold their current state."
                 );
+                self.hold_light_phases();
             }
             Err(e) => {
                 // Not fatal: the scenario may not use traffic lights at all. But if it
@@ -1092,6 +1224,101 @@ impl Coordinator {
         }
     }
 
+    /// Back up the freeze: stretch every light's phases to [`HOLD_PHASE_SECONDS`].
+    ///
+    /// tier4/carla-autoware-native found `freeze_all_traffic_lights` skips dynamically
+    /// placed light groups; those kept cycling and overrode `set_state` within ~22 s. A
+    /// light whose phase lasts a day does not advance during a scenario, frozen or not.
+    /// Applied to every light in the world, not only the mapped ones: an unmapped light
+    /// that cycles breaks invariant 3 just the same.
+    fn hold_light_phases(&mut self) {
+        let lights = match self
+            .world
+            .actors()
+            .and_then(|a| a.filter("traffic.traffic_light*"))
+        {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!("Could not list traffic lights to hold their phases: {e}");
+                return;
+            }
+        };
+
+        let mut held = 0usize;
+        let mut failed = 0usize;
+        for actor in lights.iter() {
+            let id = actor.id();
+            let carla::client::ActorKind::TrafficLight(light) = actor.into_kinds() else {
+                continue;
+            };
+            // Save first; a light whose timings cannot be read is still held, and simply
+            // not restored.
+            let saved = (|| {
+                Ok::<_, carla::CarlaError>((
+                    light.green_time()?,
+                    light.yellow_time()?,
+                    light.red_time()?,
+                ))
+            })();
+            let outcome = light
+                .set_green_time(HOLD_PHASE_SECONDS)
+                .and_then(|()| light.set_yellow_time(HOLD_PHASE_SECONDS))
+                .and_then(|()| light.set_red_time(HOLD_PHASE_SECONDS));
+            match outcome {
+                Ok(()) => {
+                    held += 1;
+                    if let Ok((g, y, r)) = saved {
+                        self.held_light_timings.push((id, g, y, r));
+                    }
+                }
+                Err(e) => {
+                    failed += 1;
+                    tracing::debug!("Could not hold phases of traffic light {id}: {e}");
+                }
+            }
+        }
+        if failed > 0 {
+            tracing::warn!(
+                "Held phases on {held} traffic light(s); {failed} refused. Those rely on the \
+                 freeze alone."
+            );
+        } else {
+            tracing::info!("Held phases on {held} traffic light(s) ({HOLD_PHASE_SECONDS} s each)");
+        }
+    }
+
+    /// Put back the phase durations [`hold_light_phases`](Self::hold_light_phases) saved.
+    fn release_light_phases(&mut self) {
+        if self.held_light_timings.is_empty() {
+            return;
+        }
+        let actors = match self.world.actors() {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!("Could not list actors to restore traffic light phases: {e}");
+                return;
+            }
+        };
+        let mut restored = 0usize;
+        for (id, g, y, r) in std::mem::take(&mut self.held_light_timings) {
+            let Ok(Some(actor)) = actors.find(id) else {
+                continue;
+            };
+            let carla::client::ActorKind::TrafficLight(light) = actor.into_kinds() else {
+                continue;
+            };
+            let outcome = light
+                .set_green_time(g)
+                .and_then(|()| light.set_yellow_time(y))
+                .and_then(|()| light.set_red_time(r));
+            match outcome {
+                Ok(()) => restored += 1,
+                Err(e) => tracing::debug!("Could not restore phases of traffic light {id}: {e}"),
+            }
+        }
+        tracing::info!("Restored CARLA phase durations on {restored} traffic light(s)");
+    }
+
     /// Unfreeze CARLA's traffic lights, but only if this bridge froze them.
     ///
     /// Freezing arrives with phase 009. The guard is here now so that landing the freeze
@@ -1101,6 +1328,7 @@ impl Coordinator {
             return;
         }
 
+        self.release_light_phases();
         match self.world.freeze_all_traffic_lights(false) {
             Ok(()) => {
                 self.froze_traffic_lights.mark_restored();
@@ -1159,6 +1387,7 @@ impl Coordinator {
         // A restarted server froze nothing for us; a surviving one is no longer known to
         // hold our freeze either. Either way we are not the one who owes an unfreeze.
         self.froze_traffic_lights.mark_restored();
+        self.held_light_timings.clear();
 
         tracing::info!("Reconnected to CARLA; synchronous mode will be re-applied next frame");
         Ok(())
@@ -1205,7 +1434,6 @@ impl Coordinator {
 
         // Fresh run, fresh warnings -- otherwise a second scenario in one process would
         // stay quiet about problems it also has.
-        self.warned_unknown_entities.clear();
         self.warned_traffic_lights = false;
 
         // Jerk is differenced across frames; carrying last run's samples into this one
@@ -1213,6 +1441,7 @@ impl Coordinator {
         self.previous_longitudinal_accel.clear();
         self.settle_frames.clear();
         self.accel_history.clear();
+        self.walker_lift.clear();
 
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
         // EntityManager first is what used to orphan them: the map was the only record of
@@ -1343,9 +1572,7 @@ impl Coordinator {
         // UpdateFrame after the ego appears. Doing it here is the same transition, earlier.
         if !self.sync_mode_enabled {
             if let Err(e) = self.enable_sync_mode() {
-                tracing::warn!(
-                    "Localization warm-up skipped: could not enter sync mode ({e:#})"
-                );
+                tracing::warn!("Localization warm-up skipped: could not enter sync mode ({e:#})");
                 return;
             }
         }
@@ -1395,30 +1622,29 @@ impl Coordinator {
     /// the scenario's timeline is unchanged while control commands are picked up more
     /// often. See `config::default_substeps` for what that costs.
     fn enable_sync_mode(&mut self) -> Result<()> {
-        let delta = self.substep_delta();
+        let timing = self.sync_timing();
+        let delta = timing.fixed_delta_seconds;
         let mut settings = self.world.settings().wrap_err("get settings")?;
-        settings.synchronous_mode = true;
-        settings.fixed_delta_seconds = Some(delta);
+        apply_sync_timing(&mut settings, timing);
         self.world
             .apply_settings(&settings, Duration::from_secs(10))
             .wrap_err("apply settings")?;
         self.sync_mode_enabled = true;
-        if self.substeps > 1 {
-            tracing::info!(
-                "CARLA sync mode enabled, fixed_delta_seconds={delta} \
-                 ({} substeps per {}s SSv2 frame)",
-                self.substeps,
-                self.step_time
-            );
-        } else {
-            tracing::info!("CARLA sync mode enabled, fixed_delta_seconds={delta}");
-        }
+        tracing::info!(
+            "CARLA sync mode enabled, fixed_delta_seconds={delta} ({} substep(s) per {}s \
+             SSv2 frame), physics max_substep_delta_time={} x max_substeps={}",
+            self.substeps,
+            self.step_time,
+            timing.max_substep_delta_time,
+            timing.max_substeps
+        );
         Ok(())
     }
 
-    /// The CARLA time step: one SSv2 frame split into `substeps`.
-    fn substep_delta(&self) -> f64 {
-        self.step_time / self.substeps.max(1) as f64
+    /// The CARLA timing for the current step: one SSv2 frame split into `substeps` ticks,
+    /// each with short PhysX substeps. See [`sync_timing`].
+    fn sync_timing(&self) -> SyncTiming {
+        sync_timing(self.step_time, self.substeps)
     }
 
     /// Advance CARLA by one SSv2 frame, in `substeps` ticks.
@@ -1504,7 +1730,17 @@ impl Coordinator {
             }
         };
 
-        settings.fixed_delta_seconds = Some(req.simulation_step_time);
+        // The CARLA tick is the SSv2 step split into substeps, exactly as enable_sync_mode
+        // sets it. This used to write the full step here, so a mid-run UpdateStepTime with
+        // `substeps: 2` ran CARLA at twice the scenario's speed.
+        let timing = self.sync_timing();
+        apply_sync_timing(&mut settings, timing);
+        tracing::info!(
+            "step_time={} applied: fixed_delta_seconds={} ({} substep(s))",
+            self.step_time,
+            timing.fixed_delta_seconds,
+            self.substeps
+        );
         if let Err(e) = self
             .world
             .apply_settings(&settings, Duration::from_secs(10))
@@ -1658,6 +1894,18 @@ impl Coordinator {
         // record of what to clean up; EntityManager is emptied on despawn and re-init.
         self.record_spawned(actor_id);
 
+        if kind == SpawnKind::Pedestrian {
+            // SSv2 sends a pedestrian's pose at its feet every frame; CARLA's walker origin
+            // is its capsule centre. CARLA seats a walker on the ground at spawn (measured:
+            // origin 0.951 m up on Town01), but every teleport after that took SSv2's z
+            // unchanged and sank the walker to its waist (origin z = 0.000). Remember the
+            // lift here; update_entity_status adds it to every teleport.
+            let bb = actor.bounding_box();
+            let lift = walker_lift(bb.transform.location.z, bb.extent.z);
+            self.walker_lift.insert(actor_id, lift);
+            tracing::debug!("Walker '{name}' origin sits {lift:.3} m above its feet");
+        }
+
         // Hand pose authority to whoever owns it (invariant 5). For everything SSv2
         // teleports, CARLA physics must be off, or PhysX fights set_transform every frame:
         // gravity pulls the actor down and collision response shoves it out of position
@@ -1756,6 +2004,14 @@ impl Coordinator {
         } else {
             SpawnKind::Npc
         };
+
+        // One ego per session. A second would get the same role_name, and acb_bridge would
+        // pick whichever it found first; the stock backend rejects it too.
+        if let Some(reason) = second_ego_rejection(req.is_ego, self.entities.ego_name(), &name) {
+            return api::SpawnVehicleEntityResponse {
+                result: Some(proto_err(reason)),
+            };
+        }
 
         // Only the ego carries a role_name: acb_bridge finds its vehicle by it, and an NPC
         // tagged the same would be picked up as if it were an Autoware vehicle.
@@ -1924,53 +2180,24 @@ impl Coordinator {
     ) -> api::UpdateEntityStatusResponse {
         let mut updated = Vec::new();
         let mut teleport_failures: Vec<String> = Vec::new();
+        let mut unknown: Vec<String> = Vec::new();
 
         for entity_status in &req.status {
             let name = &entity_status.name;
 
-            // Copy out what we need so the immutable borrow of `entities` ends here --
-            // the unknown-entity path below needs `&mut self` for the warn-once set.
-            let entity_info = self.entities.get(name).map(|e| {
-                (
-                    e.carla_actor_id,
-                    e.entity_type == EntityType::Ego,
-                    e.origin_offset,
-                )
-            });
+            let entity_info = self
+                .entities
+                .get(name)
+                .map(|e| (e.carla_actor_id, e.entity_type, e.origin_offset));
 
-            let (actor_id, is_ego, origin_offset) = match entity_info {
-                Some(v) => v,
-                None => {
-                    // Echo the requested pose back unchanged.
-                    //
-                    // This is deliberately non-fatal but no longer silent. An unknown
-                    // entity means SSv2 and this bridge disagree about what exists, and
-                    // echoing hides that: SSv2 receives exactly the pose it asked for and
-                    // concludes the entity is tracking its scripted path. That is how the
-                    // pedestrian stub used to produce passing scenarios with no pedestrian.
-                    //
-                    // Failing the whole request instead was considered and rejected: a
-                    // status arriving for an entity mid-despawn would abort an otherwise
-                    // healthy scenario. With spawn now rejecting loudly (phase 006), SSv2
-                    // aborts at spawn time, so reaching here is already exceptional --
-                    // worth a warning, not a scenario failure.
-                    //
-                    // Warns once per entity name; SSv2 sends status every frame.
-                    if self.warned_unknown_entities.insert(name.clone()) {
-                        tracing::warn!(
-                            "UpdateEntityStatus for unknown entity '{name}': echoing the \
-                             requested pose back. SSv2 and the bridge disagree about which \
-                             entities exist; this entity is not present in CARLA."
-                        );
-                    }
-                    updated.push(api::UpdatedEntityStatus {
-                        name: name.clone(),
-                        action_status: entity_status.action_status.clone(),
-                        pose: entity_status.pose,
-                    });
-                    continue;
-                }
+            let Some((actor_id, entity_type, origin_offset)) = entity_info else {
+                // Refused, not echoed: see entity_status_result. The rest of the batch is
+                // still applied so one stale name does not freeze every other entity for
+                // the frame SSv2 spends deciding to throw.
+                unknown.push(name.clone());
+                continue;
             };
+            let is_ego = entity_type == EntityType::Ego;
 
             if is_ego && !req.overwrite_ego_status {
                 // Read ego pose from CARLA physics
@@ -1994,7 +2221,16 @@ impl Coordinator {
             } else {
                 // NPC or ego overwrite: set transform from SSv2 pose
                 if let Some(pose) = entity_status.pose.as_ref() {
-                    let transform = ros_pose_to_carla_transform(pose, origin_offset);
+                    let mut transform = ros_pose_to_carla_transform(pose, origin_offset);
+                    if let Some(lift) = self.walker_lift.get(&actor_id) {
+                        transform.location.z += *lift;
+                    }
+                    // Pose only. SSv2's twist (action_status) is not passed on: CARLA accepts
+                    // set_target_velocity and WalkerControl here, but a physics-off actor
+                    // reports 0 m/s under both (measured on 0.9.16: 0.000 m/s kinematic vs
+                    // 1.504 m/s for the same WalkerControl with physics on). Per-frame
+                    // velocity and the walk animation need walker physics on; tracked as
+                    // roadmap 014 gap 5.
                     if let Err(e) = self.set_actor_transform(actor_id, &transform) {
                         // A failed teleport used to warn and still report success, so SSv2
                         // went on believing the NPC had moved -- the same silent divergence
@@ -2014,20 +2250,7 @@ impl Coordinator {
             }
         }
 
-        let result = if teleport_failures.is_empty() {
-            proto_ok()
-        } else {
-            proto_err(format!(
-                "Failed to apply the commanded pose to {} entit{} ({})",
-                teleport_failures.len(),
-                if teleport_failures.len() == 1 {
-                    "y"
-                } else {
-                    "ies"
-                },
-                teleport_failures.join("; ")
-            ))
-        };
+        let result = entity_status_result(&unknown, &teleport_failures);
 
         api::UpdateEntityStatusResponse {
             result: Some(result),
@@ -2184,6 +2407,10 @@ impl Coordinator {
             Ok(mut settings) => {
                 settings.synchronous_mode = false;
                 settings.fixed_delta_seconds = None;
+                // Hand back CARLA's own physics substepping too; the short substeps are
+                // this bridge's choice for its scenario, not the shared server's.
+                settings.max_substep_delta_time = CARLA_DEFAULT_MAX_SUBSTEP_DELTA;
+                settings.max_substeps = CARLA_DEFAULT_MAX_SUBSTEPS;
                 if let Err(e) = self
                     .world
                     .apply_settings(&settings, Duration::from_secs(10))
@@ -2926,5 +3153,82 @@ mod tests {
         let result = sensor_not_supported();
         assert!(!result.success);
         assert!(!result.description.is_empty());
+    }
+
+    // --- Roadmap 014 hardening batch ---------------------------------------------------
+
+    /// UpdateStepTime and enable_sync_mode share one timing, and it is the SSv2 step split
+    /// into substeps -- never the full step.
+    #[test]
+    fn the_carla_tick_is_the_step_over_substeps() {
+        let t = sync_timing(0.05, 2);
+        assert!((t.fixed_delta_seconds - 0.025).abs() < 1e-12);
+        assert!((sync_timing(0.05, 1).fixed_delta_seconds - 0.05).abs() < 1e-12);
+        assert!((sync_timing(0.05, 0).fixed_delta_seconds - 0.05).abs() < 1e-12);
+    }
+
+    /// autoware_universe #13406: 2 ms physics substeps, as many as the tick needs.
+    #[test]
+    fn physics_substeps_are_two_milliseconds() {
+        let t = sync_timing(0.05, 2);
+        assert_eq!(t.max_substep_delta_time, 0.002);
+        assert_eq!(t.max_substeps, 13); // ceil(0.025 / 0.002)
+        assert_eq!(sync_timing(0.02, 1).max_substeps, 10); // not 11 from rounding
+        assert_eq!(sync_timing(0.001, 1).max_substeps, 1);
+    }
+
+    /// Past CARLA's 16 substeps the count is clamped and the substep stretched, so the
+    /// substeps still cover the whole tick.
+    #[test]
+    fn long_ticks_clamp_to_sixteen_substeps_and_still_cover_the_tick() {
+        let t = sync_timing(0.05, 1);
+        assert_eq!(t.max_substeps, 16);
+        assert!((t.max_substep_delta_time - 0.05 / 16.0).abs() < 1e-12);
+        for (step, subs) in [
+            (0.01, 1),
+            (0.025, 1),
+            (0.05, 2),
+            (0.05, 1),
+            (0.1, 1),
+            (0.1, 3),
+        ] {
+            let t = sync_timing(step, subs);
+            assert!(t.max_substeps >= 1 && t.max_substeps <= 16);
+            assert!(
+                t.max_substep_delta_time * t.max_substeps as f64 >= t.fixed_delta_seconds - 1e-12,
+                "{step}/{subs}: substeps must cover the tick"
+            );
+            assert!(t.max_substep_delta_time <= 0.002 + 1e-12 || t.max_substeps == 16);
+        }
+    }
+
+    #[test]
+    fn a_second_ego_is_refused_naming_the_first() {
+        let reason = second_ego_rejection(true, Some("Ego"), "Ego2").expect("must refuse");
+        assert!(
+            reason.contains("'Ego'") && reason.contains("'Ego2'"),
+            "{reason}"
+        );
+        assert!(second_ego_rejection(true, None, "Ego").is_none());
+        assert!(second_ego_rejection(false, Some("Ego"), "npc").is_none());
+    }
+
+    #[test]
+    fn an_unknown_entity_fails_the_status_update_by_name() {
+        let r = entity_status_result(&["ghost".to_string()], &[]);
+        assert!(!r.success);
+        assert!(r.description.contains("'ghost'"), "{}", r.description);
+        let r = entity_status_result(&[], &["npc: gone".to_string()]);
+        assert!(!r.success && r.description.contains("npc: gone"));
+        assert!(entity_status_result(&[], &[]).success);
+    }
+
+    /// A CARLA walker's box is centred on its origin, so its feet are one half-height down.
+    #[test]
+    fn a_walker_is_lifted_by_its_half_height() {
+        assert!((walker_lift(0.0, 0.93) - 0.93).abs() < 1e-6);
+        // A box whose centre is already above the origin needs less.
+        assert!((walker_lift(0.9, 0.93) - 0.03).abs() < 1e-6);
+        assert_eq!(walker_lift(1.0, 0.5), 0.0);
     }
 }
