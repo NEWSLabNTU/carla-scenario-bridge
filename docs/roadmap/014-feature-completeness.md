@@ -151,9 +151,13 @@ host always had the background stack up, so it drove away before the ego arrived
 - [x] acb's ground-truth objects read `actor.velocity()`, so every teleported NPC was published
       as stationary. acb `028d8a8` estimates each actor's twist from its snapshot pose on
       simulation time (arc-corrected; reset on first sight, id reuse, despawn, gaps > 1 s and
-      implausible jumps) and keeps CARLA's own twist whenever it is non-zero. Unit-tested;
-      **live check still open** (ground-truth objects are off by default:
-      `GROUND_TRUTH_OBJECTS=true just ego-av`)
+      implausible jumps) and keeps CARLA's own twist whenever it is non-zero. Live
+      2026-09-28 (`town01_pedestrian.xosc` passing, with a passive second acb in domain 7
+      publishing ground-truth objects; `scratchpad/npcvel`): the walker reads 1.39 m/s
+      while moving (was 0); over 1 s windows published 0.695 m/s against displacement 0.692
+      (n = 249); published direction equals travel direction to 0.0°. The walker faces
+      along the lane (yaw ≈ 0°) while crossing it (heading 90°), so its velocity is lateral
+      in its own frame -- that is the scenario's orientation, not the estimator
 
 ### Hardening batch (gaps 4, 6, 10, 12, 13, 16)
 
