@@ -330,8 +330,19 @@ initialized again on top of it; NDT was asked to align before the new ego's firs
       binary too and more often under load; they cost gyro/NDT timeouts and brief MRMs while
       driving (7 in 7 runs). Not attributed to any change here; needs its own look
 - [ ] Off-route ERRORs at the end of the traffic_light route (12 in 7 runs, same spot)
-- [ ] Seen once: behavior_path_planner aborted on an rclcpp guard-condition error when a new
-      route reset its modules, wedging that run and the next
+- [x] behavior_path_planner aborted once (`terminate called ... failed to add guard
+      condition to wait set: guard condition implementation is invalid`, 1 of ~64 route
+      resets across 7 sessions): every reset recreates GoalPlanner's and StartPlanner's
+      callback groups while the executor still holds the old guard conditions
+      (autoware_universe#12460, rclcpp#2163, both open, no fix in 0.48.0/1.5.0). play_launch
+      0.12 runs each composable in its own process and does not respawn one that crashes, so
+      the container, the ADAPI and `/api/operation_mode/state` stayed up and
+      `ego_stack_health.py` said "ok" for two scenarios that then sat at the spawn until
+      their timeouts. Contained 2026-09-29: the health check also requires a publisher on
+      each planning output and asks play_launch's ledger for crashed composables; the
+      scenario gate runs it with `--reload-failed`, which POSTs `/api/nodes/<name>/load` and
+      waits for the publishers to return. Longer term: composable respawn in play_launch, or
+      an overlay of goal/start_planner with #12460's static callback groups
 
 ### Ego twist at base_link (fixed 2026-09-28)
 

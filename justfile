@@ -444,7 +444,11 @@ _require-ego-stack:
         export ROS_DOMAIN_ID={{ego_unmanaged_domain}}
         require_pilot="--require-pilot"
     fi
-    if ! "{{project}}/scripts/ego_stack_health.py" $require_pilot; then
+    # --reload-failed: play_launch does not respawn a composable that crashed inside its
+    # container, and behavior_path_planner does that about once in 60 route resets
+    # (autoware_universe#12460, an rclcpp race with no upstream fix). Without it the stack
+    # looks up, the ego spawns and never moves, and the run dies at the storyboard timeout.
+    if ! "{{project}}/scripts/ego_stack_health.py" $require_pilot --reload-failed; then
         echo "[just] Refusing to start: run \`just ego-av\` first and wait for"
         echo "[just] 'Startup complete'. See phase 012, startup order."
         exit 1

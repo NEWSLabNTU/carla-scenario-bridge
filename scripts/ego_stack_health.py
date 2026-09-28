@@ -16,6 +16,17 @@ What counts as ready is the thing the concealer actually needs: the ADAPI operat
 topic being published. That is later than "the process exists" and earlier than "the ego is
 engaged", which is the window the concealer expects to attach in.
 
+Ready also means planning is alive. play_launch runs each composable node as its own child
+process (`--container-mode isolated`), so one of them can die while its container, the
+ADAPI and the operation-mode topic carry on. behavior_path_planner did exactly that on
+2026-09-28 -- `rclcpp::exceptions::RCLError: failed to add guard condition to wait set:
+guard condition implementation is invalid`, raised while a new route reset its modules
+(autoware_universe#12460, rclcpp#2163, both open) -- and this check answered "ok" for two
+more scenarios that then sat at the spawn until their timeouts. So the check also wants a
+publisher on each planning output and asks play_launch's ledger for crashed composables.
+With `--reload-failed` it asks play_launch to load a crashed composable again and waits for
+the publishers to come back, which is the containment for a race nothing upstream fixes.
+
 An unmanaged ego needs one more thing. With the concealer inert nothing in SSv2
 routes or engages it -- `acb_pilot`'s `auto_drive` is the only thing that does, and it is
 an ordinary node that can exit on its own (it has a deadline, and it fails if no vehicle
@@ -24,19 +35,74 @@ and the run dies at the storyboard's timeout naming nothing. `--require-pilot` t
 into a refusal that names the pilot.
 
     ROS_DOMAIN_ID=1 scripts/ego_stack_health.py [--timeout 10] [--require-pilot]
+                                                [--web-port 8082] [--reload-failed]
 """
 
 import argparse
+import json
 import sys
+import urllib.error
+import urllib.request
 
 # What the concealer talks to. Operation mode is the one it drives through
 # (stop -> autonomous) and is published by the ADAPI adaptors, so its presence means the
 # API layer is up rather than merely the launch having been started.
 REQUIRED_TOPIC = "/api/operation_mode/state"
 
+# Planning outputs whose publisher disappears with the node that owns it. Each one is a
+# different composable, so a dead behavior_path_planner, behavior_velocity_planner or
+# motion planner shows up here even though the ADAPI still answers.
+PLANNING_TOPICS = (
+    "/planning/scenario_planning/lane_driving/behavior_planning/path_with_lane_id",
+    "/planning/scenario_planning/lane_driving/behavior_planning/path",
+    "/planning/scenario_planning/trajectory",
+)
+
 # The node `acb_pilot`'s auto_drive entry point creates. Only required for an
 # unmanaged ego, where it stands in for the concealer.
 PILOT_NODE = "auto_drive"
+
+
+def play_launch_get(port: int, path: str):
+    """One GET against the stack's play_launch web API, or None if it cannot be asked."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=2) as r:
+            return json.load(r)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def failed_composables(port: int):
+    """Names of composables play_launch saw crash (state Failed), or None if unknown.
+
+    play_launch 0.12 does not respawn a crashed composable; it only records the state.
+    """
+    nodes = play_launch_get(port, "/api/nodes")
+    if nodes is None:
+        return None
+    if isinstance(nodes, dict):
+        nodes = nodes.get("nodes", list(nodes.values()))
+    failed = []
+    for n in nodes:
+        status = n.get("status") or {}
+        if status.get("type") != "Composable":
+            continue
+        value = status.get("value")
+        state = value.get("status") if isinstance(value, dict) else value
+        if str(state).lower() == "failed":
+            failed.append(n.get("name") or n.get("id"))
+    return failed
+
+
+def reload_composable(port: int, name: str) -> bool:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/nodes/{name}/load", method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return 200 <= r.status < 300
+    except (urllib.error.URLError, OSError):
+        return False
 
 
 def main() -> int:
@@ -52,6 +118,17 @@ def main() -> int:
         action="store_true",
         help="also require acb_pilot's auto_drive node (an unmanaged ego has no other "
         "way to be routed or engaged)",
+    )
+    ap.add_argument(
+        "--web-port",
+        type=int,
+        default=8082,
+        help="the stack's play_launch --web-addr port, asked for crashed composables",
+    )
+    ap.add_argument(
+        "--reload-failed",
+        action="store_true",
+        help="ask play_launch to load a crashed composable again instead of refusing",
     )
     args = ap.parse_args()
 
@@ -72,10 +149,41 @@ def main() -> int:
         print(f"[ego-health] cannot join the ROS graph: {e}")
         return 1
 
+    reloaded = []
     try:
         deadline = time.time() + args.timeout
         while time.time() < deadline:
             if node.count_publishers(REQUIRED_TOPIC) > 0:
+                dead = [t for t in PLANNING_TOPICS if node.count_publishers(t) == 0]
+                failed = failed_composables(args.web_port) or []
+                if failed and args.reload_failed:
+                    for name in failed:
+                        if name in reloaded:
+                            continue
+                        ok = reload_composable(args.web_port, name)
+                        print(f"[ego-health] composable {name} had crashed; asked "
+                              f"play_launch to load it again: {'accepted' if ok else 'refused'}")
+                        reloaded.append(name)
+                    # Loading takes a few seconds; give the publishers time to come back.
+                    deadline = max(deadline, time.time() + 30.0)
+                    rclpy.spin_once(node, timeout_sec=1.0)
+                    continue
+                if dead or failed:
+                    if time.time() + 0.2 < deadline:  # discovery may still be settling
+                        rclpy.spin_once(node, timeout_sec=0.2)
+                        continue
+                    print(
+                        "[ego-health] not ready: the ADAPI is up but planning is not -- "
+                        + (f"no publisher on {', '.join(dead)}" if dead else "")
+                        + ("; " if dead and failed else "")
+                        + (f"play_launch reports crashed composable(s): {', '.join(failed)}"
+                           if failed else "")
+                        + ". A composable died inside its container (see "
+                        "play_log/ego/latest/play_launch.log for 'crashed:'); rerun with "
+                        "--reload-failed, `curl -X POST localhost:"
+                        f"{args.web_port}/api/nodes/<name>/load`, or restart `just ego-av`."
+                    )
+                    return 1
                 if args.require_pilot and PILOT_NODE not in (
                     n for n, _ns in node.get_node_names_and_namespaces()
                 ):
@@ -86,8 +194,9 @@ def main() -> int:
                         "Check the pilot's log under play_log/ego/*/node/auto_drive."
                     )
                     return 1
-                print(f"[ego-health] ok: {REQUIRED_TOPIC} has a publisher; "
-                      "the ego stack's ADAPI is up"
+                print(f"[ego-health] ok: {REQUIRED_TOPIC} has a publisher and planning "
+                      "publishes; the ego stack is up"
+                      + (f" (reloaded {', '.join(reloaded)})" if reloaded else "")
                       + (f", and {PILOT_NODE} is running" if args.require_pilot else ""))
                 return 0
             rclpy.spin_once(node, timeout_sec=0.2)
