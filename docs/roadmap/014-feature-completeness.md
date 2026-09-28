@@ -267,7 +267,18 @@ never implemented.
       acceleration check tripped the MRM. acb `87f8346`: the boundary is the measured coasting
       line and the brake covers the excess. Live: acceleration-error onsets while driving 11 → 1
       over 8 runs
-- [ ] Re-measure the brake map below 5 m/s so the increment workaround is not needed
+- [x] Brake map re-measured below 5 m/s — acb `731b044`, 2026-09-28
+      (`scripts/probe_brake_lowspeed.py`: 11 pedals × 1–6 m/s × 3 repeats, dv/dt fitted over
+      target ± 1 m/s, first 0.4 s after brake-on and the stop ticks excluded; spread ≤ 0.009).
+      The old floor was hiding a **physics-timing artefact**, not the stop: both maps had been
+      measured under CARLA's default 10 ms substeps, where a braked car reads about −27 m/s²
+      for several ticks below 5–6 m/s. The bridge runs 3.125 ms substeps since `ddf64d7`,
+      so both maps were re-measured under the bridge's timing, and the builder now refuses
+      probe files from a different timing. Pedal 0 at 0/2/4 m/s: −2.55 → −0.42/−0.84/−1.69;
+      pedal 1.0: −5.17 → −3.71/−4.15/−4.96. The no-pedal rows of the two maps now agree
+      within 0.002 m/s² at 2 and 4 m/s, so `command_for`'s increment logic reduces to a plain
+      lookup (unit-tested on the shipped CSVs); −2.5 at 2 m/s → brake 0.503. 184 acb tests,
+      ego_drive and pedestrian pass, no driving MRM onsets
 - [x] MRM churn while driving: **fixed 2026-09-28, 69 → 0 driving MRM onsets over 7 runs.**
       The two control_validator checks that showed up next to it were never the trigger:
       neither is wired into the diagnostic graph. `latency` (`now − control_cmd.stamp`
