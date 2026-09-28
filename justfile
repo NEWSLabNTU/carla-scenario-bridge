@@ -557,6 +557,13 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     if [ -n "$goal_poses_file" ]; then
         optional_args+=(goal_poses_file:="$goal_poses_file")
     fi
+    # acb's /initialpose seed on attach is for an unmanaged ego, where nothing else moves a
+    # reused stack's estimate onto the new vehicle. A managed ego's concealer initializes
+    # localization itself at every scenario and waits for the estimate to reach the initial
+    # pose before routing, so a second, overlapping init from acb only restarted the first:
+    # two NDT alignments, two EKF resets, and the pose-instability and covariance ERRORs
+    # each reset raises, twice per scenario. SEED_LOCALIZATION still overrides either way.
+    if [ "$managed" = "true" ]; then seed_default=false; else seed_default=true; fi
     # CONTROL_TRACE_PATH writes per-stage control latency as CSV; see acb's control_trace.
     if [ -n "${CONTROL_TRACE_PATH:-}" ]; then
         optional_args+=(control_trace_path:="$CONTROL_TRACE_PATH")
@@ -586,7 +593,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         launch_rviz:="${LAUNCH_RVIZ:-false}" \
         steering_multiplier:="${STEERING_MULTIPLIER:-1.0}" \
         publish_ground_truth_objects:="${GROUND_TRUTH_OBJECTS:-false}" \
-        seed_localization_on_attach:="${SEED_LOCALIZATION:-true}" \
+        seed_localization_on_attach:="${SEED_LOCALIZATION:-$seed_default}" \
         ground_truth_range_m:="${GROUND_TRUTH_RANGE_M:-100.0}" \
         accel_map_path:="$accel_map" \
         brake_map_path:="$brake_map" \
