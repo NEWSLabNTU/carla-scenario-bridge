@@ -248,7 +248,11 @@ never implemented.
       fell behind (0.26–0.5× under load) Autoware integrated simulated speeds over wall
       seconds, the EKF ran +53 m ahead and rejected NDT. Fork `2cddfac4d`,
       `clock_follows_simulation_time`: `/clock` = start + frames × step_time, start =
-      max(wall now, last `/clock` this domain saw), so it never moves back across scenarios.
+      the last `/clock` this domain saw plus one step (fork `a65f563f5`; the first version
+      used max(wall now, last), and the forward leap by the idle gap made every stamp
+      Autoware held stale at once -- about twenty ERRORs and an EMERGENCY_STOP per scenario
+      before the ego existed). The gap between scenarios is a pause, as in the simulated
+      world.
       Live: /clock/CARLA 0.999 at factor 1, 0.493 at factor 0.5 with 0 NDT time-validation
       errors
 - [x] **Stale route, older and intermittent.** The concealer requested the route 41–92 ms
@@ -300,6 +304,34 @@ never implemented.
       cause was the stamps above), but it halves the fresh-pose wait (100 → 60 ms)
 - [ ] Unmanaged ego (its own domain) gets neither signals nor the sim clock; both would need
       relaying across domains
+
+### Emergency stop at every scenario start (fixed 2026-09-29)
+
+Each scenario opened with ~28 diagnostic ERROR onsets and an EMERGENCY_STOP before the ego
+existed, and engage took 6.5–18.9 s after the first tick. Timeline (`scratchpad/initmrm`):
+the previous scenario left Autoware AUTONOMOUS on its route with the EKF still at 3.4 m/s;
+the first /clock tick leapt over the idle gap; acb seeded /initialpose and the concealer
+initialized again on top of it; NDT was asked to align before the new ego's first scans.
+
+- [x] /clock continues from the last value (fork `a65f563f5`, above)
+- [x] Concealer puts a reused Autoware back to STOP when the ego despawns, and waits for two
+      scans from the new ego before initializing -- fork `7bfe6a159`; every init now within
+      2 cm (was up to 1.6 m, once a reversed yaw)
+- [x] acb publishes eight zero IMU + VelocityReport samples when the ego is lost, so the EKF
+      does not carry its speed -- acb `ad80cd8` (EKF at rest 0.40–0.47 m/s, was 3.4)
+- [x] `just ego-av` turns acb's /initialpose seed off under a managed ego; the concealer
+      does that init -- `497c1c3`
+- Result over 7 runs: init-window ERROR onsets 28/33/29/28/24/30/17 → 6/6/7/6/3/6/6,
+  EMERGENCY_STOP before engage 7/7 → 0/7, engage 3.9–7.2 s, 7/7 pass. What remains is
+  inherent to re-seeding a running Autoware: one pose_instability at the jump, one EKF
+  initial-covariance tick, ADAPI state transitions, ~0.5 s of tracker/gyro timeouts before
+  the first sensor frames
+- [ ] **acb loop stalls**: "Skipped 19–62 CARLA frames", 1–3 s each, seen with the baseline
+      binary too and more often under load; they cost gyro/NDT timeouts and brief MRMs while
+      driving (7 in 7 runs). Not attributed to any change here; needs its own look
+- [ ] Off-route ERRORs at the end of the traffic_light route (12 in 7 runs, same spot)
+- [ ] Seen once: behavior_path_planner aborted on an rclcpp guard-condition error when a new
+      route reset its modules, wedging that run and the next
 
 ### Ego twist at base_link (fixed 2026-09-28)
 
