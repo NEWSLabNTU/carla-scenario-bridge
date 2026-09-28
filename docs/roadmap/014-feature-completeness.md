@@ -329,7 +329,20 @@ initialized again on top of it; NDT was asked to align before the new ego's firs
 - [ ] **acb loop stalls**: "Skipped 19–62 CARLA frames", 1–3 s each, seen with the baseline
       binary too and more often under load; they cost gyro/NDT timeouts and brief MRMs while
       driving (7 in 7 runs). Not attributed to any change here; needs its own look
-- [ ] Off-route ERRORs at the end of the traffic_light route (12 in 7 runs, same spot)
+- [x] "Off-route ERRORs at the end of the traffic_light route" -- a mislabel. Nothing in the
+      logs reports off-route; the 12 onsets are `control_validation_max_distance_deviation`
+      again, 55–60° into the last left turn (lanelet 39114, radius 11 m) at ~3 m/s, EKF at
+      (90.3, −60.5), while the ego's real lateral offset is ≤ 0.18 m (runs with and without
+      the ERROR drove within 5 cm of each other). MPC's 5 s open-loop prediction sits right
+      at the 1.0 m threshold there and toggles every 50 ms. Not in the diagnostic graph, no
+      effect on any verdict. No fix
+- [ ] **Emergency stop mid-turn** at (93, −58) in 3 of ~20 traffic_light runs (speed 3.1 →
+      1.3 m/s): each within 0.26 s of an `ndt_scan_matcher: scan_matching_status` WARN
+      "iterations reached limit 30" (16 of 45 MRM onsets across three sessions had one). As
+      with the stamp bug, a localization WARN makes autonomous mode unavailable. Needs: why
+      NDT hits its iteration limit in that turn (scan distortion at yaw rate? initial guess
+      from the EKF lagging?), and whether the graph in
+      `acb_launch/config/system/diagnostics/autoware-carla.yaml:101-105` should treat it so
 - [x] behavior_path_planner aborted once (`terminate called ... failed to add guard
       condition to wait set: guard condition implementation is invalid`, 1 of ~64 route
       resets across 7 sessions): every reset recreates GoalPlanner's and StartPlanner's
