@@ -338,9 +338,24 @@ initialized again on top of it; NDT was asked to align before the new ego's firs
       lines when full; tf_bridge logs only when the transform count changes. After: 0 skip
       warnings (was 138), longest velocity gap 3.1 s and only during `/clock` pauses (was
       34.3 s), 0 of 13 driving MRMs tied to an acb gap (was 79 of 95), 7/7 pass (was 3/7)
-- [ ] 13 driving EMERGENCY_STOPs remain in those 7 runs with no acb, IMU or clock gap and no
-      diagnostic ERROR onset nearby -- the NDT iteration-limit WARN mid-turn (below) is the
-      leading candidate
+- [x] **The 13 driving EMERGENCY_STOPs that remained** -- fixed 2026-09-29, acb `3405aaa` +
+      `2634caf` (local, not yet pushed; pin not bumped). Not the iteration limit: every one
+      (and the 3 pre-drive ones) was an NDT "Couldn't interpolate pose" WARN starting
+      0.1-0.23 s before the MRM, on a scan stamped *after* the /clock of its own frame, so
+      `SmartPoseBuffer::pop_old` dropped that frame's EKF pose. Three shapes: +1 us for ~2.5 s
+      (8 of 13) -- CARLA steps `elapsed_seconds` by the f32 0.05 (0.050000000745 s), gaining
+      a whole microsecond on SSv2's exact 50 ms grid every ~1340 ticks, and the 100-reading
+      mode kept the old offset for half a window; +1 ns (3) -- SSv2's /clock wobbles by 1 ns;
+      one frame ahead (2) -- the microsecond split halved the majority and the one-frame-low
+      minority won. The graph needs `/autoware/localization` at OK: Autoware's converter
+      publishes a mode available only when its unit is OK (`command_mode_mapping.cpp`,
+      `unit->level() == DiagnosticStatus::OK`), mrm_handler then operates an MRM, and
+      comfortable_stop needs localization too, so it is EMERGENCY_STOP. Upstream's
+      `localization.yaml` has the same `and` over `scan_matching_status`: intended semantics,
+      graph left alone. Fix: stamps on the grid of the newest /clock reading, 1 us early; the
+      offset is the highest cluster of readings with >= 3 members (only the correct pairing
+      reads high; a majority vote flipped every few ticks on an even split and mis-stamped
+      23-52 scans a run)
 - [x] "Off-route ERRORs at the end of the traffic_light route" -- a mislabel. Nothing in the
       logs reports off-route; the 12 onsets are `control_validation_max_distance_deviation`
       again, 55–60° into the last left turn (lanelet 39114, radius 11 m) at ~3 m/s, EKF at
@@ -348,13 +363,16 @@ initialized again on top of it; NDT was asked to align before the new ego's firs
       the ERROR drove within 5 cm of each other). MPC's 5 s open-loop prediction sits right
       at the 1.0 m threshold there and toggles every 50 ms. Not in the diagnostic graph, no
       effect on any verdict. No fix
-- [ ] **Emergency stop mid-turn** at (93, −58) in 3 of ~20 traffic_light runs (speed 3.1 →
-      1.3 m/s): each within 0.26 s of an `ndt_scan_matcher: scan_matching_status` WARN
-      "iterations reached limit 30" (16 of 45 MRM onsets across three sessions had one). As
-      with the stamp bug, a localization WARN makes autonomous mode unavailable. Needs: why
-      NDT hits its iteration limit in that turn (scan distortion at yaw rate? initial guess
-      from the EKF lagging?), and whether the graph in
-      `acb_launch/config/system/diagnostics/autoware-carla.yaml:101-105` should treat it so
+- [x] **Emergency stop mid-turn** at (93, −58) -- fixed 2026-09-29, acb `3405aaa`
+      (`acb_launch/config/localization/ndt_scan_matcher/ndt_scan_matcher.param.yaml`,
+      `step_size` 0.1 → 0.05, `max_iterations` 30 → 60). Not EKF lag (initial→result ≤ 6 cm,
+      ≤ 5 mrad at 0.28 rad/s), not scan distortion or map density: at some poses the Newton
+      step on CARLA's noise-free scan and map exceeds `step_size`, is clamped to exactly 0.1 m
+      and flips ±(74, 2, 65) mm per iteration to the limit (oscillation count 29). Once the
+      ego stopped at (88.9, −62.9) the cycle held for 2611 consecutive scans and the run timed
+      out. Standalone ndt_scan_matcher replaying CARLA scans at ten poses: 0.1 → 75/520 at the
+      limit, 0.05 → 1/520, same mean iterations; 60 iterations keep the 3 m reach. After:
+      0 iteration-limit WARNs in 3 traffic_light runs (max 3 iterations in the turn)
 - [x] behavior_path_planner aborted once (`terminate called ... failed to add guard
       condition to wait set: guard condition implementation is invalid`, 1 of ~64 route
       resets across 7 sessions): every reset recreates GoalPlanner's and StartPlanner's
