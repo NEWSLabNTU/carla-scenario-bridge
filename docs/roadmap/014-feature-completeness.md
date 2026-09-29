@@ -326,9 +326,21 @@ initialized again on top of it; NDT was asked to align before the new ego's firs
   inherent to re-seeding a running Autoware: one pose_instability at the jump, one EKF
   initial-covariance tick, ADAPI state transitions, ~0.5 s of tracker/gyro timeouts before
   the first sensor frames
-- [ ] **acb loop stalls**: "Skipped 19–62 CARLA frames", 1–3 s each, seen with the baseline
-      binary too and more often under load; they cost gyro/NDT timeouts and brief MRMs while
-      driving (7 in 7 runs). Not attributed to any change here; needs its own look
+- [x] **acb loop stalls** -- fixed 2026-09-29, acb `0d091de`. Not CARLA RPC, locks or the
+      follower: acb's main thread blocked on **writes to its own log file**
+      (`play_log/.../acb_bridge/out` on `/home`, an ext4 spinning disk at 99 %), in D state in
+      `wait_transaction_locked` for 0.5–3 s several times per scenario and 25 s when another
+      user's `rm -rf` saturated it; `tf_bridge` logged "TF Buffer updated" for every
+      `/tf_static` republish, ~40 lines/s. Every "Skipped N CARLA frames" and every gap in
+      `/vehicle/status/velocity_status` lined up with a wait, and 79 of 95 driving
+      EMERGENCY_STOPs in a 7-run baseline began inside one. Fix: tracing writes through a
+      bounded queue (4096 lines) drained by a `log-writer` thread, dropping and counting
+      lines when full; tf_bridge logs only when the transform count changes. After: 0 skip
+      warnings (was 138), longest velocity gap 3.1 s and only during `/clock` pauses (was
+      34.3 s), 0 of 13 driving MRMs tied to an acb gap (was 79 of 95), 7/7 pass (was 3/7)
+- [ ] 13 driving EMERGENCY_STOPs remain in those 7 runs with no acb, IMU or clock gap and no
+      diagnostic ERROR onset nearby -- the NDT iteration-limit WARN mid-turn (below) is the
+      leading candidate
 - [x] "Off-route ERRORs at the end of the traffic_light route" -- a mislabel. Nothing in the
       logs reports off-route; the 12 onsets are `control_validation_max_distance_deviation`
       again, 55–60° into the last left turn (lanelet 39114, radius 11 m) at ~3 m/s, EKF at

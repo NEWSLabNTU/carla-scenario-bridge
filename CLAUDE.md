@@ -279,6 +279,22 @@ new invocation, and if `df` moves faster than a build explains, look at `play_lo
 du -sh play_log/ego/*/play_launch.log play_log/ego/*/interception 2>/dev/null | sort -rh | head
 ```
 
+### The log disk can stall a node
+
+`/home` (`/dev/sda1`) is a spinning ext4 disk at 99 % that other users saturate at will.
+A node whose stdout goes to `play_log/` on it blocks in the ext4 journal when they do: acb's
+main loop stalled 0.5–3 s several times per scenario and 25 s once, skipping CARLA frames
+and starving Autoware into emergency stops (roadmap 014, acb `0d091de` moved acb's logging
+to a writer thread). Any other node that logs at tens of lines per second from a real-time
+loop is exposed the same way, and play_launch's own `system_stats.csv` shows the holes.
+Check before blaming code:
+
+```bash
+cat /proc/pressure/io            # "some avg10" over ~30 means the disk is the bottleneck
+df -h /home
+for t in /proc/$(pgrep -x acb_bridge)/task/*; do grep -H State "$t/status"; done | grep -c "D (disk"
+```
+
 ### CARLA on a host that is not the checkpoint's
 
 `third_party/carla/run.sh` assumes `~/Downloads/CARLA_0.9.16` and a `DISPLAY` you own; the
