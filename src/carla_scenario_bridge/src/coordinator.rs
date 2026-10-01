@@ -389,10 +389,43 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
 use crate::collision_monitor::CollisionMonitor;
 use crate::coordinate_conversion::{self, OriginOffset};
 use crate::entity_manager::{EntityManager, EntityType};
+use crate::episode_clock::{reload_as_pause, tick_then_read, EpisodeClock, EpisodeReload};
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs::{self, BoundingBox};
 use crate::sensor_release::SensorReleaseNotifier;
+
+/// `(elapsed_seconds, delta_seconds)` of `world`'s current snapshot.
+fn read_frame_of(world: &World) -> Result<(f64, f64)> {
+    let snapshot = world.snapshot().wrap_err("world snapshot")?;
+    let ts = snapshot.timestamp();
+    Ok((ts.elapsed_seconds, ts.delta_seconds))
+}
+
+/// The coordinator's CARLA calls for one episode change, in the shape
+/// [`reload_as_pause`] orders them.
+struct CoordinatorReload<'a> {
+    coordinator: &'a mut Coordinator,
+    town: &'a str,
+    current_town: &'a str,
+}
+
+impl EpisodeReload for CoordinatorReload<'_> {
+    type World = carla::client::World;
+    type Error = eyre::Report;
+
+    fn enter_sync(&mut self) -> Result<()> {
+        self.coordinator.enable_sync_mode()
+    }
+
+    fn read_frame(&mut self) -> Result<(f64, f64)> {
+        self.coordinator.read_frame()
+    }
+
+    fn reload(&mut self) -> Result<carla::client::World> {
+        self.coordinator.prepare_map(self.town, self.current_town)
+    }
+}
 
 /// What an `UpdateFrame` should do, given how far startup has progressed.
 ///
@@ -637,6 +670,8 @@ pub struct Coordinator {
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
     map_aliases: HashMap<String, String>,
+    /// CARLA time plus the episode epoch, reported to SSv2 (roadmap 015).
+    episode_clock: EpisodeClock,
     /// Lanelet2 signal ID to OpenDRIVE sign ID for the loaded town.
     signal_map: SignalMap,
     /// Lanelet2 signal IDs already reported as unmapped. SSv2 sends states every frame, so
@@ -661,7 +696,8 @@ impl Coordinator {
         config: BridgeConfig,
     ) -> Self {
         let config_for_release = config.sensor_release.clone();
-        let substeps = crate::config::ticks_per_frame(0.05, config.substeps, config.carla_tick_seconds);
+        let substeps =
+            crate::config::ticks_per_frame(0.05, config.substeps, config.carla_tick_seconds);
         let collision_monitor_enabled = config.collision_monitor_enabled();
         Self {
             map_aliases: config.map_alias.clone(),
@@ -671,6 +707,7 @@ impl Coordinator {
             carla_port,
             config_dir,
             signal_map: SignalMap::new(),
+            episode_clock: EpisodeClock::default(),
             warned_unmapped_signals: HashSet::new(),
             warned_arrow_shapes: false,
             world,
@@ -1031,9 +1068,17 @@ impl Coordinator {
             // just-restarted server). Widen the timeout for the whole prepare path and
             // restore it afterwards even on failure.
             let _ = self.client.set_timeout(Duration::from_secs(120));
-            let prepared = self.prepare_map(&town, &current_town);
+            let prepared = self.reload_as_pause(&town, &current_town);
             let _ = self.client.set_timeout(Duration::from_secs(30));
+            // The pause left CARLA synchronous: the old world if the load failed (its
+            // settings are untouched), and the new one only if the server kept settings
+            // across the load. Either way Initialize wants async until the ego exists.
+            self.sync_mode_enabled = false;
+            if prepared.is_err() {
+                self.force_async_mode();
+            }
             self.world = prepared?;
+            self.force_async_mode();
 
             // The old world and everything in it is gone. Anything still recorded for
             // teardown refers to actors that no longer exist.
@@ -1050,6 +1095,65 @@ impl Coordinator {
         }
 
         self.load_signal_map(&town, lanelet2_map_path)
+    }
+
+    /// Reload the world as a pause in simulation time (roadmap 015).
+    ///
+    /// Sync mode goes on *before* the last snapshot is read, and nothing ticks between that
+    /// read and the reload. acb applies the same epoch rule from the last `on_tick` it
+    /// received; with CARLA synchronous, the frame read here is that frame, so both bridges
+    /// land on the same epoch with no channel between them. Read in async mode instead and
+    /// CARLA could tick once more before the load, putting acb one step ahead of csb.
+    fn reload_as_pause(&mut self, town: &str, current_town: &str) -> Result<carla::client::World> {
+        let out = reload_as_pause(&mut CoordinatorReload {
+            coordinator: self,
+            town,
+            current_town,
+        });
+        if let Some(e) = &out.sync_error {
+            tracing::warn!(
+                "Could not switch CARLA to synchronous mode before reloading ({e}); acb may \
+                 see a later last frame and its epoch may differ from csb's"
+            );
+        }
+        if let Some(e) = &out.read_error {
+            tracing::warn!("Could not read CARLA's last frame before reloading: {e}");
+        }
+        let world = out.world?;
+
+        let last = out.last_frame.or(self.episode_clock.last_frame());
+        let (e_last, d_last) = last.unwrap_or_else(|| {
+            tracing::warn!(
+                "No last frame known for the old episode; the new one starts at the current \
+                 epoch and simulation time may go back"
+            );
+            (0.0, 0.0)
+        });
+        let change = self.episode_clock.begin_episode(e_last, d_last);
+        tracing::info!(
+            "Episode change: epoch {} -> {}, sim_time continues at {} (town {current_town} -> {town})",
+            change.old_epoch,
+            change.new_epoch,
+            change.continues_at
+        );
+        Ok(world)
+    }
+
+    /// `(elapsed_seconds, delta_seconds)` of CARLA's current snapshot.
+    fn read_frame(&self) -> Result<(f64, f64)> {
+        read_frame_of(&self.world)
+    }
+
+    /// The simulation time to report to SSv2: CARLA's current frame plus the epoch, or 0
+    /// (the protocol's "unknown") if the snapshot cannot be read.
+    fn current_simulation_time(&mut self) -> f64 {
+        match self.read_frame() {
+            Ok((elapsed, delta)) => self.episode_clock.observe(elapsed, delta),
+            Err(e) => {
+                tracing::warn!("Could not read CARLA's time; reporting 0: {e}");
+                0.0
+            }
+        }
     }
 
     /// Validate the town against the server's map list and load it.
@@ -1516,6 +1620,7 @@ impl Coordinator {
                     result: Some(proto_err(format!(
                         "CARLA is unreachable and reconnecting failed: {e}"
                     ))),
+                    simulation_time: 0.0,
                 };
             }
         }
@@ -1553,6 +1658,7 @@ impl Coordinator {
         if let Err(e) = self.load_scenario_map(&req.lanelet2_map_path) {
             return api::InitializeResponse {
                 result: Some(proto_err(format!("Cannot prepare the map: {e}"))),
+                simulation_time: 0.0,
             };
         }
 
@@ -1577,8 +1683,11 @@ impl Coordinator {
             "Initialized (step_time={}). CARLA left in async mode until the ego is spawned.",
             req.step_time
         );
+        // CARLA is free-running here, so this is the time at the reply, not a frame SSv2
+        // will step from; the first UpdateFrame reports the next one.
         api::InitializeResponse {
             result: Some(proto_ok()),
+            simulation_time: self.current_simulation_time(),
         }
     }
 
@@ -1760,11 +1869,23 @@ impl Coordinator {
     ///
     /// Returns the first error seen. Later substeps are skipped once one fails: the frame
     /// is already wrong, and the caller treats a tick failure as a connection signal.
-    fn tick_frame(&mut self) -> std::result::Result<(), carla::CarlaError> {
-        for _ in 0..self.substeps.max(1) {
-            self.world.tick()?;
-        }
-        Ok(())
+    ///
+    /// On success, returns the simulation time after the last tick (0 if the snapshot could
+    /// not be read, the protocol's "unknown").
+    fn tick_frame(&mut self) -> std::result::Result<f64, carla::CarlaError> {
+        let frame = tick_then_read(
+            &mut self.world,
+            self.substeps,
+            |w| w.tick().map(|_| ()),
+            read_frame_of,
+        )?;
+        Ok(match frame {
+            Ok((elapsed, delta)) => self.episode_clock.observe(elapsed, delta),
+            Err(e) => {
+                tracing::warn!("Could not read CARLA's time after the frame; reporting 0: {e}");
+                0.0
+            }
+        })
     }
 
     pub fn update_frame(&mut self, _req: api::UpdateFrameRequest) -> api::UpdateFrameResponse {
@@ -1777,40 +1898,48 @@ impl Coordinator {
                 // CARLA is still free-running so acb_bridge can find its vehicle. Ticking
                 // here would be meaningless in async mode, so just acknowledge the frame.
                 tracing::debug!("UpdateFrame before ego spawn: staying async, not ticking");
+                // Still report a time, so SSv2 has one from its first frame.
                 return api::UpdateFrameResponse {
                     result: Some(proto_ok()),
+                    simulation_time: self.current_simulation_time(),
                 };
             }
             FrameAction::EnableSyncThenTick => {
                 if let Err(e) = self.enable_sync_mode() {
                     return api::UpdateFrameResponse {
                         result: Some(proto_err(format!("Failed to enable sync mode: {e}"))),
+                        simulation_time: 0.0,
                     };
                 }
             }
             FrameAction::Tick => {}
         }
 
-        if let Err(e) = self.tick_frame() {
-            tracing::error!("world.tick() failed: {e}");
+        let simulation_time = match self.tick_frame() {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("world.tick() failed: {e}");
 
-            // A tick failure is the bridge's most reliable connection signal: SSv2 drives
-            // frames continuously, so repeated failures here mean CARLA is gone rather
-            // than merely idle.
-            if self.note_carla_failure() {
-                if let Err(re) = self.reconnect_carla() {
-                    tracing::error!("CARLA reconnection failed: {re}");
+                // A tick failure is the bridge's most reliable connection signal: SSv2 drives
+                // frames continuously, so repeated failures here mean CARLA is gone rather
+                // than merely idle.
+                if self.note_carla_failure() {
+                    if let Err(re) = self.reconnect_carla() {
+                        tracing::error!("CARLA reconnection failed: {re}");
+                    }
                 }
-            }
 
-            return api::UpdateFrameResponse {
-                result: Some(proto_err(format!("tick failed: {e}"))),
-            };
-        }
+                return api::UpdateFrameResponse {
+                    result: Some(proto_err(format!("tick failed: {e}"))),
+                    simulation_time: 0.0,
+                };
+            }
+        };
 
         self.note_carla_ok();
         api::UpdateFrameResponse {
             result: Some(proto_ok()),
+            simulation_time,
         }
     }
 

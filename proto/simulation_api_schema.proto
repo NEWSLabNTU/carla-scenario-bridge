@@ -114,6 +114,7 @@ message InitializeRequest {
  **/
 message InitializeResponse {
   Result result = 1; // Result of [InitializeRequest](#InitializeRequest)
+  double simulation_time = 2; // CARLA elapsed_seconds plus the episode epoch, after the frame's last tick; 0 if unknown
 }
 
 /**
@@ -130,6 +131,7 @@ message UpdateFrameRequest {
  **/
 message UpdateFrameResponse {
   Result result = 1; // Result of [UpdateFrameRequest](#UpdateFrameRequest)
+  double simulation_time = 2; // CARLA elapsed_seconds plus the episode epoch, after the frame's last tick; 0 if unknown
 }
 
 /**

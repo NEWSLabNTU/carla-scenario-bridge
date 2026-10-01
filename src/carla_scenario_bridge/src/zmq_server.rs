@@ -250,6 +250,7 @@ fn encode_error_response(variant: Option<u32>, description: &str) -> Vec<u8> {
     let response = match variant {
         Some(2) => simulation_response::Response::UpdateFrame(api::UpdateFrameResponse {
             result: Some(result),
+            simulation_time: 0.0,
         }),
         Some(3) => {
             simulation_response::Response::SpawnVehicleEntity(api::SpawnVehicleEntityResponse {
@@ -310,6 +311,7 @@ fn encode_error_response(variant: Option<u32>, description: &str) -> Vec<u8> {
         // any field number this build does not know.
         _ => simulation_response::Response::Initialize(api::InitializeResponse {
             result: Some(result),
+            simulation_time: 0.0,
         }),
     };
 

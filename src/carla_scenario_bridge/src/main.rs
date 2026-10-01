@@ -3,6 +3,7 @@ mod config;
 mod coordinate_conversion;
 mod coordinator;
 mod entity_manager;
+mod episode_clock;
 mod lanelet_map;
 mod map_resolver;
 mod proto;
