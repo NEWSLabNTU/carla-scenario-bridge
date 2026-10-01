@@ -53,7 +53,10 @@ path reports as nothing.
 
 - **Simulation time is CARLA's `WorldSnapshot.timestamp.elapsed_seconds` plus an episode
   epoch, and the epoch follows one rule that every reader applies on its own.**
-  `sim_time = elapsed_seconds + epoch`, epoch 0 at first. CARLA restarts `elapsed_seconds`
+  `sim_time = elapsed_seconds + epoch`, epoch 0 at first, **in integer nanoseconds**:
+  `sim_ns = ns(elapsed) + epoch_ns`, `ns(s)` = round half away from zero of `s * 1e9`
+  (Rust `f64::round`), applied to each term on its own. Never an f64 sum rounded once: that
+  disagrees with the per-term rule by 1 ns on a share of frames. CARLA restarts `elapsed_seconds`
   at 0 for every episode (`load_world`), and ROS has no general answer to a clock that goes
   backwards: the time design allows jumps and offers jump callbacks
   (design.ros2.org "Clock and Time"), but only rcl timers and tf2 ("Detected jump back in
@@ -63,7 +66,7 @@ path reports as nothing.
   one that breaks nodes (gazebo_ros_pkgs#863); CARLA's own ros-bridge publishes raw
   `elapsed_seconds` and its users meet the tf2 warning after every `load_world`. So the
   episode change becomes a pause, not a rewind: whoever sees it sets
-  `epoch += E_last + Δ_last` (the old episode's last frame time and step), and the new
+  `epoch_ns += ns(E_last) + ns(Δ_last)` (the old episode's last frame time and step), and the new
   episode's first frame lands one step after the old one's last. No learned offset, no
   persisted file, no channel between processes: csb and acb both watch the same frame
   stream and apply the same rule, so they agree bit-exactly provided they see the same
@@ -93,9 +96,11 @@ path reports as nothing.
   `SimClockOffset` is deleted, with its 1 µs margin and its tests; the snap-to-grid property
   it protected becomes a *measured invariant* (Acceptance).
 - **SSv2 takes time from the simulator.** `InitializeResponse` and `UpdateFrameResponse` gain
-  `double simulation_time` (seconds, CARLA `elapsed_seconds` after the frame's last tick).
-  The fork's `SimulationClock` gets a third mode, `clock_source: simulator`: ROS time = the
-  last `simulation_time` received; `/clock` is **not** published (acb owns the topic in every
+  `int64 simulation_time_ns` (integer nanoseconds, CARLA `elapsed_seconds` after the frame's
+  last tick plus the epoch, by the rule above -- csb computes the same integer acb publishes;
+  amended 2026-10-02 from a `double` in seconds, which SSv2 would have had to round again).
+  The fork's `SimulationClock` gets a third mode, `clock_source: simulator`: ROS time =
+  `rclcpp::Time(simulation_time_ns, RCL_ROS_TIME)`, the last value received, no conversion; `/clock` is **not** published (acb owns the topic in every
   domain); the persisted-last-value file goes away. Signal stamps and entity-status stamps
   both use it (the entity stamps are wall time today, a third base for no reason). SSv2's
   own nodes keep `use_sim_time=false` (the interpreter deadlocks otherwise -- 014).
@@ -245,11 +250,14 @@ Measurement first. No step lands before the number it changes is known.
       samples carried the last frame's stamp. Not exercised live: the 60 s gate (CARLA uptime
       was 237 000 s) and an episode change (a `load_world` would have taken the live stack's
       world); both are covered by unit tests only, and step 6 is their live test.
+      Superseded by step 3's live run below, which is this check with the fork's `/clock`
+      gone: 0 interpolate WARNs, scan stamp == EKF pose stamp source (both a `/clock` value).
 
 ### Protocol and csb: report the time (step 2)
 
 - [x] `proto/simulation_api_schema.proto` and the fork's copy
-      (`simulation/simulation_interface/proto/`): `double simulation_time = 2` on
+      (`simulation/simulation_interface/proto/`): `int64 simulation_time_ns = 2` (was
+      `double simulation_time`, changed in the integration below) on
       `InitializeResponse` and `UpdateFrameResponse`. Same file, same field numbers, checked
       by a test that diffs the two copies
 - [x] csb fills it from `world.snapshot().timestamp.elapsed_seconds` after the frame's last
@@ -264,6 +272,12 @@ Measurement first. No step lands before the number it changes is known.
       Done offline (csb `0ec3364`, fork `357b3be15`, unpushed; superproject pin not yet
       bumped): `episode_clock.rs` holds the rule and its tests, `proto::tests` diffs all eight
       proto files against the fork's copies. Not yet run against a live CARLA.
+      **Integer ns (2026-10-02)**, csb `a50f430`, fork `f0e480452`, acb `a0f8b8e`: the field is
+      `int64 simulation_time_ns`; `episode_clock.rs` keeps `epoch_ns` and reports
+      `nanos(elapsed) + epoch_ns` with `nanos` = acb's (`f64::round`, half away from zero, per
+      term); the fork takes `rclcpp::Time(ns, RCL_ROS_TIME)` with no conversion. csb and acb
+      carry the same table of 15 `(seconds, ns)` cases plus 7 f32-step accumulations (exact
+      halves, 3432 steps of 0.050000000745 = 171 600 002 557 ns, ...). Live below.
 
 ### SSv2 fork: take time from the simulator (step 3)
 
@@ -286,9 +300,44 @@ Measurement first. No step lands before the number it changes is known.
       simulator. The zmq client already returned whole responses, so no client change;
       `API::init`/`updateTimeInSim` read `simulation_time` from them. gtests for the
       three modes in `traffic_simulator/test/src/simulation_clock`.
-- [ ] Live: managed traffic_light → ego_drive × 3 + pedestrian. Signal stamp − `/clock` = 0 at
+- [x] Live: managed traffic_light → ego_drive × 3 + pedestrian. Signal stamp − `/clock` = 0 at
       the frame it was published for; no jump at scenario boundaries; the 014 suite passes;
       init-window ERROR onsets do not regress against 014's 3–7 per run
+      **Run 2026-10-02** (acb `a0f8b8e`, csb `a50f430`, fork `f0e480452`, fresh ego stack with
+      acb `publish_clock` on in managed mode -- `just ego-av` no longer derives it; recorder
+      `scratchpad/p015int/suite.rec`, analysis `ana_int.py`, epoch 0, load 12-21 on 32 cores).
+      5/5 pass. Over 772 s wall / 18 237 `/clock` messages / 7 481 scenario frames:
+      - every `/clock` == a CARLA frame's `nanos(elapsed)`: 0 mismatches; 0 non-increasing
+        steps; exactly one publisher (`acb_bridge`) before, between and after the runs
+      - every stamp == a CARLA frame time **and** a published `/clock`, bit-exact, 0
+        mismatches: LiDAR 7417, IMU 7458, NDT input 7417, ground-truth odom 7411,
+        VelocityReport 7451, SteeringReport 7411, fork signals 3624, EKF kinematic 10 880,
+        EKF biased pose 10 881. Each of the 3300 distinct signal stamps is also a LiDAR stamp
+      - 4 scenario frames have no `/clock`: each scenario's last sync frame, 1.5 ms before the
+        first async one, dropped by the 100 Hz cap as designed
+      - idle gaps (36-50 s): `/clock` advances wall-paced, 1713-2310 messages per gap. Each
+        scenario end holds it ~10 s (CARLA left in sync, unticked, until csb returns it to
+        async) -- the concealer's STOP handover runs inside that hold
+      - 0 NDT "Couldn't interpolate pose"; 0 MRM onsets while driving; two 0.1-0.2 s
+        EMERGENCY_STOP blips at init (tl, pedestrian), with the EKF/ellipse init ERROR, in STOP
+      - **Init-window ERROR onsets regress: 2 / 12 / 10 / 12 / 14** (014: 3-7). The new ones
+        are the four `topic_state_monitor`s (steering, velocity, obstacle pointcloud, traffic
+        signal; + trajectory twice) going ERROR 1-4 s after a scenario starts: the previous
+        ego lives on through the idle gap and is destroyed at the next Initialize, and for
+        the ~8 s until the new ego's first frame `/clock` now keeps running (CARLA async,
+        `WaitForEgo`) where SSv2's frame clock used to stand still. No effect on any verdict
+        or on driving; Autoware is in STOP then. Open item below
+      - STOP handover: "Left Autoware in STOP for the next scenario" 5/5; no fork change
+        needed (the destructor runs while `/clock` is held, as its comment assumes)
+      - The concealer's initial-pose stamp is still the interpreter's wall time
+        (~1.79e9 s) against a ROS time of ~2.4e5 s. Nothing logged about it: pose_initializer
+        and the EKF take the pose, not the stamp; localization reached the pose after 0 ms
+        in 5/5. A fourth time base nonetheless; stamping it with the simulation clock is a
+        one-line fork change left for step 4's fork work
+- [ ] Init-window regression above: freeze `/clock` across the ego swap -- e.g. csb holds CARLA
+      in sync, unticked, from destroying the old ego until the new one is spawned and acb has
+      attached, or destroys the old ego at scenario end so the swap happens inside the idle
+      gap. Either changes csb's `WaitForEgo` phase, which exists so acb can find its vehicle
 
 ### Signals from CARLA (step 4)
 
@@ -316,9 +365,19 @@ Measurement first. No step lands before the number it changes is known.
       `town01_traffic_light.xosc` with the ego route moved to the pilot's goal file: the ego
       stops at the red and proceeds at the green in domain 3, with `/clock` from acb and
       signals from acb. 013's two open gaps close with this run
-- [ ] `ego_av.launch.xml`: `publish_clock` no longer derived from `managed`; comment updated
+- [x] `ego_av.launch.xml`: `publish_clock` no longer derived from `managed`; comment updated
+      (done with step 3, csb `a50f430`: a managed ego has no other `/clock` once the fork runs
+      `clock_source: simulator`; `ACB_PUBLISH_CLOCK=false` is the emergency off)
 
 ### Episode change (step 6)
+
+Not run live (2026-10-02): only Town01 scenarios exist, and a `load_world` would take the
+shared CARLA. Covered offline: csb `a_reload_continues_one_step_after_the_last_frame`,
+`epochs_accumulate_over_several_reloads`, `sync_mode_is_on_before_the_pre_reload_snapshot`;
+acb `episode_change_continues_one_step_after_the_last_frame`,
+`reconnect_continues_from_the_last_published_clock`; and on both sides the same `nanos` table
+plus `sim_ns_rounds_each_term_not_the_sum` / `epoch_sums_rounded_terms_like_csb`, which pin
+the post-reload time to `nanos(elapsed) + nanos(E_last) + nanos(Δ_last)` in both crates.
 
 - [ ] Live: change the town between two scenarios with the ego stack up. Both episode-change
       lines fire with the same epoch; `/clock` never decreases; the next scenario's signal
