@@ -492,13 +492,15 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # managed stack against a nonexistent map. EGO_MANAGED cannot be passed by accident.
     managed="${EGO_MANAGED:-true}"
     goal_poses_file="${EGO_GOAL_POSES_FILE:-}"
+    # acb publishes /clock in every mode (roadmap 015): CARLA's frame time plus an episode
+    # epoch, from CARLA connect. SSv2 runs with clock_source:=simulator and publishes no
+    # /clock, so a managed ego needs acb's as much as an unmanaged one. ACB_PUBLISH_CLOCK=false
+    # is the emergency off, not a mode switch.
+    clock="${ACB_PUBLISH_CLOCK:-true}"
     if [ "$managed" = "true" ]; then
         export ROS_DOMAIN_ID={{ego_domain}}
-        clock=false      # SSv2 publishes /clock in its domain; a second publisher makes
-                         # localization log backwards jumps.
     else
         export ROS_DOMAIN_ID={{ego_unmanaged_domain}}
-        clock=true       # No SSv2 here, so without this the domain has no clock at all.
         if [ -z "$goal_poses_file" ]; then
             echo "[just] EGO_MANAGED=false needs EGO_GOAL_POSES_FILE: with the concealer" >&2
             echo "[just] inert, acb_pilot routes the ego and exits fatally on an empty file." >&2

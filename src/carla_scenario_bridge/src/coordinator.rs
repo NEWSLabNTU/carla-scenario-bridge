@@ -389,7 +389,7 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
 use crate::collision_monitor::CollisionMonitor;
 use crate::coordinate_conversion::{self, OriginOffset};
 use crate::entity_manager::{EntityManager, EntityType};
-use crate::episode_clock::{reload_as_pause, tick_then_read, EpisodeClock, EpisodeReload};
+use crate::episode_clock::{fmt_ns, reload_as_pause, tick_then_read, EpisodeClock, EpisodeReload};
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs::{self, BoundingBox};
@@ -1132,9 +1132,9 @@ impl Coordinator {
         let change = self.episode_clock.begin_episode(e_last, d_last);
         tracing::info!(
             "Episode change: epoch {} -> {}, sim_time continues at {} (town {current_town} -> {town})",
-            change.old_epoch,
-            change.new_epoch,
-            change.continues_at
+            fmt_ns(change.old_epoch_ns),
+            fmt_ns(change.new_epoch_ns),
+            fmt_ns(change.continues_at_ns)
         );
         Ok(world)
     }
@@ -1144,14 +1144,14 @@ impl Coordinator {
         read_frame_of(&self.world)
     }
 
-    /// The simulation time to report to SSv2: CARLA's current frame plus the epoch, or 0
-    /// (the protocol's "unknown") if the snapshot cannot be read.
-    fn current_simulation_time(&mut self) -> f64 {
+    /// The simulation time to report to SSv2, in integer nanoseconds: CARLA's current frame
+    /// plus the epoch, or 0 (the protocol's "unknown") if the snapshot cannot be read.
+    fn current_simulation_time_ns(&mut self) -> i64 {
         match self.read_frame() {
             Ok((elapsed, delta)) => self.episode_clock.observe(elapsed, delta),
             Err(e) => {
                 tracing::warn!("Could not read CARLA's time; reporting 0: {e}");
-                0.0
+                0
             }
         }
     }
@@ -1620,7 +1620,7 @@ impl Coordinator {
                     result: Some(proto_err(format!(
                         "CARLA is unreachable and reconnecting failed: {e}"
                     ))),
-                    simulation_time: 0.0,
+                    simulation_time_ns: 0,
                 };
             }
         }
@@ -1658,7 +1658,7 @@ impl Coordinator {
         if let Err(e) = self.load_scenario_map(&req.lanelet2_map_path) {
             return api::InitializeResponse {
                 result: Some(proto_err(format!("Cannot prepare the map: {e}"))),
-                simulation_time: 0.0,
+                simulation_time_ns: 0,
             };
         }
 
@@ -1687,7 +1687,7 @@ impl Coordinator {
         // will step from; the first UpdateFrame reports the next one.
         api::InitializeResponse {
             result: Some(proto_ok()),
-            simulation_time: self.current_simulation_time(),
+            simulation_time_ns: self.current_simulation_time_ns(),
         }
     }
 
@@ -1870,9 +1870,9 @@ impl Coordinator {
     /// Returns the first error seen. Later substeps are skipped once one fails: the frame
     /// is already wrong, and the caller treats a tick failure as a connection signal.
     ///
-    /// On success, returns the simulation time after the last tick (0 if the snapshot could
-    /// not be read, the protocol's "unknown").
-    fn tick_frame(&mut self) -> std::result::Result<f64, carla::CarlaError> {
+    /// On success, returns the simulation time (ns) after the last tick (0 if the snapshot
+    /// could not be read, the protocol's "unknown").
+    fn tick_frame(&mut self) -> std::result::Result<i64, carla::CarlaError> {
         let frame = tick_then_read(
             &mut self.world,
             self.substeps,
@@ -1883,7 +1883,7 @@ impl Coordinator {
             Ok((elapsed, delta)) => self.episode_clock.observe(elapsed, delta),
             Err(e) => {
                 tracing::warn!("Could not read CARLA's time after the frame; reporting 0: {e}");
-                0.0
+                0
             }
         })
     }
@@ -1901,21 +1901,21 @@ impl Coordinator {
                 // Still report a time, so SSv2 has one from its first frame.
                 return api::UpdateFrameResponse {
                     result: Some(proto_ok()),
-                    simulation_time: self.current_simulation_time(),
+                    simulation_time_ns: self.current_simulation_time_ns(),
                 };
             }
             FrameAction::EnableSyncThenTick => {
                 if let Err(e) = self.enable_sync_mode() {
                     return api::UpdateFrameResponse {
                         result: Some(proto_err(format!("Failed to enable sync mode: {e}"))),
-                        simulation_time: 0.0,
+                        simulation_time_ns: 0,
                     };
                 }
             }
             FrameAction::Tick => {}
         }
 
-        let simulation_time = match self.tick_frame() {
+        let simulation_time_ns = match self.tick_frame() {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!("world.tick() failed: {e}");
@@ -1931,7 +1931,7 @@ impl Coordinator {
 
                 return api::UpdateFrameResponse {
                     result: Some(proto_err(format!("tick failed: {e}"))),
-                    simulation_time: 0.0,
+                    simulation_time_ns: 0,
                 };
             }
         };
@@ -1939,7 +1939,7 @@ impl Coordinator {
         self.note_carla_ok();
         api::UpdateFrameResponse {
             result: Some(proto_ok()),
-            simulation_time,
+            simulation_time_ns,
         }
     }
 

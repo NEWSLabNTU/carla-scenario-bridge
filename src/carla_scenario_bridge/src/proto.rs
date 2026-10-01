@@ -54,7 +54,7 @@ mod tests {
 
     /// Every proto this bridge compiles, byte-identical to the SSv2 fork's copy. The two
     /// sides of the wire are built from different files; a field added to one and not the
-    /// other (roadmap 015's `simulation_time`) decodes as silence, not as an error.
+    /// other (roadmap 015's `simulation_time_ns`) decodes as silence, not as an error.
     #[test]
     fn protos_match_the_fork_copy() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

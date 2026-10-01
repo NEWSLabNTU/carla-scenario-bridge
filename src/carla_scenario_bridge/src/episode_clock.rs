@@ -6,17 +6,30 @@
 //! episode's last frame time and step), and the new episode's first frame lands one step
 //! after the old one's last.
 //!
-//! acb applies the same rule on its own, from the same frame stream, with no channel between
+//! All of it is integer nanoseconds, with one conversion, [`nanos`]: round half away from
+//! zero of `seconds * 1e9`, applied to each term on its own --
+//! `sim_ns = nanos(elapsed) + epoch_ns`, `epoch_ns += nanos(E_last) + nanos(Δ_last)`.
+//! acb's `clock.rs` applies the identical rule, so the time csb reports to SSv2 and the
+//! `/clock` acb publishes for the same frame are the same integer, not two roundings of an
+//! f64 sum that disagree by 1 ns on a share of frames.
+//!
+//! acb applies the rule on its own, from the same frame stream, with no channel between
 //! the two. They agree bit-exactly only if they saw the same last frame. That is why
 //! [`reload_as_pause`] switches CARLA to synchronous mode *before* it reads the last
 //! snapshot: in sync mode nothing ticks unless csb ticks, so the frame csb reads is the last
 //! frame acb's `on_tick` receives before the reload.
 
+/// Seconds to integer nanoseconds: `round(secs * 1e9)`, half away from zero (`f64::round`).
+/// Must stay identical to acb's `clock::nanos`; both carry the same table of cases.
+pub fn nanos(secs: f64) -> i64 {
+    (secs * 1e9).round() as i64
+}
+
 /// The episode epoch, and the last CARLA frame time csb has read.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct EpisodeClock {
-    /// Seconds added to CARLA's `elapsed_seconds`. Starts at 0.
-    epoch: f64,
+    /// Nanoseconds added to CARLA's `elapsed_seconds`. Starts at 0.
+    epoch_ns: i64,
     /// `(elapsed_seconds, delta_seconds)` of the newest snapshot read, if any. The fallback
     /// for an episode change whose pre-reload snapshot could not be read.
     last_frame: Option<(f64, f64)>,
@@ -25,27 +38,27 @@ pub struct EpisodeClock {
 /// What an episode change did to the epoch, for the log line.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EpisodeChange {
-    pub old_epoch: f64,
-    pub new_epoch: f64,
-    /// Simulation time of the new episode's first frame (`elapsed_seconds` = 0).
-    pub continues_at: f64,
+    pub old_epoch_ns: i64,
+    pub new_epoch_ns: i64,
+    /// Simulation time of the new episode's first frame (`elapsed_seconds` = 0), in ns.
+    pub continues_at_ns: i64,
 }
 
 impl EpisodeClock {
     #[cfg(test)]
-    pub fn epoch(&self) -> f64 {
-        self.epoch
+    pub fn epoch_ns(&self) -> i64 {
+        self.epoch_ns
     }
 
-    /// The simulation time of a frame CARLA reports as `elapsed` seconds into its episode,
-    /// remembered as the latest frame seen.
-    pub fn observe(&mut self, elapsed: f64, delta: f64) -> f64 {
+    /// The simulation time (ns) of a frame CARLA reports as `elapsed` seconds into its
+    /// episode, remembered as the latest frame seen.
+    pub fn observe(&mut self, elapsed: f64, delta: f64) -> i64 {
         self.last_frame = Some((elapsed, delta));
-        self.sim_time(elapsed)
+        self.sim_ns(elapsed)
     }
 
-    pub fn sim_time(&self, elapsed: f64) -> f64 {
-        elapsed + self.epoch
+    pub fn sim_ns(&self, elapsed: f64) -> i64 {
+        nanos(elapsed) + self.epoch_ns
     }
 
     pub fn last_frame(&self) -> Option<(f64, f64)> {
@@ -55,17 +68,24 @@ impl EpisodeClock {
     /// Apply the episode rule: the old episode ended at `last_elapsed` with step
     /// `last_delta`, so the new one starts one step later.
     pub fn begin_episode(&mut self, last_elapsed: f64, last_delta: f64) -> EpisodeChange {
-        let old_epoch = self.epoch;
-        self.epoch += last_elapsed + last_delta;
+        let old_epoch_ns = self.epoch_ns;
+        self.epoch_ns += nanos(last_elapsed) + nanos(last_delta);
         // The new episode's frames are numbered from 0 again; the old one's last frame is
         // no fallback for the next change.
         self.last_frame = None;
         EpisodeChange {
-            old_epoch,
-            new_epoch: self.epoch,
-            continues_at: self.sim_time(0.0),
+            old_epoch_ns,
+            new_epoch_ns: self.epoch_ns,
+            continues_at_ns: self.sim_ns(0.0),
         }
     }
+}
+
+/// Nanoseconds as `s.nnnnnnnnn` for log lines, without going through an f64.
+pub fn fmt_ns(ns: i64) -> String {
+    let sign = if ns < 0 { "-" } else { "" };
+    let a = ns.unsigned_abs();
+    format!("{sign}{}.{:09}", a / 1_000_000_000, a % 1_000_000_000)
 }
 
 /// The CARLA operations an episode change is made of, so their order can be tested
@@ -198,10 +218,73 @@ mod tests {
                 assert_eq!(elapsed, expected_elapsed, "read after all {substeps} ticks");
                 assert_eq!(
                     clock.observe(elapsed, delta),
-                    expected_elapsed + clock.epoch()
+                    nanos(expected_elapsed) + clock.epoch_ns()
                 );
             }
         }
+    }
+
+    /// The shared table: acb's `clock.rs` carries the same cases and must give the same
+    /// nanoseconds. Includes exact halves (half away from zero, not half to even) and
+    /// CARLA's f32 step 0.050000000745 accumulated in f64, as the server does.
+    pub(crate) const NANOS_CASES: &[(f64, i64)] = &[
+        (0.0, 0),
+        (0.05000000074505806, 50_000_001),
+        (5e-10, 1),
+        (1.5e-9, 2),
+        (2.5e-9, 3),
+        (-2.5e-9, -3),
+        (3.5e-9, 4),
+        (0.10000000149011612, 100_000_001),
+        (0.15000000223517418, 150_000_002),
+        (67.0000009983778, 67_000_000_998),
+        (171.60000255703926, 171_600_002_557),
+        (1000.0000149011612, 1_000_000_014_901),
+        (237000.05000000075, 237_000_050_000_001),
+        (237171.60000255704, 237_171_600_002_557),
+        (1790611998.05, 1_790_611_998_049_999_872),
+    ];
+
+    /// `(base seconds, steps of f32 0.05, ns)`: the accumulations behind the table rows.
+    pub(crate) const STEP_CASES: &[(f64, u32, i64)] = &[
+        (0.0, 1, 50_000_001),
+        (0.0, 3, 150_000_002),
+        (0.0, 1340, 67_000_000_998),
+        (0.0, 3432, 171_600_002_557),
+        (0.0, 20000, 1_000_000_014_901),
+        (237000.0, 1, 237_000_050_000_001),
+        (237000.0, 3432, 237_171_600_002_557),
+    ];
+
+    #[test]
+    fn nanos_matches_the_shared_table() {
+        for &(secs, ns) in NANOS_CASES {
+            assert_eq!(nanos(secs), ns, "nanos({secs:?})");
+        }
+        for &(base, k, ns) in STEP_CASES {
+            let secs = (0..k).fold(base, |t, _| t + f64::from(0.05f32));
+            assert_eq!(nanos(secs), ns, "{k} f32 steps from {base}");
+        }
+    }
+
+    /// The f64-sum rule this replaced disagreed with acb by 1 ns: rounding `elapsed + epoch`
+    /// once is not rounding each term. The integer rule sums the rounded terms.
+    #[test]
+    fn sim_ns_rounds_each_term_not_the_sum() {
+        let mut clock = EpisodeClock::default();
+        let (e_last, d_last) = (171.60000255703926, f64::from(0.05f32));
+        clock.begin_episode(e_last, d_last);
+        let elapsed = 67.0000009983778;
+        let expected = nanos(elapsed) + nanos(e_last) + nanos(d_last);
+        assert_eq!(clock.sim_ns(elapsed), expected);
+        assert_eq!(expected, 67_000_000_998 + 171_600_002_557 + 50_000_001);
+    }
+
+    #[test]
+    fn fmt_ns_prints_seconds_without_an_f64() {
+        assert_eq!(fmt_ns(1_790_611_998_049_999_872), "1790611998.049999872");
+        assert_eq!(fmt_ns(50_000_001), "0.050000001");
+        assert_eq!(fmt_ns(-3), "-0.000000003");
     }
 
     #[test]
@@ -244,14 +327,14 @@ mod tests {
     #[test]
     fn epoch_starts_at_zero() {
         let mut clock = EpisodeClock::default();
-        assert_eq!(clock.observe(812.5, 0.05), 812.5);
+        assert_eq!(clock.observe(812.5, 0.05), 812_500_000_000);
     }
 
     #[test]
     fn a_reload_continues_one_step_after_the_last_frame() {
         let mut carla = FakeCarla::new(0.05);
         let mut clock = EpisodeClock::default();
-        let mut last_sim = 0.0;
+        let mut last_sim = 0_i64;
         for _ in 0..1000 {
             carla.tick();
             last_sim = clock.observe(carla.elapsed, carla.delta);
@@ -262,13 +345,17 @@ mod tests {
         let (e_last, d_last) = out.last_frame.unwrap();
         let change = clock.begin_episode(e_last, d_last);
 
-        assert_eq!(change.old_epoch, 0.0);
-        assert_eq!(change.new_epoch, e_last + d_last);
+        assert_eq!(change.old_epoch_ns, 0);
+        assert_eq!(change.new_epoch_ns, nanos(e_last) + nanos(d_last));
         // New episode, elapsed back at 0: the clock lands exactly one step after the last.
-        assert_eq!(change.continues_at, last_sim + carla.delta);
-        assert_eq!(clock.sim_time(0.0), last_sim + carla.delta);
+        let step = nanos(carla.delta);
+        assert_eq!(change.continues_at_ns, last_sim + step);
+        assert_eq!(clock.sim_ns(0.0), last_sim + step);
         carla.tick();
-        assert!(clock.observe(carla.elapsed, carla.delta) > last_sim + carla.delta);
+        assert_eq!(
+            clock.observe(carla.elapsed, carla.delta),
+            last_sim + 2 * step
+        );
     }
 
     #[test]
@@ -276,8 +363,8 @@ mod tests {
         let mut clock = EpisodeClock::default();
         clock.begin_episode(10.0, 0.05);
         let second = clock.begin_episode(20.0, 0.05);
-        assert_eq!(second.old_epoch, 10.05);
-        assert_eq!(second.new_epoch, 10.05 + 20.05);
+        assert_eq!(second.old_epoch_ns, 10_050_000_000);
+        assert_eq!(second.new_epoch_ns, 10_050_000_000 + 20_050_000_000);
         assert_eq!(clock.last_frame(), None);
     }
 

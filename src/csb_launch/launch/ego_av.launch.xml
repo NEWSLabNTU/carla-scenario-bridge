@@ -14,10 +14,10 @@
       is where every unconfigured ROS process on the host lands, and a stray node there
       would join the scenario's graph uninvited.
 
-    - publish_clock is false here and true for background AVs: SSv2's traffic_simulator
-      publishes /clock in this domain, and a second publisher makes localization log
-      "Detected jump back in time. Clearing TF buffer". See
-      docs/design/multi-instance-architecture.md.
+    - publish_clock is true in every mode (roadmap 015): acb publishes CARLA's frame time
+      plus an episode epoch as /clock, and SSv2 (clock_source:=simulator) publishes none.
+      Exactly one /clock publisher per domain; a second makes localization log
+      "Detected jump back in time. Clearing TF buffer".
 
       play_launch launch csb_launch ego_av.launch.xml map_path:=/path/to/Town01
 
@@ -53,13 +53,10 @@
   <arg name="pilot_timeout" default="600.0" />
   <arg name="pilot_stabilize_seconds" default="15.0" />
   <arg name="pilot_route_timeout" default="120.0" />
-  <!-- Derived from `managed` by `just ego-av`, which is the interface people use: a managed
-       ego must not publish /clock (SSv2 does), an unmanaged one must (nothing else will).
-       Left as an argument rather than computed here because the XML frontend has no
-       conditional expression, and duplicating the ten-argument acb_bridge include across two
-       <group> blocks to fake one would be worse than stating it. -->
-  <arg name="publish_clock" default="false"
-       description="false for a managed ego (SSv2 owns /clock), true for an unmanaged one" />
+  <!-- No longer derived from `managed` (roadmap 015): acb owns /clock in every domain and
+       SSv2 runs with clock_source:=simulator, publishing none. false is an emergency off. -->
+  <arg name="publish_clock" default="true"
+       description="acb publishes /clock (CARLA time plus episode epoch); false only as an emergency off" />
   <!-- Whether acb reports the wheel angle it measured, or echoes the command.
        Echoing (false, acb's default) leaves no actuator inside the loop MPC
        closes, while the CARLA wheel measurably lags the command by ~0.5 s.
