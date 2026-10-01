@@ -182,18 +182,22 @@ Measurement first. No step lands before the number it changes is known.
 
 ### Protocol and csb: report the time (step 2)
 
-- [ ] `proto/simulation_api_schema.proto` and the fork's copy
+- [x] `proto/simulation_api_schema.proto` and the fork's copy
       (`simulation/simulation_interface/proto/`): `double simulation_time = 2` on
       `InitializeResponse` and `UpdateFrameResponse`. Same file, same field numbers, checked
       by a test that diffs the two copies
-- [ ] csb fills it from `world.snapshot().timestamp.elapsed_seconds` after the frame's last
+- [x] csb fills it from `world.snapshot().timestamp.elapsed_seconds` after the frame's last
       tick (and after the async no-op before the ego exists, so SSv2 has a time from the first
       frame)
-- [ ] csb keeps the same epoch rule: `load_world` first switches CARLA to synchronous mode,
+- [x] csb keeps the same epoch rule: `load_world` first switches CARLA to synchronous mode,
       reads the last snapshot, reloads, sets `epoch += E_last + Δ_last`, logs the episode
       change naming the town, and reports `elapsed + epoch` from then on
-- [ ] Unit tests: the response time equals the snapshot after `substeps` ticks plus the
+- [x] Unit tests: the response time equals the snapshot after `substeps` ticks plus the
       epoch; the epoch rule on a reload; sync mode is on before the pre-reload snapshot
+
+      Done offline (csb `0ec3364`, fork `357b3be15`, unpushed; superproject pin not yet
+      bumped): `episode_clock.rs` holds the rule and its tests, `proto::tests` diffs all eight
+      proto files against the fork's copies. Not yet run against a live CARLA.
 
 ### SSv2 fork: take time from the simulator (step 3)
 
