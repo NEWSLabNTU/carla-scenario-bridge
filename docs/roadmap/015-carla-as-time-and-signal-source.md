@@ -51,16 +51,35 @@ path reports as nothing.
 
 ## Decisions (2026-09-29)
 
-- **Simulation time is CARLA's `WorldSnapshot.timestamp.elapsed_seconds`, unmodified.** ROS
-  time in every domain = that number. No epoch constant, no persisted last value, no learned
-  offset. Two codebases (csb → SSv2, acb → Autoware) reading the same field need no
-  agreement beyond the field. A CARLA restart or a map reload resets it; that is a real
-  reset of the simulated world and is handled as one (below), not hidden behind an offset.
+- **Simulation time is CARLA's `WorldSnapshot.timestamp.elapsed_seconds` plus an episode
+  epoch, and the epoch follows one rule that every reader applies on its own.**
+  `sim_time = elapsed_seconds + epoch`, epoch 0 at first. CARLA restarts `elapsed_seconds`
+  at 0 for every episode (`load_world`), and ROS has no general answer to a clock that goes
+  backwards: the time design allows jumps and offers jump callbacks
+  (design.ros2.org "Clock and Time"), but only rcl timers and tf2 ("Detected jump back in
+  time ... Clearing TF buffer", geometry2#43) use them; Autoware's EKF, NDT and planners keep
+  their state. Simulators therefore keep the clock running across a world reset -- Gazebo's
+  `reset_world` resets poses and not time, and `reset_simulation`, which resets time, is the
+  one that breaks nodes (gazebo_ros_pkgs#863); CARLA's own ros-bridge publishes raw
+  `elapsed_seconds` and its users meet the tf2 warning after every `load_world`. So the
+  episode change becomes a pause, not a rewind: whoever sees it sets
+  `epoch += E_last + Δ_last` (the old episode's last frame time and step), and the new
+  episode's first frame lands one step after the old one's last. No learned offset, no
+  persisted file, no channel between processes: csb and acb both watch the same frame
+  stream and apply the same rule, so they agree bit-exactly provided they see the same
+  last frame -- which csb guarantees by switching CARLA to synchronous mode *before* it
+  reads the snapshot and reloads (nothing ticks in sync mode unless csb ticks). The one
+  residual risk, a lost final `on_tick` callback putting acb one step off, is caught by the
+  acceptance test (signal stamp − `/clock` == 0).
   *Risk accepted*: ROS time near zero right after a fresh CARLA start can make
   `now() - duration` negative in nodes that assume an epoch (tf2 cache, some Autoware
   monitors). The ego stack takes ~10 min to come up and acb attaches later still, so CARLA
   uptime is in the hundreds of seconds by then; acb refuses to publish `/clock` below 60 s
   of uptime and says why.
+- **acb depends on CARLA and nothing else.** It must publish a correct, monotonic `/clock`
+  with no csb running (someone driving CARLA directly, another scenario tool). Everything
+  above is therefore computed by acb from CARLA alone; csb's job is only to make its own
+  reading of the same rule agree, and to hand the result to SSv2.
 - **acb publishes `/clock` in every mode, from CARLA connect, not from hero attach.** A world
   `on_tick` subscription exists without a vehicle. Between scenarios CARLA free-runs
   (async), so `/clock` advances wall-paced; during a scenario csb ticks it, so `/clock`
@@ -104,13 +123,18 @@ path reports as nothing.
   the lights it cares about and nothing else changes behaviour. Documented in
   `docs/design/scenario-authoring.md`. (SSv2's own semantics -- uncommanded = no state --
   are kept for the V2X fallback path.)
-- **Reset is a first-class event, not smoothed over.** csb is the only process that changes
-  CARLA's world (`load_world` when the town differs, `coordinator.rs:1025-1080`), so it is
-  the one that knows time went backwards. It logs `Simulation time reset: <old> -> <new>` and
-  reports the new time on the next response; acb sees `elapsed_seconds` decrease, logs an
-  ERROR naming the reset and the fact that a long-lived Autoware must be restarted (TF
-  buffers and every stamp it holds are now in the future), and keeps publishing the true
-  time. Making the ego stack survive a reset is out of scope (below).
+- **An episode change is a logged pause, not a reset.** csb is the only process that reloads
+  the world (`load_world` when the town differs, `coordinator.rs:1025-1080`). It switches to
+  synchronous mode, reads the last snapshot, reloads, bumps its epoch by the rule, logs
+  `Episode change: epoch <old> -> <new>, sim_time continues at <t>`, and reports the new time
+  on the next response. acb notices the new episode (world id changed, `elapsed_seconds`
+  restarted), bumps its epoch from the last tick it received, logs the same line, and
+  publishes the next `/clock` one step after the last. Autoware sees a short pause, as it
+  does between scenarios. A CARLA *restart* is different: acb reconnects to a server whose
+  episode is new and whose previous last frame acb may not have seen; it then restarts its
+  own epoch from the last `/clock` it published plus one step, which keeps Autoware's clock
+  monotonic, and logs that csb's epoch (if a csb is running) will not match until the ego
+  stack is restarted.
 - **Order of work**: measure first (what the three clocks disagree by today), then acb's
   clock and stamps (self-contained, testable against the current fork), then the protocol
   field and csb, then the fork's `clock_source: simulator`, then the signal publisher and
@@ -143,10 +167,13 @@ Measurement first. No step lands before the number it changes is known.
       stamped with the frame's `elapsed_seconds` passed in from the tick, not
       `ros_time_now_secs`. The despawn zero-twist samples (014) stamped with the last frame
       time seen
-- [ ] Detect `elapsed_seconds` decreasing: ERROR once, naming the reset and the restart it
-      needs; keep publishing
+- [ ] Episode epoch: track world id and `elapsed_seconds`; on a new episode set
+      `epoch += E_last + Δ_last` from the last tick received and log the change; on a CARLA
+      reconnect with an unknown previous frame, continue from the last published `/clock`
+      plus one step and log that csb's epoch may differ
 - [ ] Unit tests: stamp == `/clock` for the same frame (bit-exact), monotonic `/clock` under
-      skipped frames, rate cap, uptime gate, reset detection
+      skipped frames, rate cap, uptime gate, the epoch rule on an episode change (new
+      first frame = old last + Δ), the reconnect fallback
 - [ ] Live, against the *current* fork (SSv2 still publishing `/clock`): two publishers on
       `/clock` for one run is expected to fight -- so run this step with
       `clock_follows_simulation_time:=false` and `publish_clock` on the fork off if it has a
@@ -162,10 +189,11 @@ Measurement first. No step lands before the number it changes is known.
 - [ ] csb fills it from `world.snapshot().timestamp.elapsed_seconds` after the frame's last
       tick (and after the async no-op before the ego exists, so SSv2 has a time from the first
       frame)
-- [ ] csb logs `Simulation time reset` when the value decreases (map reload); `load_world`
-      is the only path that can cause it, so the log names the town change
-- [ ] Unit test: the response time equals the snapshot after `substeps` ticks; the reset log
-      fires on a decrease and not on a normal frame
+- [ ] csb keeps the same epoch rule: `load_world` first switches CARLA to synchronous mode,
+      reads the last snapshot, reloads, sets `epoch += E_last + Δ_last`, logs the episode
+      change naming the town, and reports `elapsed + epoch` from then on
+- [ ] Unit tests: the response time equals the snapshot after `substeps` ticks plus the
+      epoch; the epoch rule on a reload; sync mode is on before the pre-reload snapshot
 
 ### SSv2 fork: take time from the simulator (step 3)
 
@@ -209,12 +237,14 @@ Measurement first. No step lands before the number it changes is known.
       signals from acb. 013's two open gaps close with this run
 - [ ] `ego_av.launch.xml`: `publish_clock` no longer derived from `managed`; comment updated
 
-### Reset (step 6, small)
+### Episode change (step 6)
 
-- [ ] Live: change the town between two scenarios (or restart CARLA) with the ego stack up;
-      confirm csb's and acb's reset lines fire, the stack's failure is named in the health
-      check (`scripts/ego_stack_health.py`: a `/clock` that went backwards since the stack
-      started is "restart required"), and a restarted stack recovers
+- [ ] Live: change the town between two scenarios with the ego stack up. Both episode-change
+      lines fire with the same epoch; `/clock` never decreases; the next scenario's signal
+      stamps equal `/clock` (bit-exact); no "jump back in time" from tf2; the ego drives
+- [ ] Live: restart CARLA with the ego stack up. acb's reconnect fallback keeps `/clock`
+      monotonic; the health check names the restart the stack now needs for csb and acb to
+      agree again
 
 ## Acceptance
 
@@ -226,13 +256,15 @@ Measurement first. No step lands before the number it changes is known.
 - 20 scenario runs (managed) with zero NDT "Couldn't interpolate pose" WARNs and zero
   driving-window MRM onsets, at the same load as 014's verification.
 - `town01_traffic_light` passes managed and unmanaged, with the fork's signal publisher off.
-- A map reload is reported by csb and acb within one frame, and the health check refuses a
-  run until the stack is restarted.
+- A map reload between scenarios is a pause: `/clock` never decreases, csb's and acb's
+  epochs agree, and the next scenario passes without restarting the ego stack.
+- acb publishes the same `/clock` with csb stopped (CARLA driven by hand) as with it.
 
 ## Not in scope
 
-- Surviving a time reset without restarting the ego stack (would need every Autoware node
-  to handle a backward jump; TF alone clears its buffer and re-fills, the EKF does not).
+- Surviving a *CARLA server restart* without restarting the ego stack: acb keeps the clock
+  monotonic, but csb's epoch cannot be made to agree without a channel, and the sensors
+  and the hero are gone anyway.
 - Motion-compensating the LiDAR sweep or otherwise changing what CARLA sensors report.
 - A shared lanelet crate between csb and acb; the resolved-table file is enough for one
   consumer.
