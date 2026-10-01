@@ -147,38 +147,104 @@ Measurement first. No step lands before the number it changes is known.
 
 ### Baseline (step 0)
 
-- [ ] Record for one traffic_light run, per frame: SSv2's `/clock`, acb's sensor stamp, acb's
+- [x] Record for one traffic_light run, per frame: SSv2's `/clock`, acb's sensor stamp, acb's
       odometry stamp, CARLA `elapsed_seconds` (from a passive client), the fork's signal
       stamp. Report the pairwise differences and their drift over 300 s. Expected from 014:
       `/clock − CARLA` constant to within 1 µs per ~1340 ticks, sensor stamp = `/clock` − 1 µs,
       odometry stamp = `/clock` (a frame late)
-- [ ] Record what happens across a scenario boundary today: `/clock` continues (+1 step), no
+      **Measured 2026-10-01** (traffic_light then ego_drive, both pass, acb 2634caf, managed,
+      load 33-43 on 32 cores; recorder `scratchpad/p015/rec015.py`, analysis `ana015.py`;
+      CSVs `scratchpad/p015/base.frames.csv` (per `/clock`: CARLA elapsed, frame, difference)
+      and `base.stamps.csv` (per stamp: nearest `/clock`, difference)). The traffic_light run
+      is 3432 frames (171.6 s sim, 215 s wall), not 300 s; numbers scale linearly.
+      - `/clock − CARLA elapsed`: one CARLA frame per `/clock` (3430 of 3432; one 0, one 2).
+        Drifts **−0.745 ns/frame**: −2557 ns over the run (−416 ns over ego_drive's 560
+        frames); −4.47 µs at 300 s. `/clock` steps are 50 ms exactly but for six ±1 ns.
+      - LiDAR / IMU / NDT-input stamps: `/clock − 1000 ns` for 3957 of 3970 (99.7%); 6 at
+        exactly `/clock`, 7 at ±1 ns off the margin. At each run's start they lag: the first
+        ~12 traffic_light samples all carry the frozen pre-start `/clock` (up to 550 ms behind
+        the newest), the first 3 of ego_drive are 250 ms behind, until the offset settles.
+      - Odometry (`/carla/ground_truth/odom`), VelocityReport, SteeringReport: the node clock
+        through an f64, so **never exact**: `/clock` + {22, 70, −26, −121, −73, 21, ...} ns
+        (f64 at 1.79e9 s). Relative to the newest `/clock` the recorder had seen: same frame
+        73%, one frame newer 21%, one frame older 6%.
+      - EKF `kinematic_state` and biased pose: exactly `/clock` (3891/3891, 3892/3892).
+      - Fork signal stamp (`external/traffic_signals`): exactly `/clock`, 1972/1972.
+      - NDT scan − EKF pose stamp: −1000 ns 3854 of 3870, 0 ns ×6, ±1 ns ×7, 50-150 ms ×6
+        (run start). 0 "Couldn't interpolate pose", no MRM onset.
+- [x] Record what happens across a scenario boundary today: `/clock` continues (+1 step), no
       messages for the idle gap, first tick of the next scenario. This is the behaviour the
       "continuous /clock" decision replaces with a wall-paced idle
+      **Measured** (same recording): last traffic_light `/clock` 1790611998.740707376, first
+      ego_drive `/clock` 1790611998.840707376: **+0.100 s (two steps, not one)** over 101.6 s
+      of wall time, while CARLA free-ran 90.04 s / 4204 frames asynchronously (41 Hz, delta
+      0.021 s). In the gap: no `/clock`, no sensor or status messages, except acb's 8
+      despawn standstill IMU+VelocityReport pairs 12 s after the last frame, stamped
+      1790611998.690707445 -- one frame *behind* the last `/clock`, and 445 ns off its grid.
+      The next scenario's first `/clock` pairs with a CARLA frame 16 after the previous
+      pairing (the catch-up into sync mode). Within a scenario the same pattern holds at the
+      initialize pause: one `/clock`, 32.9 s of silence, then +0.05 s.
 
 ### acb: one clock, one stamp (step 1)
 
-- [ ] `/clock` from the world `on_tick` subscription established at CARLA connect, value =
+- [x] `/clock` from the world `on_tick` subscription established at CARLA connect, value =
       `elapsed_seconds`, rate-capped at 100 Hz, refused below 60 s of CARLA uptime with an
       INFO line; hero attach and loss no longer start or stop it
-- [ ] Sensor bridges stamp with `data.timestamp()` directly; `SimClockOffset` and its tests
+- [x] Sensor bridges stamp with `data.timestamp()` directly; `SimClockOffset` and its tests
       removed; `stamp_nanos` grid snap and 1 µs margin removed
-- [ ] Odometry, ground-truth odom/TF, VelocityReport, SteeringReport, ground-truth objects
+- [x] Odometry, ground-truth odom/TF, VelocityReport, SteeringReport, ground-truth objects
       stamped with the frame's `elapsed_seconds` passed in from the tick, not
       `ros_time_now_secs`. The despawn zero-twist samples (014) stamped with the last frame
       time seen
-- [ ] Episode epoch: track world id and `elapsed_seconds`; on a new episode set
+- [x] Episode epoch: track world id and `elapsed_seconds`; on a new episode set
       `epoch += E_last + Δ_last` from the last tick received and log the change; on a CARLA
       reconnect with an unknown previous frame, continue from the last published `/clock`
       plus one step and log that csb's epoch may differ
-- [ ] Unit tests: stamp == `/clock` for the same frame (bit-exact), monotonic `/clock` under
+- [x] Unit tests: stamp == `/clock` for the same frame (bit-exact), monotonic `/clock` under
       skipped frames, rate cap, uptime gate, the epoch rule on an episode change (new
       first frame = old last + Δ), the reconnect fallback
+
+      Done in acb `a038be9` (main, unpushed; superproject pin not bumped). `clock.rs`:
+      `EpisodeClock` holds the rules (pure, 6 new tests), `SimClock::stamp` is the one
+      conversion every stamp and `/clock` uses, `spawn_clock_source` runs `/clock` on a CARLA
+      client of its own from node start (the session client is dropped after every despawn),
+      re-subscribing if the world is replaced and reconnecting if CARLA stops answering.
+      `utils.rs` is down to 13 lines; `ClockEpoch` and the `ACB_CLOCK_DECIMATE` hook went
+      too. Arithmetic is integer nanoseconds: `nanos(s) = round(s * 1e9)`, **half away from
+      zero**, applied to each term; the epoch rule is `epoch_ns += nanos(E_last) +
+      nanos(Δ_last)`. csb's `episode_clock.rs` keeps the epoch as an f64 and reports
+      `elapsed + epoch` as a double, which SSv2 turns into a ROS time; unless that conversion
+      rounds the same way, signal stamps will differ from acb's `/clock` by 1 ns on a share
+      of frames (Python's half-to-even `round` already disagrees on 96 of 6683 frames
+      measured below; a truncating `from_seconds` would disagree on about half). Step 3's
+      acceptance (signal stamp − `/clock` == 0) is where that shows.
+      124 unit tests pass; clippy has the 5 pre-existing warnings and no new ones.
 - [ ] Live, against the *current* fork (SSv2 still publishing `/clock`): two publishers on
       `/clock` for one run is expected to fight -- so run this step with
       `clock_follows_simulation_time:=false` and `publish_clock` on the fork off if it has a
       switch, else stop after the unit tests and go to step 2. Record scan stamp − EKF pose
       stamp over 20 runs: expect exactly 0, zero "Couldn't interpolate pose" WARNs
+
+      **Not run live.** The installed fork publishes `/clock` unconditionally
+      (`api.cpp:147`); `clock_follows_simulation_time:=false` only switches its value to wall
+      time. The `clock_source: simulator` switch exists in the fork source since step 3 but
+      also needs csb's step-2 `simulation_time`, and neither is built or running. The new
+      acb is also **not deployable** in a managed stack until then: its stamps are CARLA time,
+      SSv2's `/clock` is not. Do not rebuild this repo's `install/` from acb `a038be9` before
+      step 3 lands.
+      **Standalone instead** (2026-10-02, acb `a038be9` dev build alone in domain 7,
+      vehicle_name `p015hero` so the live ego's acb ignores it, CARLA asynchronous at ~45 Hz,
+      LiDAR + IMU attached; `scratchpad/p015/sa/run.sh`, recording `sa/run1/rec`, analysis
+      `sa/ana_sa.py`): `/clock` ran from node start, 1340 messages in the 30 s before any
+      hero and 1804 in the 40 s after it was destroyed; 0 non-increasing steps in 6712;
+      every `/clock` equal to the passive client's `elapsed_seconds` in ns (6683/6683, epoch
+      0); every LiDAR (3522), IMU (3531), ground-truth odom (1485), VelocityReport (1493) and
+      SteeringReport (1485) stamp equal to its CARLA frame time, and all but 2 LiDAR/IMU
+      stamps equal to a published `/clock` -- those two belong to a frame 3.4 ms after the
+      previous one, which the 100 Hz cap dropped, as designed. The 8 despawn standstill
+      samples carried the last frame's stamp. Not exercised live: the 60 s gate (CARLA uptime
+      was 237 000 s) and an episode change (a `load_world` would have taken the live stack's
+      world); both are covered by unit tests only, and step 6 is their live test.
 
 ### Protocol and csb: report the time (step 2)
 
