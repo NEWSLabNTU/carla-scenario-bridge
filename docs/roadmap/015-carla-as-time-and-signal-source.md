@@ -396,7 +396,7 @@ Measurement first. No step lands before the number it changes is known.
 - [x] Live: traffic_light passes with the fork's publisher off; `judged/traffic_signals`
       carries `43856: RED` then `GREEN` at t=150 from acb's message; the arbiter's "not latest"
       warning is gone (one stamp base)
-      **Run 2026-10-02** (acb `9e93260`, csb `<CSB>`, fork `f0e480452` unchanged; suite tl → ed
+      **Run 2026-10-02** (acb `9e93260`, csb `69603ef`, fork `f0e480452` unchanged; suite tl → ed
       → ed → ped, `scratchpad/p015s4/rec4.py`, `ana4.py`; 4/4 pass):
       - exactly one publisher on `external/traffic_signals`, `acb_bridge`, in 42 samples taken
         every 15 s through the suite (scenario stacks up and down)
