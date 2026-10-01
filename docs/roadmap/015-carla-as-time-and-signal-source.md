@@ -201,14 +201,25 @@ Measurement first. No step lands before the number it changes is known.
 
 ### SSv2 fork: take time from the simulator (step 3)
 
-- [ ] `SimulationClock` mode `clock_source: simulator` (parameter; default off, upstream
+- [x] `SimulationClock` mode `clock_source: simulator` (parameter; default off, upstream
       behaviour unchanged): `getCurrentRosTime()` returns the last received
       `simulation_time`; `update()` no longer advances a counter; no `/clock` publisher; the
       `$TMP` persisted-time file removed
-- [ ] `API::initialize`/`updateFrame` store the response's `simulation_time` before anything
+- [x] `API::initialize`/`updateFrame` store the response's `simulation_time` before anything
       stamps; `traffic_lights` time source and `entity_manager` stamps both read it
-- [ ] `carla_scenario.launch.xml`: `clock_source:=simulator`, `clock_follows_simulation_time`
+- [x] `carla_scenario.launch.xml`: `clock_source:=simulator`, `clock_follows_simulation_time`
       off, comment rewritten to point here
+
+      Edited, not yet built or verified (fork `bd6197f42` on `managed-ego-unforked`,
+      unpushed; superproject pin not yet bumped). `clock_source` is `frames` (stock),
+      `follows_simulation_time` (014; `clock_follows_simulation_time:=true` still maps to
+      it) or `simulator`; `simulator` with `clock_follows_simulation_time:=true` is an
+      error. One deviation from the item above: `update()` still advances the frame
+      counter, because that counter is the *scenario* time (`SimulationTimeCondition`,
+      NPC behaviour step), not ROS time; only `getCurrentRosTime()` follows the
+      simulator. The zmq client already returned whole responses, so no client change;
+      `API::init`/`updateTimeInSim` read `simulation_time` from them. gtests for the
+      three modes in `traffic_simulator/test/src/simulation_clock`.
 - [ ] Live: managed traffic_light → ego_drive × 3 + pedestrian. Signal stamp − `/clock` = 0 at
       the frame it was published for; no jump at scenario boundaries; the 014 suite passes;
       init-window ERROR onsets do not regress against 014's 3–7 per run

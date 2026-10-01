@@ -13,12 +13,12 @@
   <arg name="initialize_duration" default="480" description="Autoware init-through-engage budget in seconds" />
   <!-- Simulated seconds per real second. Below 1 the frame loop still runs at
        global_frame_rate but each frame advances step_time = factor / frame_rate, so the
-       world (CARLA physics included) moves slower than wall time; with
-       clock_follows_simulation_time /clock slows by the same factor. Useful to reproduce
-       an overloaded host deterministically. -->
+       world (CARLA physics included) moves slower than wall time, and so does the CARLA
+       time acb publishes on /clock. Useful to reproduce an overloaded host
+       deterministically. -->
   <arg name="global_real_time_factor" default="1.0" description="SSv2 real-time factor" />
-  <arg name="clock_follows_simulation_time" default="true"
-       description="false: SSv2's /clock carries wall time (stock behaviour); see below" />
+  <arg name="clock_source" default="simulator"
+       description="SSv2's ROS time: simulator (CARLA time, phase 015), follows_simulation_time (014) or frames (stock); see below" />
 
   <!-- The ego's Autoware is NOT launched from here. launch_autoware:=false makes SSv2's
        concealer connect to the Autoware already running in this ROS domain — bring it up
@@ -39,19 +39,22 @@
          interpreter's ROS clock waits for /clock — which only SSv2 itself would
          publish after activation — and main() blocks forever before the scenario
          starts. SSv2's own nodes therefore keep running on wall time. -->
-    <!-- clock_follows_simulation_time (NEWSLabNTU fork): the /clock SSv2 publishes is
-         (wall time when the interpreter initializes) + simulated elapsed time (frames x
-         step_time), never below the last /clock an earlier scenario published, instead of
-         wall time. CARLA physics advances one step_time per SSv2 frame, so when the frame
-         loop falls behind real time a wall-time /clock made the ego domain's Autoware
-         (use_sim_time=true) integrate simulated speeds over wall seconds: the EKF ran tens of
-         metres ahead and rejected NDT. With this, Autoware's time passes at the rate the
-         simulated world moves. -->
-    <arg name="clock_follows_simulation_time" value="$(var clock_follows_simulation_time)" />
+    <!-- clock_source (NEWSLabNTU fork, docs/roadmap/015-carla-as-time-and-signal-source.md):
+         CARLA is the single source of time. acb owns /clock in every domain and publishes
+         CARLA's elapsed_seconds plus the episode epoch; csb reports the same time in every
+         InitializeResponse / UpdateFrameResponse (simulation_time). With simulator, SSv2
+         takes its ROS time from that field (signal and entity stamps included) and
+         publishes no /clock of its own (a second publisher would interleave two time bases).
+         follows_simulation_time is 014's frame-counted /clock, kept as the fallback for a
+         backend that cannot report time (set clock_source:=follows_simulation_time; it is
+         mutually exclusive with simulator). Scenario time still counts frames either way. -->
+    <arg name="clock_source" value="$(var clock_source)" />
+    <arg name="clock_follows_simulation_time" value="false" />
     <!-- publish_conventional_traffic_signals (NEWSLabNTU fork): publish the commanded
          state of every conventional signal as TrafficLightGroupArray (regulatory element
          ids) on /perception/traffic_light_recognition/external/traffic_signals, merged with
-         any V2I signals, stamped in the /clock time base. Stock SSv2 only delivers
+         any V2I signals, stamped in the /clock time base (CARLA time with
+         clock_source:=simulator). Stock SSv2 only delivers
          conventional signals through simple_sensor_simulator's pseudo detector, which this
          setup does not run, so without it traffic_light_arbiter never learns the state and
          planning holds at every signalled stop line. This is the V2X path decided in
@@ -78,8 +81,9 @@
     <arg name="record_storage_id" value="sqlite3" />
     <arg name="record_option" value="unused" />
 
-    <!-- 20 Hz simulation stepping (was 10). With clock_follows_simulation_time /clock
-         advances once per frame, and Autoware's timers fire only when it does: at 10 Hz
+    <!-- 20 Hz simulation stepping (was 10). Measured under 014, where /clock advanced
+         once per SSv2 frame (with clock_source:=simulator acb's /clock advances once per
+         CARLA tick instead), and Autoware's timers fire only when it does: at 10 Hz
          the EKF updated in 0.1 s steps, NDT could not interpolate a pose for half its
          scans, and control_validator's latency and trajectory-deviation checks tripped
          the MRM about once per run (docs/roadmap/014). 20 Hz halves the step. The CARLA
