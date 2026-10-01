@@ -97,3 +97,29 @@ running, since nothing else would ever route the ego.
 end on `exitSuccess` when the ego reaches a position, and `exitFailure` on a generous
 timeout. No routing action, no engage, no ego-state condition — the ego drives because a
 pilot is driving it, and the scenario only observes and scores.
+
+## Traffic lights: uncommanded means GREEN
+
+Applies to every scenario, managed ego or not (roadmap 015, "Signals from CARLA").
+
+Autoware learns signal state from CARLA's light actors: acb_bridge reads them every frame and
+publishes them on the traffic light arbiter's V2X input
+(`/perception/traffic_light_recognition/external/traffic_signals`). So every mapped light is
+visible to the ego, not only the ones the scenario names.
+
+At every `Initialize` the bridge therefore sets **every mapped light GREEN**, then freezes
+CARLA's cycling and holds each light's phase. A light the scenario never commands stays GREEN
+for the whole run. A light the scenario does command (`TrafficSignalStateAction`) shows what
+it commands from its first `UpdateTrafficLights` on, and keeps the last commanded state until
+the next command or the next `Initialize`.
+
+- To stop the ego at an intersection, command that signal. Do not rely on the state a previous
+  run or CARLA's own cycle left a light in; it is reset to GREEN.
+- "Mapped" means listed in the resolved table the bridge writes beside the Lanelet2 map at
+  `Initialize` (`traffic_lights.resolved.yaml`, logged with its path): Lanelet2 traffic light
+  ways matched to a CARLA light by position, plus `config/traffic_lights_<town>.yaml`. CARLA
+  lights the Lanelet2 map does not reference keep their frozen state; Autoware cannot see them.
+- SSv2's own V2X publisher (`publish_conventional_traffic_signals`) is off in
+  `carla_scenario.launch.xml`; turning it on as well would put two sources on the arbiter's
+  input. SSv2 itself still treats an uncommanded signal as having no state, so conditions on
+  a signal's state only see what the scenario commanded.

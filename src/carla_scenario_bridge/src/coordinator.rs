@@ -433,8 +433,10 @@ impl EpisodeReload for CoordinatorReload<'_> {
 /// vehicle by polling `world.actors()`, which needs CARLA advancing on its own; but in
 /// sync mode nothing advances until someone ticks, and this bridge does not tick until
 /// SSv2 sends a frame, and SSv2 sends no frame until the ego exists. Enabling sync mode
-/// early deadlocks all three. So we stay async until the ego has been spawned, then
-/// switch on the first frame after it.
+/// early deadlocks all three. So we stay async until the ego is spawned. Since roadmap
+/// 015 the switch happens just *before* the ego spawn (`sync_before_spawn`) and the
+/// spawn's own tick puts the ego into the episode; `EnableSyncThenTick` remains the
+/// fallback if that switch failed.
 ///
 /// See `docs/design/multi-instance-architecture.md` (gap 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,6 +447,12 @@ enum FrameAction {
     EnableSyncThenTick,
     /// Steady state.
     Tick,
+}
+
+/// Whether to switch CARLA to synchronous mode before this spawn: for the ego, if not
+/// already. See the comment at its call in `spawn_entity`.
+fn sync_before_spawn(kind: SpawnKind, sync_mode_enabled: bool) -> bool {
+    kind == SpawnKind::Ego && !sync_mode_enabled
 }
 
 fn decide_frame_action(sync_mode_enabled: bool, has_ego: bool) -> FrameAction {
@@ -1185,7 +1193,8 @@ impl Coordinator {
             .map_err(|e| eyre::eyre!("load world '{town}': {e}"))
     }
 
-    /// Load the explicit signal mapping and fill the rest by position matching.
+    /// Load the explicit signal mapping, fill the rest by position matching, and write the
+    /// resolved table acb publishes signals from (roadmap 015).
     fn load_signal_map(&mut self, town: &str, lanelet2_map_path: &str) -> Result<()> {
         // Explicit per-map mapping first: it exists to correct what position matching gets
         // wrong, so it must take precedence over anything derived below.
@@ -1194,7 +1203,7 @@ impl Coordinator {
         self.warned_unmapped_signals.clear();
         self.warned_arrow_shapes = false;
 
-        self.match_signals_by_position(lanelet2_map_path);
+        let (lanelet_lights, carla_signals) = self.match_signals_by_position(lanelet2_map_path);
 
         if self.signal_map.is_empty() {
             tracing::warn!(
@@ -1204,7 +1213,59 @@ impl Coordinator {
             );
         }
 
+        self.write_resolved_signals(town, lanelet2_map_path, &lanelet_lights, &carla_signals);
         Ok(())
+    }
+
+    /// Write `traffic_lights.resolved.yaml` beside the Lanelet2 map, or to the fallback
+    /// directory if the map directory is read-only. Never fatal: without the file acb
+    /// publishes no signals, which the log says, and the scenario still runs.
+    fn write_resolved_signals(
+        &self,
+        town: &str,
+        lanelet2_map_path: &str,
+        lanelet_lights: &[crate::lanelet_map::TrafficLightElement],
+        carla_signals: &[crate::traffic_light_mapper::CarlaSignal],
+    ) {
+        use crate::resolved_signals as rs;
+        let map_file = lanelet_map_file(lanelet2_map_path);
+        let table = rs::ResolvedTable::build(
+            town,
+            &map_file,
+            &self.signal_map,
+            lanelet_lights,
+            carla_signals,
+        );
+        let yaml = match table.to_yaml() {
+            Ok(y) => y,
+            Err(e) => {
+                tracing::warn!("Could not serialize the resolved traffic light table: {e:#}");
+                return;
+            }
+        };
+        let summary = format!(
+            "{} mapped way(s) in {} regulatory element(s); unmapped: {} lanelet, {} CARLA",
+            table.signals.len(),
+            table.regulatory_element_count(),
+            table.unmapped.lanelet_way_ids.len(),
+            table.unmapped.carla_opendrive_ids.len()
+        );
+        match rs::write_with_fallback(&rs::map_dir(&map_file), &rs::fallback_dir(town), &yaml) {
+            Ok(rs::Written::MapDir(path)) => tracing::info!(
+                "Resolved traffic light table ({summary}) written to {}",
+                path.display()
+            ),
+            Ok(rs::Written::Fallback(path, why)) => tracing::warn!(
+                "Map directory not writable ({why}); resolved traffic light table ({summary}) \
+                 written to the fallback {} instead. acb_bridge's traffic_light_map_path \
+                 must name this path, or it publishes no signals.",
+                path.display()
+            ),
+            Err(e) => tracing::warn!(
+                "Could not write the resolved traffic light table anywhere ({e:#}); acb_bridge \
+                 will publish no traffic signals from CARLA"
+            ),
+        }
     }
 
     /// Fill in the signal mapping by pairing Lanelet2 traffic lights with CARLA's by position.
@@ -1213,7 +1274,16 @@ impl Coordinator {
     /// leave the explicit YAML mapping as the only source. Every shortfall is reported with
     /// counts so the gap is visible before the scenario runs rather than discovered when a
     /// light fails to change.
-    fn match_signals_by_position(&mut self, lanelet2_map_path: &str) {
+    ///
+    /// Returns what it read -- the Lanelet2 lights and CARLA's -- for the resolved table;
+    /// either is empty when it could not be read.
+    fn match_signals_by_position(
+        &mut self,
+        lanelet2_map_path: &str,
+    ) -> (
+        Vec<crate::lanelet_map::TrafficLightElement>,
+        Vec<crate::traffic_light_mapper::CarlaSignal>,
+    ) {
         let map_file = lanelet_map_file(lanelet2_map_path);
 
         let lanelet_lights = match crate::lanelet_map::load_traffic_lights(&map_file) {
@@ -1224,20 +1294,23 @@ impl Coordinator {
                      mapping alone",
                     map_file.display()
                 );
-                return;
+                return (
+                    Vec::new(),
+                    self.enumerate_carla_signals().unwrap_or_default(),
+                );
             }
         };
 
         if lanelet_lights.is_empty() {
             tracing::info!("Lanelet2 map declares no traffic lights");
-            return;
+            return (lanelet_lights, Vec::new());
         }
 
         let carla_signals = match self.enumerate_carla_signals() {
             Ok(signals) => signals,
             Err(e) => {
                 tracing::warn!("Could not enumerate CARLA traffic lights ({e})");
-                return;
+                return (lanelet_lights, Vec::new());
             }
         };
 
@@ -1267,6 +1340,7 @@ impl Coordinator {
                 report.unmatched_carla.len()
             );
         }
+        (lanelet_lights, carla_signals)
     }
 
     /// CARLA's traffic lights, reduced to an OpenDRIVE ID and a position.
@@ -1298,6 +1372,7 @@ impl Coordinator {
                     opendrive_id: id.to_string(),
                     x: location.x as f64,
                     y: location.y as f64,
+                    z: location.z as f64,
                 }),
                 Err(e) => tracing::warn!("Could not read a traffic light's OpenDRIVE id: {e}"),
             }
@@ -1391,19 +1466,21 @@ impl Coordinator {
 
     /// Freeze CARLA's signal cycling so SSv2 is the only writer (invariant 3).
     ///
-    /// Freezing leaves each light in whatever state it happened to be in, which for a light
-    /// the scenario never addresses means an arbitrary but *fixed* state for the whole run.
-    /// That is the intended trade: a cycling light near the ego's route would make the run
-    /// non-deterministic, which is what invariant 3 exists to prevent. A scenario that cares
-    /// about a signal must command it.
+    /// Freezing alone leaves each light in whatever state it happened to be in. Since acb
+    /// publishes what CARLA's lights show (roadmap 015), every mapped light is first set
+    /// GREEN, so a light the scenario never addresses is GREEN for the whole run rather than
+    /// an arbitrary phase; unmapped lights keep their frozen state (Autoware cannot see
+    /// them). A cycling light would make the run non-deterministic, which is what invariant
+    /// 3 exists to prevent. A scenario that cares about a signal must command it.
     fn freeze_traffic_lights(&mut self) {
         match self.world.freeze_all_traffic_lights(true) {
             Ok(()) => {
                 self.froze_traffic_lights.mark_frozen();
                 tracing::info!(
                     "CARLA traffic light cycling frozen; SSv2 is now the only writer. \
-                     Signals the scenario does not command hold their current state."
+                     Mapped signals the scenario does not command stay GREEN."
                 );
+                self.set_mapped_lights_green();
                 self.hold_light_phases();
             }
             Err(e) => {
@@ -1414,6 +1491,44 @@ impl Coordinator {
                      still running and will fight any scenario-commanded state."
                 );
             }
+        }
+    }
+
+    /// Set every mapped light GREEN, before the scenario commands any (roadmap 015).
+    ///
+    /// With acb publishing what CARLA's lights show, a light frozen at whatever phase the
+    /// last run (or CARLA's own cycle) left it in would stop the ego at random
+    /// intersections. GREEN is deterministic and permissive: a scenario commands the lights
+    /// it cares about, and SSv2's first `UpdateTrafficLights` overrides this for those.
+    /// Unmapped CARLA lights are left alone -- Autoware cannot see them. See
+    /// `docs/design/scenario-authoring.md`.
+    fn set_mapped_lights_green(&mut self) {
+        let ids: Vec<String> = self
+            .signal_map
+            .entries()
+            .into_iter()
+            .map(|(_, od)| od.to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut failed = Vec::new();
+        for od in &ids {
+            if let Err(e) = self.set_signal_state(od, carla::rpc::TrafficLightState::Green) {
+                failed.push(format!("{od}: {e:#}"));
+            }
+        }
+        if failed.is_empty() {
+            tracing::info!(
+                "Set {} mapped traffic light(s) GREEN; the scenario's commands override them",
+                ids.len()
+            );
+        } else {
+            tracing::warn!(
+                "Set {} of {} mapped traffic light(s) GREEN; failed: {}",
+                ids.len() - failed.len(),
+                ids.len(),
+                failed.join("; ")
+            );
         }
     }
 
@@ -2059,6 +2174,26 @@ impl Coordinator {
             Ok(k) => k,
             Err(e) => return proto_err(format!("Cannot spawn '{name}': {e}")),
         };
+
+        // Freeze the world before the ego goes in (roadmap 015, the init-window fix). In
+        // async mode a spawn that stalls the server -- the first vehicle of a fresh CARLA,
+        // a walker -- comes back as one frame whose elapsed_seconds leaps by the stall
+        // (measured 1.5 s and 6.6 s), and acb publishes that leap as /clock: every
+        // heartbeat and topic timeout in Autoware fires at once and mrm_handler blips
+        // EMERGENCY_STOP. In sync mode a stall is only a pause. The tick after the spawn
+        // (below) puts the ego into the episode, so acb finds it as before.
+        if sync_before_spawn(kind, self.sync_mode_enabled) {
+            match self.enable_sync_mode() {
+                Ok(()) => tracing::info!(
+                    "CARLA synchronous from the ego spawn on: spawns stall the server, and an \
+                     async stall would reach /clock as a leap"
+                ),
+                Err(e) => tracing::warn!(
+                    "Could not enter sync mode before the ego spawn ({e:#}); a slow spawn may \
+                     leap /clock. The first frame will switch it on as before."
+                ),
+            }
+        }
 
         // Retry a colliding spawn at increasing height, same x/y. A leftover actor on the
         // point is the usual cause; teardown now prevents most of those, and lifting clears
@@ -3086,6 +3221,20 @@ mod tests {
 
     /// Sync mode is enabled exactly once. Should the ego flag ever be cleared without
     /// leaving sync mode, keep ticking rather than re-applying world settings mid-run.
+    #[test]
+    fn only_the_ego_spawn_switches_to_sync_and_only_once() {
+        assert!(sync_before_spawn(SpawnKind::Ego, false));
+        assert!(!sync_before_spawn(SpawnKind::Ego, true));
+        for kind in [
+            SpawnKind::Npc,
+            SpawnKind::Pedestrian,
+            SpawnKind::MiscObject,
+            SpawnKind::BackgroundAv,
+        ] {
+            assert!(!sync_before_spawn(kind, false), "{kind:?}");
+        }
+    }
+
     #[test]
     fn sync_mode_is_not_re_enabled() {
         assert_eq!(decide_frame_action(true, false), FrameAction::Tick);

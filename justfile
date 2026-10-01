@@ -581,6 +581,12 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     brake_map="${BRAKE_MAP_PATH-$(ros2 pkg prefix --share acb_vehicle_description)/config/brake_map.csv}"
     accel_map="${accel_map:-none}"
     brake_map="${brake_map:-none}"
+    # acb publishes signal state from CARLA's lights (roadmap 015) from the table csb writes
+    # beside the Lanelet2 map at every Initialize: this map_path's real directory, the one
+    # the scenario's map symlinks resolve to. TRAFFIC_LIGHT_MAP_PATH overrides it (csb logs
+    # where it wrote, e.g. its fallback for a read-only map dir); empty turns it off.
+    tl_map="${TRAFFIC_LIGHT_MAP_PATH-{{map_path}}/traffic_lights.resolved.yaml}"
+    tl_map="${tl_map:-none}"
     # Not exec: the trap above has to survive to clean up the API adaptors.
     # --enforce-rules off: play_launch 0.12 defaults to `warn`, which turns on LD_PRELOAD
     # interception of every DDS take and logs each event at DEBUG into play_launch.log and
@@ -601,6 +607,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         publish_ground_truth_objects:="${GROUND_TRUTH_OBJECTS:-false}" \
         seed_localization_on_attach:="${SEED_LOCALIZATION:-$seed_default}" \
         ground_truth_range_m:="${GROUND_TRUTH_RANGE_M:-100.0}" \
+        traffic_light_map_path:="$tl_map" \
         accel_map_path:="$accel_map" \
         brake_map_path:="$brake_map" \
         "${optional_args[@]}"

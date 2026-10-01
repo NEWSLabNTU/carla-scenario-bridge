@@ -89,6 +89,18 @@ impl SignalMap {
         self.signals.len()
     }
 
+    /// Every mapping, as (Lanelet2 way id, OpenDRIVE sign id), ascending by way id. Keys
+    /// that are not integers (a typo in the YAML) are skipped: SSv2 could never address them.
+    pub fn entries(&self) -> Vec<(i32, &str)> {
+        let mut out: Vec<(i32, &str)> = self
+            .signals
+            .iter()
+            .filter_map(|(k, v)| k.trim().parse::<i32>().ok().map(|id| (id, v.as_str())))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
     pub fn is_empty(&self) -> bool {
         self.signals.is_empty()
     }
@@ -112,6 +124,7 @@ pub struct CarlaSignal {
     /// Position in CARLA's frame.
     pub x: f64,
     pub y: f64,
+    pub z: f64,
 }
 
 /// How close a Lanelet2 element and a CARLA light must be to be the same signal.
@@ -406,6 +419,7 @@ mod tests {
             x,
             y,
             z: 5.0,
+            regulatory_element_ids: vec![],
         }
     }
 
@@ -414,6 +428,7 @@ mod tests {
             opendrive_id: id.to_string(),
             x,
             y,
+            z: 0.0,
         }
     }
 

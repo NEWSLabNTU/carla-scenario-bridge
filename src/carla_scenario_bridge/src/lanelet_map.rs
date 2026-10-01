@@ -79,6 +79,10 @@ pub struct TrafficLightElement {
     pub x: f64,
     pub y: f64,
     pub z: f64,
+    /// Regulatory element relation(s) that refer to this way, ascending. Autoware's
+    /// `TrafficLightGroup` is keyed on these (roadmap 015, the resolved table), while SSv2
+    /// commands the way.
+    pub regulatory_element_ids: Vec<i64>,
 }
 
 impl TrafficLightElement {
@@ -136,18 +140,25 @@ pub fn parse_traffic_lights(xml: &str) -> Result<Vec<TrafficLightElement>> {
     }
 
     // Ways that a regulatory element controls. See REFERS_ROLE for why tags are not used.
-    let mut controlled: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // Way id to the regulatory elements that refer to it.
+    let mut controlled: HashMap<&str, Vec<i64>> = HashMap::new();
     for relation in doc.descendants().filter(|n| n.has_tag_name("relation")) {
         let tags = collect_tags(relation);
         if tags.get("type").map(String::as_str) != Some("regulatory_element") {
             continue;
         }
+        let relation_id = relation.attribute("id").and_then(|v| v.parse::<i64>().ok());
         for member in relation.children().filter(|c| c.has_tag_name("member")) {
             if member.attribute("type") == Some("way")
                 && member.attribute("role") == Some(REFERS_ROLE)
             {
                 if let Some(r) = member.attribute("ref") {
-                    controlled.insert(r);
+                    let ids = controlled.entry(r).or_default();
+                    if let Some(id) = relation_id {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
                 }
             }
         }
@@ -158,9 +169,11 @@ pub fn parse_traffic_lights(xml: &str) -> Result<Vec<TrafficLightElement>> {
         let Some(way_id_str) = way.attribute("id") else {
             continue;
         };
-        if !controlled.contains(way_id_str) {
+        let Some(regulatory_element_ids) = controlled.get(way_id_str) else {
             continue;
-        }
+        };
+        let mut regulatory_element_ids = regulatory_element_ids.clone();
+        regulatory_element_ids.sort_unstable();
 
         let Some(way_id) = way_id_str.parse::<i32>().ok() else {
             continue;
@@ -184,6 +197,7 @@ pub fn parse_traffic_lights(xml: &str) -> Result<Vec<TrafficLightElement>> {
             x: points.iter().map(|p| p.0).sum::<f64>() / n,
             y: points.iter().map(|p| p.1).sum::<f64>() / n,
             z: points.iter().map(|p| p.2).sum::<f64>() / n,
+            regulatory_element_ids,
         });
     }
 
@@ -282,6 +296,21 @@ mod tests {
         assert!(!ids.contains(&148));
     }
 
+    /// Each light carries the regulatory element that refers to it: Autoware keys signal
+    /// groups on that id, SSv2 commands the way.
+    #[test]
+    fn each_light_names_its_regulatory_element() {
+        let lights = parse_traffic_lights(TOWN01_EXCERPT).expect("parses");
+        let reg = |way| {
+            lights
+                .iter()
+                .find(|l| l.way_id == way)
+                .map(|l| l.regulatory_element_ids.clone())
+        };
+        assert_eq!(reg(43733), Some(vec![43842]));
+        assert_eq!(reg(43736), Some(vec![43843]));
+    }
+
     /// Position is the centre of the light bar, from local_x/local_y -- not lat/lon.
     #[test]
     fn position_is_the_centre_of_the_bar() {
@@ -301,6 +330,7 @@ mod tests {
             x: 348.70,
             y: 4.53,
             z: 5.0,
+            regulatory_element_ids: vec![],
         };
         let (x, y, z) = e.carla_position();
         assert!((x - 348.70).abs() < 1e-9);
@@ -315,6 +345,7 @@ mod tests {
             x: 10.0,
             y: -20.0,
             z: 5.0,
+            regulatory_element_ids: vec![],
         };
         // CARLA-frame position is (10, 20, 5). A point 3m away in x, at any height.
         assert!((e.planar_distance_to_carla(13.0, 20.0) - 3.0).abs() < 1e-9);

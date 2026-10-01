@@ -7,6 +7,7 @@ mod episode_clock;
 mod lanelet_map;
 mod map_resolver;
 mod proto;
+mod resolved_signals;
 mod sensor_release;
 mod traffic_light_mapper;
 mod zmq_server;

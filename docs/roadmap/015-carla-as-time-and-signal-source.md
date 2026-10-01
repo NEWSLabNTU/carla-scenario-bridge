@@ -334,30 +334,88 @@ Measurement first. No step lands before the number it changes is known.
         and the EKF take the pose, not the stamp; localization reached the pose after 0 ms
         in 5/5. A fourth time base nonetheless; stamping it with the simulation clock is a
         one-line fork change left for step 4's fork work
-- [ ] Init-window regression above: freeze `/clock` across the ego swap -- e.g. csb holds CARLA
-      in sync, unticked, from destroying the old ego until the new one is spawned and acb has
-      attached, or destroys the old ego at scenario end so the swap happens inside the idle
-      gap. Either changes csb's `WaitForEgo` phase, which exists so acb can find its vehicle
+- [x] Init-window regression above. **Fixed 2026-10-02** (csb, `sync_before_spawn`), but the
+      cause was not the one guessed here. Measured on the integration run
+      (`scratchpad/p015s4/init_onsets.py`, `mrm_classify.py`): csb's log shows SSv2 despawning
+      every ego at its own scenario end, so no ego survives the gap. The new onsets were two
+      things:
+      - **The four `topic_state_monitor`s are idle-gap timeouts, not init.** Their timeout is
+        30 s of ROS time; `/clock` now runs through the gap, so 30.0 s after csb returns CARLA
+        to async they go ERROR -- every one *before* the next `Initialize` (4-10 s before it).
+        The harness starts `just scenario` 30 s after the previous run, so they landed in the
+        launch-anchored window. Anchored at `Initialize` the integration run had 2/7/6/8/10.
+        No vehicle exists then; the ERROR is true, and clears at the next ego's first frame.
+        What acb can say truthfully it now says: its signal publisher runs from node start,
+        so the traffic-signal monitor no longer times out (step 4). Steering, velocity and
+        pointcloud still do (3 per gap); faking a vehicle that does not exist was rejected.
+      - **The two EMERGENCY_STOP blips were `/clock` leaps.** CARLA async advances
+        `elapsed_seconds` by wall time; a spawn that stalls the server comes back as one frame
+        that leaps by the stall: +1.54 s at traffic_light's ego spawn (first vehicle after a
+        stack start), +6.63 s at pedestrian's walker spawn (ego already spawned, first frame not
+        yet sent). acb publishes it faithfully, every heartbeat times out at once, and
+        mrm_handler blipped EMERGENCY_STOP 0.13 s later both times.
+      Fix: csb switches CARLA to synchronous *before* spawning the ego (the spawn's own tick
+      puts it in the episode, so acb finds it as before), so a stall is a pause.
+      `EnableSyncThenTick` stays as the fallback. Live (acb `9e93260`, two suites tl/ed/ed/ped,
+      4/4 pass each): `/clock` steps > 0.3 s during runs **0** (was 2), EMERGENCY_STOP blips
+      **0** (was 2), init-window onsets anchored at `Initialize` **0/7/7/5/6** and **0/7/6/4**
+      (014: 3-7); anchored at launch 0/10/10/8 and 0/10/9/7, the difference being the three
+      idle-gap monitors above
 
 ### Signals from CARLA (step 4)
 
-- [ ] csb writes `<map dir>/traffic_lights.resolved.yaml` at Initialize: for each mapped
+- [x] csb writes `<map dir>/traffic_lights.resolved.yaml` at Initialize: for each mapped
       lanelet way id, its regulatory element id(s), OpenDRIVE sign id, CARLA position; and
       the list of unmapped signals. Logs the path
-- [ ] csb sets every mapped light the scenario has not commanded to GREEN at Initialize
+      (`resolved_signals.rs`; map dir = the map file's directory *symlinks resolved*, so the
+      scenario's `csb_launch` share path and the ego's `map_path` reach the same file; a
+      read-only map dir falls back to `$XDG_RUNTIME_DIR/carla_scenario_bridge/<town>/`,
+      logged as a WARN naming the path; written atomically)
+- [x] csb sets every mapped light the scenario has not commanded to GREEN at Initialize
       before `hold_light_phases`; `docs/design/scenario-authoring.md` says so
-- [ ] acb `traffic_light_publisher.rs`: parameter `traffic_light_map_path` (empty = off),
+- [x] acb `traffic_light_publisher.rs`: parameter `traffic_light_map_path` (empty = off),
       re-read on mtime change; each frame, `World::traffic_light_from_open_drive` for each
       mapped id (cache the actors, refresh on map change), read `state`, publish
       `TrafficLightGroupArray` on `/perception/traffic_light_recognition/external/traffic_signals`
       with one group per regulatory element id, CARLA colour → `TrafficLightElement`
       (red/amber/green, shape CIRCLE, status SOLID_ON, confidence 1.0), stamp = frame time,
       range filter reusing `ground_truth_range_m`
-- [ ] `carla_scenario.launch.xml`: `publish_conventional_traffic_signals` back to false,
-      comment explains the two sources and why only one may be on
-- [ ] Live: traffic_light passes with the fork's publisher off; `judged/traffic_signals`
+      (acb `9e93260`. Own CARLA client and `on_tick`, from node start like the clock, so it
+      publishes between scenarios too (no hero: every mapped light). Disagreeing lights of
+      one regulatory element report the most restrictive colour; Off/Unknown → UNKNOWN at
+      confidence 0. Throttled on *simulation* time (40 ms), not wall time: SSv2's frames come
+      in pairs ~17 ms apart and a 20 ms wall cap dropped every other scenario frame. Wired
+      through `acb_bridge.launch.xml`, `ego_av.launch.xml` (default `$(var map_path)/
+      traffic_lights.resolved.yaml`) and `just ego-av` (`TRAFFIC_LIGHT_MAP_PATH`, empty = off))
+- [x] `carla_scenario.launch.xml`: `publish_conventional_traffic_signals` back to false,
+      comment explains the two sources and why only one may be on. **Not sufficient on its
+      own**: SSv2's V2I channel publishes on the same topic every frame regardless (upstream
+      behaviour; an empty array when the scenario has no V2I light). Measured: two publishers
+      during each run, every other message empty. A `set_remap` around the include moves the
+      interpreter's copy to `/simulation/v2i/external/traffic_signals`
+- [x] Live: traffic_light passes with the fork's publisher off; `judged/traffic_signals`
       carries `43856: RED` then `GREEN` at t=150 from acb's message; the arbiter's "not latest"
       warning is gone (one stamp base)
+      **Run 2026-10-02** (acb `9e93260`, csb `<CSB>`, fork `f0e480452` unchanged; suite tl → ed
+      → ed → ped, `scratchpad/p015s4/rec4.py`, `ana4.py`; 4/4 pass):
+      - exactly one publisher on `external/traffic_signals`, `acb_bridge`, in 42 samples taken
+        every 15 s through the suite (scenario stacks up and down)
+      - 43856 in acb's message: RED from the first frame the ego is within 100 m (41.75 s after
+        the ego spawn) until GREEN at 159.8 s (SSv2's t > 150 command); `judged` switches on
+        the same frames. Every scenario frame has a signal message (6994/6994, 0 without a
+        group); 4129 more between scenarios
+      - signal stamp == `/clock`, bit-exact: every message stamped with a CARLA frame time;
+        all but 6 of 11 119 equal a published `/clock` -- 3 at recorder start, 3 each a
+        scenario's last frame, the one the `/clock` 100 Hz cap drops by design
+      - 0 MRM state changes (0 EMERGENCY_STOP at init, 0 driving), 0 NDT interpolate WARNs;
+        4 driving onsets, all `control_validator max_distance_deviation` (014: not wired to MRM)
+      - **"not latest" is not gone**: 69 in this stack's log (throttled, one per ~6 s for the
+        whole of every run, ed and ped included), against 34 over the integration suite (tl
+        only). The arbiter warns when an input is older than what it last published; acb's
+        V2X message is always the newest frame, the camera classification path lags it. One
+        stamp base does not remove that. Harmless to the verdicts; left open
+      - first suite of the day (before the remap and the sim-time throttle) also passed 4/4;
+        it is the measurement that found the second publisher
 
 ### Unmanaged ego made whole (step 5)
 
