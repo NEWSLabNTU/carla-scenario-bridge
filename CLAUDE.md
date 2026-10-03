@@ -304,3 +304,11 @@ Pass `CARLA_DIR=... DISPLAY=:N just carla-start`, and if the unit keeps restarti
 `./CarlaUE4.sh -quality-level=Low -carla-rpc-port=2000 -nosound -RenderOffScreen` directly
 under `setsid` and wait. Any X display works for offscreen Vulkan rendering, GLX or not; a
 private one is `setsid /opt/TurboVNC/bin/Xvnc :4 -SecurityTypes None`.
+No display at all also works and is faster: `env -u DISPLAY setsid ./CarlaUE4.sh ...
+-RenderOffScreen` served RPC in 41 s against 206 s on Xvnc `:4` (2026-10-03).
+
+**This CARLA cannot change episodes.** `load_world` to any other town segfaults it after a
+long hang, and `reload_world()` hangs, with or without a display and with no other client
+attached (roadmap 015, step 6). Scenarios must stay on the town CARLA started with
+(Town01), and a scenario on another town takes the server down; restart it by pid (never
+`pkill -f CarlaUE4`, which matches the shell that runs it).
