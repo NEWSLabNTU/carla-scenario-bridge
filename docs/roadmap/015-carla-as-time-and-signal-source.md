@@ -419,10 +419,23 @@ Measurement first. No step lands before the number it changes is known.
 
 ### Unmanaged ego made whole (step 5)
 
-- [ ] `EGO_MANAGED=false just ego-av` + `town01_unmanaged.xosc`, then a copy of
+- [x] `EGO_MANAGED=false just ego-av` + `town01_unmanaged.xosc`, then a copy of
       `town01_traffic_light.xosc` with the ego route moved to the pilot's goal file: the ego
       stops at the red and proceeds at the green in domain 3, with `/clock` from acb and
-      signals from acb. 013's two open gaps close with this run
+      signals from acb. 013's two open gaps close with this run -- **done 2026-10-03**.
+      `town01_unmanaged` passed (2026-10-02). `town01_traffic_light_unmanaged.xosc` (goal in
+      `town01_traffic_light_unmanaged_poses.yaml`, timeout 600 because the pilot localizes,
+      routes and engages inside scenario time) passed: the ego stopped at (105.7, −55.4) for
+      67.6 s with 43856 RED and resumed when it turned GREEN at t = 150.2. In domain 3
+      `/clock` and `external/traffic_signals` each had exactly one publisher, `acb_bridge`;
+      0 interpolation WARNs; signal stamps equal to a `/clock` value on all but 2 of 4071
+      messages (recorder start). `auto_drive` now respawns after each scenario
+      (`ego_av.launch.xml`), since it exits on arrival and a long-lived stack serves the next
+- [ ] **Open**: a 2.99 s `/clock` leap 3 s before the ego spawn, while CARLA was still async
+      between csb's Initialize and its spawn (csb idle, waiting on SSv2): the server itself
+      stalled. `/clock` is CARLA time by decision, so acb cannot smooth it; it cost one
+      0.2 s EMERGENCY_STOP blip before engage. Candidate: csb enters sync mode at the end of
+      Initialize and ticks at the step rate until the spawn, so an idle stall is a pause
 - [x] `ego_av.launch.xml`: `publish_clock` no longer derived from `managed`; comment updated
       (done with step 3, csb `a50f430`: a managed ego has no other `/clock` once the fork runs
       `clock_source: simulator`; `ACB_PUBLISH_CLOCK=false` is the emergency off)

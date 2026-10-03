@@ -738,13 +738,22 @@ scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     # An unmanaged ego lives in its own domain, so SSv2 no longer shares one with it.
     managed="${EGO_MANAGED:-true}"
     export ROS_DOMAIN_ID={{ego_domain}}
+    # Hand SSv2 a copy, never the source. Its preprocessor moves the scenario it is given
+    # into a sibling raw/ directory and writes its own re-serialized copy at the original
+    # path (openscenario_preprocessor.cpp:122-128); pugixml drops comments on save, so every
+    # run stripped the tracked .xosc, and the next run moved that stripped file over raw/.
+    # The scenarios reference nothing by relative path, so a copy behaves identically.
+    input_dir="{{project}}/play_log/scenario/input"
+    mkdir -p "$input_dir"
+    scenario_copy="$input_dir/$(basename "{{scenario_file}}")"
+    cp "{{scenario_file}}" "$scenario_copy"
     # --parser python: scenario_test_runner.launch.py imports launch.actions the
     # Rust parser's embedded Python cannot resolve (EmitEvent)
     exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8081 \
         --log-dir play_log/scenario \
         csb_launch carla_scenario.launch.xml \
         managed_ego:=$managed \
-        scenario:="{{scenario_file}}" \
+        scenario:="$scenario_copy" \
         port:={{ssv2_port}}
 
 # Run the full stack: adapter + bridge + SSv2 + Autoware (CARLA must be running)
@@ -761,9 +770,15 @@ e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc"):
     # three inference nodes were killed seconds before they would have reported, and
     # the only symptom was a perception pipeline publishing empty results forever.
     export ROS_DOMAIN_ID={{ego_domain}}
+    # A copy, never the source: SSv2's preprocessor rewrites the file it is given (see
+    # the `scenario` recipe).
+    input_dir="{{project}}/play_log/scenario/input"
+    mkdir -p "$input_dir"
+    scenario_copy="$input_dir/$(basename "{{scenario_file}}")"
+    cp "{{scenario_file}}" "$scenario_copy"
     exec play_launch launch --enforce-rules off --web-addr 0.0.0.0:8080 \
         csb_launch demo.launch.xml \
-        scenario:="{{scenario_file}}" \
+        scenario:="$scenario_copy" \
         carla_port:={{carla_port}} \
         ssv2_port:={{ssv2_port}}
 

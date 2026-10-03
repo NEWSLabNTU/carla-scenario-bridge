@@ -302,8 +302,9 @@ never implemented.
       bridge_config.yaml: ticks per frame follow the step, 2 at 10 Hz, 1 at 20 Hz) --
       `97f0295`. /clock in 0.05 s steps; 9/9 pass. It did not change the MRM counts (the
       cause was the stamps above), but it halves the fresh-pose wait (100 → 60 ms)
-- [ ] Unmanaged ego (its own domain) gets neither signals nor the sim clock; both would need
-      relaying across domains
+- [x] Unmanaged ego (its own domain) gets neither signals nor the sim clock -- closed by
+      [015](015-carla-as-time-and-signal-source.md) step 5: acb publishes both from CARLA in
+      every domain (2026-10-03)
 
 ### Emergency stop at every scenario start (fixed 2026-09-29)
 

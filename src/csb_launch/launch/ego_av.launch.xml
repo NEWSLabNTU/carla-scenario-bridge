@@ -5,8 +5,9 @@
     Same stack, same structure as background_av.launch.xml; the differences are exactly
     the ego's domain and clock policy:
 
-    - No ROS_DOMAIN_ID override in this file: this stack must live in SSv2's domain,
-      which is ambient in the caller's environment. SSv2's concealer (launched with
+    - No ROS_DOMAIN_ID override in this file: the domain is ambient in the caller's
+      environment. A managed ego (default) must live in SSv2's domain; an unmanaged one
+      (managed:=false) lives in its own (`ego_unmanaged_domain`, 3, in the justfile). SSv2's concealer (launched with
       launch_autoware:=false) reaches this Autoware over plain ROS topics/services to
       initialize, route, and engage it — a stack in any other domain is invisible to it.
       `just ego-av` and `just scenario` therefore export the same ROS_DOMAIN_ID
@@ -37,15 +38,16 @@
   <arg name="launch_rviz" default="false" />
 
   <!-- managed=true  (default, phase 012): SSv2's concealer drives this ego's autonomy, so
-                     the stack must share SSv2's ROS domain and must NOT publish /clock,
-                     because SSv2 already does and a second publisher makes localization
-                     log backwards jumps.
+                     the stack must share SSv2's ROS domain.
        managed=false (phase 013): the concealer is inert (`managed_ego:=false` on the fork),
                      nothing in SSv2 routes or engages this ego, and the stack becomes an
-                     ordinary AV: its own domain, its own /clock, driven by acb_pilot from
-                     `goal_poses_file`. Domain and clock are then policy, not a special case.
+                     ordinary AV in its own domain, driven by acb_pilot from
+                     `goal_poses_file`.
 
-       The default preserves 012 exactly; nothing changes for a managed run. -->
+       `managed` decides the domain (set by the caller) and who drives; it no longer decides
+       the clock or the signals. In both modes acb publishes /clock and
+       external/traffic_signals from CARLA (roadmap 015), so the two modes differ only in who
+       routes and engages. -->
   <arg name="managed" default="true"
        description="true: SSv2's concealer drives the ego. false: acb_pilot does, as for a background AV." />
   <arg name="goal_poses_file" default=""
@@ -136,9 +138,17 @@
        does in every background AV's domain: waits for localization, sets the route from
        `goal_poses_file`, engages. In a managed run the concealer does this and the pilot
        must not run, since two things engaging one ego is the same class of mistake as two
-       /clock publishers. -->
+       /clock publishers.
+
+       respawn: auto_drive drives one vehicle to one goal and exits: on arrival, or when
+       the scenario despawns the ego within reach of the goal. A long-lived ego stack serves
+       consecutive scenarios, and without a pilot the next one spawns an ego that never
+       moves (`just scenario`'s health gate refuses it: "auto_drive is not running").
+       Respawned, it waits for the next ego exactly as it did for the first (roadmap 015
+       step 5). -->
   <group unless="$(var managed)">
-    <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen">
+    <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen"
+          respawn="true" respawn_delay="5.0">
       <param name="poses_file" value="$(var goal_poses_file)" />
       <param name="timeout" value="$(var pilot_timeout)" />
       <param name="stabilize_seconds" value="$(var pilot_stabilize_seconds)" />
