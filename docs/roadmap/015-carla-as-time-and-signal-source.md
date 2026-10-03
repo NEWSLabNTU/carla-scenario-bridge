@@ -434,8 +434,11 @@ Measurement first. No step lands before the number it changes is known.
 - [ ] **Open**: a 2.99 s `/clock` leap 3 s before the ego spawn, while CARLA was still async
       between csb's Initialize and its spawn (csb idle, waiting on SSv2): the server itself
       stalled. `/clock` is CARLA time by decision, so acb cannot smooth it; it cost one
-      0.2 s EMERGENCY_STOP blip before engage. Candidate: csb enters sync mode at the end of
-      Initialize and ticks at the step rate until the spawn, so an idle stall is a pause
+      0.2 s EMERGENCY_STOP blip before engage. CARLA produced no tick for 3 s right after
+      csb froze and set the 36 lights (43.6 s → 46.6 s in the bridge log); whether the light
+      writes or something else stalled the server is not known. Ticking through that window
+      is not free: SSv2 sends no frame between Initialize and the ego spawn, so csb would
+      need its own step-rate ticker thread until the spawn. Not done; the blip is harmless
 - [x] `ego_av.launch.xml`: `publish_clock` no longer derived from `managed`; comment updated
       (done with step 3, csb `a50f430`: a managed ego has no other `/clock` once the fork runs
       `clock_source: simulator`; `ACB_PUBLISH_CLOCK=false` is the emergency off)
