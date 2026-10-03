@@ -445,20 +445,31 @@ Measurement first. No step lands before the number it changes is known.
 
 ### Episode change (step 6)
 
-Not run live (2026-10-02): only Town01 scenarios exist, and a `load_world` would take the
-shared CARLA. Covered offline: csb `a_reload_continues_one_step_after_the_last_frame`,
-`epochs_accumulate_over_several_reloads`, `sync_mode_is_on_before_the_pre_reload_snapshot`;
-acb `episode_change_continues_one_step_after_the_last_frame`,
-`reconnect_continues_from_the_last_published_clock`; and on both sides the same `nanos` table
-plus `sim_ns_rounds_each_term_not_the_sum` / `epoch_sums_rounded_terms_like_csb`, which pin
-the post-reload time to `nanos(elapsed) + nanos(E_last) + nanos(Δ_last)` in both crates.
+**Live test blocked by the host's CARLA, 2026-10-03.** CARLA 0.9.16 on newslab-server139
+cannot start a new episode at all: `load_world('Town02')` segfaults the server after a
+120–300 s hang, and `reload_world()` on the same map hangs past 180 s. Reproduced five
+times: through csb's reload path (sync mode first) and from a plain Python client in async
+mode; with the ego stack's acb attached and with nothing but an idle csb attached; on a
+CARLA up for 4 days (with a chronic `Invalid session: no stream available` storm) and on
+fresh ones with none; on the private Xvnc `:4` (no GLX) and fully headless. Town02 is in
+`get_available_maps()`. So the defect is in this CARLA install, not in the reload path;
+the earlier "CARLA segfaults under long uptime" entries may share it. Logs:
+`scratchpad/carla-crash-1003{,b,c,d,e}.log`, `carla-hang-1003f.log`.
 
 - [ ] Live: change the town between two scenarios with the ego stack up. Both episode-change
       lines fire with the same epoch; `/clock` never decreases; the next scenario's signal
-      stamps equal `/clock` (bit-exact); no "jump back in time" from tf2; the ego drives
-- [ ] Live: restart CARLA with the ego stack up. acb's reconnect fallback keeps `/clock`
-      monotonic; the health check names the restart the stack now needs for csb and acb to
-      agree again
+      stamps equal `/clock` (bit-exact); no "jump back in time" from tf2; the ego drives.
+      **Blocked** (above). `scenarios/town02_episode_change.xosc` (no entities, 5 s) is the
+      ready-made trigger for when a CARLA that can load maps is available
+- [x] Live: restart CARLA with the ego stack up -- done incidentally, **four times**, by the
+      crashes above. acb's reconnect fallback kept `/clock` monotonic every time, e.g.
+      `Episode change: epoch 0 -> 711.754950153, sim_time continues at 711.755050282`, then
+      `711.754950153 -> 776.398702833`; the traffic-light publisher followed each new
+      episode. As designed, csb's epoch does not follow a restart; the ego stack and bridge
+      were restarted to re-align them
+- [ ] csb's side of the episode rule (sync, read last frame, reload, bump) is covered by unit
+      tests only. Note that CARLA's own `LoadEpisode` already sends tick cues while waiting
+      in synchronous mode, so sync-before-reload cannot deadlock the load itself
 
 ## Acceptance
 

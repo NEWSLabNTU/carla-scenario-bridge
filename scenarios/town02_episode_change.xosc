@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<!--
+	Town02, no entities: exists only to make csb load a different town, so roadmap 015
+	step 6 can be tested live. Run it between two Town01 scenarios with the ego stack up:
+	csb reloads the world in synchronous mode and bumps its episode epoch; acb sees the new
+	episode and applies the same rule from the same last frame. /clock must pause across
+	each reload and never decrease, and the next Town01 scenario's stamps must equal /clock.
+	Succeeds after 5 s of simulation time.
+-->
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-10-03T00:00:00+00:00" description="Town02 world load with no entities, for the episode-change test (roadmap 015 step 6)" revMajor="1" revMinor="2" />
+	<ParameterDeclarations />
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town02" />
+	</RoadNetwork>
+	<Entities />
+	<Storyboard>
+		<Init>
+			<Actions />
+		</Init>
+		<Story name="town02_episode_change">
+			<Act name="wait_act">
+				<ManeuverGroup maximumExecutionCount="1" name="end_group">
+					<Actors selectTriggeringEntities="false" />
+					<Maneuver name="end_conditions">
+						<Event name="success" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="five_seconds" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="5" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>
