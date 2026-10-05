@@ -50,9 +50,12 @@ acb needs no free-running world to find its vehicle: it follows `on_tick`, and t
 spawn tick delivers the first frame with the hero in it. (Before 015 acb polled
 `world.actors()`, which is why sync mode used to be deferred until after the spawn.)
 
-**Safety fallback.** If csb dies or loses SSv2 for its watchdog period, csb (or the next csb
-to connect) restores asynchronous mode, so a crashed bridge cannot leave every other CARLA
-client blocked forever. That is a failure path, not idle behaviour.
+**No idle watchdog.** csb used to hand CARLA back to async after 10 s without a request
+(300 s with an ego) so a dead scenario would not leave the world frozen. That free-running
+is what this design removes, and a ZMQ REP socket cannot tell a dead SSv2 from a long pause
+anyway. A graceful csb shutdown still restores async; after a csb crash CARLA stays paused
+until the next csb takes it (which runs it synchronous anyway). Any other CARLA client that
+waits for ticks will wait while no scenario runs.
 
 ## Tick granularity
 

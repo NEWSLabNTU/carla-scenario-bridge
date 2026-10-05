@@ -1,31 +1,20 @@
 use prost::Message;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+
 
 use crate::coordinator::Coordinator;
 use crate::proto::simulation_api_schema::{
     self as api, simulation_request, simulation_response, SimulationRequest, SimulationResponse,
 };
 
-/// How long the bridge waits, after the ego is gone, before giving CARLA back to itself.
-///
-/// With no ego there is no session left to be deterministic for, so this can be short. A
-/// running scenario steps at `step_time` (0.1 s by default), so ten seconds is two orders
-/// of magnitude beyond a normal gap.
-const IDLE_BEFORE_ASYNC_NO_EGO: Duration = Duration::from_secs(10);
-
-/// The same, but while an ego still exists -- a last resort for a scenario that died
-/// without despawning anything.
-///
-/// This one must not fire on a pause, because restoring async hands the world to
-/// free-running physics: `fixed_delta_seconds` stops governing the step and the
-/// simulation advances at whatever rate the host manages, which is precisely what
-/// synchronous mode exists to prevent. SSv2 pauses routinely and legitimately -- Autoware
-/// initialisation alone runs to `initialize_duration`, 120 s by default -- so this sits
-/// well beyond any pause the protocol can produce. A hard-killed scenario still
-/// self-heals, just in five minutes rather than ten seconds.
-const IDLE_BEFORE_ASYNC_WITH_EGO: Duration = Duration::from_secs(300);
+// No idle watchdog. Until roadmap 015 step 7 the bridge handed CARLA back to async after
+// 10 s without a request (300 s with an ego), so the world would not stay frozen if a
+// scenario died. That free-running is what put /clock leaps and idle-gap timeouts into the
+// ego's Autoware, and a REP socket cannot tell a dead SSv2 from a long pause anyway. CARLA
+// now stays synchronous and paused between scenarios, csb its only ticker; a graceful
+// shutdown still restores async (Coordinator::shutdown). See
+// docs/design/time-and-ticking.md.
 
 pub struct ZmqServer {
     socket: zmq::Socket,
@@ -47,36 +36,12 @@ impl ZmqServer {
     /// Run the server loop until shutdown is signaled.
     pub fn run(&mut self, shutdown: Arc<AtomicBool>) {
         tracing::info!("ZMQ server ready, waiting for SSv2 requests...");
-        let mut last_request = Instant::now();
 
         while !shutdown.load(Ordering::SeqCst) {
             // Poll with 100ms timeout so we can check shutdown
             let mut items = [self.socket.as_poll_item(zmq::POLLIN)];
             match zmq::poll(&mut items, 100) {
                 Ok(0) => {
-                    // No request for a while, but CARLA is still held in synchronous mode:
-                    // the scenario ended or died without the bridge being told, so nothing
-                    // is ticking and the world is frozen. Every later run then meets a dead
-                    // world -- the ego spawns and cannot move, or SSv2 never gets as far as
-                    // Initialize. Hand sync mode back so CARLA runs on its own again.
-                    //
-                    // Safe to do unprompted: if the session is merely slow, the next frame
-                    // finds sync mode off and turns it back on (see decide_frame_action).
-                    let limit = if self.coordinator.has_ego() {
-                        IDLE_BEFORE_ASYNC_WITH_EGO
-                    } else {
-                        IDLE_BEFORE_ASYNC_NO_EGO
-                    };
-                    if self.coordinator.sync_mode_enabled() && last_request.elapsed() > limit {
-                        tracing::warn!(
-                            "No SSv2 request for {:?} while CARLA is in synchronous mode \
-                             (ego present: {}); restoring async so the world is not left \
-                             frozen",
-                            limit,
-                            self.coordinator.has_ego()
-                        );
-                        self.coordinator.restore_async_mode();
-                    }
                     continue; // timeout, no message
                 }
                 Ok(_) => {} // message ready
@@ -98,7 +63,6 @@ impl ZmqServer {
                 }
             };
 
-            last_request = Instant::now();
 
             // Decode, dispatch, encode, send
             let response_bytes = self.dispatch(&msg);

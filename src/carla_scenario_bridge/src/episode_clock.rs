@@ -88,6 +88,39 @@ pub fn fmt_ns(ns: i64) -> String {
     format!("{sign}{}.{:09}", a / 1_000_000_000, a % 1_000_000_000)
 }
 
+/// The old episode's last `elapsed_seconds`, counted from csb's two snapshots around a
+/// synchronous `load_world(town, reset_settings = false)` (roadmap 015 step 7).
+///
+/// CARLA's `LoadEpisode` ticks the old episode itself while it waits, so the frame csb read
+/// before the load (`f0`, `e0`, step `delta`) is not the old episode's last: acb, following
+/// `on_tick`, sees the extra frames. The frame counter continues across episodes, and the new
+/// world (kept synchronous) only advances by `delta` per tick, so its snapshot `(f1, e1)`
+/// says how many of the frames since `f0` belong to it -- `round(e1 / delta)` -- and the rest
+/// were the old episode's. The old episode's elapsed time is then `e0` plus `delta` added
+/// once per extra frame, accumulated as CARLA accumulates it so the result is bit-identical
+/// to the frame acb saw last.
+///
+/// `None` if the numbers do not describe such a load (no step, frames going backwards, or an
+/// implausible count): the caller then falls back to `e0`.
+pub fn old_episode_last_elapsed(e0: f64, delta: f64, f0: u64, f1: u64, e1: f64) -> Option<f64> {
+    if delta.is_nan() || delta <= 0.0 || f1 <= f0 || e1.is_nan() || e1 < 0.0 {
+        return None;
+    }
+    let n_new = (e1 / delta).round();
+    if !(0.0..=1e6).contains(&n_new) {
+        return None;
+    }
+    let k_old = (f1 - f0) as i64 - n_new as i64;
+    if !(0..=1000).contains(&k_old) {
+        return None;
+    }
+    let mut e = e0;
+    for _ in 0..k_old {
+        e += delta;
+    }
+    Some(e)
+}
+
 /// The CARLA operations an episode change is made of, so their order can be tested
 /// without a server.
 pub trait EpisodeReload {
@@ -192,6 +225,40 @@ mod tests {
             self.elapsed = 0.0;
             Ok("Town02")
         }
+    }
+
+    /// Measured live, 0.9.16 (2026-10-05): one old-episode frame after csb's snapshot, and
+    /// the new world's first frame at `elapsed = delta`, both directions.
+    #[test]
+    fn frame_count_reproduces_the_frame_acbs_stream_ended_on() {
+        let d = 0.05_f32 as f64;
+        // Town01 -> Town02: F0 769975, E0 13.738989307, F1 769977, E1 0.050000001.
+        let e0 = 13.738989307_f64;
+        let got = old_episode_last_elapsed(e0, d, 769_975, 769_977, d).unwrap();
+        assert_eq!(got, e0 + d, "k_old = 1: the stream's last old frame was F0 + 1");
+        // Synthetic: k_old extra old frames and n_new new ones.
+        for k_old in 0..=5_u64 {
+            for n_new in 1..=3_u64 {
+                let mut e1 = 0.0;
+                for _ in 0..n_new {
+                    e1 += d;
+                }
+                let mut want = 100.0_f64;
+                for _ in 0..k_old {
+                    want += d;
+                }
+                let got = old_episode_last_elapsed(100.0, d, 1000, 1000 + k_old + n_new, e1);
+                assert_eq!(got, Some(want), "k_old {k_old}, n_new {n_new}");
+            }
+        }
+    }
+
+    #[test]
+    fn frame_count_refuses_numbers_that_are_not_a_synchronous_load() {
+        assert_eq!(old_episode_last_elapsed(1.0, 0.0, 10, 12, 0.05), None, "no step");
+        assert_eq!(old_episode_last_elapsed(1.0, 0.05, 12, 10, 0.05), None, "frames backwards");
+        assert_eq!(old_episode_last_elapsed(1.0, 0.05, 10, 12, 0.5), None, "more new frames than frames");
+        assert_eq!(old_episode_last_elapsed(1.0, 0.05, 10, 5000, 0.05), None, "implausible count");
     }
 
     #[test]

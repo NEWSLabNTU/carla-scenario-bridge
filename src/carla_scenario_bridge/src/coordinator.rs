@@ -389,7 +389,9 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
 use crate::collision_monitor::CollisionMonitor;
 use crate::coordinate_conversion::{self, OriginOffset};
 use crate::entity_manager::{EntityManager, EntityType};
-use crate::episode_clock::{fmt_ns, reload_as_pause, tick_then_read, EpisodeClock, EpisodeReload};
+use crate::episode_clock::{
+    fmt_ns, old_episode_last_elapsed, reload_as_pause, tick_then_read, EpisodeClock, EpisodeReload,
+};
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs::{self, BoundingBox};
@@ -408,6 +410,8 @@ struct CoordinatorReload<'a> {
     coordinator: &'a mut Coordinator,
     town: &'a str,
     current_town: &'a str,
+    /// Frame number of the pre-reload snapshot, for the frame count after the load.
+    f0: Option<u64>,
 }
 
 impl EpisodeReload for CoordinatorReload<'_> {
@@ -419,7 +423,10 @@ impl EpisodeReload for CoordinatorReload<'_> {
     }
 
     fn read_frame(&mut self) -> Result<(f64, f64)> {
-        self.coordinator.read_frame()
+        let snapshot = self.coordinator.world.snapshot().wrap_err("world snapshot")?;
+        let ts = snapshot.timestamp();
+        self.f0 = Some(snapshot.frame() as u64);
+        Ok((ts.elapsed_seconds, ts.delta_seconds))
     }
 
     fn reload(&mut self) -> Result<carla::client::World> {
@@ -617,6 +624,8 @@ fn entity_status_result(unknown: &[String], teleport_failures: &[String]) -> Pro
 }
 
 pub struct Coordinator {
+    /// The server's map list, fetched once (see `prepare_map`).
+    available_maps: Option<Vec<String>>,
     /// Kept so the bridge can rebuild `world` after a CARLA outage.
     client: Client,
     carla_host: String,
@@ -729,6 +738,7 @@ impl Coordinator {
             localization_warmup: config_for_release.localization_warmup_s,
             spawned_actors: SpawnLedger::default(),
             froze_traffic_lights: FreezeGuard::default(),
+            available_maps: None,
             held_light_timings: Vec::new(),
             consecutive_carla_failures: 0,
             previous_longitudinal_accel: HashMap::new(),
@@ -1078,15 +1088,15 @@ impl Coordinator {
             let _ = self.client.set_timeout(Duration::from_secs(120));
             let prepared = self.reload_as_pause(&town, &current_town);
             let _ = self.client.set_timeout(Duration::from_secs(30));
-            // The pause left CARLA synchronous: the old world if the load failed (its
-            // settings are untouched), and the new one only if the server kept settings
-            // across the load. Either way Initialize wants async until the ego exists.
+            // CARLA stays synchronous across the load (reset_settings = false), and csb stays
+            // its only ticker. Re-apply the settings to the new world anyway: the step and
+            // physics substeps are this bridge's, and a failed load left the old world.
             self.sync_mode_enabled = false;
-            if prepared.is_err() {
-                self.force_async_mode();
+            let world = prepared?;
+            self.world = world;
+            if let Err(e) = self.enable_sync_mode() {
+                tracing::warn!("Could not re-apply synchronous mode to the new world: {e}");
             }
-            self.world = prepared?;
-            self.force_async_mode();
 
             // The old world and everything in it is gone. Anything still recorded for
             // teardown refers to actors that no longer exist.
@@ -1113,11 +1123,14 @@ impl Coordinator {
     /// land on the same epoch with no channel between them. Read in async mode instead and
     /// CARLA could tick once more before the load, putting acb one step ahead of csb.
     fn reload_as_pause(&mut self, town: &str, current_town: &str) -> Result<carla::client::World> {
-        let out = reload_as_pause(&mut CoordinatorReload {
+        let mut backend = CoordinatorReload {
             coordinator: self,
             town,
             current_town,
-        });
+            f0: None,
+        };
+        let out = reload_as_pause(&mut backend);
+        let f0 = backend.f0;
         if let Some(e) = &out.sync_error {
             tracing::warn!(
                 "Could not switch CARLA to synchronous mode before reloading ({e}); acb may \
@@ -1129,7 +1142,34 @@ impl Coordinator {
         }
         let world = out.world?;
 
-        let last = out.last_frame.or(self.episode_clock.last_frame());
+        // The snapshot csb read is not the old episode's last frame: CARLA's LoadEpisode
+        // ticked it again while waiting. Count the extra frames from the new world's first
+        // snapshot (see `old_episode_last_elapsed`), so the epoch lands where acb's does.
+        let counted = match (out.last_frame, f0, world.snapshot()) {
+            (Some((e0, d0)), Some(f0), Ok(after)) => {
+                let e1 = after.timestamp().elapsed_seconds;
+                let f1 = after.frame() as u64;
+                match old_episode_last_elapsed(e0, d0, f0, f1, e1) {
+                    Some(e_last) => {
+                        tracing::debug!(
+                            "Old episode's last frame counted: F0 {f0} E0 {e0:.9}, F1 {f1} E1 \
+                             {e1:.9} -> E_last {e_last:.9}"
+                        );
+                        Some((e_last, d0))
+                    }
+                    None => {
+                        tracing::warn!(
+                            "Could not count the old episode's frames (F0 {f0} E0 {e0:.9}, F1 {f1} \
+                             E1 {e1:.9}); the epoch uses the pre-reload snapshot and may trail \
+                             acb's by the frames CARLA ticked during the load"
+                        );
+                        Some((e0, d0))
+                    }
+                }
+            }
+            (last, _, _) => last,
+        };
+        let last = counted.or(self.episode_clock.last_frame());
         let (e_last, d_last) = last.unwrap_or_else(|| {
             tracing::warn!(
                 "No last frame known for the old episode; the new one starts at the current \
@@ -1171,10 +1211,16 @@ impl Coordinator {
         // load_world on a town the server does not have segfaults inside carla-rust
         // (the C++ exception never crosses the FFI as an Err), so the name must be
         // validated against the server's own list first.
-        let available = self
-            .client
-            .avaiable_maps()
-            .map_err(|e| eyre::eyre!("list available maps: {e}"))?;
+        // Listed once per bridge and cached: the server's maps cannot change while it runs,
+        // and the listing took 20-35 s on every reload (roadmap 015 step 7).
+        if self.available_maps.is_none() {
+            self.available_maps = Some(
+                self.client
+                    .avaiable_maps()
+                    .map_err(|e| eyre::eyre!("list available maps: {e}"))?,
+            );
+        }
+        let available = self.available_maps.clone().unwrap_or_default();
         let known = available.iter().any(|m| m.rsplit('/').next() == Some(town));
         if !known {
             eyre::bail!(
@@ -1188,8 +1234,12 @@ impl Coordinator {
         }
 
         tracing::info!("Loading map '{town}' (CARLA currently holds '{current_town}')");
+        // reset_settings = false: the new world stays synchronous, so it advances only when
+        // csb ticks it -- csb is the only ticker (docs/design/time-and-ticking.md) -- and
+        // the frame count after the load is exact. The default reverts it to async, where it
+        // free-runs until someone reads it (and loads took 44 s to over 120 s).
         self.client
-            .load_world(town)
+            .load_world_opt(town, false)
             .map_err(|e| eyre::eyre!("load world '{town}': {e}"))
     }
 
@@ -1740,7 +1790,14 @@ impl Coordinator {
             }
         }
 
-        self.force_async_mode();
+        // Synchronous from here on, with csb the only ticker: nothing advances the world
+        // between scenarios or before the ego spawns, so idle time is a pause and a server
+        // stall cannot reach /clock as a leap (docs/design/time-and-ticking.md). acb needs no
+        // free-running world to find its vehicle; it follows on_tick, and the spawn's tick
+        // delivers the first frame.
+        if let Err(e) = self.enable_sync_mode() {
+            tracing::warn!("Could not put CARLA in synchronous mode at Initialize: {e}");
+        }
 
         // Fresh run, fresh warnings -- otherwise a second scenario in one process would
         // stay quiet about problems it also has.
@@ -1795,59 +1852,17 @@ impl Coordinator {
         self.spawn_background_avs();
 
         tracing::info!(
-            "Initialized (step_time={}). CARLA left in async mode until the ego is spawned.",
+            "Initialized (step_time={}). CARLA synchronous; csb is its only ticker.",
             req.step_time
         );
-        // CARLA is free-running here, so this is the time at the reply, not a frame SSv2
-        // will step from; the first UpdateFrame reports the next one.
+        // CARLA is paused here: this is the frame SSv2's first UpdateFrame steps from.
         api::InitializeResponse {
             result: Some(proto_ok()),
             simulation_time_ns: self.current_simulation_time_ns(),
         }
     }
 
-    /// Force CARLA into asynchronous mode, whatever it was in before.
-    ///
-    /// Unlike [`restore_async_mode`](Self::restore_async_mode), this does not check whether
-    /// *this* bridge enabled sync mode. At `Initialize` the bridge is taking the world for a
-    /// scenario, and the state CARLA happens to be in — possibly left synchronous by a run
-    /// that died — is not something to inherit.
-    fn force_async_mode(&mut self) {
-        let settings = match self.world.settings() {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("Could not read CARLA settings to force async mode: {e}");
-                return;
-            }
-        };
 
-        if !settings.synchronous_mode {
-            return;
-        }
-
-        tracing::info!("CARLA was left in synchronous mode; forcing async for startup");
-        let mut settings = settings;
-        settings.synchronous_mode = false;
-        settings.fixed_delta_seconds = None;
-        if let Err(e) = self
-            .world
-            .apply_settings(&settings, Duration::from_secs(10))
-        {
-            // Not fatal here, but say so plainly: acb_bridge polls for its vehicle and needs
-            // CARLA advancing, so a stuck synchronous world will stall startup.
-            tracing::error!(
-                "Failed to force CARLA back to async mode ({e}). Startup may deadlock: \
-                 acb_bridge cannot discover its vehicle while CARLA is frozen."
-            );
-        }
-    }
-
-    /// Whether an ego exists in this session. The idle watchdog uses it to tell a
-    /// finished scenario from one that is merely paused: SSv2 pauses routinely, for
-    /// `initialize_duration` alone, and a pause with a live ego must keep sync mode.
-    pub fn has_ego(&self) -> bool {
-        self.has_ego
-    }
 
     /// Hold a freshly spawned ego still until its bridge says localization is on it.
     ///
@@ -1923,13 +1938,6 @@ impl Coordinator {
         }
     }
 
-    /// Whether this bridge currently holds CARLA in synchronous mode.
-    ///
-    /// The server loop uses this to notice a session that has gone away while sync mode is
-    /// still on, which leaves CARLA frozen with nobody ticking it.
-    pub fn sync_mode_enabled(&self) -> bool {
-        self.sync_mode_enabled
-    }
 
     /// Switch CARLA into synchronous mode at `self.step_time` divided by `self.substeps`.
     ///

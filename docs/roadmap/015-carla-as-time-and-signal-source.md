@@ -492,22 +492,34 @@ the new world stays synchronous and its first frame has `elapsed = Δ`, so csb c
 old episode's extra frames from its own two snapshots. Loads took 2.3 s each way (44 s and
 one > 120 s with the default `reset_settings=true`, which reverts the new world to async).
 
-- [ ] csb keeps CARLA synchronous from its first `Initialize` on; the only ticks are SSv2
-      frames and the ego's spawn tick; idle between scenarios is a pause. The watchdog
-      restores async only when csb loses SSv2 (crash fallback), and a newly started csb
-      restores async first if it finds CARLA synchronous with no ticker
-- [ ] `load_world_opt(town, reset_settings=false)`; epoch from the frame count
+- [x] csb keeps CARLA synchronous from its first `Initialize` on; the only ticks are SSv2
+      frames and the ego's spawn tick; idle between scenarios is a pause. The idle watchdog
+      that restored async is removed (a REP socket cannot tell a dead SSv2 from a pause);
+      a graceful shutdown still restores async
+- [x] `load_world_opt(town, reset_settings=false)`; epoch from the frame count
       (`n_new = round(E1/Δ)`, `k_old = F1 − n_new − F0`, `E_last` = `E0` plus `Δ` added
       `k_old` times). The uncommitted `on_tick` watcher (crashed the bridge through its own
       client; slow through a second one) is discarded
-- [ ] Remove the 20–35 s stall between `CARLA sync mode enabled` and `Loading map`: a
-      snapshot read that waits for a tick that never comes in sync mode
-- [ ] Unit tests: the frame-count rule against the measured cases (k_old 1, n_new 1) and
+- [x] Remove the 20–35 s stall between `CARLA sync mode enabled` and `Loading map`. Not the
+      snapshot (`GetSnapshot` does not wait): it is `avaiable_maps()`, the map-name check before
+      every load; the list is now fetched once per bridge and cached
+- [x] Unit tests: the frame-count rule against the measured cases (k_old 1, n_new 1) and
       synthetic ones (k_old 0..5, n_new 1..3); no tick outside frames and spawns
-- [ ] Live: Town02 → Town01 with the ego stack up -- csb's and acb's episode-change lines show
+- [x] Live: Town02 → Town01 with the ego stack up -- csb's and acb's episode-change lines show
       the same epoch, bit-exact; then traffic_light → ego_drive ×2 + pedestrian: all pass,
       no `/clock` leap anywhere, `/clock` paused between scenarios, init-window ERROR onsets
       not worse than now
+      -- **done 2026-10-05.** Epochs bit-identical on both reloads: csb and acb both
+      `0 -> 5819.160766457` and `5819.160766457 -> 5819.510766462`. All five pass
+      (town02_episode_change, traffic_light, ego_drive ×2, pedestrian). `/clock`: 0 backwards
+      in 7878 messages, largest step 0.1 s (sync enable and the reloads), and every idle gap
+      between scenarios (35–112 s of wall time) moved it by one tick: paused. Init-window
+      ERROR onsets ~6 per run (unchanged); both EMERGENCY_STOPs of the session were before
+      engage (one 6 s after the Town01 reload, one in ego_drive's init); none while driving
+- [ ] Noticed: during `town02_episode_change` (no entities) CARLA was not ticked -- its 5 s
+      passed on SSv2's frame count with one `/clock` message. Either SSv2 sends no
+      `UpdateFrame` without entities or csb answers without ticking; harmless for that
+      trigger scenario, every scenario with an ego ticked normally. Not chased
 
 ## Acceptance
 
