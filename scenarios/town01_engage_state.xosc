@@ -1,0 +1,142 @@
+<?xml version="1.0"?>
+<!--
+	Town01 ego drive, judged on Autoware's own state through the concealer rather than on
+	position: an event records that ego.currentState reached DRIVING, and the run succeeds
+	when the state is ARRIVED_GOAL and DRIVING was seen. Exists to show ego-state conditions
+	work with a managed ego (roadmap 012, "full expressiveness"). Unmanaged runs cannot use it:
+	the concealer is inert there (scenario-authoring.md, rule 2).
+-->
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-04-03T00:00:00+00:00" description="Town01 ego drive judged on the ego engage state (roadmap 012)" revMajor="1" revMinor="2" />
+	<ParameterDeclarations>
+		<ParameterDeclaration name="driving_seen" parameterType="boolean" value="false" />
+	</ParameterDeclarations>
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town01" />
+	</RoadNetwork>
+	<Entities>
+		<ScenarioObject name="ego">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="Autoware">
+					<Properties>
+						<Property name="maxJerk" value="1.5" />
+						<Property name="minJerk" value="-1.5" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+	</Entities>
+	<Storyboard>
+		<Init>
+			<Actions>
+				<Private entityRef="ego">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="190.8" y="-130.1" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="120.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+			</Actions>
+		</Init>
+		<Story name="town01_engage_state">
+			<Act name="drive_act">
+				<ManeuverGroup maximumExecutionCount="1" name="ego_maneuvers">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="ego" />
+					</Actors>
+					<Maneuver name="end_conditions">
+						<Event name="driving" priority="parallel">
+							<Action name="mark_driving">
+								<GlobalAction>
+									<ParameterAction parameterRef="driving_seen">
+										<SetAction value="true" />
+									</ParameterAction>
+								</GlobalAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="state_driving" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<UserDefinedValueCondition name="ego.currentState" value="DRIVING" rule="equalTo" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="success" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="state_arrived" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<UserDefinedValueCondition name="ego.currentState" value="ARRIVED_GOAL" rule="equalTo" />
+										</ByValueCondition>
+									</Condition>
+									<Condition name="was_driving" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<ParameterCondition parameterRef="driving_seen" value="true" rule="equalTo" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="timeout" priority="parallel">
+							<Action name="exit_failure">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="timeout_condition" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="180" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>

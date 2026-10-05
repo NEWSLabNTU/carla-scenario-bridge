@@ -390,8 +390,12 @@ it entered the AND in this graph version.
       we would offer upstream (phase 005)
 - [x] Ego and background AV stacks share launch structure, differing only in domain and
       clock config
-- [ ] A scenario retains full expressiveness: ego routing from `.xosc`, engage-state
-      conditions work
+- [x] A scenario retains full expressiveness: ego routing from `.xosc`, engage-state
+      conditions work — `town01_engage_state.xosc` routes the ego from its `.xosc`, records
+      `ego.currentState == DRIVING` into a parameter and succeeds on `ARRIVED_GOAL` (passed
+      2026-10-06, ARRIVED_GOAL at 27 s). It first timed out: the concealer judged ARRIVED_GOAL's
+      2 s window with wall-time `now()` against Autoware's CARLA-time route stamp, so the
+      state went DRIVING → WAITING_FOR_ROUTE; fixed on the fork (SSv2 `6e14cbb1f`)
 - [x] Consecutive scenario runs reuse the ego stack without a restart — two runs, one
       stack, both engaged (320.0 → 269.6, then 320.0 → 105.3)
 - [x] `just test` passes — 90 tests run, 90 passed, 1 skipped, on the un-forked pin
