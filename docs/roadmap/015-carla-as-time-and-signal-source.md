@@ -445,31 +445,37 @@ Measurement first. No step lands before the number it changes is known.
 
 ### Episode change (step 6)
 
-**Live test blocked by the host's CARLA, 2026-10-03.** CARLA 0.9.16 on newslab-server139
-cannot start a new episode at all: `load_world('Town02')` segfaults the server after a
-120–300 s hang, and `reload_world()` on the same map hangs past 180 s. Reproduced five
-times: through csb's reload path (sync mode first) and from a plain Python client in async
-mode; with the ego stack's acb attached and with nothing but an idle csb attached; on a
-CARLA up for 4 days (with a chronic `Invalid session: no stream available` storm) and on
-fresh ones with none; on the private Xvnc `:4` (no GLX) and fully headless. Town02 is in
-`get_available_maps()`. So the defect is in this CARLA install, not in the reload path;
-the earlier "CARLA segfaults under long uptime" entries may share it. Logs:
-`scratchpad/carla-crash-1003{,b,c,d,e}.log`, `carla-hang-1003f.log`.
+**The host's CARLA could not change maps because it ran at `-quality-level=Low`.** At Low,
+CARLA 0.9.16 segfaults on `load_world` to another town and hangs on `reload_world()`: UE's own
+crash reports (`~/.config/Epic/CarlaUE4/Saved/Crashes/`) show
+`FLandscapeRenderSystem::FGetSectionLODBiasesTask` → `UTexture2D::GetNumResidentMips` on a
+texture freed by the level swap (carla-simulator/carla#4940). Reproduced five times on
+2026-10-03 regardless of display, client or uptime. At the default (Epic) quality the same
+server loaded Town02 in 44 s, Town01 in 4 s and `reload_world` in 4.5 s. acb `4d440dc`:
+`third_party/carla/run.sh` defaults to Epic.
 
-- [ ] Live: change the town between two scenarios with the ego stack up. Both episode-change
-      lines fire with the same epoch; `/clock` never decreases; the next scenario's signal
-      stamps equal `/clock` (bit-exact); no "jump back in time" from tf2; the ego drives.
-      **Blocked** (above). `scenarios/town02_episode_change.xosc` (no entities, 5 s) is the
-      ready-made trigger for when a CARLA that can load maps is available
-- [x] Live: restart CARLA with the ego stack up -- done incidentally, **four times**, by the
-      crashes above. acb's reconnect fallback kept `/clock` monotonic every time, e.g.
-      `Episode change: epoch 0 -> 711.754950153, sim_time continues at 711.755050282`, then
-      `711.754950153 -> 776.398702833`; the traffic-light publisher followed each new
-      episode. As designed, csb's epoch does not follow a restart; the ego stack and bridge
-      were restarted to re-align them
-- [ ] csb's side of the episode rule (sync, read last frame, reload, bump) is covered by unit
-      tests only. Note that CARLA's own `LoadEpisode` already sends tick cues while waiting
-      in synchronous mode, so sync-before-reload cannot deadlock the load itself
+- [x] Live (2026-10-05, Epic CARLA): `town02_episode_change.xosc` then `town01_traffic_light`
+      with the ego stack up -- **both pass**; csb and acb each log an episode change for both
+      reloads (1.6 s each); `/clock` never decreases; the ego drives the Town01 scenario
+- [ ] **csb's and acb's epochs differ by the frames CARLA ticks during the load**: 0.05 s and
+      0.10 s in that run (csb 660.840076844 / 705.683309788, acb 660.890076844 /
+      705.783309789). CARLA's `LoadEpisode` sends a tick cue every 50 ms while it waits in
+      synchronous mode, so the old episode advances after csb's snapshot; acb's `on_tick`
+      stream sees those frames. Sync-before-reload cannot prevent it. Tried: csb watching the
+      same `on_tick` stream across the load -- through its own client it **crashed the bridge**
+      (SIGSEGV in LibCarla when the load swapped the episode under the callback); through a
+      separate client (as acb does) the next reload took > 120 s and timed out, against 1.6 s
+      without the watcher (one run, on a server that had just been through the crash, so not
+      conclusive). Uncommitted. Note: since step 4 nothing Autoware consumes carries an SSv2
+      stamp (signals come from acb, the concealer stamps the initial pose from a scan), so the
+      skew affects only SSv2's own ROS time
+- [x] Live: restart CARLA with the ego stack up -- done **four times** by the Low-quality
+      crashes. acb's reconnect fallback kept `/clock` monotonic every time, e.g.
+      `epoch 0 -> 711.754950153, sim_time continues at 711.755050282`, then
+      `711.754950153 -> 776.398702833`; the traffic-light publisher followed each new episode
+- [ ] A 20–35 s gap between `CARLA sync mode enabled` and `Loading map` in every reload, before
+      and after the watcher change: something on that path blocks (the snapshot read in sync
+      mode is the suspect). Costs time, not correctness
 
 ## Acceptance
 

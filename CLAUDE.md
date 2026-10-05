@@ -301,14 +301,17 @@ for t in /proc/$(pgrep -x acb_bridge)/task/*; do grep -H State "$t/status"; done
 `carla-run-<port>` unit fails itself if RPC is not up in 180 s. A first launch on a new host
 took 120 s to serve RPC on this hardware, and with restart overhead the unit never came up.
 Pass `CARLA_DIR=... DISPLAY=:N just carla-start`, and if the unit keeps restarting, launch
-`./CarlaUE4.sh -quality-level=Low -carla-rpc-port=2000 -nosound -RenderOffScreen` directly
+`./CarlaUE4.sh -carla-rpc-port=2000 -nosound -RenderOffScreen` directly
 under `setsid` and wait. Any X display works for offscreen Vulkan rendering, GLX or not; a
 private one is `setsid /opt/TurboVNC/bin/Xvnc :4 -SecurityTypes None`.
-No display at all also works and is faster: `env -u DISPLAY setsid ./CarlaUE4.sh ...
--RenderOffScreen` served RPC in 41 s against 206 s on Xvnc `:4` (2026-10-03).
+No display at all also works: `env -u DISPLAY setsid ./CarlaUE4.sh ... -RenderOffScreen`
+(RPC up in 182 s at Epic quality, 2026-10-05; the 180 s unit limit is too tight for it).
 
-**This CARLA cannot change episodes.** `load_world` to any other town segfaults it after a
-long hang, and `reload_world()` hangs, with or without a display and with no other client
-attached (roadmap 015, step 6). Scenarios must stay on the town CARLA started with
-(Town01), and a scenario on another town takes the server down; restart it by pid (never
-`pkill -f CarlaUE4`, which matches the shell that runs it).
+**Never run CARLA at `-quality-level=Low`.** At Low, CARLA 0.9.16 segfaults on `load_world`
+to another town and hangs on `reload_world()`: UE 4.26's landscape render task reads a
+texture freed by the level swap (`FGetSectionLODBiasesTask` → `UTexture2D::GetNumResidentMips`
+in UE's own crash reports under `~/.config/Epic/CarlaUE4/Saved/Crashes/`, which is where to
+look first when CARLA dies -- its stdout has no stack). At the default (Epic) quality the
+same server loads Town02 in 44 s and back in 4 s (carla-simulator/carla#4940; roadmap 015
+step 6). acb's `third_party/carla/run.sh` now defaults to Epic. Kill CARLA by pid, and if it
+ignores SIGTERM use SIGKILL before starting another: a new instance on a held port crashes.
