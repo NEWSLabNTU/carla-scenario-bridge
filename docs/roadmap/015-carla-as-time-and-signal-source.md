@@ -522,7 +522,7 @@ one > 120 s with the default `reset_settings=true`, which reverts the new world 
 - [x] Step 7 also ended the idle-gap topic-monitor ERRORs: with time paused between
       scenarios, 0 ERROR onsets fell in the gaps of the 2026-10-05 suite (the "idle" onsets
       the classifier counted were outside the Town01 windows, around the map loads)
-- [ ] Noticed: `town02_episode_change` (no entities) finishes after ~3 CARLA ticks
+- [x] Noticed: `town02_episode_change` (no entities) finishes after ~3 CARLA ticks
       (passive frame probe: 930747 → 930750 over the whole run), not ~100. The interpreter
       calls `SimulatorCore::update()` every timer tick and csb ticks on every `UpdateFrame`
       once sync is on. Lead, not confirmed: the fork's clock logs `clock_source:=simulator,
@@ -530,6 +530,8 @@ one > 120 s with the default `reset_settings=true`, which reverts the new world 
       does` at start-up, and the interpreter is blocked ~60 s by the map load in Initialize,
       so a pure `SimulationTimeCondition` may be met before many frames run. Scenarios with
       an ego wait for engage and tick normally; harmless for the trigger scenario
+      **Accepted 2026-10-06**: with no vehicles in the world there is nothing to simulate, so
+      csb ticking CARLA only a few times is correct, not a defect
 - [x] Arbiter "Published traffic signal messages are not latest" (68 per session, throttled
       to one per 5 s): by construction in `traffic_light_arbiter` 0.48. Its output takes the
       stamp of the message that triggered it and warns when that is older than the newest
