@@ -366,8 +366,9 @@ it entered the AND in this graph version.
 
       Both reached AUTONOMOUS with routing SET, so the reused Autoware re-engages without a
       restart — the upstream-intended reuse flow, exercised here for the first time
-- [ ] End-to-end: single-ego scenario reaches `exitSuccess` with `ps` showing Autoware only
+- [x] End-to-end: single-ego scenario reaches `exitSuccess` with `ps` showing Autoware only
       under our launch files, none under SSv2
+      every run since: Autoware comes from `just ego-av`, SSv2's interpreter and preprocessor have 0 children (audit 2026-10-06)
 - [ ] ~~Regression guard: SSv2 submodule pin is reachable on upstream (no local commits)~~
       **not achievable as written, and superseded.** The pin carries one local commit on
       purpose: `Treat arrived_goal as a successful engage outcome`, which fixes a real race

@@ -73,23 +73,36 @@ CARLA's Traffic Manager can provide realistic background traffic alongside SSv2-
 ## Tasks
 
 ### Traffic Light Mapping
-- [ ] Enumerate all CARLA `TrafficLight` actors at startup (`world.actors().filter("traffic.traffic_light*")`)
-- [ ] Extract CARLA traffic light positions and OpenDRIVE signal references
-- [ ] Position-based matching: given lanelet signal ID + Lanelet2 map, find nearest CARLA actor
-- [ ] Fallback: load manual mapping from `config/traffic_light_map_{town}.yaml`
-- [ ] Log unmapped lanelet signal IDs as warnings
+- [x] Enumerate all CARLA `TrafficLight` actors at startup (`world.actors().filter("traffic.traffic_light*")`)
+      `Traffic light matching: 36 lanelet element(s), 36 CARLA light(s)` (audit 2026-10-06)
+- [x] Extract CARLA traffic light positions and OpenDRIVE signal references
+      `traffic_light_mapper.rs`, keyed by OpenDRIVE sign id (audit 2026-10-06)
+- [x] Position-based matching: given lanelet signal ID + Lanelet2 map, find nearest CARLA actor
+      36/36 on Town01, 24/24 on Town02 (5 m tolerance) (audit 2026-10-06)
+- [x] Fallback: load manual mapping from `config/traffic_light_map_{town}.yaml`
+      as `config/traffic_lights_<town>.yaml`, taking precedence over position matching (audit 2026-10-06)
+- [x] Log unmapped lanelet signal IDs as warnings
+      one-time warning per signal (audit 2026-10-06)
 
 ### Traffic Light Control
-- [ ] Freeze all CARLA traffic lights on `Initialize`
-- [ ] `UpdateTrafficLights` handler: convert SSv2 `TrafficSignal` to CARLA `TrafficLightState`
-- [ ] Handle multiple bulbs per signal (SSv2 can send arrow + circle states)
-- [ ] Unfreeze traffic lights on shutdown
-- [ ] Verify: CARLA traffic light visuals match SSv2 commands
+- [x] Freeze all CARLA traffic lights on `Initialize`
+      plus `hold_light_phases`; uncommanded lights GREEN since 015 (audit 2026-10-06)
+- [x] `UpdateTrafficLights` handler: convert SSv2 `TrafficSignal` to CARLA `TrafficLightState`
+      traffic_light passes: 43856 RED, then GREEN at t=150 (audit 2026-10-06)
+- [x] Handle multiple bulbs per signal (SSv2 can send arrow + circle states)
+      arrows are flattened to their colour: CARLA 0.9.16 has no arrow bulbs (014 gap 14) (audit 2026-10-06)
+- [x] Unfreeze traffic lights on shutdown
+      `Coordinator::shutdown` restores them (audit 2026-10-06)
+- [x] Verify: CARLA traffic light visuals match SSv2 commands
+      acb now publishes CARLA's own light state to Autoware and the ego obeys it (015 step 4) (audit 2026-10-06)
 
 ### Weather Extension
-- [ ] Define weather config schema in `bridge_config.yaml`
-- [ ] Implement `set_weather()` call on `Initialize` (static weather from config)
-- [ ] Optional: handle weather changes via `CustomCommandAction` or ROS parameter
+- [ ] ~~Define weather config schema in `bridge_config.yaml`~~
+      **Dropped** weather is gap 15 of 014: SSv2's protocol has no slot for it and its interpreter no-ops it; belongs to the upstream discussion (audit 2026-10-06)
+- [ ] ~~Implement `set_weather()` call on `Initialize` (static weather from config)~~
+      **Dropped** same, gap 15 (audit 2026-10-06)
+- [ ] ~~Optional: handle weather changes via `CustomCommandAction` or ROS parameter~~
+      **Dropped** same, gap 15 (audit 2026-10-06)
 
 ### Ambient Traffic (REJECTED — do not implement)
 - ~~Config option: `ambient_traffic.enabled`, `ambient_traffic.num_vehicles`~~
@@ -103,12 +116,20 @@ Replaced by background AVs — real Autoware stacks in their own ROS domains, sp
 
 ## Acceptance Criteria
 
-- [ ] CARLA traffic lights are frozen (no built-in cycling) during scenario execution
-- [ ] SSv2 `UpdateTrafficLights` with `RED` state makes CARLA traffic light display red
-- [ ] SSv2 `UpdateTrafficLights` with `GREEN` state makes CARLA traffic light display green
-- [ ] Traffic light mapping resolves at least 80% of lanelet signal IDs automatically (position-based) on Town01
-- [ ] Unmapped signal IDs produce a warning (not a crash)
-- [ ] Autoware's traffic light recognition detects the correct state (if `use_traffic_light_recognition=true`)
-- [ ] Traffic lights return to normal cycling after scenario ends (unfreeze on shutdown)
-- [ ] Weather can be set via config (e.g., rain scenario with `precipitation=80`)
+- [x] CARLA traffic lights are frozen (no built-in cycling) during scenario execution
+      held phases, 99,999 s (audit 2026-10-06)
+- [x] SSv2 `UpdateTrafficLights` with `RED` state makes CARLA traffic light display red
+      verified through acb's CARLA-state publisher (015) (audit 2026-10-06)
+- [x] SSv2 `UpdateTrafficLights` with `GREEN` state makes CARLA traffic light display green
+      same (audit 2026-10-06)
+- [x] Traffic light mapping resolves at least 80% of lanelet signal IDs automatically (position-based) on Town01
+      100% (36/36) on Town01 (audit 2026-10-06)
+- [x] Unmapped signal IDs produce a warning (not a crash)
+      warning, not a crash (audit 2026-10-06)
+- [ ] ~~Autoware's traffic light recognition detects the correct state (if `use_traffic_light_recognition=true`)~~
+      **Dropped** superseded by 009's V2X decision and 015: signal state comes from acb, and camera recognition is off by default (`traffic_light_fusion_only`) (audit 2026-10-06)
+- [x] Traffic lights return to normal cycling after scenario ends (unfreeze on shutdown)
+      on bridge shutdown; between scenarios they stay held, by design (CARLA is paused then) (audit 2026-10-06)
+- [ ] ~~Weather can be set via config (e.g., rain scenario with `precipitation=80`)~~
+      **Dropped** gap 15, as above (audit 2026-10-06)
 - ~~(Optional) Ambient traffic NPCs drive around without interfering with scenario logic~~ (rejected)

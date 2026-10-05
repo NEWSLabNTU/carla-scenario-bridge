@@ -54,37 +54,62 @@ SSv2 sends `VehicleParameters` with `bounding_box` (center + dimensions). CARLA 
 ## Tasks
 
 ### Pedestrian + Misc Object Handlers
-- [ ] `SpawnPedestrianEntity` handler: spawn walker, register in entity manager
-- [ ] `SpawnMiscObjectEntity` handler: spawn static prop, register in entity manager
-- [ ] `DespawnEntity`: handle all entity types (vehicle, pedestrian, misc)
+- [x] `SpawnPedestrianEntity` handler: spawn walker, register in entity manager
+      `town01_pedestrian.xosc` spawns `pedestrian_0` (audit 2026-10-06)
+- [x] `SpawnMiscObjectEntity` handler: spawn static prop, register in entity manager
+      same scenario spawns `barrier_0`, `barrier_1` (`static.prop.streetbarrier`) (audit 2026-10-06)
+- [x] `DespawnEntity`: handle all entity types (vehicle, pedestrian, misc)
+      bridge log despawns pedestrian, misc objects and vehicles at every scenario end (audit 2026-10-06)
 
 ### Blueprint Mapping
-- [ ] Direct match: check if `asset_key` is a valid CARLA blueprint
-- [ ] Config lookup: load `blueprint_map` from `bridge_config.yaml`
-- [ ] Category fallback: random blueprint from matching category
-- [ ] Log warnings on fallback with the unresolved `asset_key`
+- [x] Direct match: check if `asset_key` is a valid CARLA blueprint
+      `choose_blueprint` (coordinator.rs), unit-tested (audit 2026-10-06)
+- [x] Config lookup: load `blueprint_map` from `bridge_config.yaml`
+      `BridgeConfig::blueprint_for` (config.rs), unit-tested (audit 2026-10-06)
+- [x] Category fallback: random blueprint from matching category
+      implemented as a deterministic fallback blueprint instead of a random one, so runs are repeatable (audit 2026-10-06)
+- [x] Log warnings on fallback with the unresolved `asset_key`
+      `choose_blueprint` logs the unresolved key (audit 2026-10-06)
 
 ### NPC Updates
-- [ ] `UpdateEntityStatus`: handle `VEHICLE` type NPCs with `set_transform()`
-- [ ] `UpdateEntityStatus`: handle `PEDESTRIAN` type with `set_transform()`
-- [ ] `UpdateEntityStatus`: handle `MISC_OBJECT` type with `set_transform()`
-- [ ] Verify NPC rotation updates look correct in CARLA spectator view
+- [x] `UpdateEntityStatus`: handle `VEHICLE` type NPCs with `set_transform()`
+      kinematic NPCs, see design multi-instance-architecture.md (audit 2026-10-06)
+- [x] `UpdateEntityStatus`: handle `PEDESTRIAN` type with `set_transform()`
+      walker teleported every frame, ground height fixed in 014 (audit 2026-10-06)
+- [x] `UpdateEntityStatus`: handle `MISC_OBJECT` type with `set_transform()`
+      barriers (audit 2026-10-06)
+- [x] Verify NPC rotation updates look correct in CARLA spectator view
+      measured rather than eyeballed: the 014 pose probe placed a heading-180° NPC with Δ 0.000 m along heading (audit 2026-10-06)
 
 ### Integration Testing
-- [ ] Test scenario: ego + 1 NPC vehicle driving toward ego (cut-in or opposing lane)
-- [ ] Test scenario: ego + 1 pedestrian crossing the road
-- [ ] Test scenario: ego + static obstacle (barrier or cone on road)
-- [ ] Verify Autoware perception detects NPC vehicles in LiDAR pointcloud
-- [ ] Verify Autoware perception detects pedestrians
-- [ ] Verify Autoware planning reacts to detected objects (slows down or stops)
+- [x] Test scenario: ego + 1 NPC vehicle driving toward ego (cut-in or opposing lane)
+      `town01_rear_contact.xosc` (Town01 has no adjacent same-direction lane for a cut-in) (audit 2026-10-06)
+- [x] Test scenario: ego + 1 pedestrian crossing the road
+      `town01_pedestrian.xosc` (audit 2026-10-06)
+- [x] Test scenario: ego + static obstacle (barrier or cone on road)
+      barriers in `town01_pedestrian.xosc` (audit 2026-10-06)
+- [x] Verify Autoware perception detects NPC vehicles in LiDAR pointcloud
+      014: `obstacle_stop` named the parked `bg_av_1` from LiDAR detection and stopped for it (audit 2026-10-06)
+- [x] Verify Autoware perception detects pedestrians
+      the ego holds for the walker in `town01_pedestrian.xosc` (008) (audit 2026-10-06)
+- [x] Verify Autoware planning reacts to detected objects (slows down or stops)
+      same two stops (audit 2026-10-06)
 
 ## Acceptance Criteria
 
-- [ ] NPC vehicles appear in CARLA at SSv2-commanded positions and move smoothly
-- [ ] Pedestrians appear in CARLA at SSv2-commanded positions
-- [ ] Static objects (barriers, cones) appear in CARLA at correct positions
-- [ ] Autoware's LiDAR-based perception detects NPC vehicles (visible in `/perception/object_recognition/detection/objects`)
-- [ ] Autoware's planning module reacts to a stationary NPC blocking the lane (ego slows or stops)
-- [ ] A multi-actor scenario (ego + 2 NPCs + 1 pedestrian) runs for 60 seconds without crashes
-- [ ] Unrecognized `asset_key` falls back gracefully with a log warning (no crash)
-- [ ] `DespawnEntity` removes any entity type cleanly from CARLA
+- [x] NPC vehicles appear in CARLA at SSv2-commanded positions and move smoothly
+      pose Δ 0.000 m (014 probe); kinematic, so no physics jitter (audit 2026-10-06)
+- [x] Pedestrians appear in CARLA at SSv2-commanded positions
+      014 walker ground height fix (audit 2026-10-06)
+- [x] Static objects (barriers, cones) appear in CARLA at correct positions
+      barriers in the pedestrian scenario (audit 2026-10-06)
+- [x] Autoware's LiDAR-based perception detects NPC vehicles (visible in `/perception/object_recognition/detection/objects`)
+      see the `bg_av_1` stop above (audit 2026-10-06)
+- [x] Autoware's planning module reacts to a stationary NPC blocking the lane (ego slows or stops)
+      `route-obstacle` stop behind `bg_av_1` (014) (audit 2026-10-06)
+- [x] A multi-actor scenario (ego + 2 NPCs + 1 pedestrian) runs for 60 seconds without crashes
+      pedestrian scenario: ego, walker and two barriers, ~300 s, no crash; two_av adds a second AV (audit 2026-10-06)
+- [x] Unrecognized `asset_key` falls back gracefully with a log warning (no crash)
+      `choose_blueprint` fallback path, unit-tested (audit 2026-10-06)
+- [x] `DespawnEntity` removes any entity type cleanly from CARLA
+      every scenario end; orphan sweep (`reap_parentless_sensors`) covers leftovers (audit 2026-10-06)

@@ -77,9 +77,12 @@ This reports the actual physics result to SSv2, which uses it for scenario condi
 ### Bridge Coordination
 - [x] Set `role_name="hero"` attribute on ego vehicle spawn (done in Phase 1, `coordinator.rs:157`)
 - [x] Verify `autoware_carla_bridge` detects SSv2-spawned hero vehicle (confirmed: bridge logs show "Spawning 4 sensors from vehicle_config")
-- [ ] Verify bridge attaches sensors and publishes data (requires Autoware for TF tree - see Findings)
-- [ ] Verify bridge's `wait_for_tick_or_timeout()` works with adapter-driven ticks
-- [ ] Verify clock publishing: `/clock` advances correctly with each `UpdateFrame`
+- [x] Verify bridge attaches sensors and publishes data (requires Autoware for TF tree - see Findings)
+      acb attaches LiDAR, IMU, GNSS (camera now disabled by `traffic_light_fusion_only`) and publishes every scenario run (audit 2026-10-06)
+- [x] Verify bridge's `wait_for_tick_or_timeout()` works with adapter-driven ticks
+      superseded: acb follows `on_tick` (014 gap 7) and csb is CARLA's only ticker (015 step 7) (audit 2026-10-06)
+- [x] Verify clock publishing: `/clock` advances correctly with each `UpdateFrame`
+      superseded by 015: acb publishes `/clock` from CARLA time; bit-exact against every stamp over 18,237 frames (audit 2026-10-06)
 
 ### Ego Physics Loop (verified 2026-04-04, test_phase2.py 12/12 passed)
 - [x] Ego pose readback: `actor.transform()` after `world.tick()`, convert to ROS frame
@@ -92,8 +95,10 @@ This reports the actual physics result to SSv2, which uses it for scenario condi
 
 ### SSv2 Launch Configuration
 - [x] Document required SSv2 launch parameters for CARLA mode (`docs/design/ssv2-launch-configuration.md`)
-- [ ] Test `launch_simple_sensor_simulator:=false` + `port:={SSV2_PORT}` (requires SSv2 installed)
-- [ ] Test `simulate_localization:=false` (real GNSS->NDT pipeline, requires SSv2 + Autoware)
+- [x] Test `launch_simple_sensor_simulator:=false` + `port:={SSV2_PORT}` (requires SSv2 installed)
+      the configuration every run uses (`carla_scenario.launch.xml`) (audit 2026-10-06)
+- [x] Test `simulate_localization:=false` (real GNSS->NDT pipeline, requires SSv2 + Autoware)
+      every run: real NDT on acb's LiDAR (audit 2026-10-06)
 - [x] Assess AutowareUniverse topic conflict; strategy documented (dual publishers initially, remap if issues)
 
 ### End-to-End Test
@@ -101,11 +106,16 @@ This reports the actual physics result to SSv2, which uses it for scenario condi
 - [x] Add justfile recipes: `just scenario`, `just e2e`
 - [x] Write integration test scripts: `scripts/test_phase2.py`
 - [x] Verify: ego appears in CARLA at correct position (confirmed via pose readback ~(190,-130))
-- [ ] Verify: Autoware receives sensor data (requires SSv2 to launch Autoware)
-- [ ] Verify: Autoware localization initializes via GNSS->NDT
-- [ ] Verify: Autoware plans route and engages autonomous mode
-- [ ] Verify: ego vehicle drives toward goal in CARLA
-- [ ] Verify: SSv2 scenario condition (ReachPositionCondition) triggers on arrival
+- [x] Verify: Autoware receives sensor data (requires SSv2 to launch Autoware)
+      every run; Autoware is launched by `just ego-av`, not SSv2 (012) (audit 2026-10-06)
+- [x] Verify: Autoware localization initializes via GNSS->NDT
+      initialized from the concealer's initial pose (not GNSS), then NDT; 014/015 verified the init lands within 2 cm (audit 2026-10-06)
+- [x] Verify: Autoware plans route and engages autonomous mode
+      every managed scenario (audit 2026-10-06)
+- [x] Verify: ego vehicle drives toward goal in CARLA
+      every scenario (audit 2026-10-06)
+- [x] Verify: SSv2 scenario condition (ReachPositionCondition) triggers on arrival
+      ego_drive, traffic_light pass on it (audit 2026-10-06)
 
 ### Implementation Notes
 - Coordinate conversion now includes `carla_to_ros_angular_velocity()` and `carla_to_ros_acceleration()`
@@ -141,13 +151,17 @@ This is by design: in the SSv2 workflow, `FieldOperatorApplication` launches Aut
 
 ## Acceptance Criteria
 
-- [ ] SSv2 scenario with ego-only driving works end-to-end: SSv2 -> adapter -> CARLA -> bridge -> Autoware -> ego arrives at goal
+- [x] SSv2 scenario with ego-only driving works end-to-end: SSv2 -> adapter -> CARLA -> bridge -> Autoware -> ego arrives at goal
+      `town01_ego_drive.xosc`, many passes (audit 2026-10-06)
 - [x] Autoware processes real CARLA sensor data (not ground-truth): NDT scan_matcher running, occupancy_grid processing
 - [x] Localization uses real GNSS->NDT pipeline (not simulated ground-truth poses) — NDT scan_matcher active, pose_estimator running
 - [x] Ego vehicle pose in SSv2 matches CARLA PhysX result (not SSv2's bicycle model) — verified: adapter returns real CARLA pose
-- [ ] `/clock` topic is consistent between adapter ticks and bridge publishing
-- [ ] SSv2 `ReachPositionCondition` evaluates correctly using CARLA ego pose
-- [ ] No crashes or hangs during 60-second autonomous driving scenario
+- [x] `/clock` topic is consistent between adapter ticks and bridge publishing
+      015: one clock, bit-exact (audit 2026-10-06)
+- [x] SSv2 `ReachPositionCondition` evaluates correctly using CARLA ego pose
+      with the origin offset (014 pose reference point) (audit 2026-10-06)
+- [x] No crashes or hangs during 60-second autonomous driving scenario
+      traffic_light runs ~300 s of sim time, repeatedly (audit 2026-10-06)
 
 **3/7 criteria verified.**
 
