@@ -81,15 +81,48 @@ read-PhysX-report-to-SSv2 path already used for the ego, so no new machinery is 
 
 ### Consequence: puppeteered actors are kinematic
 
-Everything SSv2 teleports — NPC vehicles, pedestrians, misc objects — is spawned with CARLA
-physics **disabled**. Invariant 5 demands it: with physics on, `set_transform` places the
-actor and PhysX then pulls it down and shoves it out of collisions before the next frame, so
-two authorities drive one actor. Worse, the pose reported back to SSv2 is the commanded one,
-so the divergence is invisible to the scenario.
+Everything SSv2 teleports -- NPC vehicles, pedestrians, misc objects -- is spawned with CARLA
+physics **disabled**, and that is the only consistent combination. A physics-driven vehicle
+carries state PhysX integrates every tick (linear and angular velocity, wheel spin,
+suspension compression, contact constraints); a per-tick `set_transform` cuts across all of
+it. PhysX moves the body by `v·Δt` and the teleport overwrites the result, so CARLA's
+velocity no longer describes the motion; the suspension never settles and the car jitters;
+a teleport into an overlap becomes a one-step separation impulse. Driving NPCs by velocity
+instead of pose keeps physics intact but lets CARLA integrate its own path, so the NPC
+drifts from where the scenario puts it and SSv2 stops being the authority (invariant 5).
+Two authorities on one actor, with the reported pose the commanded one, is exactly the
+divergence the scenario cannot see.
 
-The cost is that CARLA simulates no collisions for these actors. An NPC can pass through
-another NPC, or through the ego, without CARLA reacting. This matches AWSIM, where SSv2 owns
-collision detection through its own bounding-box checks rather than the simulator's physics.
+A physics-off actor is a PhysX **kinematic** body: it keeps its collider and is visible to
+every sensor, but nothing pushes it.
+
+| Case | Behaviour | Evidence |
+|---|---|---|
+| Ego (physics on) hits an NPC | Contact generated; the ego's collision sensor fires; the ego is stopped or deflected | live, roadmap 014: `ego hit 'npc_rear'`, 1021 N·s |
+| LiDAR, camera, radar | See the NPC (raycasts and rendering use geometry, not physics) | every scenario's perception and ground truth |
+| The NPC when hit | Does not move: an infinite-mass body on SSv2's path | PhysX kinematic semantics |
+| NPC vs NPC, NPC vs walker | No contact between two kinematic bodies; they interpenetrate | PhysX semantics (not tested here) |
+| Gravity, ground | None: the NPC sits exactly at the commanded pose, so z must be right (014 fixed walker height) | 014 hardening |
+| Wheels, walk cycle | Wheels do not turn, walkers glide | cosmetic |
+
+What follows:
+
+- **Collision verdicts are SSv2's.** Its bounding-box `CollisionCondition` covers every pair,
+  NPC-NPC included, as in AWSIM. csb's collision sensor on the ego is diagnostic, and it
+  agrees with SSv2 on ego contacts **provided the contact lasts more than one frame**: csb
+  applies SSv2's NPC pose one frame after SSv2 computes it, so a scenario that ends on the
+  first frame of overlap ends before CARLA ever ticks with the bodies touching
+  (`scenarios/town01_rear_contact.xosc`; [scenario-authoring.md](scenario-authoring.md)).
+- **NPC velocity comes from acb, not CARLA.** CARLA ignores `set_target_velocity` and
+  `WalkerControl` on a physics-off actor (`get_velocity()` stays 0.000; 1.504 m/s for the
+  same call with physics on, roadmap 014). acb differentiates each actor's snapshot pose on
+  simulation time and publishes that in ground-truth objects (acb `028d8a8`; a walker read
+  0.695 m/s against 0.692 m/s from its displacement). CARLA's own velocity readout for NPCs
+  stays 0, which only matters to tools that ask CARLA directly.
+- **Post-crash dynamics are wrong by construction**: an NPC is never shoved, spun or
+  stopped by an impact. Fine for "did they collide", not for "what happened after". If a
+  scenario ever needs that, the right shape is a per-entity handover -- physics on and SSv2's
+  control released at the moment of impact -- not a global change.
 
 The ego is the exception and keeps physics: Autoware drives it, CARLA moves it, and its pose
 is read back rather than commanded.

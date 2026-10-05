@@ -123,3 +123,16 @@ the next command or the next `Initialize`.
   `carla_scenario.launch.xml`; turning it on as well would put two sources on the arbiter's
   input. SSv2 itself still treats an uncommanded signal as having no state, so conditions on
   a signal's state only see what the scenario commanded.
+
+## Collisions: do not end on the collision frame
+
+SSv2's `CollisionCondition` (bounding boxes) is the verdict for every collision, NPC-NPC
+included. csb also attaches a CARLA collision sensor to the ego and logs what CARLA saw, as
+a cross-check. That cross-check only sees contacts that last more than one frame: csb applies
+SSv2's NPC pose one frame after SSv2 computes it, so a scenario that exits on the first frame
+of overlap ends before CARLA ticks with the bodies touching, and the bridge logs "no
+collisions" for a run SSv2 scored as a collision. Delay the exit (e.g. `delay="3"` on the
+`CollisionCondition`'s `Condition`) when the CARLA side matters. Also remember that NPCs are
+kinematic: one never moves when hit, and two NPCs pass through each other in CARLA (see
+[multi-instance-architecture.md](multi-instance-architecture.md#consequence-puppeteered-actors-are-kinematic)).
+Example: `scenarios/town01_rear_contact.xosc`.

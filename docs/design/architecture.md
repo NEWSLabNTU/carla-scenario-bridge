@@ -52,7 +52,7 @@ traffic_simulator (NPC behavior, Lanelet2 routing)
 
 SSv2's `traffic_simulator` computes all NPC positions using its behavior plugins. The adapter places NPCs at those positions via `set_transform()`. CARLA's own Traffic Manager is not used for scenario-controlled actors.
 
-NPCs are **kinematic** (teleported each frame), not physics-driven. This means NPC-to-NPC collisions are not simulated by CARLA, same as AWSIM. SSv2 handles collision detection via bounding box checks.
+NPCs are **kinematic** (physics off, teleported each frame), the only combination where SSv2 stays the sole authority on their pose. They keep their colliders and stay visible to sensors: the physics-driven ego collides with them, but they are never pushed, NPC-to-NPC contacts are not simulated by CARLA (same as AWSIM; SSv2's bounding-box `CollisionCondition` is the verdict), and their velocity comes from acb's pose differencing because CARLA reports 0 for kinematic actors. Details and measurements: [multi-instance-architecture.md](multi-instance-architecture.md#consequence-puppeteered-actors-are-kinematic).
 
 ### 2. CARLA Owns Ego Physics
 
