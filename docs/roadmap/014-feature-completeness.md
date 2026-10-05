@@ -92,7 +92,7 @@ Measurement first for the three big ones. No fix lands before its number is know
       and ego-pose overwrite, undone in the ego readback. Probe after: NPC and ego actor
       origins +1.500 m along heading from the SSv2 pose, ego readback − commanded = 0.000 m.
       x/y only; the walker z question stays in the hardening batch below
-- [ ] Re-run `town01_two_av.xosc` and `town01_pedestrian.xosc`; the follow distance and stop
+- [x] Re-run `town01_two_av.xosc` and `town01_pedestrian.xosc`; the follow distance and stop
       distance in the logs move by the measured delta and nothing else changes —
       **partly done 2026-09-25 on newslab-server139** (two_av needs a second Autoware stack,
       not yet run here). `town01_ego_drive.xosc` passes before and after (34.7 → 31.7 s sim).
@@ -102,7 +102,9 @@ Measurement first for the three big ones. No fix lands before its number is know
       the ego pulls away while the walker is still ~1.7 m from its centreline, stops again
       level with the walker (bumper 0.97 m / 2.58 m past it) and never moves for the
       remaining ~200 s. 008 recorded this scenario passing on the previous host. Not a
-      reference-point problem; tracked as its own item below
+      reference-point problem; tracked as its own item below. **two_av done 2026-10-05**: passes (twice); the ego and bg_av_1
+      drove the same westbound lane at the 4.17 m/s limit, gap 88.5 m closing to a minimum of
+      29.4 m (median 58 m) as bg_av_1 started later; the ego never had to follow closely
 
 ### Pedestrian scenario stalls after the hold (found 2026-09-25, root-caused 2026-09-27)
 
@@ -193,8 +195,11 @@ host always had the background stack up, so it drove away before the ego arrived
       the two-stack baseline is 10 Hz (roadmap README)
 - [x] Replace `wait_for_tick_or_timeout` with an `on_tick` callback feeding a queue; drain to
       newest, warn on skipped frames
-- [ ] Re-measure with two stacks; that number is the acceptance (needs the background
-      stack on this host)
+- [x] Re-measure with two stacks -- done 2026-10-05 (`just two-av`, CARLA at Epic, always
+      synchronous): **19.96 Hz** in both domains with the traffic light camera dropped
+      (`traffic_light_fusion_only`, acb `disabled_sensors`), against 7.47 Hz with it -- at
+      Epic, rendering two 1280x720 cameras every tick was CARLA's largest cost. One stack
+      with the camera ran 11.6 Hz. LiDAR rate is the tick rate (one sweep per 0.05 s tick)
 
 ### Steering (gap 8)
 

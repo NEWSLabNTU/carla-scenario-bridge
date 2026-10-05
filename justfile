@@ -222,7 +222,12 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     if ! pgrep -x carla_scenario_ >/dev/null 2>&1; then
         echo "[two-av] no bridge running; starting one with CSB_BACKGROUND_AVS=all"
         setsid env CSB_BACKGROUND_AVS=all just run > "$logs/bridge.log" 2>&1 &
-        sleep 20
+        # `just run` is `cargo run`: it compiles first when its profile is stale, which takes
+        # minutes, so wait for the bridge to say it is listening rather than a fixed time.
+        for _ in $(seq 1 120); do
+            grep -q "ZMQ server ready" "$logs/bridge.log" 2>/dev/null && break
+            sleep 5
+        done
     fi
     pgrep -x carla_scenario_ >/dev/null || { echo "[two-av] bridge failed to start; see $logs/bridge.log"; exit 1; }
     # A bridge left running by a single-ego session spawns no bg_av_1, and its stack would
