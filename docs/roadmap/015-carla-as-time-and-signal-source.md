@@ -224,11 +224,12 @@ Measurement first. No step lands before the number it changes is known.
       measured below; a truncating `from_seconds` would disagree on about half). Step 3's
       acceptance (signal stamp − `/clock` == 0) is where that shows.
       124 unit tests pass; clippy has the 5 pre-existing warnings and no new ones.
-- [ ] Live, against the *current* fork (SSv2 still publishing `/clock`): two publishers on
+- [x] Live, against the *current* fork (SSv2 still publishing `/clock`): two publishers on
       `/clock` for one run is expected to fight -- so run this step with
       `clock_follows_simulation_time:=false` and `publish_clock` on the fork off if it has a
       switch, else stop after the unit tests and go to step 2. Record scan stamp − EKF pose
       stamp over 20 runs: expect exactly 0, zero "Couldn't interpolate pose" WARNs
+      **Superseded**: verified live by the steps 1-3 integration run, with acb the only `/clock` publisher (0 mismatches over 18,237 frames)
 
       **Not run live.** The installed fork publishes `/clock` unconditionally
       (`api.cpp:147`); `clock_follows_simulation_time:=false` only switches its value to wall
@@ -457,7 +458,7 @@ server loaded Town02 in 44 s, Town01 in 4 s and `reload_world` in 4.5 s. acb `4d
 - [x] Live (2026-10-05, Epic CARLA): `town02_episode_change.xosc` then `town01_traffic_light`
       with the ego stack up -- **both pass**; csb and acb each log an episode change for both
       reloads (1.6 s each); `/clock` never decreases; the ego drives the Town01 scenario
-- [ ] **csb's and acb's epochs differ by the frames CARLA ticks during the load**: 0.05 s and
+- [x] **csb's and acb's epochs differ by the frames CARLA ticks during the load**: 0.05 s and
       0.10 s in that run (csb 660.840076844 / 705.683309788, acb 660.890076844 /
       705.783309789). CARLA's `LoadEpisode` sends a tick cue every 50 ms while it waits in
       synchronous mode, so the old episode advances after csb's snapshot; acb's `on_tick`
@@ -469,13 +470,15 @@ server loaded Town02 in 44 s, Town01 in 4 s and `reload_world` in 4.5 s. acb `4d
       conclusive). Uncommitted. Note: since step 4 nothing Autoware consumes carries an SSv2
       stamp (signals come from acb, the concealer stamps the initial pose from a scan), so the
       skew affects only SSv2's own ROS time
+      **Resolved by step 7**: frame-count rule with `reset_settings=false`; epochs bit-identical on both reloads (2026-10-05)
 - [x] Live: restart CARLA with the ego stack up -- done **four times** by the Low-quality
       crashes. acb's reconnect fallback kept `/clock` monotonic every time, e.g.
       `epoch 0 -> 711.754950153, sim_time continues at 711.755050282`, then
       `711.754950153 -> 776.398702833`; the traffic-light publisher followed each new episode
-- [ ] A 20–35 s gap between `CARLA sync mode enabled` and `Loading map` in every reload, before
+- [x] A 20–35 s gap between `CARLA sync mode enabled` and `Loading map` in every reload, before
       and after the watcher change: something on that path blocks (the snapshot read in sync
       mode is the suspect). Costs time, not correctness
+      **Resolved by step 7**: it was `avaiable_maps()`, now listed once per bridge
 
 ### One ticker (step 7, decided 2026-10-05)
 
