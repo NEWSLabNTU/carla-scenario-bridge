@@ -477,6 +477,38 @@ server loaded Town02 in 44 s, Town01 in 4 s and `reload_world` in 4.5 s. acb `4d
       and after the watcher change: something on that path blocks (the snapshot read in sync
       mode is the suspect). Costs time, not correctness
 
+### One ticker (step 7, decided 2026-10-05)
+
+Design: [time-and-ticking.md](../design/time-and-ticking.md). Every remaining timing issue
+of this phase traced to a period when csb was not the only thing advancing CARLA: the 2.99 s
+pre-spawn `/clock` leap and the idle-gap topic-monitor timeouts (CARLA async, free-running),
+frames dropped by acb's 100 Hz `/clock` cap (async frames < 10 ms apart), and the 1–2 frame
+epoch skew (CARLA's `LoadEpisode` ticking the old episode after csb's snapshot).
+
+Measured before deciding (2026-10-05, Epic CARLA, ground truth from a separate client's
+`on_tick` stream): the frame counter continues across episodes; `LoadEpisode` adds exactly
+one old-episode frame after csb's snapshot; with `load_world(town, reset_settings=false)`
+the new world stays synchronous and its first frame has `elapsed = Δ`, so csb can count the
+old episode's extra frames from its own two snapshots. Loads took 2.3 s each way (44 s and
+one > 120 s with the default `reset_settings=true`, which reverts the new world to async).
+
+- [ ] csb keeps CARLA synchronous from its first `Initialize` on; the only ticks are SSv2
+      frames and the ego's spawn tick; idle between scenarios is a pause. The watchdog
+      restores async only when csb loses SSv2 (crash fallback), and a newly started csb
+      restores async first if it finds CARLA synchronous with no ticker
+- [ ] `load_world_opt(town, reset_settings=false)`; epoch from the frame count
+      (`n_new = round(E1/Δ)`, `k_old = F1 − n_new − F0`, `E_last` = `E0` plus `Δ` added
+      `k_old` times). The uncommitted `on_tick` watcher (crashed the bridge through its own
+      client; slow through a second one) is discarded
+- [ ] Remove the 20–35 s stall between `CARLA sync mode enabled` and `Loading map`: a
+      snapshot read that waits for a tick that never comes in sync mode
+- [ ] Unit tests: the frame-count rule against the measured cases (k_old 1, n_new 1) and
+      synthetic ones (k_old 0..5, n_new 1..3); no tick outside frames and spawns
+- [ ] Live: Town02 → Town01 with the ego stack up -- csb's and acb's episode-change lines show
+      the same epoch, bit-exact; then traffic_light → ego_drive ×2 + pedestrian: all pass,
+      no `/clock` leap anywhere, `/clock` paused between scenarios, init-window ERROR onsets
+      not worse than now
+
 ## Acceptance
 
 - One time base: for any frame, `sensor stamp == odometry stamp == /clock == SSv2 signal

@@ -298,10 +298,11 @@ failure is slow and points at the wrong thing — the concealer queues a `Change
 The ego stack also **outlives the scenario**: with no child process, SSv2 cannot tear it
 down, and consecutive runs re-engage the same stack (verified live, phase 012).
 
-Step 8 is load-bearing. Enabling sync mode at `Initialize` deadlocks: `acb_bridge` polls
-`world.actors()` to discover its vehicle, and in sync mode CARLA does not advance until
-something ticks — but `csb_bridge` will not tick until SSv2 sends a frame, and SSv2 does not
-send frames until the ego exists. Sync mode must be deferred until after the ego spawn.
+Steps 5 and 8 are superseded by [time-and-ticking.md](time-and-ticking.md) (roadmap 015):
+CARLA is synchronous from csb's first `Initialize` on and csb is its only ticker; idle time
+between scenarios is a pause. The deadlock this paragraph used to warn about -- acb polling
+`world.actors()` in a world nothing ticks -- is gone: acb follows `on_tick`, and the ego's
+spawn tick delivers the first frame.
 
 ### Per frame
 
@@ -324,17 +325,10 @@ SSv2 UpdateTrafficLights
 
 ### Clock ownership
 
-| Domain | `/clock` publisher | Epoch |
-|---|---|---|
-| `D0` (scenario ego) | SSv2 `traffic_simulator` | Scenario time, starts at 0 |
-| `D1..Dn` (background AVs) | `acb_bridge`, `publish_clock:=true` | `snapshot.elapsed_seconds - epoch_k`, where `epoch_k` is captured on that bridge's first tick |
-
-Cross-domain clock agreement is not required, because domains share no topics. Each Autoware
-needs a clock that is monotonic, starts near zero, and agrees with the sensor stamps *in its
-own domain*. Physics time is shared through CARLA regardless of what any `/clock` says.
-
-Sensor messages are always stamped from `node.get_clock().now()`, which with
-`use_sim_time=true` reads that domain's `/clock`. Never from `data.timestamp()`.
+Superseded by [time-and-ticking.md](time-and-ticking.md) (roadmap 015). In every domain
+`acb_bridge` publishes `/clock` from CARLA's frame time plus an episode epoch and stamps
+everything it publishes with the frame's time; SSv2 takes the same time from csb and
+publishes no `/clock`.
 
 ### Traffic lights
 
