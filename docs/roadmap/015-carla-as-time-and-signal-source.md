@@ -431,7 +431,7 @@ Measurement first. No step lands before the number it changes is known.
       0 interpolation WARNs; signal stamps equal to a `/clock` value on all but 2 of 4071
       messages (recorder start). `auto_drive` now respawns after each scenario
       (`ego_av.launch.xml`), since it exits on arrival and a long-lived stack serves the next
-- [ ] **Open**: a 2.99 s `/clock` leap 3 s before the ego spawn, while CARLA was still async
+- [x] **Resolved by step 7**: a 2.99 s `/clock` leap 3 s before the ego spawn, while CARLA was still async
       between csb's Initialize and its spawn (csb idle, waiting on SSv2): the server itself
       stalled. `/clock` is CARLA time by decision, so acb cannot smooth it; it cost one
       0.2 s EMERGENCY_STOP blip before engage. CARLA produced no tick for 3 s right after
@@ -516,10 +516,24 @@ one > 120 s with the default `reset_settings=true`, which reverts the new world 
       between scenarios (35–112 s of wall time) moved it by one tick: paused. Init-window
       ERROR onsets ~6 per run (unchanged); both EMERGENCY_STOPs of the session were before
       engage (one 6 s after the Town01 reload, one in ego_drive's init); none while driving
-- [ ] Noticed: during `town02_episode_change` (no entities) CARLA was not ticked -- its 5 s
-      passed on SSv2's frame count with one `/clock` message. Either SSv2 sends no
-      `UpdateFrame` without entities or csb answers without ticking; harmless for that
-      trigger scenario, every scenario with an ego ticked normally. Not chased
+- [x] Step 7 also ended the idle-gap topic-monitor ERRORs: with time paused between
+      scenarios, 0 ERROR onsets fell in the gaps of the 2026-10-05 suite (the "idle" onsets
+      the classifier counted were outside the Town01 windows, around the map loads)
+- [ ] Noticed: `town02_episode_change` (no entities) finishes after ~3 CARLA ticks
+      (passive frame probe: 930747 → 930750 over the whole run), not ~100. The interpreter
+      calls `SimulatorCore::update()` every timer tick and csb ticks on every `UpdateFrame`
+      once sync is on. Lead, not confirmed: the fork's clock logs `clock_source:=simulator,
+      but the simulator has not reported a simulation_time yet; using wall time until it
+      does` at start-up, and the interpreter is blocked ~60 s by the map load in Initialize,
+      so a pure `SimulationTimeCondition` may be met before many frames run. Scenarios with
+      an ego wait for engage and tick normally; harmless for the trigger scenario
+- [ ] Arbiter "Published traffic signal messages are not latest" (68 per session, throttled
+      to one per 5 s): by construction in `traffic_light_arbiter` 0.48. Its output takes the
+      stamp of the message that triggered it and warns when that is older than the newest
+      input; acb's external signals arrive every frame and are always newest, the camera
+      path's are older. Goes away only with one input: disable camera recognition (009 chose
+      V2X; frees GPU/CPU, but ends vision-based signal tests) or accept the log line.
+      Decision pending
 
 ## Acceptance
 
