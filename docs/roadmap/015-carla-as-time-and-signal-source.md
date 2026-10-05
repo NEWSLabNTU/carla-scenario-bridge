@@ -527,13 +527,20 @@ one > 120 s with the default `reset_settings=true`, which reverts the new world 
       does` at start-up, and the interpreter is blocked ~60 s by the map load in Initialize,
       so a pure `SimulationTimeCondition` may be met before many frames run. Scenarios with
       an ego wait for engage and tick normally; harmless for the trigger scenario
-- [ ] Arbiter "Published traffic signal messages are not latest" (68 per session, throttled
+- [x] Arbiter "Published traffic signal messages are not latest" (68 per session, throttled
       to one per 5 s): by construction in `traffic_light_arbiter` 0.48. Its output takes the
       stamp of the message that triggered it and warns when that is older than the newest
       input; acb's external signals arrive every frame and are always newest, the camera
       path's are older. Goes away only with one input: disable camera recognition (009 chose
       V2X; frees GPU/CPU, but ends vision-based signal tests) or accept the log line.
-      Decision pending
+      **Done 2026-10-05, camera branch dropped (acb `d415ead`)** with Autoware's own switch,
+      `traffic_light_recognition/fusion_only`, which autoware_launch's
+      `tier4_perception_component` hard-codes to false: acb_launch carries a generated copy
+      of that component (`scripts/sync_perception_component.sh`, `--check` after an Autoware
+      upgrade) where it is an argument, set by `traffic_light_fusion_only` (default true).
+      Fusion, arbiter and crosswalk estimator stay. Live: traffic_light and ego_drive pass,
+      0 arbiter warnings (was 68), no camera-branch process, and the ego stack starts in 60 s
+      instead of 320-400 s. `traffic_light_fusion_only:=false` restores vision (009 gap 7)
 
 ## Acceptance
 
