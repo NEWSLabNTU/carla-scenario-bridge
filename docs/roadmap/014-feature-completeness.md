@@ -136,8 +136,15 @@ host always had the background stack up, so it drove away before the ego arrived
       despawn, no `sensor.other.collision` left in the world. CARLA prints
       `attempting to unsubscribe from stream but sensor wasn't listening` on the stop before
       destroy; harmless, not chased
-- [ ] Run a scenario with a deliberate NPC cut-in that clips the ego; record whether SSv2's
+- [x] Run a scenario with a deliberate NPC cut-in that clips the ego; record whether SSv2's
       CollisionCondition and the CARLA sensor agree
+      -- **done 2026-10-05**, `scenarios/town01_rear_contact.xosc` (Town01 has one lane per
+      direction, so a blind NPC catches the ego from behind instead of cutting in). **They
+      agree, provided the contact lasts**: with the exit on SSv2's first frame of overlap,
+      SSv2 passed and CARLA saw nothing -- csb applies SSv2's NPC pose a frame later and the
+      run had already ended. With the exit delayed 3 s, CARLA logged `ego hit 'npc_rear' at
+      SSv2 frame 224, normal impulse 1021.2 N·s` and SSv2 passed. A scenario that wants the
+      CARLA cross-check must not end on the collision frame
 - [x] End-of-run summary: CARLA collision events vs SSv2 CollisionCondition outcomes, with
       the SSv2 frame of each; mismatches logged at WARN. Policy is diagnostic only (above)
 
