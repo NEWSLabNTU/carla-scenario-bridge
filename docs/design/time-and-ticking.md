@@ -112,9 +112,11 @@ synchronous and starts at `elapsed = Δ` after one tick. Measured: `k_old = 1`, 
 world reverts to async and free-runs for several frames before anyone reads it, which both
 breaks the count and made loads slow (44 s, and one > 120 s).
 
-A **CARLA restart** is not an episode change either bridge can see the end of. acb continues
-from the last `/clock` it published plus one tick; csb's epoch then no longer matches acb's
-until both are restarted.
+A **CARLA restart** is treated as an episode change whose last old frame is the last frame
+each bridge observed: acb continues from the last `/clock` it published plus one tick, and
+csb (roadmap 016) from the last frame it ticked plus one tick. Both saw the frame csb last
+ticked, so the epochs agree unless acb missed that frame. See
+[failure-and-frame-budget](failure-and-frame-budget.md).
 
 ## Requirements on the CARLA server
 

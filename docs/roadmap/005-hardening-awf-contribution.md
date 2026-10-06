@@ -101,6 +101,9 @@ therefore means offering *this adapter* and its tools to the community, not upst
 fork patches.
 
 ### Error Handling
+
+**Moved to [016](016-robustness-and-performance.md) (2026-10-07):** the open robustness and
+performance items below, and their acceptance criteria, are worked there.
 - [x] CARLA disconnection detection and reconnection loop
       `note_carla_failure` / `reconnect_carla` (coordinator.rs) on repeated tick failures (audit 2026-10-06)
 - [x] Entity spawn failure: return `Result { success: false }` with description
