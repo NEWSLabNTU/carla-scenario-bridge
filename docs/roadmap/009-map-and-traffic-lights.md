@@ -499,7 +499,7 @@ the run under test actually drove before reading anything into a silent pipeline
       commands, while CARLA held that signal red. The whole chain therefore works: SSv2 →
       csb → CARLA actor → camera → map projection → classifier → fusion. The rate is the
       problem, not the wiring: **1 RED, 2 AMBER, 104 UNKNOWN** in that run. See gap 7
-- [ ] Ego stops at an SSv2-commanded red in a full-stack run — **to be met over V2X, not
+- [x] Ego stops at an SSv2-commanded red in a full-stack run — **to be met over V2X, not
       vision** (decision, 2026-08-28; see "Direction" below). Not earned by the camera
       path: the ego
       does stop at the stop line, with `behavior: traffic-signal` and 0.35 m to go, but it
@@ -507,6 +507,12 @@ the run under test actually drove before reading anything into a silent pipeline
       mid-run (`GREENx1` on the ground-truth actor) and the ego sat there until the 300 s
       timeout. That is the traffic-signal module being conservative about a signal it has
       no state for, which is the correct behaviour and the wrong evidence
+      **Met over V2X (015 step 5, 2026-10-03; ticked in audit 2026-10-06).** acb publishes
+      the CARLA light states on `external/traffic_signals` and camera recognition is off
+      (`fusion_only`). `town01_traffic_light_unmanaged.xosc`: the ego stopped at
+      (105.7, −55.4) for 67.6 s with 43856 RED and resumed when SSv2 turned it GREEN at
+      t = 150.2 -- the evidence the camera run could not give. `town01_traffic_light` passes
+      managed and unmanaged with the fork's signal publisher off (015 acceptance)
 - [x] Lights cycle normally again after the scenario ends — after SIGINT, 0 of 36 frozen
 - [x] `just test` passes
 
