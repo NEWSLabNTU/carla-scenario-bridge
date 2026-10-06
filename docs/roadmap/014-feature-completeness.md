@@ -397,8 +397,12 @@ initialized again on top of it; NDT was asked to align before the new ego's firs
       their timeouts. Contained 2026-09-29: the health check also requires a publisher on
       each planning output and asks play_launch's ledger for crashed composables; the
       scenario gate runs it with `--reload-failed`, which POSTs `/api/nodes/<name>/load` and
-      waits for the publishers to return. Longer term: composable respawn in play_launch, or
-      an overlay of goal/start_planner with #12460's static callback groups
+      waits for the publishers to return. Fixed at the source 2026-10-06: play_launch
+      `873b0744` (0.13.1) reloads a crashed composable (`--composable-respawn on-crash`, off by
+      default; backoff, gives up after 5 crashes in 300 s), and both AV stacks pass it.
+      Verified live: SIGSEGV to behavior_path_planner's process → reloaded within 5 s
+      (`restart_count` 1), health check ok, and `town01_engage_state` then passed on that
+      stack. The `--reload-failed` gate stays as the backstop for a composable that gave up
 
 ### Ego twist at base_link (fixed 2026-09-28)
 

@@ -597,7 +597,14 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # interception of every DDS take and logs each event at DEBUG into play_launch.log and
     # interception/events.jsonl. With no contract files to enforce that is pure overhead, and
     # on 2026-09-27 one 50-minute ego stack wrote 169 GB of it and filled the disk.
+    #
+    # --composable-respawn on-crash (play_launch >= 873b0744): reload a composable whose
+    # isolated process crashed (behavior_path_planner, autoware_universe#12460), backing off
+    # and giving up after 5 crashes in 300 s. Autoware's containers declare no respawn, so
+    # `inherit` would never fire. The scenario gate's ego_stack_health.py --reload-failed
+    # stays as the backstop for a composable that gave up.
     play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8082 \
+        --composable-respawn on-crash \
         --load-node-timeout 120 \
         --load-total-budget 600 \
         --log-dir play_log/ego \
@@ -654,6 +661,7 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
     # itself. With launch_autoware:=false the concealer launches nothing, so nothing reads
     # it -- the flag below is what actually sets the port. See phase 012, gap 10.
     exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:{{web_port}} \
+        --composable-respawn on-crash \
         --load-node-timeout 120 \
         --load-total-budget 180 \
         --log-dir play_log/bg-{{vehicle_name}} \
