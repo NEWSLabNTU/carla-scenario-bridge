@@ -307,6 +307,12 @@ private one is `setsid /opt/TurboVNC/bin/Xvnc :4 -SecurityTypes None`.
 No display at all also works: `env -u DISPLAY setsid ./CarlaUE4.sh ... -RenderOffScreen`
 (RPC up in 182 s at Epic quality, 2026-10-05; the 180 s unit limit is too tight for it).
 
+**Pin Vulkan to the NVIDIA card** when starting CARLA by hand:
+`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json`. Left to choose on this host,
+a restarted CARLA came up on the AMD iGPU or the software renderer (18 MiB on the NVIDIA
+card), took 4–8 min to serve RPC and froze in `apply_settings(synchronous)`; pinned, RPC was
+up in 50 s (roadmap 016, gap 13). acb's `third_party/carla/run.sh` sets it when unset.
+
 **Never run CARLA at `-quality-level=Low`.** At Low, CARLA 0.9.16 segfaults on `load_world`
 to another town and hangs on `reload_world()`: UE 4.26's landscape render task reads a
 texture freed by the level swap (`FGetSectionLODBiasesTask` → `UTexture2D::GetNumResidentMips`
