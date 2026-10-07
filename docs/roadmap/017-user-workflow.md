@@ -79,18 +79,36 @@ swap audit).
       (RViz), with no scenario running
 
 ### 5. Agent protocol, relay, Autoware agent
-- [ ] Protobuf schema with a version field: commands `set_goal`, `clear_goal`,
-      `set_speed_limit`, `stop`, `teleported`, optional `cooperate`/`cooperate_auto`; state
-      `phase`, `fault`, `turn_indicators`, `capabilities`, `detail`; registration by entity
-      name; heartbeat
-- [ ] `scenario_agent_relay` package (sim-neutral): serves the concealer's ADAPI subset in the
-      scenario domain, forwards to the registered agent, maps state back (design: relay
-      mapping); unknown or silent agent → `UNAVAILABLE`
-- [ ] `acb_agent` from `acb_pilot/auto_drive.py`: connects to the relay, drives Autoware
-      through its local ADAPI, engages on its own once ready, honours `teleported`; local
-      goal file when no relay is configured
-- [ ] Unit tests: relay state mapping, schema round trip, agent state machine against a
-      fake ADAPI
+- [x] Schema with a version field -- **newline-delimited JSON over plain TCP**, `"v": 1`
+      (decision 2026-10-08: stdlib only, no pyzmq/protobuf for agent authors): commands
+      `set_goal`, `clear_goal`, `set_speed_limit`, `stop`, `teleported`, optional
+      `cooperate`/`cooperate_auto`; state `phase`, `fault`, `turn_indicators`,
+      `capabilities`, `detail` (+ `pose`, `rtc_status`); registration by entity name;
+      heartbeat 1 s / timeout 3 s. Spec: design doc "The agent protocol (I3)"; code:
+      `scenario_agent_relay/protocol.py` (agent copy: acb `acb_pilot/agent_protocol.py`)
+- [x] `scenario_agent_relay` package (sim-neutral, no CARLA import): serves the concealer's
+      ADAPI subset in the scenario domain only while the agent is up, forwards to the
+      registered agent, maps state back; no or silent agent → UNKNOWN states and services
+      withdrawn (`INITIALIZING` to the concealer). The concealer's scan / kinematic-state
+      waits are met in the relay's own time base, no fork change.
+      `launch/relay.launch.xml`
+- [x] `acb_agent` = `ros2 run acb_pilot agent` (acb `8805efb`): connects to the relay,
+      drives Autoware through its local ADAPI, engages on its own once ready, honours
+      `teleported` (fresh scans → initialize → wait for agreement), reconnects when the
+      relay restarts (seen live); local goal-file mode when no relay is configured
+- [x] Unit tests: relay state mapping (incl. a transcription of the concealer's legacy
+      state, and constants checked against the ROS messages), schema round trip, TCP
+      server (register / reply / heartbeat timeout / replace / version), agent state
+      machine against a fake ADAPI, relay client reconnect -- 62 + 30 pass
+- [x] Live (2026-10-08): `town01_engage_state` **passed with SSv2 + relay in domain 9 and
+      the ego Autoware in domain 1** (agent there), managed_ego:=true, the ego stack
+      untouched: teleported → localized in 3.7 s, concealer "Localization reached the
+      initial pose ... after 0 ms", READY → engaged → DRIVING in 0.3 s, ARRIVED 28 s
+      later, ARRIVED_GOAL condition met; passed again on an immediate rerun against the
+      same stacks. The first attempt failed ("initialize ... state
+      is PLANNING"): the relay published on a timer, so the concealer read the state from
+      before `clear_route`; the relay now publishes when a state arrives (design doc,
+      ordering rule)
 - [ ] `managed_ego:=false`, the unmanaged domain split and `EGO_MANAGED` retired
 
 ### 6. Background vehicles driven by the simulator
