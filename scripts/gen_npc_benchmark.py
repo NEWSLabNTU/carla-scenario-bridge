@@ -221,7 +221,7 @@ TEMPLATE = """<?xml version="1.0"?>
 	<ParameterDeclarations />
 	<CatalogLocations />
 	<RoadNetwork>
-		<LogicFile filepath="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town01" />
+		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
 	</RoadNetwork>
 	<Entities>
 {entities}	</Entities>

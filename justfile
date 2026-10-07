@@ -11,10 +11,10 @@ map_name := env_var_or_default('MAP_NAME', 'Town01')
 # a stray node there joins the scenario's graph without anyone asking. Background AVs get
 # 2 and up (see `just bg-av`).
 ego_domain := env_var_or_default('EGO_ROS_DOMAIN_ID', '1')
-# Where an UNMANAGED ego lives (phase 013). With the concealer inert nothing in SSv2 talks
-# to this stack, so it leaves SSv2's domain and SSv2's contains only SSv2. Distinct from
-# SSv2 (1) and from bg_av_1 (2) so all three can run at once.
-ego_unmanaged_domain := env_var_or_default('EGO_UNMANAGED_ROS_DOMAIN_ID', '3')
+# Where SSv2 and the agent relay run (roadmap 017). Separate from every vehicle's domain:
+# the scenario reaches vehicles only through the relay's TCP port (`agent_port`).
+scenario_domain := env_var_or_default('SCENARIO_ROS_DOMAIN_ID', '9')
+agent_port := env_var_or_default('AGENT_PORT', '5560')
 data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
 project := justfile_directory()
 acb_src := justfile_directory() + '/src/autoware_carla_bridge'
@@ -178,20 +178,18 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     # see them. So the second Autoware is real traffic rather than scenery.
     #
     # Usage: just two-av [scenario_file]
-    #        EGO_MANAGED=false just two-av    # unmanaged ego (phase 013)
     #        KEEP_STACKS=1 just two-av        # leave both stacks up afterwards
     #        RECORD=1 just two-av             # screencast to play_log/two-av/two-av.mp4
     #
     # The steps below exist because doing this by hand goes wrong the same four ways every
     # time: a stale vehicle the next pilot latches onto, a bridge nobody restarted, a
     # scenario started before a stack is up, and stacks left running afterwards.
-    managed="${EGO_MANAGED:-true}"
-    if [ "$managed" = "true" ]; then ego_dom={{ego_domain}}; else ego_dom={{ego_unmanaged_domain}}; fi
+    ego_dom={{ego_domain}}
     logs="{{project}}/play_log/two-av"
     mkdir -p "$logs"
     rec_display="${RECORD_DISPLAY:-:1}"
     launch_rviz=$([ "${RECORD:-0}" = "1" ] && echo true || echo false)
-    echo "[two-av] ego domain $ego_dom ($([ "$managed" = true ] && echo managed || echo unmanaged)), background AV domain 2"
+    echo "[two-av] scenario domain {{scenario_domain}}, ego domain $ego_dom, background AV domain 2"
 
     # Kill the whole process group of each stack, not the launcher alone: play_launch's
     # children outlive it often enough that CLAUDE.md has a section about it.
@@ -259,8 +257,7 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     }
 
     echo "[two-av] starting the ego stack (several minutes)"
-    setsid env EGO_MANAGED="$managed" EGO_GOAL_POSES_FILE="{{project}}/scenarios/ego_poses.yaml" \
-        LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
+    setsid env LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
         just ego-av > "$logs/ego.log" 2>&1 &
     ego_pg=$!
     wait_for_stack ego || exit 1
@@ -270,9 +267,8 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     bg_pg=$!
     wait_for_stack bg || exit 1
 
-    # Each stack has to be able to drive before a scenario is worth starting. The ego gate
-    # also requires its pilot when unmanaged, because nothing else would route it.
-    EGO_MANAGED="$managed" just _require-ego-stack || exit 1
+    # Each stack has to be able to drive before a scenario is worth starting.
+    just _require-ego-stack || exit 1
 
     # RECORD=1 grabs the display the ego stack's RViz is drawing on. RViz has to come from
     # INSIDE that stack (LAUNCH_RVIZ=1 above): a standalone `rviz2 -d autoware.rviz` cannot
@@ -313,7 +309,7 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
 
     echo "[two-av] running $(basename "{{scenario_file}}")"
     rm -f /tmp/scenario_test_runner/result.junit.xml
-    EGO_MANAGED="$managed" just scenario "{{scenario_file}}" 2>&1 | tail -5 || true
+    just scenario "{{scenario_file}}" 2>&1 | tail -5 || true
 
     stop_recording
     if [ -f /tmp/scenario_test_runner/result.junit.xml ]; then
@@ -330,8 +326,8 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
 # Run the CARLA scenario bridge adapter only
 run:
     #!/usr/bin/env bash
-    # The bridge as users start it (roadmap 017): its launch file, under play_launch, which
-    # restarts it on a crash (respawn="true"). Run `just build` after changing it.
+    # As users start it (roadmap 017): csb_launch simulation.launch.xml under play_launch,
+    # which restarts the bridge on a crash (respawn="true"). `just build` after changes.
     set -e
     source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
@@ -339,9 +335,12 @@ run:
     # CSB_BACKGROUND_AVS (all | none | role_name,...) is inherited as-is. Unset means none:
     # background AVs are opt-in, because nothing but their own stack drives them and an
     # undriven one parks in the ego's lane. `just two-av` sets it to `all`.
+    # The simulation side: the bridge and the agent relay, in the scenario domain.
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    export ROS_DOMAIN_ID={{scenario_domain}}
     exec play_launch launch --enforce-rules off --web-addr 0.0.0.0:8084 \
         --log-dir play_log/bridge \
-        carla_scenario_bridge bridge.launch.xml \
+        csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
         ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"}
 
@@ -376,9 +375,6 @@ vehicle-params blueprint="vehicle.tesla.model3" *args:
 #
 # Usage: just acceptance [scenario] [runs]
 #        just acceptance scenarios/town01_ego_drive.xosc 3
-# For an unmanaged ego (phase 013), bring the stack up that way first and pass EGO_MANAGED:
-#   EGO_MANAGED=false EGO_GOAL_POSES_FILE=$PWD/scenarios/ego_poses.yaml just ego-av
-#   EGO_MANAGED=false just acceptance $PWD/scenarios/town01_unmanaged.xosc
 acceptance scenario=(project + "/scenarios/town01_ego_drive.xosc") runs="1" domain="":
     #!/usr/bin/env bash
     set -e
@@ -387,9 +383,7 @@ acceptance scenario=(project + "/scenarios/town01_ego_drive.xosc") runs="1" doma
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     args=(--scenario "{{scenario}}" --runs {{runs}})
-    # Match the stack: an unmanaged ego lives in its own domain, and the scenario has to be
-    # launched the same way or SSv2 routes an ego that is not listening.
-    [ "${EGO_MANAGED:-true}" = "false" ] && args+=(--unmanaged)
+    # acceptance.py watches the ego's domain (default 1, `ego_domain`).
     [ -n "{{domain}}" ] && args+=(--domain "{{domain}}")
     python3 "{{acb_src}}/scripts/acceptance.py" "${args[@]}"
 
@@ -436,22 +430,13 @@ _require-ego-stack:
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # Look where the ego actually is. An unmanaged ego lives in its own domain, so checking
-    # SSv2's would find nothing and refuse a run that was correctly set up.
-    # An unmanaged ego has no concealer to route or engage it, so the pilot is not
-    # optional there and the gate checks for it too.
-    require_pilot=""
-    if [ "${EGO_MANAGED:-true}" = "true" ]; then
-        export ROS_DOMAIN_ID={{ego_domain}}
-    else
-        export ROS_DOMAIN_ID={{ego_unmanaged_domain}}
-        require_pilot="--require-pilot"
-    fi
+    # Look where the ego actually is: its own domain (roadmap 017).
+    export ROS_DOMAIN_ID={{ego_domain}}
     # --reload-failed: play_launch does not respawn a composable that crashed inside its
     # container, and behavior_path_planner does that about once in 60 route resets
     # (autoware_universe#12460, an rclcpp race with no upstream fix). Without it the stack
     # looks up, the ego spawns and never moves, and the run dies at the storyboard timeout.
-    if ! "{{project}}/scripts/ego_stack_health.py" $require_pilot --reload-failed; then
+    if ! "{{project}}/scripts/ego_stack_health.py" --reload-failed; then
         echo "[just] Refusing to start: run \`just ego-av\` first and wait for"
         echo "[just] 'Startup complete'. See phase 012, startup order."
         exit 1
@@ -466,12 +451,11 @@ _require-carla:
         exit 1
     fi
 
-# Launch the ego's Autoware + acb_bridge in SSv2's ROS domain (no domain override here:
-# SSv2's concealer needs plain ROS reachability). Long-lived: start it once, BEFORE any
-# `just scenario`, and reuse it across scenario runs.
+# Launch the ego's Autoware + acb_bridge + vehicle agent in the ego domain
+# (`ego_domain`). Long-lived: start it once and reuse it across scenario runs; it reaches
+# the scenario through the agent relay `just run` starts (EGO_RELAY, default
+# tcp://localhost:<agent_port>; empty with EGO_GOAL_POSES_FILE drives to a local goal).
 # Usage: just ego-av [map_path]
-#   EGO_MANAGED=false EGO_GOAL_POSES_FILE=... just ego-av   -> unmanaged (phase 013):
-#   own domain, own /clock, driven by acb_pilot instead of SSv2's concealer.
 ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carla
     #!/usr/bin/env bash
     set -e
@@ -485,52 +469,11 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # Domain follows `managed`. A managed ego must share SSv2's domain -- the concealer
-    # talks plain ROS and a stack anywhere else is invisible to it. An unmanaged ego is
-    # driven by its own pilot and has no reason to be there, so it gets a domain of its
-    # own and SSv2's contains only SSv2 (phase 013). Not 0 either way; see the ego_domain
-    # comment at the top of this file.
-    # Env vars, not recipe parameters: just's parameters are positional, so
-    # `just ego-av managed=false` assigns "managed=false" to map_path and silently runs a
-    # managed stack against a nonexistent map. EGO_MANAGED cannot be passed by accident.
-    managed="${EGO_MANAGED:-true}"
     goal_poses_file="${EGO_GOAL_POSES_FILE:-}"
-    # acb publishes /clock in every mode (roadmap 015): CARLA's frame time plus an episode
-    # epoch, from CARLA connect. SSv2 runs with clock_source:=simulator and publishes no
-    # /clock, so a managed ego needs acb's as much as an unmanaged one. ACB_PUBLISH_CLOCK=false
-    # is the emergency off, not a mode switch.
     clock="${ACB_PUBLISH_CLOCK:-true}"
-    if [ "$managed" = "true" ]; then
-        export ROS_DOMAIN_ID={{ego_domain}}
-    else
-        export ROS_DOMAIN_ID={{ego_unmanaged_domain}}
-        if [ -z "$goal_poses_file" ]; then
-            echo "[just] EGO_MANAGED=false needs EGO_GOAL_POSES_FILE: with the concealer" >&2
-            echo "[just] inert, acb_pilot routes the ego and exits fatally on an empty file." >&2
-            echo "[just] Try: EGO_MANAGED=false \\" >&2
-            echo "[just]      EGO_GOAL_POSES_FILE=\$PWD/scenarios/ego_poses.yaml just ego-av" >&2
-            exit 1
-        fi
-    fi
-    # --parser python: play_launch's Rust parser fails on tier4_perception_component
-    # (KeyError 'front_overhang' evaluating its Python sub-launches)
-    # The API adaptors run as their own processes: inside the big launch the
-    # concealer could not match their services in time (see ego_av.launch.xml).
-    # internal: serves /api/autoware/set/velocity_limit (what the concealer
-    # actually calls); external: /api/external/* including rtc_auto_mode.
-    # These outlive the recipe unless something kills them: the shell used to exec
-    # play_launch, replacing itself, so no trap could ever fire and every restart of this
-    # stack left another pair behind. Sixteen of them accumulated in one session, each
-    # holding the same ADAPI node names, and a fresh stack then stalled with
-    # /adapi/node/autoware_state stuck "pending" and the concealer never seeing
-    # WAITING_FOR_ENGAGE. Own them: no exec below, and a trap that takes the whole process
-    # group so the nodes go with the launcher.
-    # setsid, so each adaptor leads its own process group and the trap can take the whole
-    # tree. Killing the `ros2 launch` process alone is not enough: the nodes it spawns
-    # survive it, and their command lines look nothing like the launch file's --
-    # `--plugin external_api::RTCController`, `__ns:=/default_adapi/helpers` -- so they
-    # also survive every pkill aimed at "api_adaptor". Sixty-four of them were found alive
-    # in one domain, five deep on /internal/operator and /internal/velocity.
+    # Any domain works since roadmap 017: the scenario reaches this ego through the agent
+    # relay (TCP), not over ROS. Kept apart from the scenario domain on purpose.
+    export ROS_DOMAIN_ID={{ego_domain}}
     setsid ros2 launch autoware_iv_internal_api_adaptor internal_api_adaptor.launch.py &
     internal_api_pid=$!
     setsid ros2 launch autoware_iv_external_api_adaptor external_api_adaptor.launch.py &
@@ -560,19 +503,14 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # A ROS launch argument cannot carry an empty value -- `goal_poses_file:=` is rejected
     # as "malformed launch argument", and the failure comes minutes in, after the whole
     # parse. The launch file already declares a default for it, so pass the argument only
-    # when there is something to pass. A managed run leaves it unset, which is why this
-    # broke `just ego-av` outright rather than only the unmanaged path.
+    # when there is something to pass.
     optional_args=()
     if [ -n "$goal_poses_file" ]; then
         optional_args+=(goal_poses_file:="$goal_poses_file")
     fi
-    # acb's /initialpose seed on attach is for an unmanaged ego, where nothing else moves a
-    # reused stack's estimate onto the new vehicle. A managed ego's concealer initializes
-    # localization itself at every scenario and waits for the estimate to reach the initial
-    # pose before routing, so a second, overlapping init from acb only restarted the first:
-    # two NDT alignments, two EKF resets, and the pose-instability and covariance ERRORs
-    # each reset raises, twice per scenario. SEED_LOCALIZATION still overrides either way.
-    if [ "$managed" = "true" ]; then seed_default=false; else seed_default=true; fi
+    # The agent initializes localization at the scenario's start pose (teleported); seeding
+    # from CARLA on attach as well would race it.
+    seed_default=false
     # CONTROL_TRACE_PATH writes per-stage control latency as CSV; see acb's control_trace.
     if [ -n "${CONTROL_TRACE_PATH:-}" ]; then
         optional_args+=(control_trace_path:="$CONTROL_TRACE_PATH")
@@ -609,7 +547,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         csb_launch ego_av.launch.xml \
         map_path:="{{map_path}}" \
         carla_port:={{carla_port}} \
-        managed:=$managed \
+        relay:="${EGO_RELAY-tcp://localhost:{{agent_port}}}" \
         publish_clock:=$clock \
         report_measured_steering:="${REPORT_MEASURED_STEERING:-false}" \
         launch_rviz:="${LAUNCH_RVIZ:-false}" \
@@ -728,68 +666,43 @@ _clear-stale-scenario:
 scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     #!/usr/bin/env bash
     set -e
-    # SSv2 no longer launches Autoware, but the interpreter still resolves the
-    # sensor/vehicle model description packages from the acb workspace.
+    # The interpreter resolves the vehicle description package (acb_vehicle_description).
     source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
-    # discovery flakes at this participant count - each run randomly failed to match
-    # a different ADAPI service. Every ROS process in the pipeline must share this.
+    # discovery flakes at this participant count. Every ROS process must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # play_launch forks a process per composable node and SIGKILLs it if it has not
-    # reported ready within this window. The default is 30 s, and Autoware's traffic
-    # light classifier needs ~45 s to construct even with its TensorRT engine cached
-    # (~33 s of that is the engine build itself on a cold cache). At the default the
-    # three inference nodes were killed seconds before they would have reported, and
-    # the only symptom was a perception pipeline publishing empty results forever.
-    # Must match `just ego-av`: the concealer reaches the ego over plain ROS, and a
-    # scenario in another domain simply never finds it.
-    # Same toggle as `just ego-av` reads, and for the same reason it is an env var there.
-    # An unmanaged ego lives in its own domain, so SSv2 no longer shares one with it.
-    managed="${EGO_MANAGED:-true}"
-    export ROS_DOMAIN_ID={{ego_domain}}
-    # Hand SSv2 a copy, never the source. Its preprocessor moves the scenario it is given
-    # into a sibling raw/ directory and writes its own re-serialized copy at the original
-    # path (openscenario_preprocessor.cpp:122-128); pugixml drops comments on save, so every
-    # run stripped the tracked .xosc, and the next run moved that stripped file over raw/.
-    # The scenarios reference nothing by relative path, so a copy behaves identically.
-    input_dir="{{project}}/play_log/scenario/input"
-    mkdir -p "$input_dir"
-    scenario_copy="$input_dir/$(basename "{{scenario_file}}")"
-    cp "{{scenario_file}}" "$scenario_copy"
+    # SSv2 runs in the scenario domain with the agent relay (`just run`); the ego is
+    # reached through the relay, wherever it runs (roadmap 017).
+    export ROS_DOMAIN_ID={{scenario_domain}}
+    # The repo's scenarios name their map as $(env CARLA_MAPS)/<Town>.
+    export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
+    # The scenario file is read, never modified: SSv2's runner preprocesses a copy in its
+    # output directory (fork, roadmap 017).
     # --parser python: scenario_test_runner.launch.py imports launch.actions the
     # Rust parser's embedded Python cannot resolve (EmitEvent)
     exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8081 \
         --log-dir play_log/scenario \
-        csb_launch carla_scenario.launch.xml \
-        managed_ego:=$managed \
-        scenario:="$scenario_copy" \
+        csb_launch scenario.launch.xml \
+        scenario:="$(realpath "{{scenario_file}}")" \
         port:={{ssv2_port}}
 
 # Run the full stack: adapter + bridge + SSv2 + Autoware (CARLA must be running)
 # Usage: just e2e [scenario_file]
-e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc"):
+e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc") map_name=map_name:
     #!/usr/bin/env bash
     set -e
+    source "{{autoware_setup}}"
+    source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # play_launch forks a process per composable node and SIGKILLs it if it has not
-    # reported ready within this window. The default is 30 s, and Autoware's traffic
-    # light classifier needs ~45 s to construct even with its TensorRT engine cached
-    # (~33 s of that is the engine build itself on a cold cache). At the default the
-    # three inference nodes were killed seconds before they would have reported, and
-    # the only symptom was a perception pipeline publishing empty results forever.
     export ROS_DOMAIN_ID={{ego_domain}}
-    # A copy, never the source: SSv2's preprocessor rewrites the file it is given (see
-    # the `scenario` recipe).
-    input_dir="{{project}}/play_log/scenario/input"
-    mkdir -p "$input_dir"
-    scenario_copy="$input_dir/$(basename "{{scenario_file}}")"
-    cp "{{scenario_file}}" "$scenario_copy"
-    exec play_launch launch --enforce-rules off --web-addr 0.0.0.0:8080 \
+    export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
+    exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8080 \
         csb_launch demo.launch.xml \
-        scenario:="$scenario_copy" \
+        scenario:="$(realpath "{{scenario_file}}")" \
+        map_path:="$CARLA_MAPS/{{map_name}}" \
         carla_port:={{carla_port}} \
         ssv2_port:={{ssv2_port}}
 

@@ -1,33 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Everything in one launch, for a first try: the simulation side, an ego Autoware and one
+  scenario. For repeated runs start simulation.launch.xml and ego_av.launch.xml once and
+  run scenario.launch.xml per scenario (docs/user-guide.md).
+-->
 <launch>
   <arg name="scenario" description="Path to .xosc scenario file" />
-  <arg name="map_path" default="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town01"
-       description="Map directory for the ego's Autoware; must match the scenario's LogicFile" />
+  <arg name="map_path" description="Map directory; the same one the scenario's LogicFile names" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
-  <arg name="carla_version" default="0.9.16" />
   <arg name="ssv2_port" default="5555" />
 
-  <!-- 1. CARLA scenario bridge (ZMQ adapter between SSv2 and CARLA) -->
-  <include file="$(find-pkg-share carla_scenario_bridge)/launch/carla_scenario_bridge.launch.xml">
+  <include file="$(find-pkg-share csb_launch)/launch/simulation.launch.xml">
     <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
-    <arg name="carla_version" value="$(var carla_version)" />
     <arg name="ssv2_port" value="$(var ssv2_port)" />
   </include>
 
-  <!-- 2. Ego stack: Autoware + acb_bridge, in this (SSv2's) domain. SSv2 no longer forks
-       Autoware; the concealer connects to this stack. Launched here alongside SSv2, the
-       ordering is not enforced — the concealer's 180 s ADAPI service timeout is the only
-       slack for Autoware's startup. For repeated runs, launch ego_av.launch.xml
-       separately and reuse it. -->
   <include file="$(find-pkg-share csb_launch)/launch/ego_av.launch.xml">
     <arg name="map_path" value="$(var map_path)" />
     <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
   </include>
 
-  <!-- 3. SSv2 scenario runner (launch_autoware:=false — connects to the stack above) -->
-  <include file="$(find-pkg-share csb_launch)/launch/carla_scenario.launch.xml">
+  <include file="$(find-pkg-share csb_launch)/launch/scenario.launch.xml">
     <arg name="scenario" value="$(var scenario)" />
     <arg name="port" value="$(var ssv2_port)" />
   </include>

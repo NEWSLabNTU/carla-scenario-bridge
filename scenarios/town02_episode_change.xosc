@@ -12,7 +12,7 @@
 	<ParameterDeclarations />
 	<CatalogLocations />
 	<RoadNetwork>
-		<LogicFile filepath="$(find-pkg-share csb_launch)/data/carla-autoware-bridge/Town02" />
+		<LogicFile filepath="$(env CARLA_MAPS)/Town02" />
 	</RoadNetwork>
 	<Entities />
 	<Storyboard>

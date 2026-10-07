@@ -2,12 +2,11 @@
 <!-- Deprecated name, kept for one phase (roadmap 017): use scenario.launch.xml. -->
 <launch>
   <arg name="scenario"/>
-  <arg name="managed_ego" default="true"/>
+  <arg name="managed_ego" default="true" description="ignored; retired in roadmap 017"/>
   <arg name="port" default="5555"/>
   <arg name="global_timeout" default="600"/>
   <include file="$(find-pkg-share csb_launch)/launch/scenario.launch.xml">
     <arg name="scenario" value="$(var scenario)"/>
-    <arg name="managed_ego" value="$(var managed_ego)"/>
     <arg name="port" value="$(var port)"/>
     <arg name="global_timeout" value="$(var global_timeout)"/>
   </include>

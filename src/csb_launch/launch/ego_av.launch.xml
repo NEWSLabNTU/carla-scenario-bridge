@@ -1,19 +1,15 @@
 <launch>
   <!--
-    Autoware + acb_bridge for the scenario ego.
+    Autoware + acb_bridge + the vehicle agent for the scenario ego: the acb CARLA profile
+    (acb_launch/carla_simulator.launch.xml) with this repo's defaults.
 
     Same stack, same structure as background_av.launch.xml; the differences are exactly
     the ego's domain and clock policy:
 
     - No ROS_DOMAIN_ID override in this file: the domain is ambient in the caller's
-      environment. A managed ego (default) must live in SSv2's domain; an unmanaged one
-      (managed:=false) lives in its own (`ego_unmanaged_domain`, 3, in the justfile). SSv2's concealer (launched with
-      launch_autoware:=false) reaches this Autoware over plain ROS topics/services to
-      initialize, route, and engage it — a stack in any other domain is invisible to it.
-      `just ego-av` and `just scenario` therefore export the same ROS_DOMAIN_ID
-      (default 1, `ego_domain` in the justfile). Domain 0 is left free on purpose: it
-      is where every unconfigured ROS process on the host lands, and a stray node there
-      would join the scenario's graph uninvited.
+      environment, and any domain works. SSv2 reaches this ego only through the agent
+      relay (TCP, `relay`), never over ROS (roadmap 017). Domain 0 is best avoided: it is
+      where every unconfigured ROS process on the host lands.
 
     - publish_clock is true in every mode (roadmap 015): acb publishes CARLA's frame time
       plus an episode epoch as /clock, and SSv2 (clock_source:=simulator) publishes none.
@@ -37,24 +33,14 @@
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
 
-  <!-- managed=true  (default, phase 012): SSv2's concealer drives this ego's autonomy, so
-                     the stack must share SSv2's ROS domain.
-       managed=false (phase 013): the concealer is inert (`managed_ego:=false` on the fork),
-                     nothing in SSv2 routes or engages this ego, and the stack becomes an
-                     ordinary AV in its own domain, driven by acb_pilot from
-                     `goal_poses_file`.
-
-       `managed` decides the domain (set by the caller) and who drives; it no longer decides
-       the clock or the signals. In both modes acb publishes /clock and
-       external/traffic_signals from CARLA (roadmap 015), so the two modes differ only in who
-       routes and engages. -->
-  <arg name="managed" default="true"
-       description="true: SSv2's concealer drives the ego. false: acb_pilot does, as for a background AV." />
-  <arg name="goal_poses_file" default=""
-       description="Ego goal in acb_pilot format. Required when managed:=false; unused otherwise." />
-  <arg name="pilot_timeout" default="600.0" />
-  <arg name="pilot_stabilize_seconds" default="15.0" />
-  <arg name="pilot_route_timeout" default="120.0" />
+  <!-- Who routes and engages this ego (roadmap 017): the vehicle agent (acb_pilot agent),
+       started by the profile. With `relay` it takes the scenario's goals from the
+       scenario's agent relay, so this stack may run in any ROS domain; without one it can
+       drive to a local `goal_poses_file`. The managed/unmanaged split of phases 012-013
+       (SSv2's concealer calling this stack's ADAPI directly, same domain) is retired. -->
+  <arg name="relay" default="tcp://localhost:5560" description="the scenario's agent relay; empty = none"/>
+  <arg name="entity" default="ego" description="the scenario entity this vehicle is"/>
+  <arg name="goal_poses_file" default="" description="local goal when relay is empty"/>
   <!-- No longer derived from `managed` (roadmap 015): acb owns /clock in every domain and
        SSv2 runs with clock_source:=simulator, publishing none. false is an emergency off. -->
   <arg name="publish_clock" default="true"
@@ -105,6 +91,9 @@
          these, once. It used to be included separately here with the profile's own
          interface disabled: two bridges are two /clock publishers and doubled sensor
          streams, which crashed gyro_bias_estimator ("dt_pose or dt_gyro is zero"). -->
+    <arg name="relay" value="$(var relay)" />
+    <arg name="entity" value="$(var entity)" />
+    <arg name="goal_poses_file" value="$(var goal_poses_file)" />
     <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
     <arg name="vehicle_name" value="$(var vehicle_name)" />
@@ -130,28 +119,6 @@
        loopback-unicast CycloneDDS configs), while a standalone adaptor process
        was matched promptly. Cause not yet understood - suspected discovery
        scaling on a host with lo-multicast disabled. -->
-  <!-- 4. The pilot, for unmanaged runs only. It stands in for the concealer exactly as it
-       does in every background AV's domain: waits for localization, sets the route from
-       `goal_poses_file`, engages. In a managed run the concealer does this and the pilot
-       must not run, since two things engaging one ego is the same class of mistake as two
-       /clock publishers.
-
-       respawn: auto_drive drives one vehicle to one goal and exits: on arrival, or when
-       the scenario despawns the ego within reach of the goal. A long-lived ego stack serves
-       consecutive scenarios, and without a pilot the next one spawns an ego that never
-       moves (`just scenario`'s health gate refuses it: "auto_drive is not running").
-       Respawned, it waits for the next ego exactly as it did for the first (roadmap 015
-       step 5). -->
-  <group unless="$(var managed)">
-    <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen"
-          respawn="true" respawn_delay="5.0">
-      <param name="poses_file" value="$(var goal_poses_file)" />
-      <param name="timeout" value="$(var pilot_timeout)" />
-      <param name="stabilize_seconds" value="$(var pilot_stabilize_seconds)" />
-      <param name="route_timeout" value="$(var pilot_route_timeout)" />
-      <param name="use_sim_time" value="true" />
-    </node>
-  </group>
 
   <arg name="launch_api_adaptor" default="false" />
   <group if="$(var launch_api_adaptor)">

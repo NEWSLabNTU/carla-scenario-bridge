@@ -10,8 +10,6 @@
   It names its map directory in RoadNetwork/LogicFile, e.g. "$(env CARLA_MAPS)/Town01".
 -->
 <launch>
-  <arg name="managed_ego" default="true"
-       description="false: SSv2 does not drive the ego's autonomy (phase 013); acb_pilot does" />
 
   <!-- User-configurable arguments -->
   <arg name="scenario" description="Path to .xosc scenario file" />
@@ -87,12 +85,11 @@
 
     <!-- SSv2 orchestration -->
     <arg name="launch_autoware" value="false" />
-    <!-- managed_ego (NEWSLabNTU fork, phase 013). true keeps stock behaviour: the concealer
-         initializes, routes and engages the ego. false makes it inert, so nothing in SSv2
-         drives the ego and acb_pilot does it instead, exactly as for a background AV. The
-         fork also makes ego autonomy actions in the .xosc fail fast naming this parameter,
-         rather than time out after 180 s. -->
-    <arg name="managed_ego" value="$(var managed_ego)" />
+    <!-- The concealer always drives the ego's autonomy, through scenario_agent_relay: the
+         relay serves the ADAPI subset it calls, in this domain, and forwards to the vehicle
+         agent wherever the ego's Autoware runs (roadmap 017). The fork's managed_ego:=false
+         (phase 013) is retired; the relay replaces the domain split it existed for. -->
+    <arg name="managed_ego" value="true" />
     <arg name="launch_rviz" value="false" />
     <arg name="record" value="false" />
     <!-- play_launch serializes empty-string parameters as "-p name:=", which rcl
