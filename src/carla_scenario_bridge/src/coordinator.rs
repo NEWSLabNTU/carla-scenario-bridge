@@ -701,6 +701,9 @@ pub struct Coordinator {
     /// CARLA's view of the ego's collisions, logged beside SSv2's verdict and never fed
     /// into it (roadmap 014, gap 3). See `collision_monitor`.
     collision_monitor: CollisionMonitor,
+    /// Time spent inside `world.tick()` since [`Coordinator::take_tick_time`] last read
+    /// it, for the frame budget's processing time (which excludes it).
+    tick_time: Duration,
 }
 
 impl Coordinator {
@@ -746,6 +749,7 @@ impl Coordinator {
             accel_history: HashMap::new(),
             walker_height: HashMap::new(),
             collision_monitor: CollisionMonitor::new(collision_monitor_enabled),
+            tick_time: Duration::ZERO,
         }
     }
 
@@ -1996,12 +2000,20 @@ impl Coordinator {
     /// On success, returns the simulation time (ns) after the last tick (0 if the snapshot
     /// could not be read, the protocol's "unknown").
     fn tick_frame(&mut self) -> std::result::Result<i64, carla::CarlaError> {
+        let mut ticking = Duration::ZERO;
         let frame = tick_then_read(
             &mut self.world,
             self.substeps,
-            |w| w.tick().map(|_| ()),
+            |w| {
+                let started = Instant::now();
+                let result = w.tick().map(|_| ());
+                ticking += started.elapsed();
+                result
+            },
             read_frame_of,
-        )?;
+        );
+        self.tick_time += ticking;
+        let frame = frame?;
         Ok(match frame {
             Ok((elapsed, delta)) => self.episode_clock.observe(elapsed, delta),
             Err(e) => {
@@ -2009,6 +2021,16 @@ impl Coordinator {
                 0
             }
         })
+    }
+
+    /// Time spent inside `world.tick()` since the last call, and reset it.
+    pub fn take_tick_time(&mut self) -> Duration {
+        std::mem::take(&mut self.tick_time)
+    }
+
+    /// Entities SSv2 currently has spawned through this bridge.
+    pub fn entity_count(&self) -> usize {
+        self.entities.count()
     }
 
     pub fn update_frame(&mut self, _req: api::UpdateFrameRequest) -> api::UpdateFrameResponse {

@@ -1,9 +1,10 @@
 use prost::Message;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-
+use std::time::Instant;
 
 use crate::coordinator::Coordinator;
+use crate::frame_stats::{FrameStats, Outcome, RequestKind, SUMMARY_WINDOW_FRAMES};
 use crate::proto::simulation_api_schema::{
     self as api, simulation_request, simulation_response, SimulationRequest, SimulationResponse,
 };
@@ -19,6 +20,7 @@ use crate::proto::simulation_api_schema::{
 pub struct ZmqServer {
     socket: zmq::Socket,
     coordinator: Coordinator,
+    frame_stats: FrameStats,
 }
 
 impl ZmqServer {
@@ -30,6 +32,7 @@ impl ZmqServer {
         Ok(Self {
             socket,
             coordinator,
+            frame_stats: FrameStats::new(),
         })
     }
 
@@ -98,64 +101,84 @@ impl ZmqServer {
             }
         };
 
+        let kind = match &request_inner {
+            simulation_request::Request::Initialize(_) => RequestKind::Initialize,
+            simulation_request::Request::UpdateFrame(_) => RequestKind::UpdateFrame,
+            simulation_request::Request::UpdateEntityStatus(_) => RequestKind::UpdateEntityStatus,
+            _ => RequestKind::Other,
+        };
+        // Initialize starts a new run: close the previous one first, so its summary is
+        // logged and this run's frames count from 1.
+        if kind == RequestKind::Initialize {
+            self.end_run();
+        }
+        let frame = match kind {
+            RequestKind::Initialize => 0,
+            _ => self.frame_stats.current_frame(),
+        };
+
+        // One span per handler, named after the request and carrying the SSv2 step it
+        // belongs to, so every line the handler logs says which request and frame made it.
+        // The subscriber does not log span enter/exit (FmtSpan::NONE): at 20 Hz that would be
+        // 100+ lines a second to a disk that can stall the loop (CLAUDE.md).
+        macro_rules! handle {
+            ($handler:ident, $variant:ident, $req:expr) => {{
+                let _span = tracing::info_span!(stringify!($handler), frame).entered();
+                simulation_response::Response::$variant(self.coordinator.$handler($req))
+            }};
+        }
+
+        let started = Instant::now();
         let response = match request_inner {
-            simulation_request::Request::Initialize(req) => {
-                let resp = self.coordinator.initialize(req);
-                simulation_response::Response::Initialize(resp)
-            }
+            simulation_request::Request::Initialize(req) => handle!(initialize, Initialize, req),
             simulation_request::Request::UpdateFrame(req) => {
-                let resp = self.coordinator.update_frame(req);
-                simulation_response::Response::UpdateFrame(resp)
+                handle!(update_frame, UpdateFrame, req)
             }
             simulation_request::Request::UpdateStepTime(req) => {
-                let resp = self.coordinator.update_step_time(req);
-                simulation_response::Response::UpdateStepTime(resp)
+                handle!(update_step_time, UpdateStepTime, req)
             }
             simulation_request::Request::SpawnVehicleEntity(req) => {
-                let resp = self.coordinator.spawn_vehicle_entity(req);
-                simulation_response::Response::SpawnVehicleEntity(resp)
+                handle!(spawn_vehicle_entity, SpawnVehicleEntity, req)
             }
             simulation_request::Request::SpawnPedestrianEntity(req) => {
-                let resp = self.coordinator.spawn_pedestrian_entity(req);
-                simulation_response::Response::SpawnPedestrianEntity(resp)
+                handle!(spawn_pedestrian_entity, SpawnPedestrianEntity, req)
             }
             simulation_request::Request::SpawnMiscObjectEntity(req) => {
-                let resp = self.coordinator.spawn_misc_object_entity(req);
-                simulation_response::Response::SpawnMiscObjectEntity(resp)
+                handle!(spawn_misc_object_entity, SpawnMiscObjectEntity, req)
             }
             simulation_request::Request::DespawnEntity(req) => {
-                let resp = self.coordinator.despawn_entity(req);
-                simulation_response::Response::DespawnEntity(resp)
+                handle!(despawn_entity, DespawnEntity, req)
             }
             simulation_request::Request::UpdateEntityStatus(req) => {
-                let resp = self.coordinator.update_entity_status(req);
-                simulation_response::Response::UpdateEntityStatus(resp)
+                handle!(update_entity_status, UpdateEntityStatus, req)
             }
             simulation_request::Request::AttachLidarSensor(req) => {
-                let resp = self.coordinator.attach_lidar_sensor(req);
-                simulation_response::Response::AttachLidarSensor(resp)
+                handle!(attach_lidar_sensor, AttachLidarSensor, req)
             }
             simulation_request::Request::AttachDetectionSensor(req) => {
-                let resp = self.coordinator.attach_detection_sensor(req);
-                simulation_response::Response::AttachDetectionSensor(resp)
+                handle!(attach_detection_sensor, AttachDetectionSensor, req)
             }
             simulation_request::Request::AttachOccupancyGridSensor(req) => {
-                let resp = self.coordinator.attach_occupancy_grid_sensor(req);
-                simulation_response::Response::AttachOccupancyGridSensor(resp)
+                handle!(attach_occupancy_grid_sensor, AttachOccupancyGridSensor, req)
             }
             simulation_request::Request::AttachImuSensor(req) => {
-                let resp = self.coordinator.attach_imu_sensor(req);
-                simulation_response::Response::AttachImuSensor(resp)
+                handle!(attach_imu_sensor, AttachImuSensor, req)
             }
-            simulation_request::Request::AttachPseudoTrafficLightDetector(req) => {
-                let resp = self.coordinator.attach_pseudo_traffic_light_detector(req);
-                simulation_response::Response::AttachPseudoTrafficLightDetector(resp)
-            }
+            simulation_request::Request::AttachPseudoTrafficLightDetector(req) => handle!(
+                attach_pseudo_traffic_light_detector,
+                AttachPseudoTrafficLightDetector,
+                req
+            ),
             simulation_request::Request::UpdateTrafficLights(req) => {
-                let resp = self.coordinator.update_traffic_lights(req);
-                simulation_response::Response::UpdateTrafficLights(resp)
+                handle!(update_traffic_lights, UpdateTrafficLights, req)
             }
         };
+        let handler = started.elapsed();
+
+        let tick = self.coordinator.take_tick_time();
+        let entities = self.coordinator.entity_count();
+        let outcome = self.frame_stats.record(kind, handler, tick, entities);
+        report_frame(outcome);
 
         let sim_response = SimulationResponse {
             response: Some(response),
@@ -163,10 +186,39 @@ impl ZmqServer {
         sim_response.encode_to_vec()
     }
 
+    /// Log the finished run's frame-budget summary, if it stepped at all, and reset.
+    fn end_run(&mut self) {
+        if let Some(summary) = self.frame_stats.end_run() {
+            tracing::info!("Frame budget, whole run: {summary}");
+        }
+    }
+
     /// Undo everything this bridge changed in CARLA: destroy its actors, unfreeze traffic
     /// lights it froze, restore async mode.
     pub fn cleanup(&mut self) {
+        self.end_run();
         self.coordinator.shutdown();
+    }
+}
+
+/// Log what one request produced for the frame budget: the step at DEBUG, warnings, and a
+/// window summary when one closed.
+fn report_frame(outcome: Outcome) {
+    if let Some(s) = outcome.sample {
+        tracing::debug!(
+            frame = s.frame,
+            processing_us = s.processing.as_micros() as u64,
+            tick_us = s.tick.as_micros() as u64,
+            update_entity_status_us = s.update_entity_status.as_micros() as u64,
+            entities = s.entities,
+            "frame timing"
+        );
+    }
+    for warning in outcome.warnings {
+        tracing::warn!("{warning}");
+    }
+    if let Some(summary) = outcome.window_summary {
+        tracing::info!("Frame budget, last {SUMMARY_WINDOW_FRAMES} frames: {summary}");
     }
 }
 
