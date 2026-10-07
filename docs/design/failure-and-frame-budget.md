@@ -19,10 +19,9 @@ Authoritative for both; history and measurements in roadmap
 
 | Failure | Detected by | csb does | The running scenario | The next one |
 |---|---|---|---|---|
-| CARLA crashes | RPC error (connection refused/reset, fast) | 3 consecutive failures → one reconnect attempt per request; every request fails with its cause meanwhile | fails on its next frame | `Initialize` waits for CARLA (bounded), reconnects, reaps, runs |
-| CARLA hangs | RPC timeout (client timeout 30 s) | as above, but each failure costs the timeout | fails within ~3 timeouts | as above |
+| CARLA crashes or hangs | RPC **timeout** (client timeout 30 s; a killed server times out, it does not refuse -- measured 016) | the request fails with its cause; within a batch, the first teleport that fails slowly (> 5 s) fails the rest at once | the SSv2 fork ends it on the first failed frame (~30–60 s) | `Initialize` waits for CARLA (bounded), reconnects, reaps, runs |
 | csb panics in a handler | `catch_unwind` around dispatch | replies failure with the panic message; refuses everything but `Initialize` until the next one | fails on that request | `Initialize` resets the session |
-| csb dies (segfault in LibCarla, abort, OOM, kill) | process exit | the supervisor (`just run`) restarts it with backoff | SSv2's receive times out → scenario errors | new csb serves it; reaps what the dead one left |
+| csb dies (segfault in LibCarla, abort, OOM, kill) | process exit | the supervisor (`just run`) restarts it with backoff | a request in flight: SSv2's receive times out → error; a request queued after the death: the new csb refuses it (unknown entities) → failed frame → error | new csb serves it; reaps what the dead one left |
 | SSv2 dies mid-scenario | nothing (REP socket just idles) | nothing: CARLA stays paused with the scenario's actors | -- | `Initialize` destroys them (session reset + reap) |
 | Malformed request | protobuf decode error | replies failure for the peeked variant (phase 006) | fails | unaffected |
 
@@ -51,6 +50,13 @@ whole cycle hold:
   operator) ends the loop; any other exit restarts csb after a backoff
   (`2 s × 2^(n−1)`, capped at 60 s), and more than 5 crashes in 300 s ends the loop with an
   error -- the same policy play_launch uses for composables.
+- **SSv2 must not retry a failed frame.** Upstream `SimulatorCore::update()` discards
+  `updateFrame()`'s result, so a failed frame was simply sent again: time stops advancing,
+  so not even a `SimulationTimeCondition` timeout fires, and a scenario whose simulator lost
+  its world ran forever at one frame per 30–60 s (measured: 615 s, then stopped by hand). The
+  fork throws a `SimulationError` on the first failed frame. This is also phase 006's
+  promise kept end to end: csb has reported honest failures since then, and SSv2 was
+  dropping them.
 - **SSv2 must not wait forever.** SSv2's ZMQ `REQ` client blocks in `recv` with no timeout,
   and a request sent to a csb that died is never answered by the next one, so the scenario
   hangs until killed by hand. The fork sets a receive timeout

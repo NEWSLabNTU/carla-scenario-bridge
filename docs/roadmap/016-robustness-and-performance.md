@@ -65,6 +65,11 @@ Performance tasks and "20 NPC entities at 20Hz".
       simulator at tcp://localhost:5555 within 60 s` (step 5)
 - [ ] SSv2 fork: end the scenario when `updateFrame()` fails (gap 8) -- throw, or count
       consecutive failures and throw; without it steps 5a/5b below cannot pass
+      Implemented: `SimulatorCore::update()` throws `SimulationError` on the first failed
+      frame (no retry count: every csb failure since phase 006 means a real divergence).
+      Re-run of 5a/5b pending
+- [ ] csb: within an `UpdateEntityStatus` batch, a teleport that fails after > 5 s (a client
+      timeout: gap 9) fails the remaining teleports at once instead of 30 s each
 
 ### 4. Performance (csb)
 - [x] `tracing` spans on all 14 handlers, carrying the frame number (csb's own count: SSv2's

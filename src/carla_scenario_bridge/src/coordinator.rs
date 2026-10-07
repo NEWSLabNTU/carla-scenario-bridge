@@ -455,6 +455,10 @@ enum FrameAction {
     Tick,
 }
 
+/// A CARLA call that fails after this long failed by timing out, not by being refused: the
+/// server is gone or hung, and the next call will wait just as long.
+const SLOW_FAILURE: Duration = Duration::from_secs(5);
+
 /// The `role_name` prefix csb puts on every actor it spawns for an SSv2 entity that has no
 /// configured role, so a later bridge can tell them from everybody else's actors.
 const ENTITY_ROLE_PREFIX: &str = "csb_entity:";
@@ -2698,6 +2702,11 @@ impl Coordinator {
         let mut updated = Vec::new();
         let mut teleport_failures: Vec<String> = Vec::new();
         let mut unknown: Vec<String> = Vec::new();
+        // Set when a teleport fails slowly: the client timed out, so CARLA is gone or hung,
+        // and every further call would wait out the same timeout (30 s each -- a dead
+        // server times out rather than refusing). The rest of the batch fails at once and
+        // SSv2 ends the scenario on the failed frame (roadmap 016, gap 9).
+        let mut carla_unreachable = false;
 
         for entity_status in &req.status {
             let name = &entity_status.name;
@@ -2748,7 +2757,14 @@ impl Coordinator {
                     // 1.504 m/s for the same WalkerControl with physics on). Per-frame
                     // velocity and the walk animation need walker physics on; tracked as
                     // roadmap 014 gap 5.
-                    if let Err(e) = self.set_actor_transform(actor_id, &transform) {
+                    if carla_unreachable {
+                        teleport_failures.push(format!("{name}: skipped, CARLA unreachable"));
+                    } else if let Err(e) = {
+                        let started = std::time::Instant::now();
+                        self.set_actor_transform(actor_id, &transform).inspect_err(|_| {
+                            carla_unreachable = started.elapsed() > SLOW_FAILURE;
+                        })
+                    } {
                         // A failed teleport used to warn and still report success, so SSv2
                         // went on believing the NPC had moved -- the same silent divergence
                         // phase 006 exists to remove.
