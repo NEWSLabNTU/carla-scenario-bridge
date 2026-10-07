@@ -1,0 +1,19 @@
+<launch>
+  <!-- Simulation side, scenario domain, one per domain, long-lived like the simulator
+       adapter. Serves SSv2's concealer the Autoware ADAPI subset for `entity`, backed by
+       the agent that registers under that name on tcp://<host>:<agent_port>; with no
+       agent (or a silent one) the ADAPI reads as "Autoware not up".
+       docs/design/user-workflow.md, "The agent protocol (I3)". -->
+  <arg name="entity" default="ego" description="SSv2 entity whose agent this relay serves" />
+  <arg name="agent_port" default="5560" description="TCP port agents connect to" />
+  <arg name="agent_host" default="0.0.0.0" description="address to listen on" />
+  <arg name="agent_timeout" default="3.0" description="seconds of silence before an agent counts as gone" />
+
+  <node pkg="scenario_agent_relay" exec="relay" name="scenario_agent_relay" output="screen"
+        respawn="true" respawn_delay="2.0">
+    <param name="entity" value="$(var entity)" />
+    <param name="agent_port" value="$(var agent_port)" />
+    <param name="agent_host" value="$(var agent_host)" />
+    <param name="agent_timeout" value="$(var agent_timeout)" />
+  </node>
+</launch>

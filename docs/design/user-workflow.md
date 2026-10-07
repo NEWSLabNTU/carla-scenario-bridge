@@ -61,7 +61,7 @@ command that other autopilots reject.
 │     │ ADAPI subset (ROS)               │            │     ▲ its native interface    │
 │     ▼                                  │   agent    │     │                         │
 │ agent relay  ◀─────────────────────────┼─protocol───┼─ agent (Autoware: acb_agent)  │
-│ (sim-neutral)                          │  (ZMQ+pb)  │                               │
+│ (sim-neutral)                          │ (TCP+JSON) │                               │
 │                                        │            │ vehicle bridge (CARLA: acb)   │
 │ SSv2 ──ZMQ :5555 (SSv2 sim protocol)──▶│ simulator  │  sensors, vehicle interface,  │
 │                                        │ adapter    │  /clock, traffic signals      │
@@ -77,7 +77,7 @@ Five interfaces, each with one owner:
 |---|---|---|---|---|---|
 | I1 | SSv2 simulation protocol (ZMQ + protobuf) | SSv2 ↔ simulator adapter | SSv2 (upstream) | no -- AWSIM implements it too | no |
 | I2 | ADAPI subset (ROS, scenario domain) | concealer ↔ agent relay | Autoware ADAPI, as SSv2 uses it | no | Autoware-shaped, but only inside the scenario domain |
-| I3 | **Agent protocol** (ZMQ + protobuf) | agent relay ↔ agent | this design | no | no |
+| I3 | **Agent protocol** (TCP, newline-delimited JSON) | agent relay ↔ agent | this design | no | no |
 | I4 | Autopilot native interface | agent ↔ autopilot | the autopilot | no | yes (Autoware: ADAPI, local domain) |
 | I5 | Vehicle I/O (sensors, vehicle interface, `/clock`, signals) | vehicle bridge ↔ autopilot | the autopilot's message set | yes (bridge talks to the simulator) | yes (publishes the autopilot's messages) |
 
@@ -86,29 +86,110 @@ channel (CARLA actor ids).
 
 ## The agent protocol (I3)
 
-- **Transport**: ZMQ, protobuf schema with a version field. The relay binds one endpoint
-  (`agent_endpoint`, default `tcp://*:5560`); agents connect and **register by entity
-  name** -- the SSv2 entity name the scenario uses (`ego`), never a simulator id. The relay
-  needs no address list, and an agent can come up before or after the scenario.
-- **Commands** (relay → agent):
-  `set_goal(pose, waypoints[], allow_goal_modification)`, `clear_goal()`,
-  `set_speed_limit(mps)`, `stop()`, `teleported(pose)` -- an event, not an instruction:
-  the vehicle was placed at `pose`; an agent whose autopilot localizes uses it to
-  re-initialize -- and optional `cooperate(module, command)` / `cooperate_auto(module, on)`
-  (RTC). Unsupported optional commands are answered `UNSUPPORTED`, which the relay turns
-  into the concealer's failure, so a scenario that needs RTC fails clearly on an autopilot
-  without it.
-- **State** (agent → relay, pushed on change, with a heartbeat):
-  `phase ∈ {UNAVAILABLE, INITIALIZING, IDLE, PLANNING, READY, DRIVING, ARRIVED, STOPPED}`,
-  `fault ∈ {NONE, MINIMAL_RISK_MANEUVER, EMERGENCY}` with an optional behavior string,
-  `turn_indicators ∈ {NONE, LEFT, RIGHT, HAZARD}` (optional), `capabilities` (which optional
-  commands it accepts), and a free-form `detail`.
-- **Relay mapping to the concealer**: `phase` → legacy Autoware state
-  (`INITIALIZING`, `WAITING_FOR_ROUTE`, `PLANNING`, `WAITING_FOR_ENGAGE`, `DRIVING`,
-  `ARRIVED_GOAL`), the ADAPI state topics the concealer reads, and engage gating;
-  `set_route_points` + `enable_autoware_control` + `engage` → one `set_goal` (the agent
-  engages on its own once ready); `fault` → `mrm_state`; a missing or silent agent →
-  `UNAVAILABLE`, which the concealer sees as Autoware not up.
+Implemented in `scenario_agent_relay/protocol.py` (relay) and its copy
+`acb_pilot/agent_protocol.py` (agent); a test fails if the copies drift.
+
+- **Transport**: plain TCP, **newline-delimited JSON** (one UTF-8 object per line), standard
+  library only on both ends -- no ZMQ or protobuf dependency for an agent author (decision
+  2026-10-08; supersedes the ZMQ + protobuf draft). Every message carries `"v": 1` and a
+  `"type"`; a receiver answers any other version with `error` and closes. JSON has no
+  NaN/infinity: a non-finite number travels as `null`.
+- The relay listens on one port (`agent_port`, default 5560); agents connect and
+  **register by entity name** -- the SSv2 entity name the scenario uses (`ego`), never a
+  simulator id. The relay needs no address list, and an agent can come up before or after
+  the scenario. A newer registration for the same entity replaces the older connection (a
+  restarted agent does not wait out its predecessor's timeout).
+
+**Messages**
+
+| type | direction | fields |
+|---|---|---|
+| `register` | agent → relay, first line | `entity`, `agent` (name, informational), `capabilities` (command names) |
+| `registered` | relay → agent | `entity` |
+| `error` | either; sender then closes | `reason` |
+| `command` | relay → agent | `id` (int, unique per connection), `command`, `args` (object) |
+| `reply` | agent → relay | `id` (of the command), `status` ∈ {`OK`, `FAILED`, `UNSUPPORTED`}, `message` |
+| `state` | agent → relay | below |
+| `heartbeat` | either | -- |
+
+**Commands** (`args`; poses are `{x, y, z, qx, qy, qz, qw}` in the map frame):
+
+| command | args | meaning |
+|---|---|---|
+| `set_goal` | `goal`, `waypoints[]`, `allow_goal_modification`, optional `segments[]` (`{id, type, alternatives[]}`: lanelet ids, when the scenario routes by lane) | drive there: route, enable control, engage on its own once ready |
+| `clear_goal` | -- | drop the goal (idempotent) |
+| `set_speed_limit` | `mps` (`null` = no limit) | |
+| `stop` | -- | stop autonomous driving; hold until the next `set_goal` |
+| `teleported` | `pose` | an event, not an instruction: the vehicle was placed at `pose`; an agent whose autopilot localizes uses it to re-initialize |
+| `cooperate` (optional) | `module` (name, e.g. `INTERSECTION`), `command` ∈ {`ACTIVATE`, `DEACTIVATE`}, `uuid` (hex, from `rtc_status`) | RTC |
+| `cooperate_auto` (optional) | `module`, `enable` | RTC auto mode |
+
+An agent answers a command it does not offer with `UNSUPPORTED`; the relay turns that (and
+`FAILED`, and no reply in time) into the concealer's service failure, so a scenario that
+needs RTC fails clearly on an autopilot without it. **Ordering rule**: before replying, the
+agent pushes a `state` that shows whatever the command changed (`teleported` →
+`INITIALIZING`, `clear_goal` → `IDLE`, `set_goal` → `PLANNING`), and the relay publishes a
+state the moment it arrives. The concealer's next queued task reads the topics as soon as
+the service returns; with the relay publishing on a timer instead, `initialize()` read
+`PLANNING` from before a `clear_route` and aborted (seen live, 2026-10-08). A command may be
+repeated (the concealer retries a slow answer); the agent treats a repeat of an in-progress
+`teleported` or `set_goal` with the same pose as already done.
+
+**State** (pushed on change and at least every `HEARTBEAT_PERIOD`):
+`phase ∈ {UNAVAILABLE, INITIALIZING, IDLE, PLANNING, READY, DRIVING, ARRIVED, STOPPED}`;
+`fault ∈ {NONE, MINIMAL_RISK_MANEUVER, EMERGENCY}` with optional `fault_behavior`
+(`EMERGENCY_STOP`, `COMFORTABLE_STOP`, `PULL_OVER`, ...) and `fault_progress ∈ {OPERATING,
+SUCCEEDED, FAILED}`; optional `turn_indicators ∈ {NONE, LEFT, RIGHT, HAZARD}`;
+`capabilities`; free-form `detail`; optional `pose` (the autopilot's own estimate of where
+the vehicle is); optional `rtc_status[]` (`{module, uuid, safe, requested, command_status,
+state, auto_mode, start_distance, finish_distance}`, only with the RTC capability).
+
+**Liveness**: each side sends something at least every `HEARTBEAT_PERIOD` = 1 s (`state` or
+`heartbeat`) and treats a peer silent for `PEER_TIMEOUT` = 3 s as gone. The relay then
+reports the entity `UNAVAILABLE`; the agent reconnects (backoff 1 → 5 s) and registers again.
+
+**Relay mapping to the concealer** (`scenario_agent_relay/mapping.py`):
+
+| phase | localization | route | operation mode | concealer reads |
+|---|---|---|---|---|
+| no agent / silent / `UNAVAILABLE` | UNKNOWN | UNKNOWN | UNKNOWN, ADAPI services withdrawn | `INITIALIZING` (Autoware not up: every call waits for its service, 180 s) |
+| `INITIALIZING` | INITIALIZING | UNSET | STOP | `INITIALIZING` |
+| `IDLE` | INITIALIZED | UNSET | STOP | `WAITING_FOR_ROUTE` |
+| `PLANNING` | INITIALIZED | SET | STOP, autonomous unavailable | `PLANNING` |
+| `READY` | INITIALIZED | SET | STOP, autonomous available | `WAITING_FOR_ENGAGE` |
+| `DRIVING` | INITIALIZED | SET | AUTONOMOUS, control enabled | `DRIVING` |
+| `ARRIVED` | INITIALIZED | ARRIVED, stamped when first seen | AUTONOMOUS | `ARRIVED_GOAL` for 2 s, then `WAITING_FOR_ROUTE` |
+| `STOPPED` | INITIALIZED | SET | STOP, autonomous unavailable | `PLANNING` (not engageable until a new goal) |
+
+Services: `initialize` → `teleported(pose)`; `set_route_points` / `set_route` → `set_goal`;
+`enable_autoware_control` and `engage(true)` → answered by the relay (the agent engages on
+its own); `engage(false)` and `change_to_stop` → `stop`; `clear_route` → `clear_goal`;
+`velocity_limit` → `set_speed_limit`; `rtc_commands` / `rtc_auto_mode` → `cooperate` /
+`cooperate_auto`. `fault` → `/api/fail_safe/mrm_state` (NONE → NORMAL; MRM → OPERATING /
+SUCCEEDED / FAILED with the behavior) and `EMERGENCY` → `/api/external/get/emergency`
+true; `turn_indicators` → `/control/command/turn_indicators_cmd` (absent → NO_COMMAND);
+`rtc_status` → `/api/external/get/rtc_status`; also `/autoware/state` (legacy). Each relay
+reply deadline is under the concealer's per-attempt wait (2.5 s; 9 s for routing and
+initialize), so a slow agent costs a retry, not a lost answer.
+
+**What the concealer waits for, and who satisfies it now.** The concealer was written to
+watch Autoware's own pipeline, not just ADAPI states:
+
+- `initialize()` takes the newest `/localization/kinematic_state` stamp, waits for two
+  `/localization/util/downsample/pointcloud` scans newer than it, sends the pose stamped
+  with the newest scan, waits for `WAITING_FOR_ROUTE`, then requires a kinematic state
+  newer than the first stamp within 1 m / 0.2 rad of the pose; ARRIVED_GOAL is judged
+  against the newest scan stamp.
+- The relay satisfies these **in its own time base**: it publishes an empty
+  `PointCloud2` stamped with its clock at 10 Hz and republishes the agent's `pose` as
+  `kinematic_state` stamped when that pose arrived. Every stamp the concealer compares
+  then comes from one clock, and no fork change is needed.
+- The real waits move to the vehicle side, against the autopilot's clock and sensors:
+  `acb_agent` on `teleported` waits for two fresh scans of its own (10 s cap), calls
+  `/api/localization/initialize`, and reports `INITIALIZING` until its estimate is newer
+  than before and within 1 m / 0.2 rad of the pose (30 s cap, then `IDLE` with a `detail`
+  saying it did not converge -- the concealer's own pose check then fails the scenario
+  with both poses named). So `WAITING_FOR_ROUTE` is only reported once the pose agrees.
 
 ## Vehicle side
 
@@ -120,7 +201,11 @@ channel (CARLA actor ids).
   `goal_poses_file`), so a vehicle side is testable alone.
 - **acb_agent** (from `acb_pilot/auto_drive.py`, already CARLA-free: ADAPI only) is the
   Autoware agent. It is **simulator-neutral** -- it would serve an Autoware on AWSIM
-  unchanged. It does not live in `acb_bridge`.
+  unchanged. It does not live in `acb_bridge`. Implemented as the `agent` entry point of
+  `acb_pilot` (`ros2 run acb_pilot agent --ros-args -p relay:=tcp://host:5560 -p
+  entity:=ego`), beside `auto_drive`: same package, same ADAPI-only dependencies, and the
+  logic (`agent_core.py`) is ROS-free behind an `AutopilotPort` so it is tested against a
+  fake Autoware. Without `relay` it drives once to `goal_poses_file` (local mode).
 - **acb_bridge** is the CARLA vehicle bridge (I5): sensors, vehicle interface, `/clock`,
   traffic signals for one CARLA vehicle, found by `role_name`.
 - Packages for Autoware users: `acb_launch` (`carla_simulator.launch.xml`, the CARLA profile
