@@ -12,7 +12,7 @@ road carries them all, at least SPACING m apart within a lanelet. Positions are 
 (lanelet ID + s), which SSv2 resolves itself, so no pose has to be hand-matched to a lane.
 
 Usage:
-    scripts/gen_npc_benchmark.py                 # writes scenarios/bench/town01_npc_{10,20,50}.xosc
+    scripts/gen_npc_benchmark.py --carla-port 2000   # writes scenarios/bench/town01_npc_{10,20,50}.xosc
     scripts/gen_npc_benchmark.py --counts 5 100 --out /tmp/bench
 """
 
@@ -30,11 +30,13 @@ DURATION_S = 60
 SPEED_MPS = 8.0
 # Start positions: margin from either end of a lanelet, and gap between NPCs on one lanelet.
 MARGIN = 10.0
-SPACING = 25.0
+SPACING = 15.0
 # A lanelet counts as straight road (not a junction connector) when its heading changes by
 # less than this between its first and last centerline segment, and it is at least this long.
 MAX_TURN_DEG = 10.0
 MIN_LENGTH = 2 * MARGIN + 5.0
+# With --carla-port: no level obstacle (pole, planter, sign) within this of a start point.
+CLEARANCE = 2.5
 
 
 def load_lanelets(path):
@@ -97,7 +99,44 @@ def point_at(center, s):
     return center[-1]
 
 
-def start_positions(lanelets, count):
+def carla_driving_check(port):
+    """A predicate: is this map-frame point on a CARLA driving lane, clear of the kerb?
+
+    Some Town01 road lanelets run over planters and poles in CARLA's level, where CARLA
+    refuses the spawn and SSv2 fails the scenario. The lanelet map cannot tell; CARLA can.
+    """
+    import carla  # only needed with --carla-port
+
+    client = carla.Client("localhost", port)
+    client.set_timeout(20.0)
+    world = client.get_world()
+    cmap = world.get_map()
+    obstacles = [
+        bb
+        for label in (
+            carla.CityObjectLabel.Poles,
+            carla.CityObjectLabel.Vegetation,
+            carla.CityObjectLabel.Static,
+            carla.CityObjectLabel.TrafficLight,
+            carla.CityObjectLabel.TrafficSigns,
+        )
+        for bb in world.get_level_bbs(label)
+    ]
+
+    def ok(xy):
+        loc = carla.Location(x=xy[0], y=-xy[1], z=0.5)  # ROS -> CARLA: flip Y
+        wp = cmap.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+        on = wp and wp.transform.location
+        # Many Town01 road lanelets sit a half or whole lane off CARLA's driving lanes
+        # (2-7 m); a start must be on a driving lane's centre.
+        if not on or math.hypot(on.x - loc.x, on.y - loc.y) > 1.0:
+            return False
+        return all(math.hypot(b.location.x - loc.x, b.location.y - loc.y) > CLEARANCE for b in obstacles)
+
+    return ok
+
+
+def start_positions(lanelets, count, usable=lambda xy: True):
     """`count` (lanelet_id, s) slots, round-robin over lanelets so NPCs spread out.
 
     The map has overlapping road lanelets (several share a start where a lane forks), so a
@@ -119,7 +158,7 @@ def start_positions(lanelets, count):
         for lanelet_id, s, xy in layer:
             if len(picked) == count:
                 break
-            if all(math.dist(xy, other) >= SPACING for _, _, other in picked):
+            if usable(xy) and all(math.dist(xy, other) >= SPACING for _, _, other in picked):
                 picked.append((lanelet_id, s, xy))
         depth += 1
     return [(lanelet_id, s) for lanelet_id, s, _ in picked]
@@ -248,13 +287,20 @@ def main():
     ap.add_argument("--counts", type=int, nargs="+", default=[10, 20, 50])
     ap.add_argument("--map", type=Path, default=MAP)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    ap.add_argument(
+        "--carla-port",
+        type=int,
+        help="check each start against a running CARLA's Town01 (driving lane, no obstacle); "
+        "the committed scenarios were generated with it",
+    )
     args = ap.parse_args()
 
+    usable = carla_driving_check(args.carla_port) if args.carla_port else (lambda xy: True)
     lanelets = load_lanelets(args.map)
     args.out.mkdir(parents=True, exist_ok=True)
     for n in args.counts:
         path = args.out / f"town01_npc_{n}.xosc"
-        path.write_text(scenario(n, start_positions(lanelets, n)))
+        path.write_text(scenario(n, start_positions(lanelets, n, usable)))
         print(f"{path} ({n} NPCs, {len(lanelets)} candidate lanelets)")
 
 
