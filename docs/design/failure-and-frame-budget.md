@@ -43,6 +43,14 @@ whole cycle hold:
   map. The next `Initialize` re-applies sync and loads the scenario's town as usual; entity
   mappings from before the crash are dropped (their actor IDs mean nothing to the new server).
 
+- **One timeout, not one per call.** A call that fails after more than 5 s failed by timing
+  out, so CARLA is gone or hung. csb then marks CARLA unreachable until the next successful
+  reconnect: teleports, despawns and teardown skip their RPCs (the collision sensor is
+  abandoned, actors stay in the ledger), so ending a scenario against a dead server costs
+  one timeout instead of 30 s per actor and sensor (measured 186 s for an ego with 5
+  sensors). Nothing leaks: the ledger is torn down after the reconnect if the server
+  survived, forgotten if it restarted, and the reaper catches marked actors either way.
+
 ### csb crash and restart
 
 - **Supervisor.** csb is a long-lived singleton outside any launch file, so nothing restarted
@@ -64,6 +72,13 @@ whole cycle hold:
   `Initialize` with a map load and the CARLA wait) and throws on expiry, which the
   interpreter reports as a simulation error. The socket is recreated after a timeout, since a
   `REQ` socket that missed its reply cannot send again.
+- **Keep the epoch.** The episode epoch lived only in csb's memory, so a restarted csb
+  reported CARLA's raw elapsed time: SSv2's time went backwards (16825 s → 283 s, measured)
+  and stayed an epoch apart from acb's `/clock`. csb now records `(CARLA episode id, epoch,
+  last frame)` after every frame in `$XDG_RUNTIME_DIR/carla-scenario-bridge/` (tmpfs: the
+  log disk can stall a writer, see CLAUDE.md), keyed by CARLA host and port. A new csb
+  restores it when the episode id matches; when it does not (CARLA also restarted while
+  csb was down), it applies the episode rule to the recorded last frame, as acb did.
 - **Reap what the dead csb left.** `destroy_all_spawned` only knows this process's ledger.
   Vehicles with a configured `role_name` are already reaped at `Initialize`
   (`reap_orphaned_vehicles`). NPCs, walkers and props carried no mark, so a csb that died

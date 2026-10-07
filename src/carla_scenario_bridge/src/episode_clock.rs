@@ -47,7 +47,7 @@ pub struct EpisodeChange {
 impl EpisodeClock {
     #[cfg(test)]
     pub fn epoch_ns(&self) -> i64 {
-        self.epoch_ns
+        self.epoch()
     }
 
     /// The simulation time (ns) of a frame CARLA reports as `elapsed` seconds into its
@@ -63,6 +63,18 @@ impl EpisodeClock {
 
     pub fn last_frame(&self) -> Option<(f64, f64)> {
         self.last_frame
+    }
+
+    /// A clock carried over from a previous csb process (see `clock_store`).
+    pub fn restored(epoch_ns: i64, last_frame: Option<(f64, f64)>) -> Self {
+        Self {
+            epoch_ns,
+            last_frame,
+        }
+    }
+
+    pub fn epoch(&self) -> i64 {
+        self.epoch_ns
     }
 
     /// Apply the episode rule: the old episode ended at `last_elapsed` with step

@@ -720,6 +720,14 @@ pub struct Coordinator {
     /// different one is talking to a restarted server (or a world someone else loaded): the
     /// old actor ids mean nothing there and the old episode's clock has ended.
     world_id: Option<u64>,
+    /// Where the episode clock is recorded for the next csb process (clock_store).
+    clock_path: PathBuf,
+    /// Set after the first failed write, so a broken runtime dir warns once.
+    warned_clock_store: bool,
+    /// Set when a CARLA call failed by timing out (`SLOW_FAILURE`): the server is gone or
+    /// hung. Until a reconnect succeeds, teleports, despawns and teardown skip their RPCs
+    /// rather than wait out the same timeout once per actor (roadmap 016, gap 10).
+    carla_unreachable: bool,
     /// Time spent inside `world.tick()` since [`Coordinator::take_tick_time`] last read
     /// it, for the frame budget's processing time (which excludes it).
     tick_time: Duration,
@@ -739,6 +747,8 @@ impl Coordinator {
             crate::config::ticks_per_frame(0.05, config.substeps, config.carla_tick_seconds);
         let collision_monitor_enabled = config.collision_monitor_enabled();
         let world_id = world.id().ok();
+        let clock_path = crate::clock_store::path_for(&carla_host, carla_port);
+        let episode_clock = Self::resume_clock(&clock_path, world_id);
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -747,7 +757,7 @@ impl Coordinator {
             carla_port,
             config_dir,
             signal_map: SignalMap::new(),
-            episode_clock: EpisodeClock::default(),
+            episode_clock,
             warned_unmapped_signals: HashSet::new(),
             warned_arrow_shapes: false,
             world,
@@ -770,6 +780,9 @@ impl Coordinator {
             walker_height: HashMap::new(),
             collision_monitor: CollisionMonitor::new(collision_monitor_enabled),
             world_id,
+            clock_path,
+            warned_clock_store: false,
+            carla_unreachable: false,
             tick_time: Duration::ZERO,
         }
     }
@@ -1033,6 +1046,18 @@ impl Coordinator {
     /// its own is a success -- the requested end state holds either way. Never panics, so it
     /// is safe on the shutdown path.
     pub fn destroy_all_spawned(&mut self) -> TeardownReport {
+        if self.carla_unreachable {
+            // One timeout per actor and sensor otherwise (gap 10). The ledger is kept for
+            // the next teardown after a reconnect.
+            self.collision_monitor.abandon();
+            tracing::warn!(
+                "Teardown skipped: CARLA unreachable; {} actor(s) stay in the ledger for the \
+                 next teardown, or the reaper",
+                self.spawned_actors.len()
+            );
+            return TeardownReport::default();
+        }
+
         // Our own collision sensor goes before the ego it is attached to, and its run's
         // summary is logged while the entity names can still be resolved.
         self.finish_collision_monitor();
@@ -1044,14 +1069,25 @@ impl Coordinator {
         // channel immutably.
         let world = &self.world;
         let notifier = self.sensor_release.as_ref();
+        // The first destroy that fails by timing out ends the RPCs for the rest (gap 10).
+        let mut timed_out = false;
         let (report, destroyed) = self.spawned_actors.teardown(|actor_id| {
+            if timed_out {
+                return Err(eyre::eyre!("skipped: CARLA unreachable"));
+            }
             // The ledger knows the actor id but not the role name; the notice carries "-"
             // and the bridges match on the id, which is the key both sides always have.
             if let Some(notifier) = notifier {
                 notifier.release(actor_id, "-");
             }
+            let started = Instant::now();
             destroy_actor_in(world, actor_id)
+                .inspect_err(|_| timed_out = started.elapsed() > SLOW_FAILURE)
         });
+        if timed_out && !self.carla_unreachable {
+            self.carla_unreachable = true;
+            tracing::warn!("Teardown: a destroy timed out; CARLA treated as unreachable");
+        }
         for actor_id in destroyed {
             self.forget_actor_samples(actor_id);
         }
@@ -1732,6 +1768,7 @@ impl Coordinator {
     /// Note a successful CARLA operation.
     fn note_carla_ok(&mut self) {
         self.consecutive_carla_failures = 0;
+        self.carla_unreachable = false;
     }
 
     /// Note a failed CARLA operation; returns true once the connection looks lost.
@@ -1773,6 +1810,7 @@ impl Coordinator {
         self.world = world;
         self.world_id = world_id;
         self.consecutive_carla_failures = 0;
+        self.carla_unreachable = false;
         if restarted {
             self.forget_previous_server();
         }
@@ -1823,6 +1861,70 @@ impl Coordinator {
         }
     }
 
+    /// The clock a new csb starts with: the previous process's, if it left one.
+    fn resume_clock(path: &std::path::Path, world_id: Option<u64>) -> EpisodeClock {
+        use crate::clock_store::{load, resume, Resume};
+        let Some(stored) = load(path) else {
+            tracing::info!("Episode clock: none recorded at {}; epoch 0", path.display());
+            return EpisodeClock::default();
+        };
+        match resume(stored, world_id) {
+            Resume::SameEpisode(clock) => {
+                tracing::info!(
+                    "Episode clock: resumed epoch {} from the previous csb (same CARLA episode)",
+                    fmt_ns(clock.epoch())
+                );
+                clock
+            }
+            Resume::NewEpisode(clock) => {
+                tracing::warn!(
+                    "Episode clock: CARLA is in another episode than the previous csb recorded \
+                     ({:?} -> {world_id:?}); epoch {} -> {}, sim_time continues at {}",
+                    stored.world_id,
+                    fmt_ns(stored.epoch_ns),
+                    fmt_ns(clock.epoch()),
+                    fmt_ns(clock.sim_ns(0.0))
+                );
+                clock
+            }
+        }
+    }
+
+    /// Record the episode clock for the next csb process. Cheap (tmpfs); called after every
+    /// change to it.
+    fn record_clock(&mut self) {
+        let Some(world_id) = self.world_id else {
+            return;
+        };
+        let stored = crate::clock_store::StoredClock {
+            world_id,
+            epoch_ns: self.episode_clock.epoch(),
+            last_frame: self.episode_clock.last_frame(),
+        };
+        if let Err(e) = crate::clock_store::save(&self.clock_path, &stored) {
+            if !std::mem::replace(&mut self.warned_clock_store, true) {
+                tracing::warn!(
+                    "Could not record the episode clock at {} ({e}); a restarted csb would \
+                     start from epoch 0",
+                    self.clock_path.display()
+                );
+            }
+        }
+    }
+
+    /// Note how a failed CARLA call failed: one that took longer than `SLOW_FAILURE` timed
+    /// out, and marks CARLA unreachable until the next reconnect.
+    fn note_failure_after(&mut self, started: Instant) {
+        if started.elapsed() > SLOW_FAILURE && !self.carla_unreachable {
+            self.carla_unreachable = true;
+            tracing::warn!(
+                "A CARLA call timed out after {:.1} s; treating CARLA as unreachable until it \
+                 reconnects (teardown skips its RPCs; the reaper catches what is left)",
+                started.elapsed().as_secs_f64()
+            );
+        }
+    }
+
     /// After a reconnect to a different episode -- CARLA restarted -- drop what belonged to
     /// the old server and end its episode on the clock.
     ///
@@ -1859,6 +1961,7 @@ impl Coordinator {
                 self.world_id
             ),
         }
+        self.record_clock();
     }
 
     pub fn initialize(&mut self, req: api::InitializeRequest) -> api::InitializeResponse {
@@ -1962,9 +2065,11 @@ impl Coordinator {
             req.step_time
         );
         // CARLA is paused here: this is the frame SSv2's first UpdateFrame steps from.
+        let simulation_time_ns = self.current_simulation_time_ns();
+        self.record_clock();
         api::InitializeResponse {
             result: Some(proto_ok()),
-            simulation_time_ns: self.current_simulation_time_ns(),
+            simulation_time_ns,
         }
     }
 
@@ -2162,10 +2267,12 @@ impl Coordinator {
             FrameAction::Tick => {}
         }
 
+        let tick_started = Instant::now();
         let simulation_time_ns = match self.tick_frame() {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!("world.tick() failed: {e}");
+                self.note_failure_after(tick_started);
 
                 // A tick failure is the bridge's most reliable connection signal: SSv2 drives
                 // frames continuously, so repeated failures here mean CARLA is gone rather
@@ -2184,6 +2291,7 @@ impl Coordinator {
         };
 
         self.note_carla_ok();
+        self.record_clock();
         api::UpdateFrameResponse {
             result: Some(proto_ok()),
             simulation_time_ns,
@@ -2623,6 +2731,30 @@ impl Coordinator {
             Some(EntityType::Ego)
         );
 
+        if self.carla_unreachable {
+            // Every RPC below would wait out the client timeout (gap 10). The actor stays in
+            // the ledger: torn down after a reconnect to the same server, forgotten after a
+            // restart, and reaped by its mark either way.
+            if was_ego {
+                self.collision_monitor.abandon();
+                self.has_ego = false;
+            }
+            return match self.entities.remove(name) {
+                Some(actor_id) => {
+                    tracing::warn!(
+                        "Despawn '{name}' (actor {actor_id}): CARLA unreachable; left to the \
+                         next teardown or the reaper"
+                    );
+                    api::DespawnEntityResponse {
+                        result: Some(proto_ok()),
+                    }
+                }
+                None => api::DespawnEntityResponse {
+                    result: Some(proto_err(format!("Entity '{name}' not found"))),
+                },
+            };
+        }
+
         if was_ego {
             // Our collision sensor before the ego it rides on; logs the run's summary.
             self.finish_collision_monitor();
@@ -2630,6 +2762,7 @@ impl Coordinator {
 
         match self.entities.remove(name) {
             Some(actor_id) => {
+                let started = Instant::now();
                 // Report failure when the actor could not be destroyed. This used to warn
                 // and return success regardless, so SSv2 believed an entity was gone while
                 // it was still in the world -- blocking spawn points and appearing in
@@ -2684,9 +2817,12 @@ impl Coordinator {
                             result: Some(proto_ok()),
                         }
                     }
-                    Err(e) => api::DespawnEntityResponse {
-                        result: Some(proto_err(format!("Failed to despawn '{name}': {e}"))),
-                    },
+                    Err(e) => {
+                        self.note_failure_after(started);
+                        api::DespawnEntityResponse {
+                            result: Some(proto_err(format!("Failed to despawn '{name}': {e}"))),
+                        }
+                    }
                 }
             }
             None => api::DespawnEntityResponse {
@@ -2706,7 +2842,7 @@ impl Coordinator {
         // and every further call would wait out the same timeout (30 s each -- a dead
         // server times out rather than refusing). The rest of the batch fails at once and
         // SSv2 ends the scenario on the failed frame (roadmap 016, gap 9).
-        let mut carla_unreachable = false;
+        let mut carla_unreachable = self.carla_unreachable;
 
         for entity_status in &req.status {
             let name = &entity_status.name;
@@ -2783,6 +2919,10 @@ impl Coordinator {
             }
         }
 
+        if carla_unreachable && !self.carla_unreachable {
+            self.carla_unreachable = true;
+            tracing::warn!("A teleport timed out; CARLA treated as unreachable");
+        }
         let result = entity_status_result(&unknown, &teleport_failures);
 
         api::UpdateEntityStatusResponse {
