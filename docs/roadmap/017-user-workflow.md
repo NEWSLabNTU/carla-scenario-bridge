@@ -46,35 +46,44 @@ swap audit).
 - [x] This phase doc
 
 ### 1. csb as a ROS node
-- [ ] csb reads ROS params `carla_host`, `carla_port`, `ssv2_port`, `config_file` (and the
-      background-AV selection), via the Rust ROS client acb uses; env vars stay as overrides
-- [ ] Default config is the installed `share/carla_scenario_bridge/config/bridge_config.yaml`,
+- [x] csb reads ROS params `carla_host`, `carla_port`, `ssv2_port`, `config_file`,
+      `background_avs`, `reconnect_wait_seconds`; env vars stay as overrides (file < env <
+      params). **No ROS client library**: csb has no topics, so it parses `--ros-args`
+      (`-p`, `--params-file`) itself (`ros_args.rs`, 4 tests)
+- [x] Default config is the installed `share/carla_scenario_bridge/config/bridge_config.yaml`,
       not `./config` relative to the working directory
-- [ ] `bridge.launch.xml` with `respawn="true"` (play_launch supervises); `just run` becomes
-      a thin call to it and the bash supervisor loop is removed
-- [ ] `ros2 run carla_scenario_bridge carla_scenario_bridge --ros-args -p ...` works from any
-      directory
+- [x] `bridge.launch.xml` with `respawn="true"` (play_launch supervises); `just run` becomes
+      a thin call (to `csb_launch simulation.launch.xml`: bridge + relay) and the bash
+      supervisor loop is removed
+- [x] `ros2 run carla_scenario_bridge carla_scenario_bridge --ros-args -p ...` works from any
+      directory (the signal tables were generated with it from /tmp)
 
 ### 2. Scenario launch and scenario files
-- [ ] `csb_launch/scenario.launch.xml`: `scenario:=` plus `port`, `global_timeout`; SSv2's
+- [x] `csb_launch/scenario.launch.xml`: `scenario:=` plus `port`, `global_timeout`; SSv2's
       fixed args inside (renamed from `carla_scenario.launch.xml`, old name kept as an
       include for one phase)
-- [ ] SSv2 fork: the preprocessor writes its re-serialized copy to the output dir and never
-      touches the input file; the justfile's copy step is removed
-- [ ] Scenarios reference the map dir by plain path; the repo's examples use a path the
-      justfile passes in (no `find-pkg-share csb_launch` in any `.xosc`)
+- [x] SSv2 fork (`ac4c9e983`): the runner hands the preprocessor a copy in its output dir,
+      so the input file is never touched; the justfile's copy step is removed (and the
+      tracked `scenarios/raw/` debris it had produced)
+- [x] Scenarios reference the map dir by plain path; the repo's examples use
+      `$(env CARLA_MAPS)/<Town>` (the fork implements the `$(env NAME [default])`
+      substitution, an upstream TODO); `just scenario` exports `CARLA_MAPS`
 
 ### 3. Simulator artifacts out of the shared map dir
-- [ ] Offline generator for `<map dir>/carla/traffic_lights.yaml` (csb's resolver as a tool)
-- [ ] csb checks the table against CARLA at `Initialize` and fails on a mismatch, instead of
-      writing it; acb reads it from `carla/`
+- [x] Offline generator: `carla_scenario_bridge --generate-signal-table <map dir>` writes
+      `<map dir>/carla/traffic_lights.yaml` (Town01: 36 signals, Town02: 24, 2026-10-08)
+- [x] csb checks the table against CARLA at `Initialize` and fails on a mismatch (missing:
+      warning), instead of writing it; acb reads it from `carla/` (tests: check matches,
+      ignores the map path spelling, detects a change)
 
 ### 4. Vehicle-side packages for Autoware users
-- [ ] `carla_simulator.launch.xml` starts `acb_bridge` itself (`vehicle_name`, CARLA host and
-      port, clock); no `launch_vehicle_interface:=false` workaround
-- [ ] CARLA overrides switchable: `carla_localization`, `carla_perception`, `carla_system`
+- [x] `carla_simulator.launch.xml` starts `acb_bridge` itself (`vehicle_name`, CARLA host and
+      port, clock); no `launch_vehicle_interface:=false` workaround. Found live: the
+      unscoped `autoware.launch.xml` include leaked its own `launch_vehicle_interface`
+      (false) and kept the bridge from starting; captured beforehand (acb `c7e0eb5`)
+- [x] CARLA overrides switchable: `carla_localization`, `carla_perception`, `carla_system`
       (default true); with one off, the user's `autoware.launch.xml` launches that component
-- [ ] csb's `ego_av.launch.xml` and `background_av.launch.xml` reduce to includes of it
+- [x] csb's `ego_av.launch.xml` and `background_av.launch.xml` reduce to includes of it
 - [ ] An Autoware started this way attaches to a CARLA vehicle and drives a route set by hand
       (RViz), with no scenario running
 
@@ -109,7 +118,17 @@ swap audit).
       is PLANNING"): the relay published on a timer, so the concealer read the state from
       before `clear_route`; the relay now publishes when a state arrives (design doc,
       ordering rule)
-- [ ] `managed_ego:=false`, the unmanaged domain split and `EGO_MANAGED` retired
+- [x] `managed_ego:=false`, the unmanaged domain split and `EGO_MANAGED` retired:
+      `scenario.launch.xml` always runs the concealer against the relay; `ego_av` passes
+      `relay`/`entity`; the unmanaged scenarios are removed; the justfile has a scenario
+      domain (9) and an ego domain (1)
+- [x] Fresh-stack startup (found 2026-10-08): Autoware's ADAPI state is latched but only
+      published once `/clock` runs, i.e. once a scenario ticks CARLA, so an agent that
+      waited for it before reporting ready deadlocked the first scenario. The agent is now
+      ready on Autoware's services and reports INITIALIZING until the states arrive;
+      commands do not wait for unpublished state. `town01_engage_state` then **passed on a
+      freshly started ego stack** (concealer "Localization reached the initial pose ...
+      after 0 ms", success)
 
 ### 6. Background vehicles driven by the simulator
 - [ ] Check carla-rust's Traffic Manager bindings (fall back to a server-side alternative if
