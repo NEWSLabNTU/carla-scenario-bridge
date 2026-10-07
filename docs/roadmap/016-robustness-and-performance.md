@@ -52,7 +52,8 @@ Performance tasks and "20 NPC entities at 20Hz".
    `Initialize` and by a 5-line Python probe alike; the next `Initialize` then failed after
    `load world 'Town01'` timed out (120 s). With
    `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json` RPC was up in 50 s and sync
-   applied in 0.01 s. `run.sh`/CLAUDE.md should set it
+   applied in 0.01 s. **Fixed**: acb `third_party/carla/run.sh` pins the NVIDIA ICD when
+   `VK_ICD_FILENAMES` is unset; CLAUDE.md's manual recipe says the same
 
 ## Steps
 
@@ -110,8 +111,12 @@ Performance tasks and "20 NPC entities at 20Hz".
       in between 1749.389020: one frame per step, no jump), passed. Non-zero epoch --
       "resumed epoch 1788.389020101", first `simulation_time` 2019.146663 directly after
       csb's recorded last frame (1788.389020101 + 230.657643 + one step)
-- [ ] csb/acb: agree on the epoch when a restarted CARLA runs frames csb never ticks
-      (gap 12). After CARLA restarts in which csb read no frame ("no frame of the old one
+- [x] ~~csb/acb: agree on the epoch when a restarted CARLA runs frames csb never ticks
+      (gap 12)~~ **Accepted as a limitation (decision 2026-10-07)**: it takes CARLA restarts
+      with no scenario between them; both clocks stay monotonic, scenarios pass, and an ego
+      stack restart clears it. The alternative -- csb publishing its epoch through CARLA
+      (e.g. a marker actor) for acb to adopt -- was judged not worth the machinery.
+      Documented in time-and-ticking.md. Evidence: After CARLA restarts in which csb read no frame ("no frame of the old one
       was ever read, so the epoch stays"), acb still applied the episode rule to the async
       frames it received from those servers (and to a probe's ticks): acb epoch 1788.389 ->
       1803.352 -> 2043.159 -> 2054.249 while csb stayed at 1788.389. SSv2 time then runs a
@@ -211,5 +216,6 @@ Performance tasks and "20 NPC entities at 20Hz".
   `/clock` 0 decreases in all runs; csb's time continues across its own restart (gap 11
   fixed). csb and acb epochs identical across a single CARLA restart (1788.389020101 both);
   they diverge by a constant when an unticked CARLA instance dies (gap 12, open)
-- 20 NPCs at 20 Hz: csb processing p95 < 10 ms, excluding the tick
-- Scaling limit at 50 NPCs recorded
+- 20 NPCs at 20 Hz: csb processing p95 < 10 ms, excluding the tick -- **met**: 1.79 ms
+- Scaling limit at 50 NPCs recorded -- **met**: linear, ~0.065 ms per NPC, 4.19 ms p95 at 50;
+  no limit reached

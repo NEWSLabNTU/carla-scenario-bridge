@@ -112,19 +112,20 @@ performance items below, and their acceptance criteria, are worked there.
       `zmq_server.rs` logs and replies `Failed to decode request` (audit 2026-10-06)
 - [x] ZMQ reconnection: handle SSv2 disconnect/reconnect (reset state on new `Initialize`)
       each `Initialize` resets the session; consecutive scenarios run on one bridge daily (audit 2026-10-06)
-- [ ] Graceful degradation: adapter never crashes from CARLA or SSv2 errors
+- [x] Graceful degradation: adapter never crashes from CARLA or SSv2 errors
+      **Done in 016**: panics answered and contained (`catch_unwind`), a LibCarla segfault restarted by `just run`'s supervisor; every fault ends the scenario in bounded time
       **Open.** Not provable: carla-rust/LibCarla can segfault the process (a callback across a `load_world` did, 2026-10-05; `load_world` of an unknown town does, which csb guards by validating the name) (audit 2026-10-06)
 
 ### Performance
-- [ ] Add `tracing` spans to all 14 handlers
+- [x] Add `tracing` spans to all 14 handlers -- 016
       **Open**: no spans yet (audit 2026-10-06)
-- [ ] Log per-frame timing: `UpdateEntityStatus` duration, `world.tick()` duration
+- [x] Log per-frame timing: `UpdateEntityStatus` duration, `world.tick()` duration -- 016 (`frame_stats.rs`)
       **Open** (audit 2026-10-06)
-- [ ] Benchmark with 10 NPC entities at 20Hz: measure frame budget usage
+- [x] Benchmark with 10 NPC entities at 20Hz: measure frame budget usage -- 016: p95 0.90 ms
       **Open**. Context: two full stacks now run CARLA at 19.96 Hz (014) (audit 2026-10-06)
-- [ ] Benchmark with 50 NPC entities: identify scaling limits
+- [x] Benchmark with 50 NPC entities: identify scaling limits -- 016: linear, p95 4.19 ms, no limit reached
       **Open** (audit 2026-10-06)
-- [ ] Warn if frame processing exceeds 25ms (50% of 20Hz budget)
+- [x] Warn if frame processing exceeds 25ms (50% of 20Hz budget) -- 016
       **Open** (audit 2026-10-06)
 
 ### SafetyPool Scenarios
@@ -162,11 +163,11 @@ performance items below, and their acceptance criteria, are worked there.
 
 ## Acceptance Criteria
 
-- [ ] Adapter recovers from CARLA crash without itself crashing (reconnects and waits for new `Initialize`)
+- [x] Adapter recovers from CARLA crash without itself crashing (reconnects and waits for new `Initialize`) -- verified live in 016 step 5
       **Not verified live**: after this week's CARLA crashes the bridge was restarted by hand each time (audit 2026-10-06)
 - [x] Entity spawn failure returns a descriptive error to SSv2 (not a crash)
       phase 006 (audit 2026-10-06)
-- [ ] 20 NPC entities at 20Hz: per-frame processing < 10ms (excluding CARLA tick time)
+- [x] 20 NPC entities at 20Hz: per-frame processing < 10ms (excluding CARLA tick time) -- 016: p95 1.79 ms
 - [ ] At least 1 SafetyPool scenario runs end-to-end with correct pass/fail result
 - [ ] Lane-to-lanelet mapping tool produces correct CSV for Town01 (validated against known mappings)
 - [ ] Documentation sufficient for an AWF contributor to set up and run the adapter

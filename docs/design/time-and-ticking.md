@@ -118,6 +118,13 @@ csb (roadmap 016) from the last frame it ticked plus one tick. Both saw the fram
 ticked, so the epochs agree unless acb missed that frame. See
 [failure-and-frame-budget](failure-and-frame-budget.md).
 
+**Known limitation (accepted, roadmap 016 gap 12).** A restarted CARLA free-runs before
+csb's first `Initialize`. If that server dies again before csb has read a frame from it,
+acb has seen its frames and applies the episode rule to the last one, while csb has seen
+none and keeps its epoch: from then on the two differ by a constant (265.86 s measured).
+Both stay monotonic and scenarios pass; restarting the ego stack (acb) clears it. A csb
+restart is not affected: csb records its clock on tmpfs and resumes it.
+
 ## Requirements on the CARLA server
 
 - **Never `-quality-level=Low`.** At Low, CARLA 0.9.16 segfaults on `load_world` to another
