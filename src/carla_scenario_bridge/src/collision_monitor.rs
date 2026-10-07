@@ -341,6 +341,21 @@ impl CollisionMonitor {
         }
     }
 
+    /// Drop the sensor without a word to CARLA: the server it lived on is gone (CARLA
+    /// restarted), so stopping or destroying it would only wait on a dead connection.
+    /// What it recorded is still logged.
+    pub fn abandon(&mut self) {
+        if let Some((sensor, ego_name)) = self.attached.take() {
+            // Leaked, not dropped: LibCarla's ServerSideSensor destructor stops a listening
+            // sensor, which is an RPC to the dead server (and an exception thrown from a
+            // destructor aborts). One handle per CARLA restart.
+            std::mem::forget(sensor);
+            self.drain(|_| None);
+            tracing::info!("{} (sensor abandoned: CARLA restarted)", self.log.summary(&ego_name));
+            self.log = CollisionLog::default();
+        }
+    }
+
     /// End the run: stop and destroy the sensor, then log the summary.
     ///
     /// Must be called **before** the ego is destroyed. This client is the sensor's

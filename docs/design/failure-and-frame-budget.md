@@ -54,7 +54,7 @@ whole cycle hold:
 - **SSv2 must not wait forever.** SSv2's ZMQ `REQ` client blocks in `recv` with no timeout,
   and a request sent to a csb that died is never answered by the next one, so the scenario
   hangs until killed by hand. The fork sets a receive timeout
-  (`simulation_interface` `ZMQ_RCVTIMEO`, default 300 s, above the worst legitimate request:
+  (`simulation_interface` `ZMQ_RCVTIMEO`, `SIMULATOR_RESPONSE_TIMEOUT`, default 420 s, above the worst legitimate request:
   `Initialize` with a map load and the CARLA wait) and throws on expiry, which the
   interpreter reports as a simulation error. The socket is recreated after a timeout, since a
   `REQ` socket that missed its reply cannot send again.

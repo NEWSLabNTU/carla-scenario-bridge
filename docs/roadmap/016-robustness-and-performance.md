@@ -43,7 +43,7 @@ Performance tasks and "20 NPC entities at 20Hz".
 
 ### 3. Robustness (around csb)
 - [ ] `just run` supervises csb: restart on abnormal exit, backoff, give up after 5 in 300 s
-- [ ] SSv2 fork: `ZMQ_RCVTIMEO` on the `simulation_interface` client (default 300 s), socket
+- [ ] SSv2 fork: `ZMQ_RCVTIMEO` on the `simulation_interface` client (default 420 s), socket
       recreated after a timeout, error names csb
 
 ### 4. Performance (csb)

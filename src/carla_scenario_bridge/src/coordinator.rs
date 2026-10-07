@@ -456,6 +456,18 @@ enum FrameAction {
     Tick,
 }
 
+/// The `role_name` prefix csb puts on every actor it spawns for an SSv2 entity that has no
+/// configured role, so a later bridge can tell them from everybody else's actors.
+const ENTITY_ROLE_PREFIX: &str = "csb_entity:";
+
+fn entity_role_name(entity: &str) -> String {
+    format!("{ENTITY_ROLE_PREFIX}{entity}")
+}
+
+fn is_entity_role_name(role: &str) -> bool {
+    role.starts_with(ENTITY_ROLE_PREFIX)
+}
+
 /// Whether to switch CARLA to synchronous mode before this spawn: for the ego, if not
 /// already. See the comment at its call in `spawn_entity`.
 fn sync_before_spawn(kind: SpawnKind, sync_mode_enabled: bool) -> bool {
@@ -701,6 +713,10 @@ pub struct Coordinator {
     /// CARLA's view of the ego's collisions, logged beside SSv2's verdict and never fed
     /// into it (roadmap 014, gap 3). See `collision_monitor`.
     collision_monitor: CollisionMonitor,
+    /// CARLA's episode id for `world`, when it could be read. A reconnect that finds a
+    /// different one is talking to a restarted server (or a world someone else loaded): the
+    /// old actor ids mean nothing there and the old episode's clock has ended.
+    world_id: Option<u64>,
 }
 
 impl Coordinator {
@@ -716,6 +732,7 @@ impl Coordinator {
         let substeps =
             crate::config::ticks_per_frame(0.05, config.substeps, config.carla_tick_seconds);
         let collision_monitor_enabled = config.collision_monitor_enabled();
+        let world_id = world.id().ok();
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -746,6 +763,7 @@ impl Coordinator {
             accel_history: HashMap::new(),
             walker_height: HashMap::new(),
             collision_monitor: CollisionMonitor::new(collision_monitor_enabled),
+            world_id,
         }
     }
 
@@ -825,14 +843,18 @@ impl Coordinator {
     /// reporting success. Reaping first is what makes the ladder mean "the ground is not
     /// where we thought" again, rather than "something is already parked here".
     ///
-    /// Only role names this bridge is configured to own are touched. Anything else in the
-    /// world belongs to somebody else -- a manually spawned vehicle, another tool's traffic
+    /// Entities -- NPCs, walkers, props -- are found by the mark every bridge puts on them
+    /// (`entity_role_name`), whatever their type; a bridge that died mid-scenario leaves
+    /// them standing where the next scenario drives (roadmap 016).
+    ///
+    /// Only role names this bridge is configured to own, and marked entities, are touched.
+    /// Anything else in the world belongs to somebody else -- a manually spawned vehicle, another tool's traffic
     /// -- and is left alone.
     ///
     /// That includes background AVs the config declares but this run did not enable: a
     /// `bg_av_1` left by a previous bridge started with `CSB_BACKGROUND_AVS=all` is exactly
     /// the undriven car in the ego's lane that the opt-in default exists to prevent.
-    fn reap_orphaned_vehicles(&mut self) {
+    fn reap_orphaned_actors(&mut self) {
         let mut owned: Vec<String> = vec![self.config.ego.role_name.clone()];
         owned.extend(
             self.config
@@ -852,7 +874,6 @@ impl Coordinator {
 
         let orphans: Vec<(u32, String)> = actors
             .iter()
-            .filter(|actor| actor.type_id().starts_with("vehicle."))
             .filter(|actor| !self.spawned_actors.contains(actor.id()))
             .filter_map(|actor| {
                 let attrs = actor.attributes().ok()?;
@@ -860,7 +881,9 @@ impl Coordinator {
                     .iter()
                     .find(|a| a.id() == "role_name")
                     .map(|a| a.value_string())?;
-                owned.contains(&role).then(|| (actor.id(), role))
+                let ours = is_entity_role_name(&role)
+                    || (actor.type_id().starts_with("vehicle.") && owned.contains(&role));
+                ours.then(|| (actor.id(), role))
             })
             .collect();
 
@@ -869,7 +892,7 @@ impl Coordinator {
         }
 
         tracing::warn!(
-            "Found {} vehicle(s) from a previous bridge process still in the world; \
+            "Found {} actor(s) from a previous bridge process still in the world; \
              destroying them so this run's spawn points are clear",
             orphans.len()
         );
@@ -1093,6 +1116,7 @@ impl Coordinator {
             // physics substeps are this bridge's, and a failed load left the old world.
             self.sync_mode_enabled = false;
             let world = prepared?;
+            self.world_id = world.id().ok();
             self.world = world;
             if let Err(e) = self.enable_sync_mode() {
                 tracing::warn!("Could not re-apply synchronous mode to the new world: {e}");
@@ -1736,9 +1760,15 @@ impl Coordinator {
             .map_err(|e| eyre::eyre!("set timeout: {e}"))?;
         let world = client.world().map_err(|e| eyre::eyre!("get world: {e}"))?;
 
+        let world_id = world.id().ok();
+        let restarted = world_id.is_none() || world_id != self.world_id;
         self.client = client;
         self.world = world;
+        self.world_id = world_id;
         self.consecutive_carla_failures = 0;
+        if restarted {
+            self.forget_previous_server();
+        }
 
         // Whatever CARLA we are now talking to, it is not holding our settings.
         self.sync_mode_enabled = false;
@@ -1751,6 +1781,79 @@ impl Coordinator {
         Ok(())
     }
 
+    /// `reconnect_carla`, retried every 5 s until `carla.reconnect_wait_seconds` have passed.
+    ///
+    /// A scenario started while CARLA is still coming back waits for it instead of failing
+    /// (docs/design/failure-and-frame-budget.md). Logs once a minute, not every attempt.
+    fn reconnect_carla_waiting(&mut self) -> Result<()> {
+        let wait = Duration::from_secs(self.config.carla.reconnect_wait_seconds);
+        let start = std::time::Instant::now();
+        let mut next_log = Duration::ZERO;
+        loop {
+            match self.reconnect_carla() {
+                Ok(()) => {
+                    if start.elapsed() >= Duration::from_secs(5) {
+                        tracing::info!(
+                            "CARLA reachable again after {:.0} s",
+                            start.elapsed().as_secs_f64()
+                        );
+                    }
+                    return Ok(());
+                }
+                Err(e) if start.elapsed() + Duration::from_secs(5) < wait => {
+                    if start.elapsed() >= next_log {
+                        tracing::warn!(
+                            "CARLA still unreachable after {:.0} s ({e}); waiting up to {} s",
+                            start.elapsed().as_secs_f64(),
+                            wait.as_secs()
+                        );
+                        next_log += Duration::from_secs(60);
+                    }
+                    std::thread::sleep(Duration::from_secs(5));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// After a reconnect to a different episode -- CARLA restarted -- drop what belonged to
+    /// the old server and end its episode on the clock.
+    ///
+    /// Actor ids from the old server name nothing, or worse something else, on the new one,
+    /// so the ledger is forgotten, not torn down: destroying by stale id could take a new
+    /// server's traffic light or another client's car. Time continues by the episode rule
+    /// applied to the last frame csb observed, anchored at the new episode's elapsed 0 --
+    /// the rule acb applies to the last frame it received (docs/design/time-and-ticking.md).
+    fn forget_previous_server(&mut self) {
+        let forgotten = self.spawned_actors.len();
+        self.spawned_actors.clear();
+        self.entities.clear();
+        self.collision_monitor.abandon();
+        self.previous_longitudinal_accel.clear();
+        self.settle_frames.clear();
+        self.accel_history.clear();
+        self.walker_height.clear();
+
+        match self.episode_clock.last_frame() {
+            Some((e_last, d_last)) => {
+                let change = self.episode_clock.begin_episode(e_last, d_last);
+                tracing::warn!(
+                    "CARLA was restarted (new episode {:?}): forgot {forgotten} actor(s) of the \
+                     old server; epoch {} -> {}, sim_time continues at {}",
+                    self.world_id,
+                    fmt_ns(change.old_epoch_ns),
+                    fmt_ns(change.new_epoch_ns),
+                    fmt_ns(change.continues_at_ns)
+                );
+            }
+            None => tracing::warn!(
+                "CARLA was restarted (new episode {:?}): forgot {forgotten} actor(s) of the old \
+                 server; no frame of the old one was ever read, so the epoch stays",
+                self.world_id
+            ),
+        }
+    }
+
     pub fn initialize(&mut self, req: api::InitializeRequest) -> api::InitializeResponse {
         tracing::info!(
             "Initialize: step_time={}, realtime_factor={}",
@@ -1761,15 +1864,10 @@ impl Coordinator {
         self.step_time = req.step_time;
         self.update_ticks_per_frame();
 
-        // Deliberately NOT enabling synchronous mode here -- see FrameAction. CARLA must
-        // keep free-running until the ego exists, or acb_bridge can never discover it.
-        //
-        // Clearing the flag is not enough: it only records what *we* believe. CARLA can
-        // already be in synchronous mode -- left there by a previous scenario in this
-        // process, or by a run that died before restoring it -- and then the bridge thinks
-        // it is async while CARLA is frozen, waiting for a tick that will not come until an
-        // ego exists. That is the gap 1 deadlock returning through the back door, and it is
-        // exactly what a second scenario run hits. So assert the state rather than assume it.
+        // Forget what we believe about CARLA's mode; synchronous mode is (re-)applied below,
+        // after the connection probe. If that fails, `sync_mode_enabled` stays false and
+        // the first frame after the ego spawn retries it (FrameAction::EnableSyncThenTick);
+        // until then frames are acknowledged without ticking.
         self.sync_mode_enabled = false;
         self.has_ego = false;
 
@@ -1780,10 +1878,11 @@ impl Coordinator {
         // the server may have been restarted and be perfectly healthy.
         if self.world.settings().is_err() {
             tracing::warn!("CARLA connection looks dead at Initialize; reconnecting");
-            if let Err(e) = self.reconnect_carla() {
+            if let Err(e) = self.reconnect_carla_waiting() {
                 return api::InitializeResponse {
                     result: Some(proto_err(format!(
-                        "CARLA is unreachable and reconnecting failed: {e}"
+                        "CARLA is unreachable and reconnecting failed for {} s: {e}",
+                        self.config.carla.reconnect_wait_seconds
                     ))),
                     simulation_time_ns: 0,
                 };
@@ -1840,7 +1939,7 @@ impl Coordinator {
         // A previous bridge process may have died without tearing its vehicles down, and
         // they sit on the spawn points this run needs. Reap them after the map is settled
         // (a reload would have cleared them anyway) and before anything spawns.
-        self.reap_orphaned_vehicles();
+        self.reap_orphaned_actors();
         // Separately, and not from the tail of the call above: that function returns early
         // when it finds no orphaned vehicles, which is the common case, so anything appended
         // to it never runs.
@@ -2215,8 +2314,11 @@ impl Coordinator {
         let mut last_error: Option<String> = None;
         let mut actor = None;
 
+        // An entity without a configured role still carries one: the mark that lets the
+        // next bridge reap it if this one dies mid-scenario (reap_orphaned_actors).
+        let entity_role = entity_role_name(name);
         for (attempt, z) in spawn_retry_heights(base_z).enumerate() {
-            let builder = match self.build_actor(&blueprint_key, role_name) {
+            let builder = match self.build_actor(&blueprint_key, role_name, &entity_role) {
                 Ok(b) => b,
                 Err(e) => return proto_err(format!("Cannot build '{name}': {e}")),
             };
@@ -2951,20 +3053,34 @@ impl Coordinator {
         &mut self,
         blueprint_key: &str,
         role_name: Option<&str>,
+        entity_role: &str,
     ) -> Result<carla::client::ActorBuilder<'_>> {
-        let mut builder = self
+        // role_name is how acb_bridge finds the vehicle it is meant to serve. Everything else
+        // gets the entity mark where the blueprint has the attribute; a blueprint without
+        // it spawns unmarked -- it cannot be reaped after a crash, which is the state every
+        // entity was in before, not a reason to refuse the spawn.
+        let (role, required) = match role_name {
+            Some(role) => (role, true),
+            None => (entity_role, false),
+        };
+        let takes_role = required
+            || self
+                .world
+                .actor_builder(blueprint_key)
+                .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?
+                .set_attribute("role_name", role)
+                .is_ok();
+        let builder = self
             .world
             .actor_builder(blueprint_key)
             .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?;
-
-        // role_name is how acb_bridge finds the vehicle it is meant to serve.
-        if let Some(role) = role_name {
-            builder = builder
-                .set_attribute("role_name", role)
-                .map_err(|e| eyre::eyre!("set role_name: {e}"))?;
+        if !takes_role {
+            tracing::debug!("'{blueprint_key}' takes no role_name; spawning unmarked");
+            return Ok(builder);
         }
-
-        Ok(builder)
+        builder
+            .set_attribute("role_name", role)
+            .map_err(|e| eyre::eyre!("set role_name: {e}"))
     }
 
     fn read_actor_state(
@@ -3161,6 +3277,15 @@ fn sensor_not_supported() -> ProtoResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entity_marks_are_recognised_and_configured_roles_are_not() {
+        assert_eq!(entity_role_name("npc_3"), "csb_entity:npc_3");
+        assert!(is_entity_role_name(&entity_role_name("walker")));
+        for role in ["hero", "bg_av_1", "autopilot", "", "csb_entity"] {
+            assert!(!is_entity_role_name(role), "{role}");
+        }
+    }
 
     /// Regression guard for gap 1. Enabling sync mode at Initialize deadlocks startup:
     /// The scenario's timeline must not move when substeps change: SSv2 asks for a frame

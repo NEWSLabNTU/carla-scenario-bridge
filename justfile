@@ -344,8 +344,51 @@ run:
     # undriven one parks in the ego's lane. `just two-av` sets it to `all`; by hand,
     # `CSB_BACKGROUND_AVS=all just run` alongside `just bg-av`. See background_avs in
     # bridge_config.yaml.
-    cargo run \
-        --manifest-path "{{project}}/src/carla_scenario_bridge/Cargo.toml"
+    #
+    # Supervised (roadmap 016): the bridge is a long-lived singleton outside every launch
+    # file, so nothing else restarts it. A clean exit -- status 0, which is what Ctrl-C and
+    # SIGTERM produce after csb's graceful shutdown -- ends the loop; any other exit (a
+    # segfault in LibCarla, an abort, a kill -9) restarts it after 2 s x 2^(n-1), capped at
+    # 60 s, and more than 5 crashes in 300 s gives up -- play_launch's composable policy.
+    # Set CSB_SUPERVISE=0 for a single run.
+    manifest="{{project}}/src/carla_scenario_bridge/Cargo.toml"
+    cargo build --manifest-path "$manifest"
+    if [ "${CSB_SUPERVISE:-1}" = 0 ]; then
+        exec cargo run --manifest-path "$manifest"
+    fi
+    target=$(cargo metadata --format-version 1 --no-deps --manifest-path "$manifest" |
+        python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+    bin="$target/debug/carla_scenario_bridge"
+    set +e
+    stop=0
+    child=0
+    # Ctrl-C reaches the child directly (same process group); a TERM sent to this shell is
+    # passed on as INT so csb still restores CARLA to async on the way out.
+    trap 'stop=1' INT
+    trap 'stop=1; [ "$child" -gt 0 ] && kill -INT "$child" 2>/dev/null' TERM
+    crashes=()
+    while :; do
+        "$bin" &
+        child=$!
+        wait "$child"; status=$?
+        while kill -0 "$child" 2>/dev/null; do wait "$child"; status=$?; done
+        if [ "$stop" = 1 ] || [ "$status" = 0 ]; then
+            exit "$status"
+        fi
+        now=$(date +%s)
+        recent=()
+        for t in "${crashes[@]}"; do [ $((now - t)) -lt 300 ] && recent+=("$t"); done
+        crashes=("${recent[@]}" "$now")
+        n=${#crashes[@]}
+        if [ "$n" -gt 5 ]; then
+            echo "[run] carla_scenario_bridge crashed $n times in 300 s (last status $status); giving up" >&2
+            exit "$status"
+        fi
+        delay=$((2 << (n - 1))); [ "$delay" -gt 60 ] && delay=60
+        echo "[run] carla_scenario_bridge exited with status $status (crash $n in 300 s); restarting in ${delay} s" >&2
+        sleep "$delay" & wait $!
+        [ "$stop" = 1 ] && exit "$status"
+    done
 
 # Start CARLA simulator as a background service
 carla-start:

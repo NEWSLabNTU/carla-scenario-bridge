@@ -19,6 +19,10 @@ use crate::proto::simulation_api_schema::{
 pub struct ZmqServer {
     socket: zmq::Socket,
     coordinator: Coordinator,
+    /// Set when a handler panicked: why. Every request but `Initialize` is refused until the
+    /// next `Initialize`, because a handler that died half-way may have left the entity map
+    /// and CARLA disagreeing (docs/design/failure-and-frame-budget.md, "Panics").
+    poisoned: Option<String>,
 }
 
 impl ZmqServer {
@@ -30,6 +34,7 @@ impl ZmqServer {
         Ok(Self {
             socket,
             coordinator,
+            poisoned: None,
         })
     }
 
@@ -64,8 +69,12 @@ impl ZmqServer {
             };
 
 
-            // Decode, dispatch, encode, send
-            let response_bytes = self.dispatch(&msg);
+            // Decode, dispatch, encode, send -- a panic in a handler becomes a failure
+            // response instead of the end of the process.
+            let variant = peek_request_variant(&msg);
+            let mut poisoned = self.poisoned.take();
+            let response_bytes = guarded_dispatch(&mut poisoned, variant, || self.dispatch(&msg));
+            self.poisoned = poisoned;
 
             if let Err(e) = self.socket.send(&response_bytes, 0) {
                 tracing::error!("send error: {e}");
@@ -178,6 +187,58 @@ impl ZmqServer {
 /// malformed.
 ///
 /// Returns `None` if the message is empty or the leading varint is itself unreadable.
+/// `SimulationRequest`'s field number for `Initialize`, the one request a poisoned session
+/// still serves.
+const INITIALIZE_FIELD: u32 = 1;
+
+/// Run `dispatch` so that a panic in it answers this request with a failure and poisons the
+/// session instead of unwinding out of `main`.
+///
+/// While `poisoned` is set, every request but `Initialize` is refused without dispatching.
+/// An `Initialize` that returns (whatever its result) resets the session and clears it.
+fn guarded_dispatch(
+    poisoned: &mut Option<String>,
+    variant: Option<u32>,
+    dispatch: impl FnOnce() -> Vec<u8>,
+) -> Vec<u8> {
+    let is_initialize = variant == Some(INITIALIZE_FIELD);
+    if let (Some(reason), false) = (poisoned.as_deref(), is_initialize) {
+        return encode_error_response(
+            variant,
+            &format!(
+                "csb refused the request: an internal error ({reason}) ended this session; \
+                 the next Initialize starts a new one"
+            ),
+        );
+    }
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(dispatch)) {
+        Ok(bytes) => {
+            if is_initialize {
+                *poisoned = None;
+            }
+            bytes
+        }
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            tracing::error!(
+                "Handler panicked on request variant {variant:?}: {message}; refusing \
+                 everything but Initialize until the next one"
+            );
+            *poisoned = Some(message.clone());
+            encode_error_response(variant, &format!("csb internal error: {message}"))
+        }
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic with a non-string payload".to_string())
+}
+
 fn peek_request_variant(msg: &[u8]) -> Option<u32> {
     // Decode a base-128 varint. Tags are small, so cap the read: field numbers here are
     // all <= 15, giving a single-byte tag, but tolerate multi-byte for robustness.
@@ -399,5 +460,58 @@ mod tests {
             assert!(!result.success, "field {field} should be a failure");
             assert_eq!(result.description, "why", "field {field} lost description");
         }
+    }
+
+    fn failure_description(bytes: &[u8]) -> Option<String> {
+        let response = SimulationResponse::decode(bytes).ok()?.response?;
+        let result = match response {
+            simulation_response::Response::Initialize(r) => r.result,
+            simulation_response::Response::UpdateFrame(r) => r.result,
+            _ => None,
+        }?;
+        (!result.success).then_some(result.description)
+    }
+
+    fn ok_bytes() -> Vec<u8> {
+        b"ok".to_vec()
+    }
+
+    #[test]
+    fn a_panicking_handler_answers_with_a_failure_and_poisons_the_session() {
+        let mut poisoned = None;
+        let bytes = guarded_dispatch(&mut poisoned, Some(2), || panic!("entity map broke"));
+        let why = failure_description(&bytes).expect("an UpdateFrame failure");
+        assert!(why.contains("csb internal error: entity map broke"), "{why}");
+        assert_eq!(poisoned.as_deref(), Some("entity map broke"));
+    }
+
+    #[test]
+    fn a_poisoned_session_refuses_everything_but_initialize() {
+        let mut poisoned = Some("earlier panic".to_string());
+        let mut ran = false;
+        let bytes = guarded_dispatch(&mut poisoned, Some(2), || {
+            ran = true;
+            ok_bytes()
+        });
+        assert!(!ran, "a poisoned session must not dispatch UpdateFrame");
+        let why = failure_description(&bytes).expect("an UpdateFrame failure");
+        assert!(why.contains("earlier panic") && why.contains("Initialize"), "{why}");
+        assert!(poisoned.is_some());
+    }
+
+    #[test]
+    fn initialize_clears_the_poison() {
+        let mut poisoned = Some("earlier panic".to_string());
+        assert_eq!(guarded_dispatch(&mut poisoned, Some(1), ok_bytes), ok_bytes());
+        assert!(poisoned.is_none());
+        assert_eq!(guarded_dispatch(&mut poisoned, Some(2), ok_bytes), ok_bytes());
+    }
+
+    #[test]
+    fn a_panicking_initialize_keeps_the_session_poisoned() {
+        let mut poisoned = Some("earlier panic".to_string());
+        let bytes = guarded_dispatch(&mut poisoned, Some(1), || panic!("{}", String::from("again")));
+        assert!(failure_description(&bytes).unwrap().contains("again"));
+        assert_eq!(poisoned.as_deref(), Some("again"));
     }
 }

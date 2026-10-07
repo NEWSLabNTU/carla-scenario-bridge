@@ -11,6 +11,9 @@
 carla:
   host: "localhost"
   port: 2000
+  # Initialize waits this long for a CARLA that is gone (restarting: ~182 s headless at
+  # Epic) before failing the scenario. docs/design/failure-and-frame-budget.md
+  reconnect_wait_seconds: 240
 
 # SSv2 ZMQ server. Overridden by SSV2_PORT.
 ssv2:

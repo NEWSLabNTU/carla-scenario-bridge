@@ -34,6 +34,9 @@ fn default_ego_role_name() -> String {
 pub struct CarlaConfig {
     pub host: String,
     pub port: u16,
+    /// How long `Initialize` keeps trying to reach a CARLA that is gone -- restarting,
+    /// typically, which takes ~3 min before it serves RPC -- before it fails the scenario.
+    pub reconnect_wait_seconds: u64,
 }
 
 impl Default for CarlaConfig {
@@ -41,6 +44,7 @@ impl Default for CarlaConfig {
         Self {
             host: default_carla_host(),
             port: default_carla_port(),
+            reconnect_wait_seconds: 240,
         }
     }
 }
