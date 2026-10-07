@@ -68,6 +68,10 @@ impl EntityManager {
             .map(|(name, _)| name.as_str())
     }
 
+    pub fn count(&self) -> usize {
+        self.entities.len()
+    }
+
     pub fn clear(&mut self) {
         self.entities.clear();
     }
