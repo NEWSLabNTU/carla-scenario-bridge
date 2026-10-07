@@ -10,6 +10,7 @@ mod lanelet_map;
 mod map_resolver;
 mod proto;
 mod resolved_signals;
+mod ros_args;
 mod sensor_release;
 mod traffic_light_mapper;
 mod zmq_server;
@@ -28,15 +29,31 @@ fn main() -> Result<()> {
         )
         .init();
 
-    // Per-map config (signal mappings) and the bridge config live in the same directory.
-    let config_dir = std::env::var("CSB_CONFIG_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("config"));
+    // ROS parameters from `ros2 run ... --ros-args -p` or a launch file's params file.
+    let params = ros_args::RosParams::from_args(std::env::args().skip(1))?;
 
-    // File first, then environment overrides -- launch files set CARLA_HOST and friends per
-    // run, and a checked-in config must not override what a launch explicitly asked for.
-    let mut config = config::BridgeConfig::load_or_default(&config_dir.join("bridge_config.yaml"))?;
+    // Which config file: the `config_file` parameter, then CSB_CONFIG_DIR, then the installed
+    // package's, then ./config (a source checkout). Per-map files (traffic_lights_<town>.yaml)
+    // are looked up beside it.
+    let config_file = params
+        .path("config_file")
+        .or_else(|| {
+            std::env::var("CSB_CONFIG_DIR")
+                .ok()
+                .map(|d| std::path::PathBuf::from(d).join("bridge_config.yaml"))
+        })
+        .or_else(ros_args::installed_config)
+        .unwrap_or_else(|| std::path::PathBuf::from("config/bridge_config.yaml"));
+    let config_dir = config_file
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+
+    // File, then environment, then ROS parameters: each later source is a more specific
+    // statement of what this run wants.
+    let mut config = config::BridgeConfig::load_or_default(&config_file)?;
     config.apply_env_overrides();
+    config.apply_ros_params(&params)?;
 
     let carla_host = config.carla.host.clone();
     let carla_port = config.carla.port;
@@ -45,7 +62,7 @@ fn main() -> Result<()> {
     tracing::info!("carla-scenario-bridge starting");
     tracing::info!("  CARLA:  {carla_host}:{carla_port}");
     tracing::info!("  SSv2:   tcp://*:{ssv2_port}");
-    tracing::info!("  Config: {}", config_dir.display());
+    tracing::info!("  Config: {}", config_file.display());
     tracing::info!("  Ego role_name: {}", config.ego.role_name);
     // One line: which background AVs this run spawns, and how to get the ones it does not.
     // They are opt-in (unset = none) -- see config::BACKGROUND_AVS_ENV.
@@ -74,7 +91,7 @@ fn main() -> Result<()> {
     tracing::info!("CARLA world acquired");
 
     // The coordinator keeps the client so it can rebuild the world after a CARLA outage.
-    let coord = coordinator::Coordinator::new(
+    let mut coord = coordinator::Coordinator::new(
         client,
         world,
         carla_host.clone(),
@@ -82,6 +99,13 @@ fn main() -> Result<()> {
         config_dir,
         config,
     );
+    // Generator mode: write a map dir's CARLA traffic light table, then leave CARLA as found.
+    if let Some(map_dir) = generate_signal_table_arg() {
+        let result = coord.generate_signal_table(&map_dir);
+        coord.shutdown();
+        return result;
+    }
+
     let zmq_ctx = zmq::Context::new();
     let mut server = zmq_server::ZmqServer::new(&zmq_ctx, ssv2_port, coord)?;
 
@@ -93,6 +117,17 @@ fn main() -> Result<()> {
 
     tracing::info!("Shutdown complete");
     Ok(())
+}
+
+/// `--generate-signal-table <map dir>` (before any `--ros-args`).
+fn generate_signal_table_arg() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args().skip(1).take_while(|a| a != "--ros-args");
+    while let Some(a) = args.next() {
+        if a == "--generate-signal-table" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+    }
+    None
 }
 
 fn connect_to_carla(host: &str, port: u16, shutdown: &AtomicBool) -> Option<Client> {

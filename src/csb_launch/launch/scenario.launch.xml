@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Run one scenario against a running simulator adapter (carla_scenario_bridge
+  bridge.launch.xml). Exits when the scenario ends; the verdict is in
+  /tmp/scenario_test_runner/result.junit.xml.
+
+    play_launch launch csb_launch scenario.launch.xml scenario:=<scenario dir>/<name>.xosc
+
+  The scenario file is read, never modified (SSv2 preprocesses a copy in its output dir).
+  It names its map directory in RoadNetwork/LogicFile, e.g. "$(env CARLA_MAPS)/Town01".
+-->
+<launch>
+  <arg name="managed_ego" default="true"
+       description="false: SSv2 does not drive the ego's autonomy (phase 013); acb_pilot does" />
+
+  <!-- User-configurable arguments -->
+  <arg name="scenario" description="Path to .xosc scenario file" />
+  <arg name="port" default="5555" description="ZMQ port for adapter connection" />
+  <arg name="global_timeout" default="600" description="Scenario timeout in seconds" />
+  <!-- The concealer's deadline is ABSOLUTE (FieldOperatorApplication construction +
+       initialize_duration) and shared by every wait up to and including engage, so
+       it must cover localization + routing + the diagnostics gate converging on
+       this slow host, not just "init". -->
+  <arg name="initialize_duration" default="480" description="Autoware init-through-engage budget in seconds" />
+  <!-- Simulated seconds per real second. Below 1 the frame loop still runs at
+       global_frame_rate but each frame advances step_time = factor / frame_rate, so the
+       world (CARLA physics included) moves slower than wall time, and so does the CARLA
+       time acb publishes on /clock. Useful to reproduce an overloaded host
+       deterministically. -->
+  <arg name="global_real_time_factor" default="1.0" description="SSv2 real-time factor" />
+  <arg name="clock_source" default="simulator"
+       description="SSv2's ROS time: simulator (CARLA time, phase 015), follows_simulation_time (014) or frames (stock); see below" />
+
+  <!-- The ego's Autoware is NOT launched from here. launch_autoware:=false makes SSv2's
+       concealer connect to the Autoware already running in this ROS domain — bring it up
+       first with ego_av.launch.xml and wait for ADAPI: the concealer's constructor queues
+       a ChangeToStop call with a 180 s service timeout, so a late stack fails slowly. -->
+  <group>
+  <!-- SSv2's V2I channel publishes on the arbiter's V2X input every frame, upstream behaviour
+       independent of publish_conventional_traffic_signals: with no V2I lights in the
+       scenario that is an empty TrafficLightGroupArray, interleaved with acb's message
+       (measured 2026-10-02, two publishers during a run, every other message on the topic
+       empty). acb is the one source of signal state (roadmap 015), so SSv2's copy is moved
+       aside; /v2x/traffic_signals, its legacy topic, is untouched. Drop this remap together
+       with turning publish_conventional_traffic_signals back on. -->
+  <set_remap from="/perception/traffic_light_recognition/external/traffic_signals"
+             to="/simulation/v2i/external/traffic_signals" />
+  <include file="$(find-pkg-share scenario_test_runner)/launch/scenario_test_runner.launch.py">
+    <!-- CARLA-specific defaults - Autoware integration -->
+    <arg name="architecture_type" value="awf/universe/20250130" />
+    <!-- Still required with launch_autoware:=false: EgoEntity reads both before it
+         reaches the launch_autoware branch (ego_entity.cpp:64-65). -->
+    <arg name="sensor_model" value="acb_sensor_kit" />
+    <arg name="vehicle_model" value="acb_vehicle" />
+
+    <!-- CARLA adapter mode - no built-in simulator, real sensors -->
+    <arg name="launch_simple_sensor_simulator" value="false" />
+    <arg name="simulate_localization" value="false" />
+    <!-- use_sim_time deliberately left at SSv2's default (false). With true, the
+         interpreter's ROS clock waits for /clock — which only SSv2 itself would
+         publish after activation — and main() blocks forever before the scenario
+         starts. SSv2's own nodes therefore keep running on wall time. -->
+    <!-- clock_source (NEWSLabNTU fork, docs/roadmap/015-carla-as-time-and-signal-source.md):
+         CARLA is the single source of time. acb owns /clock in every domain and publishes
+         CARLA's elapsed_seconds plus the episode epoch; csb reports the same time in every
+         InitializeResponse / UpdateFrameResponse (simulation_time). With simulator, SSv2
+         takes its ROS time from that field (signal and entity stamps included) and
+         publishes no /clock of its own (a second publisher would interleave two time bases).
+         follows_simulation_time is 014's frame-counted /clock, kept as the fallback for a
+         backend that cannot report time (set clock_source:=follows_simulation_time; it is
+         mutually exclusive with simulator). Scenario time still counts frames either way. -->
+    <arg name="clock_source" value="$(var clock_source)" />
+    <arg name="clock_follows_simulation_time" value="false" />
+    <!-- publish_conventional_traffic_signals (NEWSLabNTU fork) is OFF: signal state reaches
+         Autoware from CARLA's lights, published by acb_bridge on
+         /perception/traffic_light_recognition/external/traffic_signals in whatever domain
+         the ego runs (docs/roadmap/015-carla-as-time-and-signal-source.md, "Signals from
+         CARLA"). There are two possible sources for that topic: acb (what CARLA's lights
+         show; csb writes SSv2's commands into them every frame) and this fork switch (SSv2's
+         commanded state, regulatory element ids, stamped on the simulator clock). Only
+         one may be on: two publishers interleave their messages on the arbiter's V2X input,
+         and a group present in one and absent in the other flickers between a colour and
+         nothing. The switch stays for a backend without acb; turn acb's off
+         (`TRAFFIC_LIGHT_MAP_PATH= just ego-av`) before turning this on. -->
+    <arg name="publish_conventional_traffic_signals" value="false" />
+
+
+    <!-- SSv2 orchestration -->
+    <arg name="launch_autoware" value="false" />
+    <!-- managed_ego (NEWSLabNTU fork, phase 013). true keeps stock behaviour: the concealer
+         initializes, routes and engages the ego. false makes it inert, so nothing in SSv2
+         drives the ego and acb_pilot does it instead, exactly as for a background AV. The
+         fork also makes ego autonomy actions in the .xosc fail fast naming this parameter,
+         rather than time out after 180 s. -->
+    <arg name="managed_ego" value="$(var managed_ego)" />
+    <arg name="launch_rviz" value="false" />
+    <arg name="record" value="false" />
+    <!-- play_launch serializes empty-string parameters as "-p name:=", which rcl
+         rejects at node startup. Both are unused while record:=false; they only
+         need to be non-empty. -->
+    <arg name="record_storage_id" value="sqlite3" />
+    <arg name="record_option" value="unused" />
+
+    <!-- 20 Hz simulation stepping (was 10). Measured under 014, where /clock advanced
+         once per SSv2 frame (with clock_source:=simulator acb's /clock advances once per
+         CARLA tick instead), and Autoware's timers fire only when it does: at 10 Hz
+         the EKF updated in 0.1 s steps, NDT could not interpolate a pose for half its
+         scans, and control_validator's latency and trajectory-deviation checks tripped
+         the MRM about once per run (docs/roadmap/014). 20 Hz halves the step. The CARLA
+         tick stays 0.05 s: the bridge derives ticks per frame from carla_tick_seconds in
+         bridge_config.yaml (2 at 10 Hz, 1 at 20 Hz), so sensors, physics and the LiDAR
+         sweep are unchanged and only the ZMQ round trips double. Not 30 Hz: this host
+         could not keep the sim near realtime there, and Autoware's topic_state_monitor
+         timeouts are wall time, so a slow sim starves them. -->
+    <arg name="global_frame_rate" value="20" />
+    <arg name="global_real_time_factor" value="$(var global_real_time_factor)" />
+
+    <!-- User-configurable pass-through -->
+    <arg name="scenario" value="$(var scenario)" />
+    <arg name="port" value="$(var port)" />
+    <arg name="global_timeout" value="$(var global_timeout)" />
+    <arg name="initialize_duration" value="$(var initialize_duration)" />
+  </include>
+  </group>
+</launch>

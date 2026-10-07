@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  carla-scenario-bridge: CARLA's adapter for scenario_simulator_v2 (SSv2's simulation protocol
+  on ZMQ). Long-lived: start it once, run any number of scenarios against it.
+
+    play_launch launch carla_scenario_bridge bridge.launch.xml [config_file:=...] [carla_host:=...]
+
+  respawn: a crash inside LibCarla cannot be caught in-process; the launch restarts the
+  bridge, which then resumes its episode clock and reaps what the dead one left
+  (docs/design/failure-and-frame-budget.md). Empty arguments keep the config file's value.
+-->
+<launch>
+  <arg name="config_file" default="$(find-pkg-share carla_scenario_bridge)/config/bridge_config.yaml"
+       description="bridge_config.yaml (CARLA, blueprint and map aliases, background vehicles)"/>
+  <arg name="carla_host" default="" description="CARLA host; empty keeps the config file's"/>
+  <arg name="carla_port" default="" description="CARLA RPC port; empty keeps the config file's"/>
+  <arg name="ssv2_port" default="" description="ZMQ port SSv2 connects to; empty keeps the config file's"/>
+  <arg name="background_avs" default=""
+       description="background AVs from the config to spawn: none, all, or role names (comma-separated); empty keeps CSB_BACKGROUND_AVS, else none"/>
+  <arg name="respawn_delay" default="2.0" description="seconds before restarting a crashed bridge"/>
+
+  <node pkg="carla_scenario_bridge" exec="carla_scenario_bridge" name="carla_scenario_bridge"
+        output="screen" respawn="true" respawn_delay="$(var respawn_delay)">
+    <param name="config_file" value="$(var config_file)"/>
+    <param name="carla_host" value="$(var carla_host)"/>
+    <param name="carla_port" value="$(var carla_port)"/>
+    <param name="ssv2_port" value="$(var ssv2_port)"/>
+    <param name="background_avs" value="$(var background_avs)"/>
+  </node>
+</launch>

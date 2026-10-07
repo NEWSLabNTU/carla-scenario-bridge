@@ -722,6 +722,8 @@ pub struct Coordinator {
     world_id: Option<u64>,
     /// Where the episode clock is recorded for the next csb process (clock_store).
     clock_path: PathBuf,
+    /// Generator mode: write `<map dir>/carla/traffic_lights.yaml` instead of checking it.
+    generate_signal_table: bool,
     /// Set after the first failed write, so a broken runtime dir warns once.
     warned_clock_store: bool,
     /// Set when a CARLA call failed by timing out (`SLOW_FAILURE`): the server is gone or
@@ -782,6 +784,7 @@ impl Coordinator {
             world_id,
             clock_path,
             warned_clock_store: false,
+            generate_signal_table: false,
             carla_unreachable: false,
             tick_time: Duration::ZERO,
         }
@@ -1330,20 +1333,23 @@ impl Coordinator {
             );
         }
 
-        self.write_resolved_signals(town, lanelet2_map_path, &lanelet_lights, &carla_signals);
-        Ok(())
+        self.check_resolved_signals(town, lanelet2_map_path, &lanelet_lights, &carla_signals)
     }
 
-    /// Write `traffic_lights.resolved.yaml` beside the Lanelet2 map, or to the fallback
-    /// directory if the map directory is read-only. Never fatal: without the file acb
-    /// publishes no signals, which the log says, and the scenario still runs.
-    fn write_resolved_signals(
+    /// Compare the resolved table with `<map dir>/carla/traffic_lights.yaml`, the map
+    /// artifact acb publishes signals from (roadmap 017: the map dir is read-only at run
+    /// time). In generator mode (`generate_signal_table`) write it instead.
+    ///
+    /// A missing table is a warning -- csb still applies the scenario's signals to CARLA,
+    /// only acb has nothing to publish them from -- but a different one fails Initialize:
+    /// acb would report the state of the wrong lights to Autoware.
+    fn check_resolved_signals(
         &self,
         town: &str,
         lanelet2_map_path: &str,
         lanelet_lights: &[crate::lanelet_map::TrafficLightElement],
         carla_signals: &[crate::traffic_light_mapper::CarlaSignal],
-    ) {
+    ) -> Result<()> {
         use crate::resolved_signals as rs;
         let map_file = lanelet_map_file(lanelet2_map_path);
         let table = rs::ResolvedTable::build(
@@ -1353,13 +1359,6 @@ impl Coordinator {
             lanelet_lights,
             carla_signals,
         );
-        let yaml = match table.to_yaml() {
-            Ok(y) => y,
-            Err(e) => {
-                tracing::warn!("Could not serialize the resolved traffic light table: {e:#}");
-                return;
-            }
-        };
         let summary = format!(
             "{} mapped way(s) in {} regulatory element(s); unmapped: {} lanelet, {} CARLA",
             table.signals.len(),
@@ -1367,20 +1366,38 @@ impl Coordinator {
             table.unmapped.lanelet_way_ids.len(),
             table.unmapped.carla_opendrive_ids.len()
         );
-        match rs::write_with_fallback(&rs::map_dir(&map_file), &rs::fallback_dir(town), &yaml) {
-            Ok(rs::Written::MapDir(path)) => tracing::info!(
-                "Resolved traffic light table ({summary}) written to {}",
-                path.display()
-            ),
-            Ok(rs::Written::Fallback(path, why)) => tracing::warn!(
-                "Map directory not writable ({why}); resolved traffic light table ({summary}) \
-                 written to the fallback {} instead. acb_bridge's traffic_light_map_path \
-                 must name this path, or it publishes no signals.",
-                path.display()
-            ),
-            Err(e) => tracing::warn!(
-                "Could not write the resolved traffic light table anywhere ({e:#}); acb_bridge \
-                 will publish no traffic signals from CARLA"
+        let map_dir = rs::map_dir_of(std::path::Path::new(lanelet2_map_path));
+        let path = rs::table_path(&map_dir);
+
+        if self.generate_signal_table {
+            let written = rs::write_table(&map_dir, &table.to_yaml()?)?;
+            tracing::info!("Traffic light table ({summary}) written to {}", written.display());
+            return Ok(());
+        }
+
+        match rs::check_table(&path, &table)? {
+            rs::Check::Matches => {
+                tracing::info!("Traffic light table {} matches CARLA ({summary})", path.display());
+                Ok(())
+            }
+            rs::Check::Missing => {
+                tracing::warn!(
+                    "No traffic light table at {} ({summary} resolved): acb_bridge will \
+                     publish no signals. Generate it once per map: \
+                     ros2 run carla_scenario_bridge carla_scenario_bridge \
+                     --generate-signal-table {}",
+                    path.display(),
+                    map_dir.display()
+                );
+                Ok(())
+            }
+            rs::Check::Differs(why) => eyre::bail!(
+                "The traffic light table {} does not match CARLA's lights ({why}; resolved: \
+                 {summary}). acb_bridge would publish the wrong lights. Regenerate it: \
+                 ros2 run carla_scenario_bridge carla_scenario_bridge \
+                 --generate-signal-table {}",
+                path.display(),
+                map_dir.display()
             ),
         }
     }
@@ -1859,6 +1876,15 @@ impl Coordinator {
                 Err(e) => return Err(e),
             }
         }
+    }
+
+    /// `--generate-signal-table <map dir>`: load the map's town in CARLA, resolve its signals
+    /// and write `<map dir>/carla/traffic_lights.yaml`. The one place csb writes a map dir.
+    pub fn generate_signal_table(&mut self, map_dir: &std::path::Path) -> Result<()> {
+        self.generate_signal_table = true;
+        let result = self.load_scenario_map(&map_dir.to_string_lossy());
+        self.generate_signal_table = false;
+        result
     }
 
     /// The clock a new csb starts with: the previous process's, if it left one.

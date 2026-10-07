@@ -79,7 +79,7 @@
        writes beside the Lanelet2 map at every Initialize. Same file the scenario's map
        resolves to: csb writes next to the real map file, symlinks resolved, which is this
        map_path. Empty turns acb's signal publisher off. -->
-  <arg name="traffic_light_map_path" default="$(var map_path)/traffic_lights.resolved.yaml" />
+  <arg name="traffic_light_map_path" default="$(var map_path)/carla/traffic_lights.yaml" />
   <arg name="control_trace_path" default="" />
   <arg name="accel_map_path" default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv" />
   <arg name="brake_map_path" default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv" />
@@ -101,20 +101,11 @@
     <arg name="rviz" value="$(var launch_rviz)" />
     <arg name="lidar_detection_model" value="$(var lidar_detection_model)" />
     <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)" />
-    <!-- The acb vehicle interface would start a second acb_bridge with
-         publish_clock=true (its default). Two bridges mean two /clock
-         publishers and doubled sensor streams: subscribers see time jump
-         backwards and zero-dt message pairs, which crashes
-         gyro_bias_estimator ("dt_pose or dt_gyro is zero") and leaves its
-         diagnostic stale-ERROR in the autonomous-mode gate. The bridge is
-         launched once, explicitly, below. -->
-    <arg name="launch_vehicle_interface" value="false" />
-  </include>
-
-  <!-- 2. acb_bridge for the ego. See `publish_clock` above for who owns the clock. -->
-  <include file="$(find-pkg-share acb_bridge)/launch/acb_bridge.launch.xml">
-    <arg name="disabled_sensors" value="$(eval &quot;'camera6/camera_link' if '$(var traffic_light_fusion_only)' == 'true' else ''&quot;)" />
-    <arg name="carla_address" value="$(var carla_host)" />
+    <!-- acb_bridge (the vehicle interface) is started by carla_simulator.launch.xml from
+         these, once. It used to be included separately here with the profile's own
+         interface disabled: two bridges are two /clock publishers and doubled sensor
+         streams, which crashed gyro_bias_estimator ("dt_pose or dt_gyro is zero"). -->
+    <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
     <arg name="vehicle_name" value="$(var vehicle_name)" />
     <arg name="publish_clock" value="$(var publish_clock)" />

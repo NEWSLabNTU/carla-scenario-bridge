@@ -274,7 +274,7 @@ impl BridgeConfig {
             // healthy while quietly being a different run than the one configured.
             tracing::warn!(
                 "No configuration at {}; using defaults (no background AVs, no blueprint \
-                 or map aliases). Set CSB_CONFIG_DIR if this is not what you meant.",
+                 or map aliases). Pass config_file (ROS parameter) or set CSB_CONFIG_DIR if this is not what you meant.",
                 path.display()
             );
             BridgeConfig::default()
@@ -282,6 +282,39 @@ impl BridgeConfig {
 
         config.validate()?;
         Ok(config)
+    }
+
+    /// Apply ROS parameters (`carla_host`, `carla_port`, `ssv2_port`, `background_avs`,
+    /// `reconnect_wait_seconds`) over the file and the environment: a launch file's explicit
+    /// value is the most specific statement of intent. A malformed number is an error, not
+    /// a silent default.
+    pub fn apply_ros_params(&mut self, params: &crate::ros_args::RosParams) -> Result<()> {
+        if let Some(host) = params.get("carla_host").filter(|h| !h.is_empty()) {
+            self.carla.host = host.to_string();
+        }
+        let num = |name: &str| -> Result<Option<u64>> {
+            params
+                .get(name)
+                .filter(|v| !v.is_empty())
+                .map(|v| {
+                    v.parse::<u64>()
+                        .map_err(|e| eyre::eyre!("parameter {name}:={v}: {e}"))
+                })
+                .transpose()
+        };
+        if let Some(port) = num("carla_port")? {
+            self.carla.port = u16::try_from(port).map_err(|e| eyre::eyre!("carla_port: {e}"))?;
+        }
+        if let Some(port) = num("ssv2_port")? {
+            self.ssv2.port = u16::try_from(port).map_err(|e| eyre::eyre!("ssv2_port: {e}"))?;
+        }
+        if let Some(wait) = num("reconnect_wait_seconds")? {
+            self.carla.reconnect_wait_seconds = wait;
+        }
+        if let Some(raw) = params.get("background_avs").filter(|v| !v.is_empty()) {
+            self.select_background_avs(Some(raw));
+        }
+        Ok(())
     }
 
     /// Apply environment overrides. See the module docs for why the environment wins.

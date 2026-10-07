@@ -330,66 +330,20 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
 # Run the CARLA scenario bridge adapter only
 run:
     #!/usr/bin/env bash
+    # The bridge as users start it (roadmap 017): its launch file, under play_launch, which
+    # restarts it on a crash (respawn="true"). Run `just build` after changing it.
     set -e
-    export CARLA_VERSION={{carla_version}}
-    export CARLA_HOST="${CARLA_HOST:-localhost}"
-    export CARLA_PORT="{{carla_port}}"
-    export SSV2_PORT="{{ssv2_port}}"
-    # Without this the bridge looks for bridge_config.yaml in ./config -- which exists
-    # (it holds the DDS xml) but has no bridge config in it, so the run silently comes up
-    # with no background AVs and no blueprint aliases.
-    export CSB_CONFIG_DIR="${CSB_CONFIG_DIR:-{{project}}/src/carla_scenario_bridge/config}"
+    source "{{autoware_setup}}"
+    source "{{acb_src}}/install/setup.bash"
+    source "{{project}}/install/setup.bash"
     # CSB_BACKGROUND_AVS (all | none | role_name,...) is inherited as-is. Unset means none:
     # background AVs are opt-in, because nothing but their own stack drives them and an
-    # undriven one parks in the ego's lane. `just two-av` sets it to `all`; by hand,
-    # `CSB_BACKGROUND_AVS=all just run` alongside `just bg-av`. See background_avs in
-    # bridge_config.yaml.
-    #
-    # Supervised (roadmap 016): the bridge is a long-lived singleton outside every launch
-    # file, so nothing else restarts it. A clean exit -- status 0, which is what Ctrl-C and
-    # SIGTERM produce after csb's graceful shutdown -- ends the loop; any other exit (a
-    # segfault in LibCarla, an abort, a kill -9) restarts it after 2 s x 2^(n-1), capped at
-    # 60 s, and more than 5 crashes in 300 s gives up -- play_launch's composable policy.
-    # Set CSB_SUPERVISE=0 for a single run.
-    manifest="{{project}}/src/carla_scenario_bridge/Cargo.toml"
-    # dev-release, as `just build` uses: until 016 this ran the unoptimised debug profile.
-    cargo build --profile dev-release --manifest-path "$manifest"
-    if [ "${CSB_SUPERVISE:-1}" = 0 ]; then
-        exec cargo run --profile dev-release --manifest-path "$manifest"
-    fi
-    target=$(cargo metadata --format-version 1 --no-deps --manifest-path "$manifest" |
-        python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-    bin="$target/dev-release/carla_scenario_bridge"
-    set +e
-    stop=0
-    child=0
-    # Ctrl-C reaches the child directly (same process group); a TERM sent to this shell is
-    # passed on as INT so csb still restores CARLA to async on the way out.
-    trap 'stop=1' INT
-    trap 'stop=1; [ "$child" -gt 0 ] && kill -INT "$child" 2>/dev/null' TERM
-    crashes=()
-    while :; do
-        "$bin" &
-        child=$!
-        wait "$child"; status=$?
-        while kill -0 "$child" 2>/dev/null; do wait "$child"; status=$?; done
-        if [ "$stop" = 1 ] || [ "$status" = 0 ]; then
-            exit "$status"
-        fi
-        now=$(date +%s)
-        recent=()
-        for t in "${crashes[@]}"; do [ $((now - t)) -lt 300 ] && recent+=("$t"); done
-        crashes=("${recent[@]}" "$now")
-        n=${#crashes[@]}
-        if [ "$n" -gt 5 ]; then
-            echo "[run] carla_scenario_bridge crashed $n times in 300 s (last status $status); giving up" >&2
-            exit "$status"
-        fi
-        delay=$((2 << (n - 1))); [ "$delay" -gt 60 ] && delay=60
-        echo "[run] carla_scenario_bridge exited with status $status (crash $n in 300 s); restarting in ${delay} s" >&2
-        sleep "$delay" & wait $!
-        [ "$stop" = 1 ] && exit "$status"
-    done
+    # undriven one parks in the ego's lane. `just two-av` sets it to `all`.
+    exec play_launch launch --enforce-rules off --web-addr 0.0.0.0:8084 \
+        --log-dir play_log/bridge \
+        carla_scenario_bridge bridge.launch.xml \
+        carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
+        ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"}
 
 # Start CARLA simulator as a background service
 carla-start:
@@ -634,7 +588,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # beside the Lanelet2 map at every Initialize: this map_path's real directory, the one
     # the scenario's map symlinks resolve to. TRAFFIC_LIGHT_MAP_PATH overrides it (csb logs
     # where it wrote, e.g. its fallback for a read-only map dir); empty turns it off.
-    tl_map="${TRAFFIC_LIGHT_MAP_PATH-{{map_path}}/traffic_lights.resolved.yaml}"
+    tl_map="${TRAFFIC_LIGHT_MAP_PATH-{{map_path}}/carla/traffic_lights.yaml}"
     tl_map="${tl_map:-none}"
     # Not exec: the trap above has to survive to clean up the API adaptors.
     # --enforce-rules off: play_launch 0.12 defaults to `warn`, which turns on LD_PRELOAD
