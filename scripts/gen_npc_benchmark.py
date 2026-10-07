@@ -38,7 +38,7 @@ MIN_LENGTH = 2 * MARGIN + 5.0
 
 
 def load_lanelets(path):
-    """Return [(lanelet_id, length_m)] for straight road lanelets, sorted by id."""
+    """Return [(lanelet_id, length_m, centerline)] for straight road lanelets, sorted by id."""
     root = ET.parse(path).getroot()
     nodes = {}
     for n in root.iter("node"):
@@ -63,7 +63,7 @@ def load_lanelets(path):
         length = sum(math.dist(a, b) for a, b in zip(center, center[1:]))
         if length < MIN_LENGTH or turn_deg(center) > MAX_TURN_DEG:
             continue
-        out.append((int(rel.get("id")), length))
+        out.append((int(rel.get("id")), length, center))
     return sorted(out)
 
 
@@ -86,21 +86,43 @@ def turn_deg(pts):
     return abs(math.degrees(d))
 
 
+def point_at(center, s):
+    """The centerline point `s` m from its start."""
+    for a, b in zip(center, center[1:]):
+        seg = math.dist(a, b)
+        if s <= seg:
+            t = s / seg if seg else 0.0
+            return (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+        s -= seg
+    return center[-1]
+
+
 def start_positions(lanelets, count):
-    """`count` (lanelet_id, s) slots, round-robin over lanelets so NPCs spread out."""
+    """`count` (lanelet_id, s) slots, round-robin over lanelets so NPCs spread out.
+
+    The map has overlapping road lanelets (several share a start where a lane forks), so a
+    slot is skipped when it lies within SPACING m of one already taken; otherwise SSv2 would
+    place two NPCs on top of each other and CARLA would refuse the second spawn.
+    """
     slots = []
-    for lanelet_id, length in lanelets:
+    for lanelet_id, length, center in lanelets:
         k = int((length - 2 * MARGIN) // SPACING) + 1
-        slots.append([(lanelet_id, MARGIN + i * SPACING) for i in range(k)])
+        slots.append(
+            [(lanelet_id, MARGIN + i * SPACING, point_at(center, MARGIN + i * SPACING)) for i in range(k)]
+        )
     picked = []
     depth = 0
     while len(picked) < count:
         layer = [s[depth] for s in slots if depth < len(s)]
         if not layer:
             sys.exit(f"Town01 has room for only {len(picked)} NPCs at {SPACING} m spacing")
-        picked.extend(layer[: count - len(picked)])
+        for lanelet_id, s, xy in layer:
+            if len(picked) == count:
+                break
+            if all(math.dist(xy, other) >= SPACING for _, _, other in picked):
+                picked.append((lanelet_id, s, xy))
         depth += 1
-    return picked
+    return [(lanelet_id, s) for lanelet_id, s, _ in picked]
 
 
 VEHICLE = """		<ScenarioObject name="{name}">
