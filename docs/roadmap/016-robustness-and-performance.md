@@ -33,6 +33,15 @@ Performance tasks and "20 NPC entities at 20Hz".
    a dead server returns "time-out of 30000ms", for `tick` and for a reconnect's
    `get world` alike, so each failed request costs 30 s (60 s with a reconnect attempt), not
    the fast failure the design's failure table assumed.
+10. **Teardown against a dead CARLA costs 30 s per actor** (found live, step 5 re-run).
+   After the failed-frame verdict SSv2 still despawns its entities; csb's despawn of the ego
+   timed out on the ego and each of its 5 sensors, so the launch exited 216 s after the
+   kill although the verdict came at 30 s. Linear in actors: 10 NPCs would be ~5 min.
+11. **A csb restart loses the epoch** (found live, step 5). A new csb process starts at
+   epoch 0 and reports CARLA's `elapsed` (e.g. 283 s after one at 16825 s); acb keeps its
+   epoch, so after any csb restart SSv2's time and `/clock` differ by the lost epoch
+   (16686.302864088 s here) and csb's reported time has gone backwards across the restart.
+   Scenarios still passed with the offset (ego drive at 14:02 and 14:48).
 
 ## Steps
 
@@ -63,13 +72,20 @@ Performance tasks and "20 NPC entities at 20Hz".
       recreated after a timeout, error names csb. Live 2026-10-07 with
       `SIMULATOR_RESPONSE_TIMEOUT=60`: junit `SimulationError ... No response from the
       simulator at tcp://localhost:5555 within 60 s` (step 5)
-- [ ] SSv2 fork: end the scenario when `updateFrame()` fails (gap 8) -- throw, or count
+- [x] SSv2 fork: end the scenario when `updateFrame()` fails (gap 8) -- throw, or count
       consecutive failures and throw; without it steps 5a/5b below cannot pass
       Implemented: `SimulatorCore::update()` throws `SimulationError` on the first failed
       frame (no retry count: every csb failure since phase 006 means a real divergence).
-      Re-run of 5a/5b pending
+      Live 2026-10-07: 5a verdict 30.7 s after the CARLA kill, 5b 2 s after the csb kill;
+      no false failures in fault-free `town01_npc_10` (1201 frames) and `town01_ego_drive`
 - [ ] csb: within an `UpdateEntityStatus` batch, a teleport that fails after > 5 s (a client
-      timeout: gap 9) fails the remaining teleports at once instead of 30 s each
+      timeout: gap 9) fails the remaining teleports at once instead of 30 s each.
+      Not yet exercised live: the 5a re-run is a 1-entity ego run and its kill landed in
+      `tick` (one 30 s timeout, frame 421); needs a CARLA kill during an NPC bench
+- [ ] csb: bound teardown against a dead CARLA (gap 10) -- e.g. skip destroys once the
+      connection is known dead, as the reconnect path already forgets the ledger
+- [ ] csb: keep the epoch across a csb restart (gap 11), e.g. persist the last
+      `(epoch, E_last, Δ_last)` or adopt acb's `/clock`
 
 ### 4. Performance (csb)
 - [x] `tracing` spans on all 14 handlers, carrying the frame number (csb's own count: SSv2's
@@ -84,7 +100,7 @@ Performance tasks and "20 NPC entities at 20Hz".
       refused a spawn there
 
 ### 5. Live verification
-- [ ] (5a) Kill CARLA mid-scenario: the scenario fails within bounded time with a CARLA message;
+- [x] (5a) Kill CARLA mid-scenario: the scenario fails within bounded time with a CARLA message;
       restart CARLA; the next scenario passes with the same csb and ego stack; `/clock` and
       csb's reported time never decrease.
       2026-10-07, `town01_ego_drive`, CARLA SIGKILLed ~3 s into the drive (frame 464).
@@ -103,7 +119,19 @@ Performance tasks and "20 NPC entities at 20Hz".
       "after a reconnect" variant. Scenario passed. `/clock` sampled in domain 1 from before
       the kill to the end of the session: 0 decreases (16686.252864 -> 16686.302964 across
       the restart, 17004.34 at the end)
-- [ ] (5b) Kill csb (SIGKILL) mid-scenario: the scenario errors within the receive timeout; the
+      **Re-run with gap 8 fixed (2026-10-07 14:18), passes.** CARLA SIGKILLed at frame 421:
+      junit `SimulationError: The simulator reported a failed frame ...` 30.7 s after the
+      kill (one `tick` timeout); the launch exited at 216 s, teardown being 6 destroy
+      timeouts (gap 10). CARLA restart took 8 min to RPC at load 60–400; a scenario started
+      meanwhile got a clean `Initialize` failure after the 240 s wait ("CARLA is unreachable
+      and reconnecting failed for 240 s"). The first ego drive after RPC came up failed with
+      `AutowareError ... WAITING_FOR_ENGAGE ... current state is PLANNING` (load 255–411,
+      traffic_signals topic timeouts, MRM emergency stop); the immediate retry, same csb and
+      ego stack, passed. Epochs: acb `16686.302864088 -> 17737.672079398`, csb
+      `0 -> 1051.369215310` -- the same elapsed rule, offset by exactly 16686.302864088, the
+      epoch csb lost when it was itself restarted earlier (gap 11). `/clock` 0 decreases over
+      the whole re-run (17737.622079 -> 17737.672180 across the restart, 18581.45 at the end)
+- [x] (5b) Kill csb (SIGKILL) mid-scenario: the scenario errors within the receive timeout; the
       supervisor restarts csb; no NPC from the dead run remains; the next scenario passes.
       2026-10-07, `bench/town01_npc_10`, `SIMULATOR_RESPONSE_TIMEOUT=60`, csb child killed
       15 s after `Initialize`. Supervisor: `exited with status 137 (crash 1 in 300 s);
@@ -117,7 +145,12 @@ Performance tasks and "20 NPC entities at 20Hz".
       answered `UpdateEntityStatus: unknown entities 'npc_00' ...` and SSv2 retried it at
       20 Hz (gap 8) until stopped by hand after 10 min (11,500 WARN lines). Reaping still
       worked: the next `Initialize` destroyed the dead run's 10 NPCs both times.
-      A last `town01_ego_drive` on the twice-restarted csb, same ego stack, passed
+      A last `town01_ego_drive` on the twice-restarted csb, same ego stack, passed.
+      **Re-run with gap 8 fixed (14:02), between requests, passes:** the queued
+      `UpdateEntityStatus` reached the new csb, failed (`unknown entities`), and SSv2 ended
+      with `SimulationError: The simulator reported a failed frame` ~2 s after the kill
+      (launch exited at 6.8 s). Next `town01_npc_10`: 10 orphans reaped, passed, 0
+      `csb_entity:` actors left
 - [x] Benchmarks 10 / 20 / 50: record p50/p95/max processing and tick; 20 NPCs < 10 ms.
       2026-10-07, dev-release build, 1201 frames each, all pass; ms, p50 / p95 / max:
 
@@ -136,12 +169,13 @@ Performance tasks and "20 NPC entities at 20Hz".
 ## Acceptance
 
 - After a CARLA crash and a csb crash, each, the next scenario passes with no process
-  restarted by hand (CARLA itself excepted) -- **met** 2026-10-07 for csb and ego stack;
-  the failed scenario itself had to be stopped by hand (next item)
-- No failure leaves a scenario running past its bound -- **not met**: a CARLA kill, and a
-  csb kill between requests, leave the scenario retrying forever (gap 8, SSv2 fork task in
-  step 3). A csb kill with a request in flight ends in 60 s
+  restarted by hand (CARLA itself excepted) -- **met** 2026-10-07 (after the CARLA restart
+  the first ego drive failed at load 255–411 and the retry passed; see 5a)
+- No failure leaves a scenario running past its bound -- **met** with gap 8 fixed: CARLA
+  kill 30.7 s to the verdict (216 s to launch exit, gap 10), csb kill between requests ~2 s,
+  csb kill with a request in flight 60 s (`SIMULATOR_RESPONSE_TIMEOUT=60`)
 - Reported simulation time and `/clock` never decrease across a CARLA restart -- **met**:
-  csb and acb epochs identical, `/clock` 0 decreases
+  `/clock` 0 decreases in both runs; csb and acb epochs identical when csb had not been
+  restarted, offset by csb's lost epoch when it had (gap 11, a csb-restart issue)
 - 20 NPCs at 20 Hz: csb processing p95 < 10 ms, excluding the tick
 - Scaling limit at 50 NPCs recorded
