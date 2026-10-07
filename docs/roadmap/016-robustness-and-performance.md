@@ -90,13 +90,21 @@ Performance tasks and "20 NPC entities at 20Hz".
       frame (no retry count: every csb failure since phase 006 means a real divergence).
       Live 2026-10-07: 5a verdict 30.7 s after the CARLA kill, 5b 2 s after the csb kill;
       no false failures in fault-free `town01_npc_10` (1201 frames) and `town01_ego_drive`
-- [ ] csb: within an `UpdateEntityStatus` batch, a teleport that fails after > 5 s (a client
+- [x] csb: within an `UpdateEntityStatus` batch, a teleport that fails after > 5 s (a client
       timeout: gap 9) fails the remaining teleports at once instead of 30 s each.
       Not yet exercised live: the 5a re-run is a 1-entity ego run and its kill landed in
       `tick` (one 30 s timeout, frame 421); needs a CARLA kill during an NPC bench.
       2026-10-07 `town01_npc_20`, CARLA SIGKILLed 25 s after `Initialize`: again the first
       call to time out was `tick` (frame 132, 30.0 s), the teleports before it returned --
       no "teleport timed out" line. Still unexercised; the end-to-end bound holds anyway
+      **Closed by reading LibCarla (2026-10-08): a teleport cannot wait on a dead server.**
+      `Client::SetActorTransform` is `AsyncCall` (0.9.16 `client/detail/Client.cpp`; fire and
+      forget, unlike `DestroyActor`/`SetActorSimulatePhysics`, which are `CallAndWait`), and
+      csb's `world.actors()` lookup reads the episode's cached actor list. That is why both
+      live kills timed out in `tick` first and the teleports "returned normally". The guard
+      stays as cheap defence for the one synchronous path left -- LibCarla fetching an
+      actor description it has not cached -- and the end-to-end bound (one tick timeout)
+      was measured in 5a
 - [x] csb: bound teardown against a dead CARLA (gap 10) -- e.g. skip destroys once the
       connection is known dead, as the reconnect path already forgets the ledger.
       Live 2026-10-07 (f6f75ac), `town01_npc_20` with CARLA SIGKILLed: "A CARLA call timed

@@ -19,7 +19,7 @@ Authoritative for both; history and measurements in roadmap
 
 | Failure | Detected by | csb does | The running scenario | The next one |
 |---|---|---|---|---|
-| CARLA crashes or hangs | RPC **timeout** (client timeout 30 s; a killed server times out, it does not refuse -- measured 016) | the request fails with its cause; within a batch, the first teleport that fails slowly (> 5 s) fails the rest at once | the SSv2 fork ends it on the first failed frame (~30–60 s) | `Initialize` waits for CARLA (bounded), reconnects, reaps, runs |
+| CARLA crashes or hangs | RPC **timeout** (client timeout 30 s; a killed server times out, it does not refuse -- measured 016) | the request fails with its cause. Teleports never wait (LibCarla's `SetActorTransform` is fire-and-forget), so the first frame's `tick` is what times out; the first call that fails slowly (> 5 s) marks CARLA unreachable and later RPCs are skipped | the SSv2 fork ends it on the first failed frame (~30–60 s) | `Initialize` waits for CARLA (bounded), reconnects, reaps, runs |
 | csb panics in a handler | `catch_unwind` around dispatch | replies failure with the panic message; refuses everything but `Initialize` until the next one | fails on that request | `Initialize` resets the session |
 | csb dies (segfault in LibCarla, abort, OOM, kill) | process exit | the supervisor (`just run`) restarts it with backoff | a request in flight: SSv2's receive times out → error; a request queued after the death: the new csb refuses it (unknown entities) → failed frame → error | new csb serves it; reaps what the dead one left |
 | SSv2 dies mid-scenario | nothing (REP socket just idles) | nothing: CARLA stays paused with the scenario's actors | -- | `Initialize` destroys them (session reset + reap) |
