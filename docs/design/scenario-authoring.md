@@ -1,102 +1,46 @@
-# Writing Scenarios for an Unmanaged Ego
+# Writing Scenarios
 
-A scenario that runs against `managed_ego:=true` (the default, and what phase 012 shipped)
-is an ordinary SSv2 scenario and nothing here applies to it. This document is about
-`managed_ego:=false`, where SSv2 does not drive the ego's autonomy at all — see
-[architecture.md](architecture.md#5-ssv2-drives-the-scenario-autoware-is-external) for what
-that means and why the option exists.
+Scenarios are standard OpenSCENARIO 1.x files run by scenario_simulator_v2 (SSv2). This page
+covers what is specific to running them in CARLA through carla-scenario-bridge. Workflow:
+[../user-guide.md](../user-guide.md); architecture: [user-workflow.md](user-workflow.md).
 
-The short version: **the ego is a vehicle the scenario observes, not one it commands.**
+## The map
 
-## The rules
+`RoadNetwork/LogicFile` names the map directory -- the same directory the vehicle side's
+Autoware gets as `map_path` -- by path:
 
-### 1. No ego autonomy actions
-
-The concealer is inert, so there is nothing to carry these out. They are not ignored —
-they are hard errors, on purpose, at the moment the storyboard reaches them:
-
-```
-clearRoute cannot be requested because the ego vehicle is not managed by
-scenario_simulator_v2 (the parameter managed_ego:=false was given).
+```xml
+<LogicFile filepath="/data/maps/Town01"/>
+<LogicFile filepath="$(env CARLA_MAPS)/Town01"/>   <!-- the repo's examples -->
 ```
 
-That covers `AcquirePositionAction` and `AssignRouteAction` on the ego (both route through
-`clearRoute`), engage, `enableAutowareControl`, `setVelocityLimit` and the cooperate
-commands. Failing fast is deliberate: the alternative is a scenario that appears to run
-while the ego quietly does something else.
+The directory's name is the CARLA town (or an alias in `bridge_config.yaml`'s `map_alias`);
+the bridge loads that town if CARLA holds another. The scenario file itself is never
+modified.
 
-`setVelocityLimit` is the one exception. It is called unconditionally by
-`applyAssignControllerAction` — every scenario with a controller hits it, whether or not it
-asks for a speed limit — so it is inert rather than fatal, and an unmanaged run simply has
-no velocity limit.
+## The ego
 
-### 2. No ego-state conditions
+The entity whose `ObjectController` has the property `isEgo=true`. Its Autoware runs on the
+vehicle side, possibly in another ROS domain or on another host; the scenario reaches it
+through the agent relay, so everything SSv2 offers for an ego works as usual:
 
-`UserDefinedValueCondition`s that read ego state keep their stock behavior, which for an
-inert concealer means pinned values (`"INITIALIZING"`, `""`). Engage, MRM and emergency
-conditions therefore never fire. There is no error for this — the condition just never
-becomes true — so do not use them.
+- `TeleportAction` at init places the vehicle in CARLA and tells the vehicle's agent, which
+  re-initializes localization there.
+- `AcquirePositionAction` / `AssignRouteAction` set its goal; the agent routes and engages.
+- `maxSpeed` (controller property) and `SpeedAction` set its speed limit.
+- `ego.currentState` (`WAITING_FOR_ROUTE`, `DRIVING`, `ARRIVED_GOAL`, ...), MRM and turn
+  indicator conditions read the agent's reported state.
+- `RequestToCooperateCommandAction` (RTC) works on Autoware; an agent without RTC answers
+  `UNSUPPORTED` and the action fails (slowly: SSv2 retries it for ~90 s).
 
-Everything the simulator feeds is unaffected and is what these scenarios should be written
-against: pose, distance, speed, collision, time, and traffic-light conditions.
+The ego cannot be told to change lanes or follow a relative speed: SSv2 refuses both for an
+ego, by design.
 
-### 3. The goal lives in the pilot's poses file
+## Other vehicles, pedestrians and objects
 
-With no `AcquirePositionAction`, the ego's destination comes from
-`EGO_GOAL_POSES_FILE` — `acb_pilot` format, `goal_pose` in the map frame:
-
-```yaml
-goal_pose:
-  x: 88.4
-  y: -100.0
-  z: 0.0
-  qx: 0.0
-  qy: 0.0
-  qz: -0.7071
-  qw: 0.7071
-```
-
-The pilot reads **only** `goal_pose`. An `initial_pose` key is accepted by other tools in
-that format but ignored here; the ego's start pose comes from the scenario's
-`TeleportAction`, and localization finds it from GNSS.
-
-This means the goal is stated twice whenever the scenario also wants to detect arrival —
-once in the poses file, once in the `ReachPositionCondition` that ends the run. Keep them
-in sync; `scenarios/town01_unmanaged.xosc` and `scenarios/ego_poses.yaml` are the worked
-example, both naming (88.4, -100.0).
-
-### 4. Budget scenario time for the pilot
-
-A managed ego is engaged by the concealer before the storyboard starts moving. An unmanaged
-one is engaged by the pilot, which localizes, waits out a stabilization period, routes and
-engages **inside** scenario time — about 95 s before the ego moves at all. A timeout copied
-from a managed scenario will fire before the ego has driven anywhere.
-`town01_unmanaged.xosc` allows 600 s where its managed sibling allows 300 s.
-
-## Running one
-
-```bash
-EGO_MANAGED=false EGO_GOAL_POSES_FILE=$PWD/scenarios/ego_poses.yaml just ego-av
-# wait for 'Startup complete'
-EGO_MANAGED=false just scenario $PWD/scenarios/town01_unmanaged.xosc
-```
-
-`EGO_MANAGED` is an environment variable rather than a `just` parameter because just's
-parameters are positional: `just ego-av managed=false` would silently assign
-`"managed=false"` to `map_path`. It must be set for **both** commands — the ego stack uses
-it to pick its domain, and the scenario uses it to pass `managed_ego` to the interpreter and
-to check the right domain for a healthy stack.
-
-Starting the scenario first is refused rather than left to time out: `just scenario` runs
-`scripts/ego_stack_health.py`, which for an unmanaged run also requires the pilot to be
-running, since nothing else would ever route the ego.
-
-## What a good unmanaged scenario looks like
-
-`scenarios/town01_unmanaged.xosc`: teleport the ego to a start pose, set a traffic light,
-end on `exitSuccess` when the ego reaches a position, and `exitFailure` on a generous
-timeout. No routing action, no engage, no ego-state condition — the ego drives because a
-pilot is driving it, and the scenario only observes and scores.
+Driven by SSv2 by default: its behavior tree computes each pose and the bridge places the
+CARLA actor there every frame, physics off -- exact and repeatable, but never pushed by a
+collision (see "Collisions" below). Every SSv2 action works on them.
 
 ## Traffic lights: uncommanded means GREEN
 

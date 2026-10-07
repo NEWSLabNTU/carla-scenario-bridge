@@ -1164,6 +1164,9 @@ impl Coordinator {
             let world = prepared?;
             self.world_id = world.id().ok();
             self.world = world;
+            // The new episode's epoch, recorded before anything can kill this process: a
+            // restart would otherwise resume the old episode's (gap 11).
+            self.record_clock();
             if let Err(e) = self.enable_sync_mode() {
                 tracing::warn!("Could not re-apply synchronous mode to the new world: {e}");
             }
