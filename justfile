@@ -352,13 +352,14 @@ run:
     # 60 s, and more than 5 crashes in 300 s gives up -- play_launch's composable policy.
     # Set CSB_SUPERVISE=0 for a single run.
     manifest="{{project}}/src/carla_scenario_bridge/Cargo.toml"
-    cargo build --manifest-path "$manifest"
+    # dev-release, as `just build` uses: until 016 this ran the unoptimised debug profile.
+    cargo build --profile dev-release --manifest-path "$manifest"
     if [ "${CSB_SUPERVISE:-1}" = 0 ]; then
-        exec cargo run --manifest-path "$manifest"
+        exec cargo run --profile dev-release --manifest-path "$manifest"
     fi
     target=$(cargo metadata --format-version 1 --no-deps --manifest-path "$manifest" |
         python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
-    bin="$target/debug/carla_scenario_bridge"
+    bin="$target/dev-release/carla_scenario_bridge"
     set +e
     stop=0
     child=0
