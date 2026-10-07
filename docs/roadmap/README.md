@@ -30,6 +30,8 @@ what unblocks what.
 - [013: Unmanaged Ego on the Fork](013-forked-unmanaged-ego.md) — `managed_ego:=false` patch on the NEWSLabNTU fork; ego gets its own domain, pilot, and clock like every background AV
 - [014: Feature Completeness](014-feature-completeness.md) — pose reference-point offset, collision truth, NPC velocity, and a hardening batch from the 2026-09-25 audit ([design/ssv2-feature-completeness.md](../design/ssv2-feature-completeness.md))
 - [015: CARLA as Time and Signal Source](015-carla-as-time-and-signal-source.md) — one simulation clock (CARLA's, reported to SSv2 and published by acb in every domain) and signal state read from CARLA's lights, replacing 014's learned offsets and SSv2-domain-only V2X
+- [016: Robustness and Performance](016-robustness-and-performance.md) — every fault ends the scenario in bounded time and the next one runs unattended; csb supervised, epoch persisted; frame budget measured (20 NPCs p95 1.79 ms)
+- [017: User Workflow and the Vehicle Agent](017-user-workflow.md) — ROS-native workflow from a scenario dir and a map dir; csb as a ROS node; an agent protocol and relay so SSv2 and Autoware need no shared domain and CARLA/Autoware are swappable ([design/user-workflow.md](../design/user-workflow.md))
 
 ### Why this order
 
