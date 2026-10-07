@@ -42,6 +42,17 @@ Performance tasks and "20 NPC entities at 20Hz".
    epoch, so after any csb restart SSv2's time and `/clock` differ by the lost epoch
    (16686.302864088 s here) and csb's reported time has gone backwards across the restart.
    Scenarios still passed with the offset (ego drive at 14:02 and 14:48).
+12. **acb counts frames csb never sees** (found live, step 5, after gap 11's fix). A
+   restarted CARLA free-runs async frames before csb's first `Initialize`; when that server
+   dies again unticked, acb applies the episode rule to its last async frame and csb keeps
+   its epoch, so the two diverge by that server's lifetime (265.86 s here).
+13. **CARLA on the wrong Vulkan device** (environment, step 5). Restarted without
+   `VK_ICD_FILENAMES`, CARLA came up on the AMD iGPU or llvmpipe (NVIDIA memory 18 MiB in
+   use): RPC after 4–8 min, and `apply_settings(synchronous_mode=True)` wedged it -- by csb's
+   `Initialize` and by a 5-line Python probe alike; the next `Initialize` then failed after
+   `load world 'Town01'` timed out (120 s). With
+   `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json` RPC was up in 50 s and sync
+   applied in 0.01 s. `run.sh`/CLAUDE.md should set it
 
 ## Steps
 
@@ -81,11 +92,30 @@ Performance tasks and "20 NPC entities at 20Hz".
 - [ ] csb: within an `UpdateEntityStatus` batch, a teleport that fails after > 5 s (a client
       timeout: gap 9) fails the remaining teleports at once instead of 30 s each.
       Not yet exercised live: the 5a re-run is a 1-entity ego run and its kill landed in
-      `tick` (one 30 s timeout, frame 421); needs a CARLA kill during an NPC bench
-- [ ] csb: bound teardown against a dead CARLA (gap 10) -- e.g. skip destroys once the
-      connection is known dead, as the reconnect path already forgets the ledger
-- [ ] csb: keep the epoch across a csb restart (gap 11), e.g. persist the last
-      `(epoch, E_last, Δ_last)` or adopt acb's `/clock`
+      `tick` (one 30 s timeout, frame 421); needs a CARLA kill during an NPC bench.
+      2026-10-07 `town01_npc_20`, CARLA SIGKILLed 25 s after `Initialize`: again the first
+      call to time out was `tick` (frame 132, 30.0 s), the teleports before it returned --
+      no "teleport timed out" line. Still unexercised; the end-to-end bound holds anyway
+- [x] csb: bound teardown against a dead CARLA (gap 10) -- e.g. skip destroys once the
+      connection is known dead, as the reconnect path already forgets the ledger.
+      Live 2026-10-07 (f6f75ac), `town01_npc_20` with CARLA SIGKILLed: "A CARLA call timed
+      out after 30.0 s; treating CARLA as unreachable", then all 20 despawns "CARLA
+      unreachable; left to the next teardown or the reaper" within 5 ms. Kill -> verdict
+      30.1 s, kill -> launch exit 34.7 s (was 216 s for one ego with 5 sensors)
+- [x] csb: keep the epoch across a csb restart (gap 11), e.g. persist the last
+      `(epoch, E_last, Δ_last)` or adopt acb's `/clock`.
+      Live 2026-10-07 (f6f75ac), csb SIGKILLed between scenarios, supervisor restart:
+      epoch 0 -- "resumed epoch 0.000000000 ... (same CARLA episode)", last `/clock`
+      1749.339020, next `town01_ego_drive` first `simulation_time` 1749.439019521 (`/clock`
+      in between 1749.389020: one frame per step, no jump), passed. Non-zero epoch --
+      "resumed epoch 1788.389020101", first `simulation_time` 2019.146663 directly after
+      csb's recorded last frame (1788.389020101 + 230.657643 + one step)
+- [ ] csb/acb: agree on the epoch when a restarted CARLA runs frames csb never ticks
+      (gap 12). After CARLA restarts in which csb read no frame ("no frame of the old one
+      was ever read, so the epoch stays"), acb still applied the episode rule to the async
+      frames it received from those servers (and to a probe's ticks): acb epoch 1788.389 ->
+      1803.352 -> 2043.159 -> 2054.249 while csb stayed at 1788.389. SSv2 time then runs a
+      constant 265.86 s behind `/clock`. Both stay monotonic; scenarios pass with it
 
 ### 4. Performance (csb)
 - [x] `tracing` spans on all 14 handlers, carrying the frame number (csb's own count: SSv2's
@@ -170,12 +200,16 @@ Performance tasks and "20 NPC entities at 20Hz".
 
 - After a CARLA crash and a csb crash, each, the next scenario passes with no process
   restarted by hand (CARLA itself excepted) -- **met** 2026-10-07 (after the CARLA restart
-  the first ego drive failed at load 255–411 and the retry passed; see 5a)
+  the first ego drive failed at load 255–411 and the retry passed; see 5a). Same again
+  after gap 11's csb restart: one `AutowareError` (localization initialize 30 tries), retry
+  passed. `town01_npc_20` after a CARLA kill + restart passed with 0 `csb_entity:` left
 - No failure leaves a scenario running past its bound -- **met** with gap 8 fixed: CARLA
-  kill 30.7 s to the verdict (216 s to launch exit, gap 10), csb kill between requests ~2 s,
+  kill 30.7 s to the verdict (216 s to launch exit before gap 10's fix; with it, 20 NPCs:
+  30.1 s verdict, 34.7 s launch exit), csb kill between requests ~2 s,
   csb kill with a request in flight 60 s (`SIMULATOR_RESPONSE_TIMEOUT=60`)
 - Reported simulation time and `/clock` never decrease across a CARLA restart -- **met**:
-  `/clock` 0 decreases in both runs; csb and acb epochs identical when csb had not been
-  restarted, offset by csb's lost epoch when it had (gap 11, a csb-restart issue)
+  `/clock` 0 decreases in all runs; csb's time continues across its own restart (gap 11
+  fixed). csb and acb epochs identical across a single CARLA restart (1788.389020101 both);
+  they diverge by a constant when an unticked CARLA instance dies (gap 12, open)
 - 20 NPCs at 20 Hz: csb processing p95 < 10 ms, excluding the tick
 - Scaling limit at 50 NPCs recorded
