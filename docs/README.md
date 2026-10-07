@@ -4,7 +4,9 @@
 - [Architecture](design/architecture.md) - System overview, component responsibilities, AWSIM comparison
 - [Multi-Instance Architecture](design/multi-instance-architecture.md) - Authority model, background AVs, clock ownership, gap list ⭐
 - [SSv2 Protocol](design/ssv2-protocol.md) - ZMQ+Protobuf message reference
-- [SSv2 Launch Configuration](design/ssv2-launch-configuration.md) - Launch parameters, process order, topic conflicts
+- [User Guide](user-guide.md) - install, map and scenario directories, running
+- [User workflow and the vehicle agent](design/user-workflow.md) - two sides, interfaces, swapping CARLA or Autoware
+- [SSv2 Launch Configuration](design/ssv2-launch-configuration.md) - SSv2 parameter background (run workflow superseded by the user guide)
 
 ## Roadmap
 - [Overview](roadmap/README.md) - Phase index and ordering rationale

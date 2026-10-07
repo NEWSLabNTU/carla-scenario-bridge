@@ -14,7 +14,7 @@ ZMQ+Protobuf adapter that makes CARLA a backend for tier4/scenario_simulator_v2 
 ```bash
 just build    # Build with colcon + cargo
 just clean    # Clean artifacts
-just run      # Run the bridge (connects to CARLA, listens for SSv2)
+just run      # Simulation side: bridge + agent relay (simulation.launch.xml)
 just check    # Format + clippy
 just test     # Run tests
 ```
@@ -181,20 +181,25 @@ ps -eo pid,ppid,etimes,args --no-headers | grep -E "CarlaUE4-Linux|carla_scenari
 ss -lpn | grep 5555        # exactly one bridge should hold the SSv2 port
 ```
 
-**The bridge is not part of any launch file.** `carla_scenario.launch.xml` includes only
-SSv2's `scenario_test_runner`; the bridge is a separate long-lived process started by
-`just run`. Nothing restarts it between scenarios, so it routinely outlives the session
-that started it -- one was found still serving scenarios 44 hours later, running code from
-two rebuilds earlier. Killing it does not get a fresh one: it leaves no bridge at all, and
-every scenario then spawns no ego.
-
-So treat the bridge as a tracked singleton. Check its age against the current build before
-trusting a measurement, and after a rebuild restart it deliberately:
+**The simulation side is its own long-lived launch.** `just run` starts
+`csb_launch simulation.launch.xml` under play_launch (web 8084, scenario domain 9): the bridge
+(`respawn="true"`, so a crash restarts it) and the agent relay (TCP 5560) the ego's vehicle
+agent registers with. Scenario launches never include it, so it outlives sessions -- one
+bridge was once found serving scenarios 44 hours later, running code from two rebuilds
+earlier. Treat it as a tracked singleton: check its age against the build before trusting a
+measurement, and after `just build` restart it deliberately (stop the play_launch on 8084 by
+pid, then `setsid just run > log 2>&1 &`). It runs the *installed* binary, so `just build`
+must run first.
 
 ```bash
-ps -eo pid,etimes,args --no-headers | grep carla_scenario_bridge | grep -v grep
-just run &      # the only thing that starts one
+ps -eo pid,etimes,args --no-headers | grep -E "[c]arla_scenario_bridge|[s]cenario_agent_relay"
+ss -lpn | grep -E ":5555 |:5560 "   # bridge, relay
 ```
+
+**The ego is reached through the relay, not ROS (roadmap 017).** SSv2 runs in the scenario
+domain (9), the ego stack in its own (1); a scenario whose ego never engages usually means
+the agent never registered: check the relay's log (`play_log/bridge/latest/node/
+scenario_agent_relay/err`) and the agent's (`play_log/ego/latest/node/acb_agent/err`).
 
 After stopping a stack, reap what outlived it. This is now mostly the ego stack's
 business -- a scenario stack that ended on its own leaves nothing -- but a stack killed by
@@ -203,7 +208,7 @@ hand mid-run still can. Orphans show up as `ppid == 1`:
 ```bash
 ps -eo pid,ppid,etimes,comm --no-headers | awk '$2==1 && ($4=="component_node" ||
     $4=="add_two_ints_se" || $4=="zenohd" || $4=="carla_scenario_" ||
-    $4=="carla_manual_co" || $4=="auto_drive" || $4=="acb_bridge")'
+    $4=="carla_manual_co" || $4=="auto_drive" || $4=="acb_bridge" || $4=="agent" || $4=="relay")'
 ```
 
 A name-based list only finds what is on it. A `carla_manual_control` left over from the

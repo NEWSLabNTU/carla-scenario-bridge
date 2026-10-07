@@ -16,11 +16,18 @@ Run [OpenSCENARIO](https://www.asam.net/standards/detail/openscenario-v200/) sce
   <img src="docs/architecture.svg" alt="System architecture" width="820">
 </p>
 
-- **SSv2** parses the OpenSCENARIO file, drives scenario logic and NPC behavior, and manages Autoware's lifecycle (launch, localization init, route, engage).
-- **carla-scenario-bridge** (this project) receives SSv2 commands over ZMQ, spawns/moves entities in CARLA, controls traffic lights, synchronizes frames, and reports ego pose back.
-- **CARLA** provides ego vehicle physics and GPU-rendered sensors (lidar, camera, IMU, GNSS).
-- **[autoware_carla_bridge](https://github.com/NEWSLabNTU/ros_zenoh_bridge)** publishes CARLA sensor data as ROS 2 topics, relays vehicle status, and applies Autoware's control commands back to CARLA.
-- **Autoware** processes real sensor data through its complete perception → planning → control pipeline.
+Two sides, which meet only in CARLA and the map directory -- no shared ROS domain, host or
+start order:
+
+- **Simulation side** -- **SSv2** runs the OpenSCENARIO file, NPC behavior and the verdict;
+  **carla-scenario-bridge** (this project) is CARLA's adapter for SSv2's protocol (spawns,
+  moves, signals, time); the **agent relay** passes the scenario's goals for the ego to
+  whatever drives it.
+- **Vehicle side** -- your **Autoware** with this project's sensor kit and vehicle interface:
+  **[autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge)** publishes
+  CARLA's sensors, `/clock` and signals and applies Autoware's control; its **vehicle agent**
+  takes goals from the relay and drives Autoware's API locally.
+- **CARLA** owns physics, sensors and simulation time.
 
 ## Getting Started
 
@@ -57,39 +64,21 @@ source /opt/ros/humble/setup.bash
 just build
 ```
 
-### Run the end-to-end demo
+### Run
 
-The bundled `town01_ego_drive.xosc` scenario spawns an ego vehicle on CARLA's Town01 map, plans a route, and drives autonomously to the goal.
-
-```bash
-# 1. Start CARLA (background systemd service, takes ~30s to initialize)
-just carla-start
-
-# 2. Launch everything: adapter + sensor bridge + SSv2 + Autoware
-just e2e
-
-# Check CARLA status at any time
-just carla-status
-
-# When done
-just carla-stop
-```
-
-To run a custom scenario:
+See the **[User Guide](docs/user-guide.md)**: prepare a map directory and a scenario
+directory, then
 
 ```bash
-just e2e /path/to/your_scenario.xosc
+./CarlaUE4.sh -RenderOffScreen                                        # CARLA
+ROS_DOMAIN_ID=9 play_launch launch csb_launch simulation.launch.xml  # bridge + relay
+ROS_DOMAIN_ID=1 play_launch launch acb_launch carla_simulator.launch.xml \
+    map_path:=<map dir> relay:=tcp://localhost:5560                   # your Autoware
+ROS_DOMAIN_ID=9 play_launch launch csb_launch scenario.launch.xml scenario:=<file>.xosc
 ```
 
-### Environment variables
-
-| Variable        | Default     | Description                         |
-|-----------------|-------------|-------------------------------------|
-| `CARLA_VERSION` | `0.9.16`    | CARLA version for API compatibility |
-| `CARLA_HOST`    | `localhost` | CARLA server host                   |
-| `CARLA_PORT`    | `2000`      | CARLA server port                   |
-| `SSV2_PORT`     | `5555`      | ZMQ port for SSv2 communication     |
-| `MAP_NAME`      | `Town01`    | CARLA map to load                   |
+`play_launch launch` is a drop-in for `ros2 launch` with crash recovery and a web UI.
+Developers have the same as `just run`, `just ego-av` and `just scenario <file>`.
 
 ## Project Structure
 
@@ -105,14 +94,16 @@ just e2e /path/to/your_scenario.xosc
 │   │   │   ├── coordinate_conversion.rs
 │   │   │   └── traffic_light_mapper.rs
 │   │   └── build.rs                # prost-build proto compilation
-│   ├── csb_launch/                 # ROS 2 launch files (demo + scenario)
+│   ├── csb_launch/                 # simulation, scenario, ego and demo launch files
+│   ├── scenario_agent_relay/       # the scenario's side of the vehicle agent protocol
 │   ├── autoware_carla_bridge/      # Submodule — sensor/vehicle interface
 │   └── scenario_simulator_v2/      # Submodule — scenario framework
 ├── proto/                          # SSv2 protobuf definitions (8 .proto files)
 ├── scenarios/                      # Example OpenSCENARIO files
 ├── docs/
 │   ├── design/                     # Architecture, protocol, launch config
-│   └── roadmap/                    # Phase 1–5 implementation roadmap
+│   ├── roadmap/                    # phased roadmap
+│   └── user-guide.md
 ├── justfile                        # Build and run commands
 └── Cargo.toml                      # Workspace root
 ```
@@ -121,7 +112,9 @@ just e2e /path/to/your_scenario.xosc
 
 - [Architecture](docs/design/architecture.md) — design principles, protocol details, responsibility split
 - [SSv2 Protocol Reference](docs/design/ssv2-protocol.md) — the 14 ZMQ message types
-- [SSv2 Launch Configuration](docs/design/ssv2-launch-configuration.md) — launch parameters and startup order
+- [User Guide](docs/user-guide.md) — install, map and scenario directories, running
+- [User workflow and the vehicle agent](docs/design/user-workflow.md) — the two sides, the interfaces, swapping CARLA or Autoware
+- [Writing scenarios](docs/design/scenario-authoring.md) — maps, the ego, other vehicles, signals, collisions
 - [Roadmap](docs/roadmap/README.md) — phased implementation plan
 
 ## Development
@@ -137,24 +130,6 @@ just test         # Run tests with cargo-nextest
 just ci           # Build + check + test
 just format       # Auto-format with cargo +nightly fmt
 just install-deps # Install build prerequisites
-```
-
-### Running components separately
-
-For development, you can run the adapter standalone without the full `e2e` stack:
-
-```bash
-# Terminal 1: Start CARLA
-just carla-start
-
-# Terminal 2: Run just the adapter (connects to CARLA, listens on ZMQ port)
-just run
-
-# Terminal 3: Run autoware_carla_bridge separately
-# (see autoware_carla_bridge docs)
-
-# Terminal 4: Run an SSv2 scenario (launches Autoware)
-just scenario /path/to/scenario.xosc
 ```
 
 ## Related Projects

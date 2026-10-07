@@ -1,5 +1,11 @@
 # SSv2 Launch Configuration for CARLA
 
+> **Superseded for the run workflow (roadmap 017, 2026-10-08).** How to start things is now
+> [../user-guide.md](../user-guide.md), and the process/domain structure is
+> [user-workflow.md](user-workflow.md): SSv2 reaches the ego through the agent relay, in any
+> ROS domain, and the managed/unmanaged modes described below are retired. The SSv2
+> parameter notes below remain accurate as background.
+
 How to launch scenario_simulator_v2 to use this adapter as its backend instead of `simple_sensor_simulator`.
 
 ## Required Launch Parameters
