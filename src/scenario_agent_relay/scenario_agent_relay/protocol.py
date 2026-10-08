@@ -22,8 +22,18 @@ COMMAND = "command"  # relay -> agent
 REPLY = "reply"  # agent -> relay, answer to a command (same id)
 STATE = "state"  # agent -> relay, on change and periodically
 HEARTBEAT = "heartbeat"  # either way, when nothing else was sent for HEARTBEAT_PERIOD
+# Commanders (a simulator adapter driving an "agent"-controlled entity): register with
+# role "commander", then ask the relay to command an entity's agent or report its state.
+COMMAND_FOR = "command_for"  # commander -> relay; answered with reply (+ state)
+QUERY = "query"  # commander -> relay; answered with reply (+ state)
 
-MESSAGE_TYPES = (REGISTER, REGISTERED, ERROR, COMMAND, REPLY, STATE, HEARTBEAT)
+MESSAGE_TYPES = (REGISTER, REGISTERED, ERROR, COMMAND, REPLY, STATE, HEARTBEAT,
+                 COMMAND_FOR, QUERY)
+
+# -- roles (register.role) -------------------------------------------------------------
+ROLE_AGENT = "agent"  # the default: drives the vehicle registered as `entity`
+ROLE_COMMANDER = "commander"  # commands agents by entity name; no entity of its own
+ROLES = (ROLE_AGENT, ROLE_COMMANDER)
 
 # Each side sends something at least this often, and treats a peer that sent nothing for
 # PEER_TIMEOUT as gone.
@@ -152,7 +162,10 @@ def validate(message: dict) -> None:
     if kind not in MESSAGE_TYPES:
         raise ProtocolError(f"unknown message type {kind!r}")
     if kind == REGISTER:
-        if not _require(message, "entity", str):
+        role = message.get("role", ROLE_AGENT)
+        if role not in ROLES:
+            raise ProtocolError(f"register: role={role!r} not in {ROLES}")
+        if role == ROLE_AGENT and not _require(message, "entity", str):
             raise ProtocolError("register: empty entity")
         caps = message.get("capabilities", [])
         if not isinstance(caps, list) or not all(isinstance(c, str) for c in caps):
@@ -171,6 +184,31 @@ def validate(message: dict) -> None:
     elif kind == REPLY:
         _require(message, "id", int)
         _one_of(message, "status", REPLY_STATUSES)
+        # Only in replies to a commander: whether an agent is registered under the
+        # entity's name, and its latest state.
+        if "registered" in message and not isinstance(message["registered"], bool):
+            raise ProtocolError("reply: registered is a boolean")
+        if message.get("state") is not None:
+            if not isinstance(message["state"], dict):
+                raise ProtocolError("reply: state is an object")
+            validate({**message["state"], "type": STATE})
+    elif kind == COMMAND_FOR:
+        _require(message, "id", int)
+        if not _require(message, "entity", str):
+            raise ProtocolError("command_for: empty entity")
+        _one_of(message, "command", COMMANDS)
+        args = message.get("args", {})
+        if not isinstance(args, dict):
+            raise ProtocolError("command_for: args is an object")
+        _validate_args(message["command"], args)
+        timeout = message.get("timeout")
+        if timeout is not None and (not isinstance(timeout, (int, float))
+                                    or isinstance(timeout, bool) or timeout <= 0):
+            raise ProtocolError("command_for: timeout is a positive number of seconds")
+    elif kind == QUERY:
+        _require(message, "id", int)
+        if not _require(message, "entity", str):
+            raise ProtocolError("query: empty entity")
     elif kind == STATE:
         _one_of(message, "phase", PHASES)
         _one_of(message, "fault", FAULTS, optional=True)
@@ -219,6 +257,22 @@ def register(entity, capabilities=(), agent=""):
             "capabilities": list(capabilities)}
 
 
+def register_commander(agent=""):
+    return {"type": REGISTER, "role": ROLE_COMMANDER, "agent": agent}
+
+
+def command_for(request_id, entity, name, timeout=None, **args):
+    message = {"type": COMMAND_FOR, "id": request_id, "entity": entity, "command": name,
+               "args": args}
+    if timeout is not None:
+        message["timeout"] = timeout
+    return message
+
+
+def query(request_id, entity):
+    return {"type": QUERY, "id": request_id, "entity": entity}
+
+
 def registered(entity):
     return {"type": REGISTERED, "entity": entity}
 
@@ -231,8 +285,13 @@ def command(command_id, name, **args):
     return {"type": COMMAND, "id": command_id, "command": name, "args": args}
 
 
-def reply(command_id, status=OK, message=""):
-    return {"type": REPLY, "id": command_id, "status": status, "message": message}
+def reply(command_id, status=OK, message="", state=None, registered=None):
+    body = {"type": REPLY, "id": command_id, "status": status, "message": message}
+    if registered is not None:
+        body["registered"] = registered
+    if state is not None:
+        body["state"] = state
+    return body
 
 
 def heartbeat():

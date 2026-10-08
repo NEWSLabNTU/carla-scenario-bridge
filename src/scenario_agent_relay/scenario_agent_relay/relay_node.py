@@ -1,6 +1,9 @@
 """scenario_agent_relay: serves the concealer's ADAPI subset (I2) for one entity, backed by
 the agent registered under that entity's name (I3).
 
+Agents registered under other names are served to commanders (a simulator adapter driving
+entities whose controller is `agent`) by the AgentServer itself; this node adds nothing.
+
 Simulator-neutral and autopilot-neutral: nothing here knows CARLA, and Autoware appears
 only as the shape of the ROS interface SSv2's concealer expects in the scenario domain.
 See docs/design/user-workflow.md, "The agent protocol (I3)".

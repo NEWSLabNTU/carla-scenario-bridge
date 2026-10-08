@@ -28,6 +28,13 @@ MESSAGES = [
             fault_progress=P.SUCCEEDED, turn_indicators=P.LEFT,
             capabilities=P.COMMANDS, detail="x", pose=POSE,
             rtc_status=[{"module": "INTERSECTION", "uuid": "ab" * 16}]),
+    # commanders (a simulator adapter driving "agent"-controlled entities)
+    P.register_commander("carla_scenario_bridge"),
+    P.command_for(1, "bg_av_1", P.SET_GOAL, goal=POSE, waypoints=[]),
+    P.command_for(2, "bg_av_1", P.TELEPORTED, timeout=5.0, pose=POSE),
+    P.query(3, "bg_av_1"),
+    P.reply(3, P.OK, "", P.state(P.IDLE, pose=POSE), registered=True),
+    P.reply(4, P.FAILED, "no agent registered for entity 'x'", registered=False),
 ]
 
 
@@ -64,6 +71,13 @@ def test_wrong_version_is_rejected():
     b'{"v": 1, "type": "state", "phase": "FLYING"}',
     b'{"v": 1, "type": "state", "phase": "IDLE", "fault": "FIRE"}',
     b'{"v": 1, "type": "command", "id": 1, "command": "cooperate", "args": {"module": "X", "command": "MAYBE"}}',
+    b'{"v": 1, "type": "register", "role": "observer", "entity": "ego"}',
+    b'{"v": 1, "type": "command_for", "id": 1, "entity": "", "command": "stop"}',
+    b'{"v": 1, "type": "command_for", "id": 1, "entity": "a", "command": "fly"}',
+    b'{"v": 1, "type": "command_for", "id": 1, "entity": "a", "command": "stop", "timeout": 0}',
+    b'{"v": 1, "type": "query", "id": 1}',
+    b'{"v": 1, "type": "reply", "id": 1, "status": "OK", "registered": "yes"}',
+    b'{"v": 1, "type": "reply", "id": 1, "status": "OK", "state": {"phase": "FLYING"}}',
 ])
 def test_invalid_messages_are_rejected(line):
     with pytest.raises(P.ProtocolError):
@@ -81,3 +95,13 @@ def test_line_reader_splits_and_buffers():
     assert reader.feed(a + b[:5]) == [a.rstrip(b"\n")]
     assert reader.feed(b[5:]) == [b.rstrip(b"\n")]
     assert reader.feed(b"\n\n") == []
+
+
+def test_a_commander_registers_without_an_entity():
+    message = P.decode(P.encode(P.register_commander("csb")))
+    assert message["role"] == P.ROLE_COMMANDER and "entity" not in message
+
+
+def test_an_agent_register_without_a_role_is_still_valid():
+    # Agents written before commanders existed send no role.
+    P.decode(b'{"v": 1, "type": "register", "entity": "ego", "capabilities": []}')

@@ -2,7 +2,9 @@
   <!-- Simulation side, scenario domain, one per domain, long-lived like the simulator
        adapter. Serves SSv2's concealer the Autoware ADAPI subset for `entity`, backed by
        the agent that registers under that name on tcp://<host>:<agent_port>; with no
-       agent (or a silent one) the ADAPI reads as "Autoware not up".
+       agent (or a silent one) the ADAPI reads as "Autoware not up". Agents registered
+       under other names (entities whose controller is `agent`) are reached by commanders
+       on the same port: the simulator adapter, which forwards their goals.
        docs/design/user-workflow.md, "The agent protocol (I3)". -->
   <arg name="entity" default="ego" description="SSv2 entity whose agent this relay serves" />
   <arg name="agent_port" default="5560" description="TCP port agents connect to" />

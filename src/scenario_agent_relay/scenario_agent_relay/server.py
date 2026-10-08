@@ -12,6 +12,11 @@ import time
 
 from . import protocol as P
 
+# A commander's command_for waits this long for the agent's reply unless it names its own
+# timeout, which is capped at COMMANDER_MAX_TIMEOUT.
+COMMANDER_TIMEOUT = 9.0
+COMMANDER_MAX_TIMEOUT = 30.0
+
 
 class AgentSession:
     """One registered agent connection."""
@@ -89,6 +94,44 @@ class AgentSession:
             slot[0].set()
 
 
+class CommanderSession:
+    """One commander connection: request/response, no heartbeat in either direction.
+
+    A commander (e.g. a simulator adapter driving an entity whose controller is "agent")
+    asks the relay to command the agent registered under an entity's name. It owns no
+    entity and is never timed out for silence; a closed socket ends it.
+    """
+
+    def __init__(self, sock, address, agent):
+        self.sock = sock
+        self.address = address
+        self.agent = agent
+        self.closed = threading.Event()
+        self._send_lock = threading.Lock()
+
+    def send(self, message) -> bool:
+        data = P.encode(message)
+        with self._send_lock:
+            if self.closed.is_set():
+                return False
+            try:
+                self.sock.sendall(data)
+                return True
+            except OSError:
+                self.close()
+                return False
+
+    def close(self):
+        if self.closed.is_set():
+            return
+        self.closed.set()
+        for call in (lambda: self.sock.shutdown(socket.SHUT_RDWR), self.sock.close):
+            try:
+                call()
+            except OSError:
+                pass
+
+
 class AgentServer:
     """Accepts agents, keeps one session per entity, relays commands and state.
 
@@ -108,6 +151,7 @@ class AgentServer:
         self.heartbeat_period = heartbeat_period
         self.log = logger or logging.getLogger("scenario_agent_relay")
         self._sessions = {}
+        self._commanders = set()
         self._lock = threading.Lock()
         self._ids = itertools.count(1)
         self._stopping = threading.Event()
@@ -132,8 +176,11 @@ class AgentServer:
         self._stopping.set()
         with self._lock:
             sessions = list(self._sessions.values())
+            commanders = list(self._commanders)
         for session in sessions:
             session.close("relay stopping")
+        for commander in commanders:
+            commander.close()
         if self._listener is not None:
             self._listener.close()
         for thread in self._threads:
@@ -194,11 +241,16 @@ class AgentServer:
                     if session is not None:
                         session.close("agent closed the connection")
                     return
-                for line in reader.feed(data):
+                lines = reader.feed(data)
+                for index, line in enumerate(lines):
                     message = P.decode(line)
                     if session is None:
                         if message["type"] != P.REGISTER:
                             raise P.ProtocolError("the first message must be register")
+                        if message.get("role") == P.ROLE_COMMANDER:
+                            self._serve_commander(sock, address, message, reader,
+                                                  lines[index + 1:])
+                            return
                         session = self._register(sock, address, message)
                         continue
                     session.last_received = time.monotonic()
@@ -223,6 +275,73 @@ class AgentServer:
                 session.close(str(e))
             else:
                 self._reject(sock, str(e))
+
+    # -- commanders -------------------------------------------------------------------------
+    def _serve_commander(self, sock, address, message, reader, pending):
+        commander = CommanderSession(sock, address, message.get("agent", ""))
+        with self._lock:
+            self._commanders.add(commander)
+        commander.send(P.registered(""))
+        self.log.info(f"commander {commander.agent or '?'} connected from "
+                      f"{address[0]}:{address[1]}")
+        reason = "commander closed the connection"
+        try:
+            # Lines that arrived together with the register message come first.
+            while not self._stopping.is_set() and not commander.closed.is_set():
+                for line in pending:
+                    self._on_commander_message(commander, P.decode(line))
+                try:
+                    data = sock.recv(65536)
+                except socket.timeout:
+                    pending = []
+                    continue
+                except OSError:
+                    data = b""
+                if not data:
+                    break
+                pending = reader.feed(data)
+        except P.ProtocolError as e:
+            reason = str(e)
+            self.log.warning(f"commander {address[0]}:{address[1]}: {e}; closing")
+            commander.send(P.error(str(e)))
+        finally:
+            commander.close()
+            with self._lock:
+                self._commanders.discard(commander)
+            self.log.info(f"commander {commander.agent or '?'} gone ({reason})")
+
+    def _on_commander_message(self, commander, message):
+        kind = message["type"]
+        if kind == P.QUERY:
+            session = self.session(message["entity"])
+            if session is None:
+                commander.send(P.reply(message["id"], P.FAILED, "no agent registered for "
+                                       f"entity {message['entity']!r}", registered=False))
+            else:
+                commander.send(P.reply(message["id"], P.OK, "", session.state,
+                                       registered=True))
+        elif kind == P.COMMAND_FOR:
+            # Its own thread: a slow agent must not hold up the commander's other requests.
+            threading.Thread(target=self._command_for, args=(commander, message),
+                             daemon=True).start()
+        elif kind == P.HEARTBEAT:
+            pass
+        else:
+            raise P.ProtocolError(f"a commander cannot send {kind}")
+
+    def _command_for(self, commander, message):
+        entity, name = message["entity"], message["command"]
+        timeout = min(float(message.get("timeout") or COMMANDER_TIMEOUT),
+                      COMMANDER_MAX_TIMEOUT)
+        status, text = self.command(entity, name, timeout, **message.get("args", {}))
+        if status is None:  # no agent, no answer, or the connection dropped
+            status = P.FAILED
+        session = self.session(entity)
+        self.log.info(f"commander {commander.agent or '?'}: {name} for {entity!r} -> "
+                      f"{status}" + (f": {text}" if text else ""))
+        commander.send(P.reply(message["id"], status, text,
+                               session.state if session is not None else None,
+                               registered=session is not None))
 
     def _reject(self, sock, reason):
         try:
