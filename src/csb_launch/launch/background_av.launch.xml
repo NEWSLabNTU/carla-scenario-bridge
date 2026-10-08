@@ -1,91 +1,70 @@
 <launch>
   <!--
-    Autoware + acb_bridge + pilot for one background AV.
+    The vehicle side of one background AV: Autoware + acb_bridge + the vehicle agent, i.e.
+    the acb CARLA profile (acb_launch/carla_simulator.launch.xml), exactly like the ego's
+    (ego_av.launch.xml) but for a scenario entity whose controller is `agent`.
 
-    A background AV is a CARLA vehicle driven by its own Autoware, outside SSv2's model.
-    carla_scenario_bridge spawns the vehicle from its `background_avs` config; this file
-    brings up the stack that drives it.
+    The scenario declares the vehicle (roadmap 017):
 
-    Run this in the AV's own ROS domain, which must differ from the scenario ego's.
-    Domains: 1 is the ego and SSv2, background AVs take 2 and up, and 0 stays empty so
-    that no unconfigured ROS process on the host can join a run. `just bg-av` does this
-    for you.
+      <ScenarioObject name="bg_av_1"> ... <Controller name="agent"> ...
+
+    carla_scenario_bridge spawns it with role_name = the entity name and drives it through
+    the agent relay: `teleported` with its spawn pose, then the scenario's
+    AcquirePositionAction / AssignRouteAction as `set_goal`. This stack's agent registers
+    with that relay as `entity` and drives Autoware locally; acb_bridge attaches to the CARLA
+    vehicle named `vehicle_name`. So entity and vehicle_name are the same name (the default).
+
+    Run it in its own ROS domain, different from the ego's and the scenario's: the scenario
+    reaches it only through the relay's TCP port. Domains used by `just`: 9 scenario, 1 ego,
+    2 and up background AVs; 0 stays empty so that no unconfigured ROS process on the host can
+    join a run. `just bg-av` does this for you.
 
       ROS_DOMAIN_ID=2 play_launch launch csb_launch background_av.launch.xml \
-          vehicle_name:=bg_av_1 map_path:=/path/to/Town01 \
-          goal_poses_file:=/path/to/bg_av_1_poses.yaml
+          entity:=bg_av_1 map_path:=/path/to/Town01 relay:=tcp://sim-host:5560
 
-    `vehicle_name` must match the `role_name` in bridge_config.yaml, because that is how
-    acb_bridge finds the vehicle it serves.
+    Long-lived, like the ego stack: one start serves consecutive scenarios, and it may come
+    up before or after a scenario starts (the bridge tells the agent where its vehicle is as
+    soon as it registers). publish_clock is true: acb publishes CARLA's time as /clock in
+    this domain, as in every domain (roadmap 015).
 
-    publish_clock is true here and false for the scenario ego. SSv2 publishes /clock in its
-    own domain, but there is no SSv2 in this one, so without this the domain would have no
-    simulation clock at all. See docs/design/multi-instance-architecture.md.
-
-    The pilot stands in for SSv2's concealer, which only exists in the ego's domain: it
-    waits for the AD API services and GNSS-driven localization, sets the route, engages
-    autonomous mode, and exits when the vehicle arrives. Without it the AV localizes and
-    then sits still.
-
-    `goal_poses_file` is a YAML file with a `goal_pose` key in acb_pilot's format —
-    quaternion, map frame:
-
-      goal_pose: {x: 153.6, y: -36.3, z: 0.0, qx: 0.0, qy: 0.0, qz: -0.614, qw: 0.789}
-
-    This is NOT the `goal_pose: {x, y, z, yaw}` line in bridge_config.yaml — the pilot
-    takes a file path, not an inline pose, and wants a quaternion, not a yaw. The config's
-    goal_pose stays a human-readable record of intent; this file is what the pilot actually
-    reads. acb_pilot ships per-town examples under
-    $(find-pkg-share acb_pilot)/config/poses/, and `ros2 run acb_pilot capture_poses`
-    records new ones from RViz.
+    Without a relay (relay:="") the agent instead drives once to `goal_poses_file` (local
+    mode, acb_pilot poses format): a check that the stack and CARLA work, no scenario.
   -->
-  <arg name="vehicle_name" description="CARLA role_name of this AV's vehicle" />
+  <arg name="entity" default="bg_av_1" description="the scenario entity this vehicle is (controller `agent`)" />
+  <arg name="vehicle_name" default="$(var entity)"
+       description="CARLA role_name of the vehicle; the bridge names an agent-driven vehicle after its entity" />
+  <arg name="relay" default="tcp://localhost:5560" description="the scenario's agent relay; empty = local mode" />
+  <arg name="goal_poses_file" default="" description="local mode's goal when relay is empty" />
   <arg name="map_path" description="Directory with lanelet2_map.osm and pointcloud_map.pcd" />
-  <arg name="goal_poses_file" default=""
-       description="YAML with this AV's goal_pose (acb_pilot format). Required unless use_pilot:=false; the pilot exits fatally if left empty." />
-  <arg name="use_pilot" default="true"
-       description="Set false to bring the stack up without route-and-engage, e.g. to drive from RViz" />
-  <arg name="pilot_timeout" default="600.0"
-       description="Seconds the pilot allows for localization, engagement and arrival combined" />
-  <arg name="pilot_stabilize_seconds" default="15.0"
-       description="Pilot settling time between localization and routing. Comes out of the scenario's sim-time budget, since the world only ticks while a scenario runs." />
-  <arg name="pilot_route_timeout" default="120.0"
-       description="Seconds the pilot keeps retrying the route before giving up" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
   <arg name="vehicle_model" default="acb_vehicle" />
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
-
-  <!-- 1. Autoware, using the same CARLA-tuned configuration as the scenario ego -->
+  <!-- Same CPU-only choices as ego_av.launch.xml: this host shares its GPU, and a second
+       TensorRT centerpoint does not fit beside CARLA and the ego's stack. -->
+  <arg name="lidar_detection_model" default="clustering" />
+  <arg name="occupancy_grid_map_method" default="laserscan_based" />
   <!-- Signal state comes from acb (CARLA's lights, roadmap 015), so traffic light recognition
        runs fusion-only and the camera that only fed it is not spawned. false brings both back. -->
   <arg name="traffic_light_fusion_only" default="true" description="signals from acb only; no traffic light camera"/>
+
   <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
     <arg name="traffic_light_fusion_only" value="$(var traffic_light_fusion_only)" />
     <arg name="map_path" value="$(var map_path)" />
     <arg name="vehicle_model" value="$(var vehicle_model)" />
     <arg name="sensor_model" value="$(var sensor_model)" />
     <arg name="rviz" value="$(var launch_rviz)" />
-    <!-- acb_bridge for this vehicle, started by the profile. publish_clock: no SSv2 in
-         this domain, so this bridge owns /clock here. -->
+    <arg name="lidar_detection_model" value="$(var lidar_detection_model)" />
+    <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)" />
+    <!-- The vehicle agent, started by the profile: registers with the relay as `entity`. -->
+    <arg name="relay" value="$(var relay)" />
+    <arg name="entity" value="$(var entity)" />
+    <arg name="goal_poses_file" value="$(var goal_poses_file)" />
+    <!-- acb_bridge for this vehicle, started by the profile. -->
     <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
     <arg name="vehicle_name" value="$(var vehicle_name)" />
     <arg name="publish_clock" value="true" />
   </include>
-
-  <!-- 2. Pilot: route and engage, since no concealer exists in this domain.
-       It only waits — for AD API services, then localization — so starting it with
-       everything else imposes no ordering. use_sim_time is set explicitly rather than
-       trusting the Autoware include's set_parameter to leak into this context. -->
-  <group if="$(var use_pilot)">
-    <node pkg="acb_pilot" exec="auto_drive" name="auto_drive" output="screen">
-      <param name="poses_file" value="$(var goal_poses_file)" />
-      <param name="timeout" value="$(var pilot_timeout)" />
-      <param name="stabilize_seconds" value="$(var pilot_stabilize_seconds)" />
-      <param name="route_timeout" value="$(var pilot_route_timeout)" />
-      <param name="use_sim_time" value="true" />
-    </node>
-  </group>
 </launch>

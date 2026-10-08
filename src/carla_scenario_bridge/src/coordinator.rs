@@ -5,8 +5,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
-use crate::config::{BackgroundAv, BridgeConfig, SensorReleaseConfig};
+use crate::config::{BridgeConfig, SensorReleaseConfig};
 use crate::map_resolver::{lanelet_map_file, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
@@ -69,9 +70,10 @@ enum SpawnKind {
     Pedestrian,
     /// A static obstacle. Placed once and left alone unless SSv2 moves it.
     MiscObject,
-    /// An extra Autoware instance's vehicle. Driven by CARLA PhysX under that Autoware's
-    /// control, and deliberately unknown to SSv2 -- see [`SpawnKind::entity_type`].
-    BackgroundAv,
+    /// A scenario vehicle whose controller is `agent`: CARLA PhysX moves it under the
+    /// control of the autopilot behind the agent registered as its entity name (typically
+    /// a full Autoware); SSv2 adopts the pose csb reads back (`agent_link`).
+    AgentVehicle,
 }
 
 /// Which blueprint a spawn should use once CARLA has been asked about them.
@@ -105,7 +107,7 @@ impl SpawnKind {
     /// Blueprint used when the scenario's asset key does not name a CARLA blueprint.
     fn default_blueprint(self) -> &'static str {
         match self {
-            SpawnKind::Ego | SpawnKind::Npc | SpawnKind::AutopilotNpc | SpawnKind::BackgroundAv => {
+            SpawnKind::Ego | SpawnKind::Npc | SpawnKind::AutopilotNpc | SpawnKind::AgentVehicle => {
                 "vehicle.tesla.model3"
             }
             SpawnKind::Pedestrian => "walker.pedestrian.0001",
@@ -113,19 +115,18 @@ impl SpawnKind {
         }
     }
 
-    /// The SSv2 entity type this actor is registered as, if any.
-    ///
-    /// `None` for a background AV, and that is the whole point: it is a CARLA vehicle driven
-    /// by its own Autoware, not a scenario entity. Registering it would put it into
-    /// `UpdateEntityStatus`, and SSv2 would start teleporting a vehicle that Autoware is
-    /// already driving -- two pose authorities on one actor (invariant 5).
+    /// The SSv2 entity type this actor is registered as, if any. Every kind is a scenario
+    /// entity since background AVs became one (controller `agent`, roadmap 017); the pose
+    /// authority question is settled by `physics_driven` and the readback, not by hiding
+    /// the vehicle from SSv2.
     fn entity_type(self) -> Option<EntityType> {
         match self {
             SpawnKind::Ego => Some(EntityType::Ego),
-            SpawnKind::Npc | SpawnKind::AutopilotNpc => Some(EntityType::Vehicle),
+            SpawnKind::Npc | SpawnKind::AutopilotNpc | SpawnKind::AgentVehicle => {
+                Some(EntityType::Vehicle)
+            }
             SpawnKind::Pedestrian => Some(EntityType::Pedestrian),
             SpawnKind::MiscObject => Some(EntityType::MiscObject),
-            SpawnKind::BackgroundAv => None,
         }
     }
 
@@ -140,7 +141,7 @@ impl SpawnKind {
         // them may be teleported.
         matches!(
             self,
-            SpawnKind::Ego | SpawnKind::BackgroundAv | SpawnKind::AutopilotNpc
+            SpawnKind::Ego | SpawnKind::AgentVehicle | SpawnKind::AutopilotNpc
         )
     }
 
@@ -151,7 +152,7 @@ impl SpawnKind {
             SpawnKind::AutopilotNpc => "simulator-driven vehicle",
             SpawnKind::Pedestrian => "pedestrian",
             SpawnKind::MiscObject => "misc object",
-            SpawnKind::BackgroundAv => "background AV",
+            SpawnKind::AgentVehicle => "agent-driven vehicle",
         }
     }
 }
@@ -377,24 +378,23 @@ fn jerk_from_acceleration(previous: f64, current: f64, dt: f64) -> f64 {
     (current - previous) / dt
 }
 
-/// Convert a configured background-AV pose into the protobuf pose the spawn path expects.
-///
-/// Config states yaw in degrees, which is what an operator writing a YAML file will reach
-/// for; the wire format is a quaternion.
-fn background_av_pose(av: &BackgroundAv) -> Pose {
-    let half = av.spawn_pose.yaw.to_radians() / 2.0;
-    Pose {
-        position: Some(geometry_msgs::Point {
-            x: av.spawn_pose.x,
-            y: av.spawn_pose.y,
-            z: av.spawn_pose.z,
-        }),
-        orientation: Some(geometry_msgs::Quaternion {
-            x: 0.0,
-            y: 0.0,
-            z: half.sin(),
-            w: half.cos(),
-        }),
+/// An SSv2 pose (map frame) as an agent-protocol pose.
+fn agent_pose(pose: &Pose) -> AgentPose {
+    let p = pose.position.unwrap_or_default();
+    let q = pose.orientation.unwrap_or(geometry_msgs::Quaternion {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 1.0,
+    });
+    AgentPose {
+        x: p.x,
+        y: p.y,
+        z: p.z,
+        qx: q.x,
+        qy: q.y,
+        qz: q.z,
+        qw: q.w,
     }
 }
 
@@ -504,15 +504,35 @@ fn sync_before_spawn(kind: SpawnKind, sync_mode_enabled: bool) -> bool {
 }
 
 /// Who drives a vehicle SSv2 spawns: its `behavior` is the entity's OpenSCENARIO
-/// controller name (or SSv2's plugin name), and only `simulator_autopilot` hands it to CARLA.
+/// controller name (or SSv2's plugin name). `simulator_autopilot` hands it to CARLA's
+/// Traffic Manager, `agent` to the agent registered under its name; anything else is SSv2's.
 fn vehicle_spawn_kind(is_ego: bool, behavior: &str) -> SpawnKind {
     if is_ego {
         SpawnKind::Ego
     } else if behavior == autopilot::BEHAVIOR {
         SpawnKind::AutopilotNpc
+    } else if behavior == agent_link::BEHAVIOR {
+        SpawnKind::AgentVehicle
     } else {
         SpawnKind::Npc
     }
+}
+
+/// Why an `agent` entity cannot have the CARLA role_name it needs (= its entity name).
+fn agent_role_conflict(entity: &str, ego_role: &str) -> Option<String> {
+    if entity.trim().is_empty() {
+        return Some("an agent-driven vehicle needs a name (it is its CARLA role_name)".into());
+    }
+    if entity == ego_role {
+        return Some(format!(
+            "'{entity}' is the ego's CARLA role_name; an agent-driven vehicle's role_name is \
+             its entity name, and two vehicles answering to one role_name confuse acb_bridge"
+        ));
+    }
+    if is_entity_role_name(entity) {
+        return Some(format!("'{entity}' collides with csb's own entity marks"));
+    }
+    None
 }
 
 /// Spacing of the points sampled along each lane for the lane graph [m].
@@ -845,6 +865,12 @@ pub struct Coordinator {
     /// The state the scenario last commanded per light (OpenDRIVE id), this run. Kept so
     /// the lights can be put back after Traffic Manager's start resets them.
     commanded_lights: HashMap<String, carla::rpc::TrafficLightState>,
+    /// The agent relay connection for `agent` entities, started at the first such spawn.
+    agent_link: Option<AgentLink>,
+    /// The entities agents drive (controller `agent`), by SSv2 name = CARLA role_name.
+    agent_vehicles: HashSet<String>,
+    /// Where their role names are recorded for a later csb's reaper (`agent_link`).
+    agent_ledger: PathBuf,
 }
 
 impl Coordinator {
@@ -862,6 +888,7 @@ impl Coordinator {
         let collision_monitor_enabled = config.collision_monitor_enabled();
         let world_id = world.id().ok();
         let clock_path = crate::clock_store::path_for(&carla_host, carla_port);
+        let agent_ledger = agent_link::ledger_path(&carla_host, carla_port);
         let episode_clock = Self::resume_clock(&clock_path, world_id);
         Self {
             map_aliases: config.map_alias.clone(),
@@ -903,6 +930,9 @@ impl Coordinator {
             road_graph: None,
             autopilot: HashMap::new(),
             commanded_lights: HashMap::new(),
+            agent_link: None,
+            agent_vehicles: HashSet::new(),
+            agent_ledger,
         }
     }
 
@@ -986,22 +1016,17 @@ impl Coordinator {
     /// (`entity_role_name`), whatever their type; a bridge that died mid-scenario leaves
     /// them standing where the next scenario drives (roadmap 016).
     ///
-    /// Only role names this bridge is configured to own, and marked entities, are touched.
-    /// Anything else in the world belongs to somebody else -- a manually spawned vehicle, another tool's traffic
-    /// -- and is left alone.
+    /// Agent-driven vehicles carry their entity name as role_name (the vehicle side finds
+    /// them by it), not the mark, so every csb records those names in a ledger on tmpfs
+    /// (`agent_link::ledger_path`) and the reaper reads it.
     ///
-    /// That includes background AVs the config declares but this run did not enable: a
-    /// `bg_av_1` left by a previous bridge started with `CSB_BACKGROUND_AVS=all` is exactly
-    /// the undriven car in the ego's lane that the opt-in default exists to prevent.
+    /// Only the ego's role name, the ledger's names and marked entities are touched.
+    /// Anything else in the world belongs to somebody else -- a manually spawned vehicle,
+    /// another tool's traffic -- and is left alone.
     fn reap_orphaned_actors(&mut self) {
         let mut owned: Vec<String> = vec![self.config.ego.role_name.clone()];
-        owned.extend(
-            self.config
-                .background_avs
-                .iter()
-                .map(|av| av.role_name.clone()),
-        );
-        owned.extend(self.config.disabled_background_avs.iter().cloned());
+        owned.extend(agent_link::load_ledger(&self.agent_ledger));
+        self.store_agent_ledger();
 
         let actors = match self.world.actors() {
             Ok(actors) => actors,
@@ -1047,6 +1072,14 @@ impl Coordinator {
                      Its spawn point is still occupied, and this run may stack a vehicle on it."
                 ),
             }
+        }
+    }
+
+    /// Record the agent-driven vehicles this process has in the world, for the reaper of
+    /// a later csb should this one die without tearing them down.
+    fn store_agent_ledger(&self) {
+        if let Err(e) = agent_link::store_ledger(&self.agent_ledger, &self.agent_vehicles) {
+            tracing::warn!("Could not record agent-driven vehicles: {e:#}");
         }
     }
 
@@ -1165,8 +1198,13 @@ impl Coordinator {
     /// its own is a success -- the requested end state holds either way. Never panics, so it
     /// is safe on the shutdown path.
     pub fn destroy_all_spawned(&mut self) -> TeardownReport {
-        // Traffic Manager lets go of its vehicles before they are destroyed.
+        // Traffic Manager lets go of its vehicles before they are destroyed; agents stop.
         self.release_autopilot_vehicles();
+        if let Some(link) = self.agent_link.as_ref() {
+            link.despawn_all();
+        }
+        let had_agent_vehicles = !self.agent_vehicles.is_empty();
+        self.agent_vehicles.clear();
         if self.carla_unreachable {
             // One timeout per actor and sensor otherwise (gap 10). The ledger is kept for
             // the next teardown after a reconnect.
@@ -1212,6 +1250,11 @@ impl Coordinator {
         for actor_id in destroyed {
             self.forget_actor_samples(actor_id);
         }
+        // Their names stay in the ledger while a destroy may have failed: the reaper of the
+        // next Initialize (or csb) finishes the job.
+        if had_agent_vehicles && report.failed == 0 {
+            self.store_agent_ledger();
+        }
 
         if report.attempted == 0 {
             return report;
@@ -1232,6 +1275,9 @@ impl Coordinator {
     /// Safe to call more than once, and safe when CARLA has already gone away.
     pub fn shutdown(&mut self) {
         self.destroy_all_spawned();
+        if let Some(mut link) = self.agent_link.take() {
+            link.shutdown();
+        }
         self.restore_traffic_lights();
         self.restore_async_mode();
         if let Some(tm) = self.traffic_manager.take() {
@@ -1648,89 +1694,6 @@ impl Coordinator {
         Ok(signals)
     }
 
-    /// Spawn the configured background AVs.
-    ///
-    /// These are ordinary CARLA vehicles that a separate Autoware drives. They are tracked
-    /// for teardown like anything else this bridge creates, but are **not** registered as
-    /// SSv2 entities, so SSv2 neither controls them nor sees them in its conditions.
-    ///
-    /// A failure to spawn one is not fatal: the scenario ego can still run, and aborting the
-    /// whole scenario because a secondary vehicle would not fit is the wrong trade. It is
-    /// reported loudly.
-    fn spawn_background_avs(&mut self) {
-        if self.config.background_avs.is_empty() {
-            // Opt-in since the default flipped to none. Say so once per scenario when the
-            // config declares some, so a two-AV run started against a bridge that was not
-            // asked for them is visible in the bridge log rather than just missing a car.
-            if !self.config.disabled_background_avs.is_empty() {
-                tracing::info!(
-                    "No background AVs spawned; declared but not enabled: {} (start the \
-                     bridge with {}=all to spawn them)",
-                    self.config.disabled_background_avs.join(", "),
-                    crate::config::BACKGROUND_AVS_ENV
-                );
-            }
-            return;
-        }
-
-        let avs: Vec<BackgroundAv> = self.config.background_avs.clone();
-        tracing::info!("Spawning {} background AV(s)", avs.len());
-
-        let mut spawned = 0;
-        for av in &avs {
-            let pose = background_av_pose(av);
-            let asset_key = av.blueprint.clone().unwrap_or_default();
-
-            let result = self.spawn_entity(
-                &av.role_name,
-                &asset_key,
-                Some(&pose),
-                // Not an SSv2 entity: its pose comes from bridge_config and already names
-                // the CARLA actor origin, so nothing is shifted.
-                OriginOffset::default(),
-                SpawnKind::BackgroundAv,
-                Some(&av.role_name),
-            );
-
-            if result.success {
-                spawned += 1;
-                // goal_pose is for that domain's pilot, not for this bridge -- logged so the
-                // operator can see what the run expects without opening the config.
-                tracing::info!(
-                    "Background AV '{}' spawned; its acb_bridge should be launched with \
-                     vehicle_name:={} in ROS domain {:?}, and its pilot routed to {:?}",
-                    av.role_name,
-                    av.role_name,
-                    av.ros_domain_id,
-                    av.goal_pose.map(|p| (p.x, p.y))
-                );
-                // Nothing in this bridge drives it. Without its own stack running it parks
-                // at the spawn pose, and a scenario ego in that lane stops behind it --
-                // which reads as a planner stall (roadmap 014, town01_pedestrian).
-                tracing::warn!(
-                    "Background AV '{}' spawned at ({:.1}, {:.1}, yaw {:.0} deg): an undriven \
-                     background AV blocks the lane it is spawned in. If no Autoware stack is \
-                     running in ROS domain {:?} for it, restart the bridge without {} \
-                     (background AVs are opt-in).",
-                    av.role_name,
-                    av.spawn_pose.x,
-                    av.spawn_pose.y,
-                    av.spawn_pose.yaw,
-                    av.ros_domain_id,
-                    crate::config::BACKGROUND_AVS_ENV
-                );
-            } else {
-                tracing::error!(
-                    "Background AV '{}' failed to spawn: {}. The scenario continues without it.",
-                    av.role_name,
-                    result.description
-                );
-            }
-        }
-
-        tracing::info!("{spawned}/{} background AV(s) spawned", avs.len());
-    }
-
     /// Freeze CARLA's signal cycling so SSv2 is the only writer (invariant 3).
     ///
     /// Freezing alone leaves each light in whatever state it happened to be in. Since acb
@@ -2108,6 +2071,11 @@ impl Coordinator {
         self.spawned_actors.clear();
         self.entities.clear();
         self.autopilot.clear();
+        // A new server holds none of their vehicles; their agents are told to stop.
+        if let Some(link) = self.agent_link.as_ref() {
+            link.despawn_all();
+        }
+        self.agent_vehicles.clear();
         self.collision_monitor.abandon();
         self.previous_longitudinal_accel.clear();
         self.settle_frames.clear();
@@ -2232,11 +2200,6 @@ impl Coordinator {
         // when it finds no orphaned vehicles, which is the common case, so anything appended
         // to it never runs.
         self.reap_parentless_sensors();
-
-        // Background AVs go in after the map (a reload would destroy them) and before the
-        // ego, so their Autoware instances can be finding their vehicles while SSv2 is
-        // still setting the scenario up.
-        self.spawn_background_avs();
 
         tracing::info!(
             "Initialized (step_time={}). CARLA synchronous; csb is its only ticker.",
@@ -2765,8 +2728,7 @@ impl Coordinator {
             }
         }
 
-        // Background AVs are deliberately absent from EntityManager -- see
-        // SpawnKind::entity_type. Everything else SSv2 knows about is registered.
+        // Everything SSv2 spawns is registered (SpawnKind::entity_type).
         if let Some(entity_type) = kind.entity_type() {
             self.entities
                 .insert(name.to_string(), entity_type, actor_id, origin_offset);
@@ -2812,9 +2774,25 @@ impl Coordinator {
             };
         }
 
-        // Only the ego carries a role_name: acb_bridge finds its vehicle by it, and an NPC
-        // tagged the same would be picked up as if it were an Autoware vehicle.
-        let role_name = (kind == SpawnKind::Ego).then(|| self.config.ego.role_name.clone());
+        // Only the vehicles an autopilot drives carry a role_name: acb_bridge finds its
+        // vehicle by it, and an NPC tagged the same would be picked up as if it were an
+        // Autoware vehicle. The ego's is configured; an agent-driven vehicle's is its entity
+        // name, which the vehicle side is started with (vehicle_name:=<entity>).
+        let role_name = match kind {
+            SpawnKind::Ego => Some(self.config.ego.role_name.clone()),
+            SpawnKind::AgentVehicle => Some(name.clone()),
+            _ => None,
+        };
+        if kind == SpawnKind::AgentVehicle {
+            if let Err(reason) = self.check_agent_role(&name) {
+                return api::SpawnVehicleEntityResponse {
+                    result: Some(proto_err(format!(
+                        "Cannot spawn '{name}' (controller {}): {reason}",
+                        agent_link::BEHAVIOR
+                    ))),
+                };
+            }
+        }
         let origin_offset = origin_offset_of(
             req.parameters
                 .as_ref()
@@ -2850,8 +2828,55 @@ impl Coordinator {
                 };
             }
         }
+        if result.success && kind == SpawnKind::AgentVehicle {
+            // Whether an agent is registered yet does not matter here: the vehicle side
+            // may come up later. The agent is told where its vehicle is as soon as it is
+            // there; a goal for an entity with no agent is what fails (UpdateEntityGoal).
+            self.agent_vehicles.insert(name.clone());
+            self.store_agent_ledger();
+            let pose = req.pose.as_ref().map(agent_pose);
+            let link = self.agent_link();
+            if let Some(pose) = pose {
+                link.spawned(&name, pose);
+            }
+        }
         api::SpawnVehicleEntityResponse {
             result: Some(result),
+        }
+    }
+
+    /// The agent link, started on first use.
+    fn agent_link(&mut self) -> &mut AgentLink {
+        let relay = self.config.agent_relay().to_string();
+        self.agent_link
+            .get_or_insert_with(|| AgentLink::start(&relay))
+    }
+
+    /// An `agent` entity's role_name is its name; refuse one another vehicle already has,
+    /// since acb_bridge would attach to whichever it finds first.
+    fn check_agent_role(&self, name: &str) -> std::result::Result<(), String> {
+        if let Some(reason) = agent_role_conflict(name, &self.config.ego.role_name) {
+            return Err(reason);
+        }
+        let actors = self
+            .world
+            .actors()
+            .map_err(|e| format!("cannot list CARLA's actors: {e}"))?;
+        let taken = actors.iter().find(|actor| {
+            actor.type_id().starts_with("vehicle.")
+                && actor.attributes().ok().is_some_and(|attrs| {
+                    attrs
+                        .iter()
+                        .any(|a| a.id() == "role_name" && a.value_string() == name)
+                })
+        });
+        match taken {
+            Some(actor) => Err(format!(
+                "CARLA already has a vehicle with role_name '{name}' (actor {}, not spawned \
+                 by this bridge); its vehicle side could attach to either",
+                actor.id()
+            )),
+            None => Ok(()),
         }
     }
 
@@ -2960,6 +2985,14 @@ impl Coordinator {
             self.entities.get(name).map(|e| e.entity_type),
             Some(EntityType::Ego)
         );
+
+        // Its agent stops driving it.
+        if self.agent_vehicles.remove(name) {
+            if let Some(link) = self.agent_link.as_ref() {
+                link.despawned(name);
+            }
+            self.store_agent_ledger();
+        }
 
         // Traffic Manager lets go of a simulator-driven vehicle before it is destroyed.
         if let Some(ap) = self.autopilot.remove(name) {
@@ -3085,6 +3118,10 @@ impl Coordinator {
         // SSv2 ends the scenario on the failed frame (roadmap 016, gap 9).
         let mut carla_unreachable = self.carla_unreachable;
         let mut autopilot_failures: Vec<String> = Vec::new();
+        let mut agent_failures: Vec<String> = Vec::new();
+        if let Some(link) = self.agent_link.as_ref() {
+            link.set_npc_logic_started(req.npc_logic_started);
+        }
 
         for entity_status in &req.status {
             let name = &entity_status.name;
@@ -3102,9 +3139,15 @@ impl Coordinator {
                 continue;
             };
             let is_ego = entity_type == EntityType::Ego;
-            let simulator_driven = self.autopilot.contains_key(name);
+            let agent_driven = self.agent_vehicles.contains(name);
+            let simulator_driven = self.autopilot.contains_key(name) || agent_driven;
+            if agent_driven {
+                if let Some(error) = self.agent_link.as_ref().and_then(|l| l.error(name)) {
+                    agent_failures.push(format!("{name}: {error}"));
+                }
+            }
 
-            if simulator_driven {
+            if simulator_driven && !agent_driven {
                 // CARLA drives it: no teleport, the pose goes the other way (like the ego's).
                 if carla_unreachable {
                     autopilot_failures.push(format!("{name}: skipped, CARLA unreachable"));
@@ -3187,6 +3230,17 @@ impl Coordinator {
             result = proto_err(format!(
                 "{earlier}the simulator autopilot failed for {}",
                 autopilot_failures.join("; ")
+            ));
+        }
+        if !agent_failures.is_empty() {
+            let earlier = if result.success {
+                String::from("UpdateEntityStatus: ")
+            } else {
+                format!("{}; ", result.description)
+            };
+            result = proto_err(format!(
+                "{earlier}an agent-driven vehicle cannot be driven: {}",
+                agent_failures.join("; ")
             ));
         }
 
@@ -3532,11 +3586,21 @@ impl Coordinator {
         req: api::UpdateEntityGoalRequest,
     ) -> api::UpdateEntityGoalResponse {
         let name = req.name.clone();
+        if self.agent_vehicles.contains(&name) {
+            return api::UpdateEntityGoalResponse {
+                result: Some(match self.update_agent_goal(&name, &req) {
+                    Ok(()) => proto_ok(),
+                    Err(e) => proto_err(format!("UpdateEntityGoal for '{name}': {e:#}")),
+                }),
+            };
+        }
         let Some(mut ap) = self.autopilot.remove(&name) else {
             let why = if self.entities.get(&name).is_some() {
                 format!(
-                    "'{name}' is not driven by the simulator (its controller is not {})",
-                    autopilot::BEHAVIOR
+                    "'{name}' is not driven by the simulator (its controller is neither {} \
+                     nor {})",
+                    autopilot::BEHAVIOR,
+                    agent_link::BEHAVIOR
                 )
             } else {
                 format!("Entity '{name}' not found")
@@ -3553,6 +3617,41 @@ impl Coordinator {
                 Err(e) => proto_err(format!("UpdateEntityGoal for '{name}': {e:#}")),
             }),
         }
+    }
+
+    /// An `agent` entity's goal, route or target speed goes to its agent (queued; sent once
+    /// SSv2's NPC logic runs and the agent can take it). Fails at once, naming the entity,
+    /// when no agent is registered for it -- SSv2 then ends the scenario.
+    fn update_agent_goal(&mut self, name: &str, req: &api::UpdateEntityGoalRequest) -> Result<()> {
+        let target_speed = if req.has_target_speed {
+            if !(req.target_speed.is_finite() && req.target_speed >= 0.0) {
+                eyre::bail!("target speed {} m/s is not a speed", req.target_speed);
+            }
+            Some(req.target_speed)
+        } else {
+            None
+        };
+        let waypoints: Vec<AgentPose> = req.waypoints.iter().map(agent_pose).collect();
+        let commands = AgentCommand::from_goal_request(&waypoints, req.clear, target_speed);
+        if commands.is_empty() {
+            return Ok(());
+        }
+        self.agent_link()
+            .check_agent(name)
+            .map_err(|e| eyre::eyre!("{e:#}"))?;
+        for command in &commands {
+            match command {
+                AgentCommand::SetGoal { goal, waypoints } => tracing::info!(
+                    "'{name}': goal ({:.1}, {:.1}) via {} waypoint(s) for its agent",
+                    goal.x,
+                    goal.y,
+                    waypoints.len()
+                ),
+                other => tracing::info!("'{name}': {} for its agent", other.name()),
+            }
+        }
+        self.agent_link().push(name, commands);
+        Ok(())
     }
 
     fn update_autopilot_goal(
@@ -4245,7 +4344,7 @@ mod tests {
             SpawnKind::Npc,
             SpawnKind::Pedestrian,
             SpawnKind::MiscObject,
-            SpawnKind::BackgroundAv,
+            SpawnKind::AgentVehicle,
         ] {
             assert!(!sync_before_spawn(kind, false), "{kind:?}");
         }
@@ -4308,8 +4407,8 @@ mod tests {
     fn only_the_ego_is_physics_driven() {
         assert!(SpawnKind::Ego.physics_driven());
         assert!(
-            SpawnKind::BackgroundAv.physics_driven(),
-            "a background AV is driven by its own Autoware through CARLA physics"
+            SpawnKind::AgentVehicle.physics_driven(),
+            "an agent-driven vehicle is driven by its own Autoware through CARLA physics"
         );
         assert!(!SpawnKind::Npc.physics_driven());
         assert!(
@@ -4322,14 +4421,35 @@ mod tests {
 
     /// `acb_bridge` finds its vehicle by role_name. Only the ego should carry one -- an NPC
     /// tagged `hero` would be picked up by a bridge as if it were an Autoware vehicle.
-    /// A background AV is a CARLA vehicle driven by its own Autoware, not a scenario
-    /// entity. Registering it would put it into UpdateEntityStatus and SSv2 would start
-    /// teleporting a vehicle Autoware is already driving.
+    /// An agent-driven vehicle's role_name is its entity name, so it may not take the ego's
+    /// or look like one of csb's marks.
     #[test]
-    fn a_background_av_is_not_an_ssv2_entity() {
-        assert_eq!(SpawnKind::BackgroundAv.entity_type(), None);
-        assert!(SpawnKind::Ego.entity_type().is_some());
-        assert!(SpawnKind::Npc.entity_type().is_some());
+    fn an_agent_vehicle_needs_a_role_name_of_its_own() {
+        assert_eq!(agent_role_conflict("bg_av_1", "hero"), None);
+        assert!(agent_role_conflict("hero", "hero").unwrap().contains("ego"));
+        assert!(agent_role_conflict("", "hero").is_some());
+        assert!(agent_role_conflict("csb_entity:x", "hero").is_some());
+    }
+
+    #[test]
+    fn ssv2_poses_become_agent_poses() {
+        let pose = Pose {
+            position: Some(geometry_msgs::Point {
+                x: 230.0,
+                y: -129.8,
+                z: 0.3,
+            }),
+            orientation: Some(geometry_msgs::Quaternion {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+                w: 0.0,
+            }),
+        };
+        let a = agent_pose(&pose);
+        assert_eq!((a.x, a.y, a.z, a.qz, a.qw), (230.0, -129.8, 0.3, 1.0, 0.0));
+        let a = agent_pose(&Pose::default());
+        assert_eq!(a.qw, 1.0, "a missing orientation is the identity");
     }
 
     #[test]
@@ -4344,6 +4464,8 @@ mod tests {
             vehicle_spawn_kind(false, "simulator_autopilot"),
             SpawnKind::AutopilotNpc
         );
+        assert_eq!(vehicle_spawn_kind(false, "agent"), SpawnKind::AgentVehicle);
+        assert_eq!(vehicle_spawn_kind(true, "agent"), SpawnKind::Ego);
     }
 
     #[test]
@@ -4352,6 +4474,10 @@ mod tests {
         assert_eq!(SpawnKind::Npc.entity_type(), Some(EntityType::Vehicle));
         assert_eq!(
             SpawnKind::AutopilotNpc.entity_type(),
+            Some(EntityType::Vehicle)
+        );
+        assert_eq!(
+            SpawnKind::AgentVehicle.entity_type(),
             Some(EntityType::Vehicle)
         );
         assert_eq!(

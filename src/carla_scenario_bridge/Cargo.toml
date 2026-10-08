@@ -25,6 +25,7 @@ prost = "0.13"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+serde_json = "1"
 
 # Lanelet2 maps are OSM XML; roxmltree matches acb_bridge's parser choice
 roxmltree = "0.20"

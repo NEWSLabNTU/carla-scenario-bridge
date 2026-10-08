@@ -8,8 +8,8 @@ map_name := env_var_or_default('MAP_NAME', 'Town01')
 # ROS domain for the ego stack, which is also SSv2's: the concealer reaches the ego over
 # plain ROS, so `just ego-av` and `just scenario` must agree on this. Domain 0 is left
 # free deliberately -- it is where every unconfigured ROS process on the host lands, and
-# a stray node there joins the scenario's graph without anyone asking. Background AVs get
-# 2 and up (see `just bg-av`).
+# a stray node there joins the scenario's graph without anyone asking. Background AVs
+# (scenario entities with controller `agent`) get 2 and up (see `just bg-av`).
 ego_domain := env_var_or_default('EGO_ROS_DOMAIN_ID', '1')
 # Where SSv2 and the agent relay run (roadmap 017). Separate from every vehicle's domain:
 # the scenario reaches vehicles only through the relay's TCP port (`agent_port`).
@@ -172,18 +172,19 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     #!/usr/bin/env bash
     set -u
     # What "two Autoware" means here: the ego's stack and one background AV's, each a full
-    # Autoware in its OWN ROS domain with its own acb_bridge and its own /clock. SSv2 knows
-    # only about the ego -- background AVs are spawned by csb_bridge from bridge_config.yaml
-    # and are invisible to the scenario, whose collision and ReachPosition conditions never
-    # see them. So the second Autoware is real traffic rather than scenery.
+    # Autoware in its OWN ROS domain with its own acb_bridge, /clock and vehicle agent. Both
+    # are scenario entities (roadmap 017): the ego by isEgo, bg_av_1 by its controller
+    # `agent`. csb spawns bg_av_1 with role_name bg_av_1 and drives it through the agent
+    # relay -- teleported, then the scenario's goal -- so SSv2 sees it (collisions, reach
+    # conditions) and the ego's Autoware perceives real, Autoware-driven traffic.
     #
     # Usage: just two-av [scenario_file]
-    #        KEEP_STACKS=1 just two-av        # leave both stacks up afterwards
+    #        KEEP_STACKS=1 just two-av        # leave the stacks this run started up afterwards
     #        RECORD=1 just two-av             # screencast to play_log/two-av/two-av.mp4
     #
-    # The steps below exist because doing this by hand goes wrong the same four ways every
-    # time: a stale vehicle the next pilot latches onto, a bridge nobody restarted, a
-    # scenario started before a stack is up, and stacks left running afterwards.
+    # Stacks already running are reused and left running: the simulation side (`just run`),
+    # the ego stack (`just ego-av`, web 8082) and the background AV stack (`just bg-av`, web
+    # 8083). Only stacks this recipe starts are stopped at the end.
     ego_dom={{ego_domain}}
     logs="{{project}}/play_log/two-av"
     mkdir -p "$logs"
@@ -191,61 +192,52 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     launch_rviz=$([ "${RECORD:-0}" = "1" ] && echo true || echo false)
     echo "[two-av] scenario domain {{scenario_domain}}, ego domain $ego_dom, background AV domain 2"
 
-    # Kill the whole process group of each stack, not the launcher alone: play_launch's
-    # children outlive it often enough that CLAUDE.md has a section about it.
+    # The play_launch serving web port $1, if any (stacks are told apart by their port).
+    stack_on_port() {
+        for p in $(pgrep -x play_launch); do
+            tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q -- "--web-addr [0-9.]*:$1 " \
+                && { echo "$p"; return 0; }
+        done
+        return 1
+    }
+
+    # Kill the whole process group of each stack we started, not the launcher alone:
+    # play_launch's children outlive it often enough that CLAUDE.md has a section about it.
     ego_pg=""; bg_pg=""
     cleanup() {
+        [ -z "$bg_pg$ego_pg" ] && return
         if [ "${KEEP_STACKS:-0}" = "1" ]; then
-            echo "[two-av] KEEP_STACKS=1, leaving both stacks up"
+            echo "[two-av] KEEP_STACKS=1, leaving the stacks this run started up"
             return
         fi
-        echo "[two-av] stopping stacks"
+        echo "[two-av] stopping the stacks this run started"
         for pg in $bg_pg $ego_pg; do kill -TERM -"$pg" 2>/dev/null || true; done
         sleep 15
         for pg in $bg_pg $ego_pg; do kill -KILL -"$pg" 2>/dev/null || true; done
     }
     trap cleanup EXIT INT TERM
 
-    # A vehicle left behind by a killed run is the single most expensive thing to miss: the
-    # next pilot localizes to it, routes it, engages it, and spends its whole budget driving
-    # a car this run is not about. See acb 195467a.
-    "{{project}}/scripts/clear_stale_vehicles.py" --port {{carla_port}} || {
-        echo "[two-av] could not clear the world; refusing to start a run in it"
-        exit 1
-    }
-
-    # The bridge is not part of any launch file and nothing restarts it between runs.
-    # Background AVs are opt-in (CSB_BACKGROUND_AVS unset = none), so this run -- the one
-    # that brings up bg_av_1's stack -- is what asks for them.
+    # The simulation side (bridge + relay) is long-lived and not part of any scenario launch.
     if ! pgrep -x carla_scenario_ >/dev/null 2>&1; then
-        echo "[two-av] no bridge running; starting one with CSB_BACKGROUND_AVS=all"
-        setsid env CSB_BACKGROUND_AVS=all just run > "$logs/bridge.log" 2>&1 &
-        # `just run` is `cargo run`: it compiles first when its profile is stale, which takes
-        # minutes, so wait for the bridge to say it is listening rather than a fixed time.
+        echo "[two-av] no bridge running; starting the simulation side (just run)"
+        setsid just run > "$logs/bridge.log" 2>&1 &
         for _ in $(seq 1 120); do
             grep -q "ZMQ server ready" "$logs/bridge.log" 2>/dev/null && break
             sleep 5
         done
     fi
     pgrep -x carla_scenario_ >/dev/null || { echo "[two-av] bridge failed to start; see $logs/bridge.log"; exit 1; }
-    # A bridge left running by a single-ego session spawns no bg_av_1, and its stack would
-    # then wait for a vehicle that never appears. Refuse rather than run a one-AV "two-av".
-    just _bridge-spawns bg_av_1 || {
-        echo "[two-av] the running bridge does not spawn bg_av_1; restart it with"
-        echo "[two-av]   CSB_BACKGROUND_AVS=all just run"
-        exit 1
-    }
 
-    # One stack at a time, deliberately. Starting both together was tried and does not
-    # work: each Autoware loads three TensorRT inference nodes (the traffic-light
-    # classifiers and fine detector, plus lidar_centerpoint on the background AV) that take
-    # ~45 s each to construct on a warm engine cache, and two stacks building them at once
-    # pushed both past their load budget. Both sat at "composable 88/89 loaded (1 pending)"
-    # until the wait expired, with the pending members every time being exactly those
-    # inference nodes. Serial costs a few more minutes and finishes.
+    # One stack at a time, deliberately: two Autoware stacks building their TensorRT nodes at
+    # once pushed both past their load budget ("composable 88/89 loaded (1 pending)").
     wait_for_stack() {
-        local name="$1" deadline=$((SECONDS + 1200))
+        local name="$1" pg="$2" deadline=$((SECONDS + 1200))
         until grep -q "Startup complete" "$logs/$name.log" 2>/dev/null; do
+            if ! kill -0 -"$pg" 2>/dev/null; then
+                echo "[two-av] $name stack exited before starting up; see $logs/$name.log"
+                tail -3 "$logs/$name.log"
+                return 1
+            fi
             if [ $SECONDS -gt $deadline ]; then
                 echo "[two-av] $name stack did not come up within 1200s; see $logs/$name.log"
                 grep -oE "waiting on [0-9]+ member\(s\): [^.]*" "$logs/$name.log" | tail -1
@@ -256,41 +248,37 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
         echo "[two-av] $name stack up at $(date +%T)"
     }
 
-    echo "[two-av] starting the ego stack (several minutes)"
-    setsid env LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
-        just ego-av > "$logs/ego.log" 2>&1 &
-    ego_pg=$!
-    wait_for_stack ego || exit 1
+    if stack_on_port 8082 >/dev/null; then
+        echo "[two-av] reusing the running ego stack (web 8082)"
+    else
+        echo "[two-av] starting the ego stack (several minutes)"
+        setsid env LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
+            just ego-av > "$logs/ego.log" 2>&1 &
+        ego_pg=$!
+        wait_for_stack ego "$ego_pg" || exit 1
+    fi
 
-    echo "[two-av] starting the background AV stack"
-    setsid just bg-av > "$logs/bg.log" 2>&1 &
-    bg_pg=$!
-    wait_for_stack bg || exit 1
+    if stack_on_port 8083 >/dev/null; then
+        echo "[two-av] reusing the running background AV stack (web 8083)"
+    else
+        echo "[two-av] starting the background AV stack"
+        setsid just bg-av > "$logs/bg.log" 2>&1 &
+        bg_pg=$!
+        wait_for_stack bg "$bg_pg" || exit 1
+    fi
 
-    # Each stack has to be able to drive before a scenario is worth starting.
+    # Each stack has to be able to drive before a scenario is worth starting, and the
+    # background AV's agent has to be registered: its goal fails the scenario otherwise.
     just _require-ego-stack || exit 1
+    just _require-agent bg_av_1 || exit 1
 
-    # RECORD=1 grabs the display the ego stack's RViz is drawing on. RViz has to come from
-    # INSIDE that stack (LAUNCH_RVIZ=1 above): a standalone `rviz2 -d autoware.rviz` cannot
-    # load the config at all, because the config's VehicleModel display needs vehicle
-    # parameters the stack's launch provides -- it fails with "Statically typed parameter
-    # 'wheel_radius' must be initialized" and falls back to a bare 450x250 window, which is
-    # exactly what the first recorded attempt captured.
-    #
-    # RECORDING CHANGES THE RESULT ON THIS MACHINE, so do not record a run you intend to
-    # judge. RViz renders through llvmpipe on the VNC display -- Mesa software rasterizing,
-    # not the RTX 5090 sitting next to it, which CARLA has -- and costs ~4 cores on its own.
-    # Measured: without recording, load ~5 and the scenario passed with both AVs reaching
-    # their goals; with recording, load 59 on 32 cores, 134 "machine is not powerful enough
-    # to run at 10 Hz" warnings from the interpreter, and the run died on the storyboard's
-    # own 300 s timeout with the background AV still sitting at its spawn point.
-    # VirtualGL is installed (`vglrun`, also `-d egl`) but did not engage for rviz2 here --
-    # it stayed on llvmpipe and in neither case appeared in `nvidia-smi`. Getting RViz onto
-    # the GPU is the fix and is not done.
+    # RECORD=1 grabs the display the ego stack's RViz is drawing on (LAUNCH_RVIZ above; a
+    # standalone rviz2 cannot load autoware.rviz without the stack's vehicle parameters).
+    # RECORDING CHANGES THE RESULT ON THIS MACHINE (RViz on llvmpipe costs ~4 cores): do
+    # not record a run you intend to judge.
     rec_pid=""
     stop_recording() {
-        # SIGINT, not SIGKILL: mp4 writes its index when the muxer closes, and a killed
-        # ffmpeg leaves a file no player will open.
+        # SIGINT, not SIGKILL: mp4 writes its index when the muxer closes.
         [ -n "$rec_pid" ] && kill -INT -"$rec_pid" 2>/dev/null && sleep 5
         [ -n "$rec_pid" ] && echo "[two-av] screencast: $logs/two-av.mp4"
     }
@@ -308,20 +296,47 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     fi
 
     echo "[two-av] running $(basename "{{scenario_file}}")"
-    rm -f /tmp/scenario_test_runner/result.junit.xml
+    junit=/tmp/scenario_test_runner/result.junit.xml
+    rm -f "$junit"
     just scenario "{{scenario_file}}" 2>&1 | tail -5 || true
 
     stop_recording
-    if [ -f /tmp/scenario_test_runner/result.junit.xml ]; then
-        if grep -q 'failures="0" errors="0"' /tmp/scenario_test_runner/result.junit.xml; then
+    if [ -f "$junit" ]; then
+        if grep -q 'failures="0" errors="0"' "$junit"; then
             echo "[two-av] scenario PASSED"
         else
             echo "[two-av] scenario FAILED -- junit:"
-            sed -n "1,6p" /tmp/scenario_test_runner/result.junit.xml
+            sed -n "1,6p" "$junit"
         fi
     else
         echo "[two-av] no junit written: the run did not reach a verdict"
     fi
+
+# Succeed if an agent is registered with the agent relay as `entity` (the relay's commander
+# `query`; docs/design/user-workflow.md). A scenario entity with controller `agent` fails its
+# first goal without one.
+_require-agent entity:
+    #!/usr/bin/env python3
+    import json, socket, sys
+    try:
+        s = socket.create_connection(("localhost", {{agent_port}}), timeout=3)
+    except OSError as e:
+        sys.exit(f"[just] agent relay on port {{agent_port}} unreachable ({e}); run `just run`")
+    f = s.makefile("rw")
+    for m in ({"type": "register", "role": "commander", "agent": "just"},
+              {"type": "query", "id": 1, "entity": "{{entity}}"}):
+        f.write(json.dumps({**m, "v": 1}) + "\n")
+    f.flush()
+    for line in f:
+        m = json.loads(line)
+        if m.get("type") == "reply":
+            if m.get("registered"):
+                print(f"[just] agent for '{{entity}}' registered "
+                      f"({(m.get('state') or {}).get('phase', 'no state yet')})")
+                sys.exit(0)
+            sys.exit("[just] no agent registered as '{{entity}}': start its vehicle side "
+                     "(`just bg-av {{entity}}`) and wait for 'Startup complete'")
+    sys.exit("[just] the relay closed the connection")
 
 # Run the CARLA scenario bridge adapter only
 run:
@@ -332,9 +347,6 @@ run:
     source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
-    # CSB_BACKGROUND_AVS (all | none | role_name,...) is inherited as-is. Unset means none:
-    # background AVs are opt-in, because nothing but their own stack drives them and an
-    # undriven one parks in the ego's lane. `just two-av` sets it to `all`.
     # The simulation side: the bridge and the agent relay, in the scenario domain.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{scenario_domain}}
@@ -560,30 +572,20 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         brake_map_path:="$brake_map" \
         "${optional_args[@]}"
 
-# Launch one background AV's Autoware + acb_bridge + pilot in its own ROS domain.
-# The bridge spawns the vehicle (see background_avs in bridge_config.yaml); this brings up
-# the stack that drives it. Long-lived, like `just ego-av`, and startable before or after
-# the scenario -- only CARLA has to be up first. Background AVs are opt-in: the bridge
-# spawns this vehicle only if it was started with CSB_BACKGROUND_AVS=all (or a list naming
-# it), and this recipe warns when the running bridge was not.
+# Launch one background AV's vehicle side -- Autoware + acb_bridge + vehicle agent -- in its
+# own ROS domain. The background AV is a scenario entity whose controller is `agent`
+# (scenarios/town01_two_av.xosc): csb spawns it with role_name = the entity name, and this
+# stack's agent registers with the agent relay under that name and takes the scenario's goals.
+# Long-lived, like `just ego-av`, and startable before or after the scenario.
 #
+# Domains start at 2: 9 is the scenario's, 1 the ego's, and 0 is left free so that a stray
+# unconfigured ROS process cannot join a run's graph. A second background AV goes on 3 with
+# its own web port: `just bg-av bg_av_2 3 8085`.
 #
-# Domains start at 2: 1 belongs to the ego and SSv2, and 0 is left free so that a stray
-# unconfigured ROS process cannot join a run's graph. A second background AV goes on 3.
-#
-# Restart this before every scenario run. SSv2 restarts sim time at ~0 each run, and a
-# stack that has already seen a later clock stalls on the backward jump -- its pilot then
-# waits for a fresh pose that never arrives. See docs/CHECKPOINT.md.
-#
-# Usage: just bg-av [vehicle_name] [domain] [web_port]
-bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name) goals=(project + "/scenarios/bg_av_1_poses.yaml"): _require-carla
+# Usage: just bg-av [entity] [domain] [web_port] [map_path]
+bg-av entity="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carla
     #!/usr/bin/env bash
     set -e
-    if pgrep -x carla_scenario_ >/dev/null 2>&1 && ! just _bridge-spawns {{vehicle_name}}; then
-        echo "[bg-av] WARNING: the running bridge does not spawn {{vehicle_name}} -- this stack"
-        echo "[bg-av] will wait for a vehicle that never appears. Restart the bridge with"
-        echo "[bg-av]   CSB_BACKGROUND_AVS=all just run"
-    fi
     source "{{autoware_setup}}"
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
@@ -591,37 +593,21 @@ bg-av vehicle_name="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/c
     # 1000 in it is what keeps domain 1's unicast ports out of domain 0's range.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{domain}}
-    # --web-addr keeps this stack's UI off the port the ego's Autoware already took.
-    # There used to be a PLAY_LAUNCH_WEB_ADDR export here as well: it existed only so the
-    # concealer's patched launch.hpp could pass an address when SSv2 forked Autoware
-    # itself. With launch_autoware:=false the concealer launches nothing, so nothing reads
-    # it -- the flag below is what actually sets the port. See phase 012, gap 10.
+    # BG_RELAY empty with BG_GOAL_POSES_FILE drives once to a local goal (no scenario).
+    # play_launch rejects an empty `name:=`, so optional arguments go in only when set.
+    optional_args=()
+    [ -n "${BG_GOAL_POSES_FILE:-}" ] && optional_args+=(goal_poses_file:="$BG_GOAL_POSES_FILE")
     exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:{{web_port}} \
         --composable-respawn on-crash \
         --load-node-timeout 120 \
         --load-total-budget 180 \
-        --log-dir play_log/bg-{{vehicle_name}} \
+        --log-dir play_log/bg-{{entity}} \
         csb_launch background_av.launch.xml \
-        vehicle_name:={{vehicle_name}} \
+        entity:={{entity}} \
+        relay:="${BG_RELAY-tcp://localhost:{{agent_port}}}" \
         map_path:="{{map_path}}" \
-        goal_poses_file:="{{goals}}" \
-        carla_port:={{carla_port}}
-
-# Succeed if a running bridge spawns background AV `vehicle_name`, judged from the
-# CSB_BACKGROUND_AVS in its environment (unset/blank/none = none, all, or a role_name list).
-# Background AVs are opt-in, so a bridge started by a single-ego session spawns none.
-_bridge-spawns vehicle_name:
-    #!/usr/bin/env bash
-    for p in $(pgrep -x carla_scenario_); do
-        sel=$(tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | sed -n 's/^CSB_BACKGROUND_AVS=//p' | tr -d ' ')
-        case "$sel" in
-            [Aa][Ll][Ll]) exit 0 ;;
-        esac
-        case ",$sel," in
-            *",{{vehicle_name}},"*) exit 0 ;;
-        esac
-    done
-    exit 1
+        carla_port:={{carla_port}} \
+        "${optional_args[@]}"
 
 # Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already
 # be up; SSv2 no longer launches Autoware)

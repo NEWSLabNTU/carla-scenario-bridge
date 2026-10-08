@@ -24,8 +24,8 @@
     nothing and kills nothing, so one ego stack serves consecutive scenario runs.
   -->
   <arg name="map_path" description="Directory with lanelet2_map.osm and pointcloud_map.pcd" />
-  <!-- Default "hero": SSv2 spawns the ego with role_name "hero", unlike background AVs
-       whose names come from bridge_config.yaml. -->
+  <!-- Default "hero": SSv2 spawns the ego with role_name "hero", (bridge_config ego.role_name);
+       an agent-driven background AV is named after its entity. -->
   <arg name="vehicle_name" default="hero" description="CARLA role_name of the ego vehicle" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />

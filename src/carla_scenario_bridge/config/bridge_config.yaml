@@ -41,56 +41,13 @@ blueprint_map:
 map_alias: {}
 #  kashiwanoha: "Town01"
 
-# Additional Autoware instances, each driving its own CARLA vehicle.
-#
-# An empty list is a plain single-ego run and behaves exactly as before.
-#
-# These exist because SSv2 supports exactly one ego -- it throws "Multiple egos in the
-# simulation are unsupported yet." -- and its concealer forks Autoware into SSv2's own
-# ROS_DOMAIN_ID. So extra Autoware stacks cannot be scenario entities.
-#
-# IMPORTANT: background AVs are invisible to SSv2. Its collision detection and its
-# ReachPosition/Distance conditions never see them. A background AV can collide with the
-# scenario ego and SSv2 will still report exitSuccess. See
-# docs/design/multi-instance-architecture.md.
-#
-# This bridge spawns the vehicle. Bringing up the matching Autoware and acb_bridge in the
-# right ROS domain is launch's job -- see csb_launch/launch/background_av.launch.xml.
-#
-# Nothing in this bridge drives a background AV. Without its own stack running it parks at
-# spawn_pose in the ego's lane, and the ego stops behind it (town01_pedestrian.xosc failed
-# three times that way, read as a planner stall). So the entries below are OPT-IN: listing
-# one here declares it, and the bridge spawns it only when CSB_BACKGROUND_AVS asks at
-# startup:
-#   none       (default, also when unset or empty) spawn none of them
-#   all        spawn every entry below
-#   a,b        spawn only these role_names; names not listed here are warned about and ignored
-# `just two-av` starts the bridge with `all`; by hand, `CSB_BACKGROUND_AVS=all just run`
-# together with `just bg-av`. The bridge logs the enabled set at startup.
-background_avs:
-  - role_name: "bg_av_1"
-    # Background AVs start at domain 2: the ego and SSv2 share domain 1, and domain 0 is
-    # deliberately left empty so a stray unconfigured ROS process cannot join a run.
-    ros_domain_id: 2
-    blueprint: "vehicle.tesla.model3"
-    # On the ego's own street, ahead of it: lanelet 6583 runs x 325.6 -> 101.4 westbound
-    # at y = -129.8, the ego covers 320 -> 135 of it, and this AV covers 230 -> 110. The
-    # overlap is the point -- it is how the ego's Autoware gets something real to perceive
-    # -- and the 25 m of clearance past the ego's goal is what keeps a parked background
-    # AV from blocking the lane the ego still has to finish in.
-    #
-    # Same three traps as any pose on this map: subtype=road only (65 of 300 lanelets
-    # carry no subtype), ahead of the vehicle along the lanelet's own direction, and
-    # inside its span. Check with lanelet2, not by eye off the OSM.
-    spawn_pose: {x: 230.0, y: -129.8, z: 0.5, yaw: 180.0}
-    goal_pose:  {x: 110.0, y: -129.8, z: 0.0, yaw: 180.0}
-#  - role_name: "bg_av_1"      # must be unique, and match that domain's vehicle_name
-#    ros_domain_id: 1          # informational here; launch owns the actual domain
-#    blueprint: "vehicle.tesla.model3"
-#    spawn_pose: {x: 0.0, y: 0.0, z: 0.5, yaw: 0.0}   # ROS frame, yaw in degrees
-#    goal_pose: {x: 0.0, y: 0.0, z: 0.0, yaw: 0.0}    # informational -- the pilot reads its
-#                                                     # own quaternion poses file, passed as
-#                                                     # goal_poses_file to background_av.launch.xml
+# Entities whose controller is `agent` (background AVs, each driven by its own Autoware):
+# the bridge spawns the vehicle with role_name = the entity name and forwards the scenario's
+# goals to the agent registered with this agent relay under that name
+# (docs/design/scenario-authoring.md). The ROS parameter `agent_relay` overrides it;
+# simulation.launch.xml points it at the relay it starts. Background AVs used to be listed
+# here (`background_avs`); that key is now refused -- declare them in the scenario.
+agent_relay: "tcp://localhost:5560"
 
 # Telling the sensor bridges before we despawn something.
 #

@@ -11,7 +11,6 @@
   <arg name="carla_host" default=""/>
   <arg name="carla_port" default=""/>
   <arg name="ssv2_port" default=""/>
-  <arg name="background_avs" default=""/>
   <arg name="entity" default="ego" description="the scenario entity the relay serves"/>
   <arg name="agent_port" default="5560" description="TCP port vehicle agents connect to"/>
 
@@ -20,7 +19,8 @@
     <arg name="carla_host" value="$(var carla_host)"/>
     <arg name="carla_port" value="$(var carla_port)"/>
     <arg name="ssv2_port" value="$(var ssv2_port)"/>
-    <arg name="background_avs" value="$(var background_avs)"/>
+    <!-- Entities with controller `agent` are driven through this same relay. -->
+    <arg name="agent_relay" value="tcp://localhost:$(var agent_port)"/>
   </include>
   <include file="$(find-pkg-share scenario_agent_relay)/launch/relay.launch.xml">
     <arg name="entity" value="$(var entity)"/>

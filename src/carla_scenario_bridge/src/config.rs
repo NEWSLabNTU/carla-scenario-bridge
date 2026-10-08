@@ -126,46 +126,6 @@ impl Default for EgoConfig {
     }
 }
 
-/// A pose in the ROS frame, as scenarios and Autoware use it.
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct PoseConfig {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-    /// Heading in degrees.
-    pub yaw: f64,
-}
-
-/// An Autoware instance driving its own vehicle, outside SSv2's model.
-///
-/// Background AVs exist because SSv2 supports exactly one ego -- it throws
-/// `"Multiple egos in the simulation are unsupported yet."` -- and its concealer forks
-/// Autoware into SSv2's own `ROS_DOMAIN_ID`. So additional Autoware stacks cannot be
-/// scenario entities; they are ordinary CARLA vehicles that a separate Autoware drives.
-///
-/// **They are invisible to SSv2.** Its collision detection and conditions never see them.
-/// See `docs/design/multi-instance-architecture.md`.
-#[derive(Debug, Clone, Deserialize)]
-pub struct BackgroundAv {
-    /// CARLA `role_name`. Must match the `vehicle_name` of the `acb_bridge` serving it.
-    pub role_name: String,
-    /// ROS domain its Autoware runs in.
-    ///
-    /// Not used by this bridge -- launch owns the actual domain -- but recorded here so one
-    /// file describes the whole run and the per-domain launch can read the same source.
-    #[serde(default)]
-    pub ros_domain_id: Option<u32>,
-    /// CARLA blueprint to spawn.
-    #[serde(default)]
-    pub blueprint: Option<String>,
-    /// Where to spawn, in the ROS frame.
-    pub spawn_pose: PoseConfig,
-    /// Where its pilot should route it. Consumed by that domain's pilot, not by this bridge.
-    #[serde(default)]
-    pub goal_pose: Option<PoseConfig>,
-}
-
 /// CARLA's Traffic Manager, which drives the entities whose controller is
 /// `simulator_autopilot` (see `autopilot`).
 #[derive(Debug, Clone, Deserialize)]
@@ -198,16 +158,11 @@ pub struct BridgeConfig {
     pub blueprint_map: HashMap<String, String>,
     /// Map directory name to CARLA town, for maps not named after their town.
     pub map_alias: HashMap<String, String>,
-    /// Additional Autoware instances *enabled for this run*. Empty means a plain single-ego
-    /// run. After [`BridgeConfig::apply_env_overrides`] this holds only the ones
-    /// [`BACKGROUND_AVS_ENV`] selected -- none unless it asks for them.
-    pub background_avs: Vec<BackgroundAv>,
-    /// Role names the file declares under `background_avs` that this run does not spawn,
-    /// because [`BACKGROUND_AVS_ENV`] did not select them. Filled by
-    /// [`BridgeConfig::apply_env_overrides`]; kept so every `Initialize` can say what it is
-    /// leaving out instead of silently spawning fewer vehicles than the config lists.
-    #[serde(skip)]
-    pub disabled_background_avs: Vec<String>,
+    /// Removed (roadmap 017): background AVs are scenario entities whose controller is
+    /// `agent`. Kept only so a file that still declares them is refused with that message
+    /// instead of being silently ignored -- see [`BridgeConfig::validate`].
+    #[serde(rename = "background_avs")]
+    pub removed_background_avs: Option<serde_yaml::Value>,
     /// Channel for telling sensor bridges to release their sensors before a despawn.
     pub sensor_release: SensorReleaseConfig,
     /// How many CARLA ticks to run per SSv2 frame. See `default_substeps`.
@@ -223,7 +178,13 @@ pub struct BridgeConfig {
     pub collision_monitor: Option<bool>,
     /// Traffic Manager for simulator-driven entities.
     pub traffic_manager: TrafficManagerConfig,
+    /// The agent relay that entities with controller `agent` are driven through
+    /// (`tcp://host:port`; empty = the default). csb connects to it as a commander (see
+    /// `agent_link`). Read it through [`BridgeConfig::agent_relay`].
+    pub agent_relay: String,
 }
+
+const DEFAULT_AGENT_RELAY: &str = "tcp://localhost:5560";
 
 /// Off, because under a managed ego it cannot work -- see `warm_up_localization`.
 ///
@@ -293,12 +254,11 @@ impl BridgeConfig {
             tracing::info!("Loaded configuration from {}", path.display());
             config
         } else {
-            // A warning, not an info line: the defaults have no background AVs and no
-            // blueprint or map aliases, so a run started from the wrong directory looks
-            // healthy while quietly being a different run than the one configured.
+            // A warning, not an info line: the defaults have no blueprint or map aliases,
+            // so a run started from the wrong directory looks healthy while quietly being a
+            // different run than the one configured.
             tracing::warn!(
-                "No configuration at {}; using defaults (no background AVs, no blueprint \
-                 or map aliases). Pass config_file (ROS parameter) or set CSB_CONFIG_DIR if this is not what you meant.",
+                "No configuration at {}; using defaults (no blueprint or map aliases). Pass config_file (ROS parameter) or set CSB_CONFIG_DIR if this is not what you meant.",
                 path.display()
             );
             BridgeConfig::default()
@@ -308,7 +268,7 @@ impl BridgeConfig {
         Ok(config)
     }
 
-    /// Apply ROS parameters (`carla_host`, `carla_port`, `ssv2_port`, `background_avs`,
+    /// Apply ROS parameters (`carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
     /// `reconnect_wait_seconds`) over the file and the environment: a launch file's explicit
     /// value is the most specific statement of intent. A malformed number is an error, not
     /// a silent default.
@@ -335,8 +295,11 @@ impl BridgeConfig {
         if let Some(wait) = num("reconnect_wait_seconds")? {
             self.carla.reconnect_wait_seconds = wait;
         }
-        if let Some(raw) = params.get("background_avs").filter(|v| !v.is_empty()) {
-            self.select_background_avs(Some(raw));
+        if let Some(relay) = params.get("agent_relay").filter(|v| !v.is_empty()) {
+            self.agent_relay = relay.to_string();
+        }
+        if params.get("background_avs").is_some_and(|v| !v.is_empty()) {
+            bail!("{}", REMOVED_BACKGROUND_AVS);
         }
         Ok(())
     }
@@ -354,92 +317,30 @@ impl BridgeConfig {
         if let Some(port) = env_port("SSV2_PORT") {
             self.ssv2.port = port;
         }
-        let raw = std::env::var(BACKGROUND_AVS_ENV).ok();
-        self.select_background_avs(raw.as_deref());
-    }
-
-    /// Narrow `background_avs` to what [`BACKGROUND_AVS_ENV`] selects (`raw` is its value,
-    /// `None` when unset), recording the rest in `disabled_background_avs`.
-    ///
-    /// Separate from [`Self::apply_env_overrides`] so it can be tested without mutating the
-    /// process environment.
-    pub fn select_background_avs(&mut self, raw: Option<&str>) {
-        let selection = BackgroundAvSelection::from_env_value(raw);
-        let declared: Vec<String> = self
-            .background_avs
-            .iter()
-            .map(|a| a.role_name.clone())
-            .collect();
-        let unknown = selection.apply(&mut self.background_avs);
-        for name in unknown {
-            tracing::warn!(
-                "{BACKGROUND_AVS_ENV} names '{name}', which bridge_config.yaml does not \
-                 declare; ignored"
-            );
+        if std::env::var("CSB_BACKGROUND_AVS").is_ok_and(|v| !v.trim().is_empty()) {
+            tracing::warn!("CSB_BACKGROUND_AVS is ignored: {REMOVED_BACKGROUND_AVS}");
         }
-        self.disabled_background_avs = declared
-            .into_iter()
-            .filter(|n| !self.background_avs.iter().any(|a| &a.role_name == n))
-            .collect();
-    }
-
-    /// The one startup line saying which background AVs this run spawns, and how to get
-    /// the others. `raw` is the value of [`BACKGROUND_AVS_ENV`], `None` when unset.
-    pub fn background_av_summary(&self, raw: Option<&str>) -> String {
-        let source = match raw {
-            Some(v) if !v.trim().is_empty() => format!("{BACKGROUND_AVS_ENV}={}", v.trim()),
-            _ => format!("{BACKGROUND_AVS_ENV} unset, default none"),
-        };
-        let enabled: Vec<String> = self
-            .background_avs
-            .iter()
-            .map(|a| match a.ros_domain_id {
-                Some(d) => format!("{} (domain {d})", a.role_name),
-                None => a.role_name.clone(),
-            })
-            .collect();
-        let mut line = if enabled.is_empty() {
-            format!("Background AVs: none enabled ({source}; single-ego run)")
-        } else {
-            format!(
-                "Background AVs enabled ({source}): {}. Each one is spawned at every \
-                 Initialize and parks in its lane unless its own stack (`just bg-av`) drives it",
-                enabled.join(", ")
-            )
-        };
-        if !self.disabled_background_avs.is_empty() {
-            line.push_str(&format!(
-                ". Declared but not spawned: {}; to spawn them, start the bridge with \
-                 `{BACKGROUND_AVS_ENV}=all just run` (or a role_name list) and bring up their \
-                 stacks with `just bg-av` -- `just two-av` does both",
-                self.disabled_background_avs.join(", ")
-            ));
-        }
-        line
     }
 
     /// Reject configurations that would misbehave in ways that are hard to diagnose later.
     fn validate(&self) -> Result<()> {
-        // Role names identify vehicles to acb_bridge. A duplicate means two bridges race for
-        // one vehicle, or one bridge attaches sensors to a vehicle meant for another --
-        // discovered as confusing runtime behaviour rather than as a config error.
-        let mut seen: HashMap<&str, &str> = HashMap::new();
-        seen.insert(self.ego.role_name.as_str(), "ego");
-
-        for av in &self.background_avs {
-            if av.role_name.trim().is_empty() {
-                bail!("a background AV has an empty role_name");
-            }
-            if let Some(previous) = seen.insert(av.role_name.as_str(), "background AV") {
-                bail!(
-                    "role_name '{}' is used by more than one vehicle (already used by the \
-                     {previous}); acb_bridge finds vehicles by role_name, so they must be unique",
-                    av.role_name
-                );
-            }
+        if self.removed_background_avs.is_some() {
+            bail!("{}", REMOVED_BACKGROUND_AVS);
         }
-
+        if self.ego.role_name.trim().is_empty() {
+            bail!("ego.role_name is empty; acb_bridge finds the ego by it");
+        }
+        crate::agent_link::parse_relay_address(self.agent_relay()).wrap_err("agent_relay")?;
         Ok(())
+    }
+
+    /// The agent relay address, defaulted.
+    pub fn agent_relay(&self) -> &str {
+        if self.agent_relay.trim().is_empty() {
+            DEFAULT_AGENT_RELAY
+        } else {
+            self.agent_relay.trim()
+        }
     }
 
     /// Whether to run the ego collision monitor. Defaults to on: it costs one sensor that
@@ -454,81 +355,12 @@ impl BridgeConfig {
     }
 }
 
-/// Which of the configured background AVs to spawn. Read from the environment at startup.
-///
-/// **Opt-in: unset means none.** A background AV is spawned at every `Initialize`, but
-/// nothing in this bridge drives it: its own Autoware stack in its own ROS domain does. On a
-/// host where that stack is not running the car just parks at its spawn pose, in whatever
-/// lane it was placed in -- `town01_pedestrian.xosc` failed three times on exactly that, the
-/// ego stopped 8 m behind an undriven `bg_av_1`, and it was misread as a planner stall.
-/// Spawning them by default made the checked-in config break scenarios on every host without
-/// the background stack, so the run that brings that stack up (`just two-av`, or a manual
-/// `just bg-av`) has to ask: `CSB_BACKGROUND_AVS=all just run`.
-pub const BACKGROUND_AVS_ENV: &str = "CSB_BACKGROUND_AVS";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BackgroundAvSelection {
-    /// Spawn everything the config lists.
-    All,
-    /// Spawn none of them (the default, and what an unset or blank variable means).
-    None,
-    /// Spawn only these role names.
-    Only(Vec<String>),
-}
-
-impl BackgroundAvSelection {
-    /// The selection for a value of [`BACKGROUND_AVS_ENV`], `None` when it is unset.
-    /// Unset means [`Self::None`]: background AVs are opt-in.
-    pub fn from_env_value(raw: Option<&str>) -> Self {
-        raw.map_or(Self::None, Self::parse)
-    }
-
-    /// `all`, `none`, or a comma-separated list of role names. Case-insensitive keywords,
-    /// whitespace around entries ignored, empty entries dropped. An empty value means
-    /// `none`, the same as unset: an exported-but-blank variable is not a request for
-    /// vehicles, and spawning undriven ones is the failure this default exists to avoid.
-    pub fn parse(raw: &str) -> Self {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
-            return Self::None;
-        }
-        if trimmed.eq_ignore_ascii_case("all") {
-            return Self::All;
-        }
-        let mut names: Vec<String> = Vec::new();
-        for name in trimmed.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-            if !names.iter().any(|n| n == name) {
-                names.push(name.to_string());
-            }
-        }
-        if names.is_empty() {
-            // Only separators, e.g. ",": nothing was named, so nothing is selected.
-            return Self::None;
-        }
-        Self::Only(names)
-    }
-
-    /// Keep only the selected background AVs. Returns the requested names the config does
-    /// not declare, so the caller can warn about them.
-    pub fn apply(&self, avs: &mut Vec<BackgroundAv>) -> Vec<String> {
-        match self {
-            Self::All => Vec::new(),
-            Self::None => {
-                avs.clear();
-                Vec::new()
-            }
-            Self::Only(names) => {
-                let unknown = names
-                    .iter()
-                    .filter(|n| !avs.iter().any(|av| &av.role_name == *n))
-                    .cloned()
-                    .collect();
-                avs.retain(|av| names.iter().any(|n| n == &av.role_name));
-                unknown
-            }
-        }
-    }
-}
+/// Why `background_avs` (file key, ROS parameter, `CSB_BACKGROUND_AVS`) is refused.
+pub const REMOVED_BACKGROUND_AVS: &str = "background_avs was removed (roadmap 017): a \
+    background AV is now a scenario entity whose controller is `agent` -- the bridge spawns \
+    it with role_name = the entity name and drives it through the agent that registers with \
+    the agent relay under that name (see docs/design/scenario-authoring.md). Delete the \
+    background_avs section from bridge_config.yaml.";
 
 fn env_port(name: &str) -> Option<u16> {
     let raw = std::env::var(name).ok()?;
@@ -545,130 +377,6 @@ fn env_port(name: &str) -> Option<u16> {
 mod tests {
     use super::*;
 
-    fn two_avs() -> Vec<BackgroundAv> {
-        let yaml = "background_avs:\n  - role_name: bg_av_1\n    spawn_pose: {x: 1.0}\n  \
-                    - role_name: bg_av_2\n    spawn_pose: {x: 2.0}\n";
-        let config: BridgeConfig = serde_yaml::from_str(yaml).unwrap();
-        config.background_avs
-    }
-
-    fn names(avs: &[BackgroundAv]) -> Vec<&str> {
-        avs.iter().map(|a| a.role_name.as_str()).collect()
-    }
-
-    #[test]
-    fn background_av_selection_all_keeps_everything() {
-        for raw in ["all", "ALL", "  all "] {
-            let sel = BackgroundAvSelection::parse(raw);
-            assert_eq!(sel, BackgroundAvSelection::All, "{raw:?}");
-            let mut avs = two_avs();
-            assert!(sel.apply(&mut avs).is_empty());
-            assert_eq!(names(&avs), ["bg_av_1", "bg_av_2"]);
-        }
-    }
-
-    #[test]
-    fn background_av_selection_none_removes_everything() {
-        for raw in ["none", "None", " none\n", "", "  ", " , "] {
-            let sel = BackgroundAvSelection::parse(raw);
-            assert_eq!(sel, BackgroundAvSelection::None, "{raw:?}");
-            let mut avs = two_avs();
-            assert!(sel.apply(&mut avs).is_empty());
-            assert!(avs.is_empty());
-        }
-    }
-
-    #[test]
-    fn background_av_selection_list_keeps_only_named() {
-        let sel = BackgroundAvSelection::parse(" bg_av_2 , ,bg_av_2");
-        assert_eq!(sel, BackgroundAvSelection::Only(vec!["bg_av_2".into()]));
-        let mut avs = two_avs();
-        assert!(sel.apply(&mut avs).is_empty());
-        assert_eq!(names(&avs), ["bg_av_2"]);
-    }
-
-    #[test]
-    fn background_av_selection_unknown_names_are_reported_and_ignored() {
-        let sel = BackgroundAvSelection::parse("bg_av_1,bg_av_9");
-        let mut avs = two_avs();
-        assert_eq!(sel.apply(&mut avs), vec!["bg_av_9".to_string()]);
-        assert_eq!(names(&avs), ["bg_av_1"]);
-
-        // Only unknown names: nothing spawns, and every name is reported.
-        let sel = BackgroundAvSelection::parse("nope");
-        let mut avs = two_avs();
-        assert_eq!(sel.apply(&mut avs), vec!["nope".to_string()]);
-        assert!(avs.is_empty());
-    }
-
-    fn config_with_two_avs() -> BridgeConfig {
-        let yaml = "background_avs:\n  - role_name: bg_av_1\n    ros_domain_id: 2\n    \
-                    spawn_pose: {x: 1.0}\n  - role_name: bg_av_2\n    spawn_pose: {x: 2.0}\n";
-        serde_yaml::from_str(yaml).unwrap()
-    }
-
-    /// The regression: an unset variable used to mean `all`, so the checked-in config
-    /// parked `bg_av_1` in the ego's lane on every host without a background stack.
-    #[test]
-    fn background_avs_are_opt_in_when_the_variable_is_unset() {
-        assert_eq!(
-            BackgroundAvSelection::from_env_value(None),
-            BackgroundAvSelection::None
-        );
-        let mut config = config_with_two_avs();
-        config.select_background_avs(None);
-        assert!(config.background_avs.is_empty());
-        assert_eq!(config.disabled_background_avs, ["bg_av_1", "bg_av_2"]);
-    }
-
-    #[test]
-    fn a_blank_variable_is_the_default_too() {
-        let mut config = config_with_two_avs();
-        config.select_background_avs(Some("  "));
-        assert!(config.background_avs.is_empty());
-        assert_eq!(config.disabled_background_avs, ["bg_av_1", "bg_av_2"]);
-    }
-
-    #[test]
-    fn asking_for_them_spawns_them() {
-        let mut config = config_with_two_avs();
-        config.select_background_avs(Some("all"));
-        assert_eq!(names(&config.background_avs), ["bg_av_1", "bg_av_2"]);
-        assert!(config.disabled_background_avs.is_empty());
-
-        let mut config = config_with_two_avs();
-        config.select_background_avs(Some("bg_av_2"));
-        assert_eq!(names(&config.background_avs), ["bg_av_2"]);
-        assert_eq!(config.disabled_background_avs, ["bg_av_1"]);
-    }
-
-    #[test]
-    fn the_startup_line_says_what_is_enabled_and_how_to_enable_the_rest() {
-        let mut config = config_with_two_avs();
-        config.select_background_avs(None);
-        let line = config.background_av_summary(None);
-        assert!(line.contains("none enabled"), "{line}");
-        assert!(
-            line.contains("CSB_BACKGROUND_AVS unset, default none"),
-            "{line}"
-        );
-        assert!(line.contains("bg_av_1, bg_av_2"), "{line}");
-        assert!(line.contains("CSB_BACKGROUND_AVS=all just run"), "{line}");
-
-        let mut config = config_with_two_avs();
-        config.select_background_avs(Some("all"));
-        let line = config.background_av_summary(Some("all"));
-        assert!(line.contains("enabled (CSB_BACKGROUND_AVS=all)"), "{line}");
-        assert!(line.contains("bg_av_1 (domain 2), bg_av_2"), "{line}");
-        assert!(!line.contains("Declared but not spawned"), "{line}");
-
-        // A config with no background AVs has nothing to offer.
-        let mut config: BridgeConfig = serde_yaml::from_str("{}").unwrap();
-        config.select_background_avs(None);
-        let line = config.background_av_summary(None);
-        assert!(!line.contains("Declared but not spawned"), "{line}");
-    }
-
     #[test]
     fn an_empty_config_is_all_defaults() {
         let config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
@@ -676,7 +384,9 @@ mod tests {
         assert_eq!(config.carla.port, 2000);
         assert_eq!(config.ssv2.port, 5555);
         assert_eq!(config.ego.role_name, "hero");
-        assert!(config.background_avs.is_empty());
+        assert_eq!(config.agent_relay(), "tcp://localhost:5560");
+        assert!(config.validate().is_ok());
+        assert!(BridgeConfig::default().validate().is_ok());
         assert!(config.blueprint_map.is_empty());
     }
 
@@ -701,93 +411,35 @@ mod tests {
         assert_eq!(config.blueprint_for("unknown"), None);
     }
 
+    /// Background AVs moved into the scenario (controller `agent`); a file that still
+    /// declares them is refused, not silently ignored.
     #[test]
-    fn background_avs_parse_with_their_poses() {
-        let yaml = r#"
-background_avs:
-  - role_name: bg_av_1
-    ros_domain_id: 1
-    blueprint: vehicle.audi.tt
-    spawn_pose: {x: 10.0, y: -20.0, z: 0.5, yaw: 90.0}
-    goal_pose: {x: 100.0, y: -20.0, z: 0.0, yaw: 0.0}
-"#;
+    fn a_background_avs_section_is_refused_with_the_way_forward() {
+        let yaml = "background_avs:\n  - role_name: bg_av_1\n    spawn_pose: {x: 1.0}\n";
         let config: BridgeConfig = serde_yaml::from_str(yaml).expect("parses");
-        assert_eq!(config.background_avs.len(), 1);
-
-        let av = &config.background_avs[0];
-        assert_eq!(av.role_name, "bg_av_1");
-        assert_eq!(av.ros_domain_id, Some(1));
-        assert_eq!(av.blueprint.as_deref(), Some("vehicle.audi.tt"));
-        assert_eq!(av.spawn_pose.x, 10.0);
-        assert_eq!(av.spawn_pose.y, -20.0);
-        assert_eq!(av.spawn_pose.yaw, 90.0);
-        assert_eq!(av.goal_pose.map(|p| p.x), Some(100.0));
-    }
-
-    /// Only role_name and spawn_pose are required; the rest have sensible defaults.
-    #[test]
-    fn a_minimal_background_av_parses() {
-        let yaml = "background_avs:\n  - role_name: bg\n    spawn_pose: {x: 1.0}\n";
-        let config: BridgeConfig = serde_yaml::from_str(yaml).expect("parses");
-        let av = &config.background_avs[0];
-        assert_eq!(av.blueprint, None);
-        assert_eq!(av.ros_domain_id, None);
-        assert_eq!(av.spawn_pose.y, 0.0);
-    }
-
-    /// acb_bridge finds its vehicle by role_name, so a duplicate makes two bridges fight
-    /// over one vehicle. Catch it at startup, not as puzzling runtime behaviour.
-    #[test]
-    fn duplicate_role_names_are_rejected() {
-        let yaml = r#"
-background_avs:
-  - role_name: dup
-    spawn_pose: {x: 0.0}
-  - role_name: dup
-    spawn_pose: {x: 1.0}
-"#;
-        let config: BridgeConfig = serde_yaml::from_str(yaml).expect("parses");
-        let err = config.validate().expect_err("duplicate must be rejected");
-        assert!(err.to_string().contains("dup"), "{err}");
-    }
-
-    /// The ego's role name shares the namespace with the background AVs.
-    #[test]
-    fn a_background_av_may_not_take_the_egos_role_name() {
-        let yaml = r#"
-ego:
-  role_name: hero
-background_avs:
-  - role_name: hero
-    spawn_pose: {x: 0.0}
-"#;
-        let config: BridgeConfig = serde_yaml::from_str(yaml).expect("parses");
-        let err = config
-            .validate()
-            .expect_err("clash with ego must be rejected");
-        assert!(err.to_string().contains("ego"), "{err}");
+        let err = config.validate().expect_err("removed key must be refused");
+        assert!(err.to_string().contains("controller is `agent`"), "{err}");
     }
 
     #[test]
-    fn an_empty_role_name_is_rejected() {
-        let yaml = "background_avs:\n  - role_name: '  '\n    spawn_pose: {x: 0.0}\n";
-        let config: BridgeConfig = serde_yaml::from_str(yaml).expect("parses");
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn a_valid_config_passes_validation() {
-        let yaml = r#"
-ego:
-  role_name: hero
-background_avs:
-  - role_name: bg_av_1
-    spawn_pose: {x: 0.0}
-  - role_name: bg_av_2
-    spawn_pose: {x: 1.0}
-"#;
-        let config: BridgeConfig = serde_yaml::from_str(yaml).expect("parses");
+    fn the_agent_relay_is_configurable_and_checked() {
+        let config: BridgeConfig =
+            serde_yaml::from_str("agent_relay: tcp://sim:6000\n").expect("parses");
+        assert_eq!(config.agent_relay(), "tcp://sim:6000");
         assert!(config.validate().is_ok());
+        let config: BridgeConfig =
+            serde_yaml::from_str("agent_relay: http://sim\n").expect("parses");
+        assert!(config.validate().is_err());
+
+        let mut config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        let params = crate::ros_args::RosParams::from_args(
+            ["--ros-args", "-p", "agent_relay:=tcp://h:1"]
+                .iter()
+                .map(|s| s.to_string()),
+        )
+        .expect("parses");
+        config.apply_ros_params(&params).expect("applies");
+        assert_eq!(config.agent_relay(), "tcp://h:1");
     }
 
     #[test]

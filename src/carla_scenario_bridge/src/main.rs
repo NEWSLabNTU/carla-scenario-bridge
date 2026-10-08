@@ -1,3 +1,4 @@
+mod agent_link;
 mod autopilot;
 mod clock_store;
 mod collision_monitor;
@@ -65,10 +66,10 @@ fn main() -> Result<()> {
     tracing::info!("  SSv2:   tcp://*:{ssv2_port}");
     tracing::info!("  Config: {}", config_file.display());
     tracing::info!("  Ego role_name: {}", config.ego.role_name);
-    // One line: which background AVs this run spawns, and how to get the ones it does not.
-    // They are opt-in (unset = none) -- see config::BACKGROUND_AVS_ENV.
-    let bg_env = std::env::var(config::BACKGROUND_AVS_ENV).ok();
-    tracing::info!("  {}", config.background_av_summary(bg_env.as_deref()));
+    tracing::info!(
+        "  Agent relay (controller `agent`): {}",
+        config.agent_relay()
+    );
 
     let shutdown = Arc::new(AtomicBool::new(false));
     {

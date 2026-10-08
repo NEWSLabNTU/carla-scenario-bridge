@@ -1,6 +1,9 @@
-# Goal for the bg_av_1 background AV's pilot (acb_pilot auto_drive format).
-# Matches the informational goal_pose in config/bridge_config.yaml: the AV drives west
-# along lanelet 6583 of Town01, from x=230 to x=110 at y=-129.8 (ROS frame, yaw 180 deg).
+# Local-mode goal for bg_av_1's vehicle agent (acb_pilot poses format), for testing its
+# stack with no scenario: BG_RELAY= BG_GOAL_POSES_FILE=$PWD/scenarios/bg_av_1_poses.yaml
+# just bg-av. In a scenario the goal comes from town01_two_av.xosc (bg_av_1, controller
+# `agent`), which uses the same pose: west along lanelet 6583 of Town01, from x=230 to
+# x=110 at y=-129.8 (ROS frame, yaw 180 deg). The agent needs the vehicle in CARLA, which
+# only a scenario spawns, so local mode needs one placed by hand (role_name bg_av_1).
 #
 # This is the ego's own lane. The AV starts 90 m ahead of the ego and finishes 25 m past
 # where the ego stops, so the two share the road for most of the run without the parked

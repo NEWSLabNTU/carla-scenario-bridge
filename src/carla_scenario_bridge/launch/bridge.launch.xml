@@ -11,12 +11,12 @@
 -->
 <launch>
   <arg name="config_file" default="$(find-pkg-share carla_scenario_bridge)/config/bridge_config.yaml"
-       description="bridge_config.yaml (CARLA, blueprint and map aliases, background vehicles)"/>
+       description="bridge_config.yaml (CARLA, blueprint and map aliases, Traffic Manager, agent relay)"/>
   <arg name="carla_host" default="" description="CARLA host; empty keeps the config file's"/>
   <arg name="carla_port" default="" description="CARLA RPC port; empty keeps the config file's"/>
   <arg name="ssv2_port" default="" description="ZMQ port SSv2 connects to; empty keeps the config file's"/>
-  <arg name="background_avs" default=""
-       description="background AVs from the config to spawn: none, all, or role names (comma-separated); empty keeps CSB_BACKGROUND_AVS, else none"/>
+  <arg name="agent_relay" default=""
+       description="tcp://host:port of the agent relay that drives entities with controller `agent`; empty keeps the config file's (default tcp://localhost:5560)"/>
   <arg name="respawn_delay" default="2.0" description="seconds before restarting a crashed bridge"/>
 
   <node pkg="carla_scenario_bridge" exec="carla_scenario_bridge" name="carla_scenario_bridge"
@@ -25,6 +25,6 @@
     <param name="carla_host" value="$(var carla_host)"/>
     <param name="carla_port" value="$(var carla_port)"/>
     <param name="ssv2_port" value="$(var ssv2_port)"/>
-    <param name="background_avs" value="$(var background_avs)"/>
+    <param name="agent_relay" value="$(var agent_relay)"/>
   </node>
 </launch>

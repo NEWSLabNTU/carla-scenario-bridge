@@ -1,7 +1,32 @@
 <?xml version="1.0"?>
+<!--
+	Town01: two Autoware-driven vehicles in one lane (roadmap 017 step 6).
+
+	  ego       Autoware (isEgo via the Autoware controller), through the agent relay:
+	            westbound on lanelet 6583 from x = 320 to x = 135.
+	  bg_av_1   controller `agent`: the agent registered with the relay as "bg_av_1" drives
+	            it: `just bg-av`, its own Autoware in its own ROS domain. 90 m ahead of the
+	            ego in the same lane, from x = 230 to x = 110, so the ego's Autoware has a
+	            real, Autoware-driven vehicle to perceive and follow, and the parked bg_av_1
+	            ends 25 m past the ego's goal. csb spawns it with role_name bg_av_1 (the
+	            vehicle side's vehicle_name), sends its agent `teleported` with the spawn pose
+	            and, once SSv2's NPC logic runs and the agent has localized, `set_goal`.
+
+	bg_av_1 declares the ego's Performance: the same vehicle under the same Autoware, whose
+	first throttle off the parked hand brake reads ~13 m/s2 for a moment (a 10 m/s2 bound
+	failed the first run on it).
+
+	Both are scenario entities: SSv2 sees bg_av_1 at the pose CARLA reports, so a
+	collision between the two is judged. Success when both have reached their goals (each
+	ReachPositionCondition latches a parameter) and bg_av_1 stands still; a collision, or
+	300 s, fails.
+-->
 <OpenSCENARIO>
-	<FileHeader author="carla-scenario-bridge" date="2026-04-03T00:00:00+00:00" description="Town01 long ego drive, for multi-AV runs that need sim time" revMajor="1" revMinor="2" />
-	<ParameterDeclarations />
+	<FileHeader author="carla-scenario-bridge" date="2026-10-08T00:00:00+00:00" description="Town01: the ego and an agent-driven background AV in one lane" revMajor="1" revMinor="2" />
+	<ParameterDeclarations>
+		<ParameterDeclaration name="ego_arrived" parameterType="integer" value="0" />
+		<ParameterDeclaration name="bg_av_1_arrived" parameterType="integer" value="0" />
+	</ParameterDeclarations>
 	<CatalogLocations />
 	<RoadNetwork>
 		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
@@ -29,6 +54,25 @@
 				</Controller>
 			</ObjectController>
 		</ScenarioObject>
+		<ScenarioObject name="bg_av_1">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="agent">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
 	</Entities>
 	<Storyboard>
 		<Init>
@@ -51,24 +95,45 @@
 						</RoutingAction>
 					</PrivateAction>
 				</Private>
+				<Private entityRef="bg_av_1">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="230.0" y="-129.8" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="110.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
 			</Actions>
 		</Init>
 		<Story name="town01_drive">
 			<Act name="drive_act">
-				<ManeuverGroup maximumExecutionCount="1" name="ego_maneuvers">
+				<ManeuverGroup maximumExecutionCount="1" name="judges">
 					<Actors selectTriggeringEntities="false">
 						<EntityRef entityRef="ego" />
+						<EntityRef entityRef="bg_av_1" />
 					</Actors>
 					<Maneuver name="end_conditions">
-						<Event name="success" priority="parallel">
-							<Action name="exit_success">
-								<UserDefinedAction>
-									<CustomCommandAction type="exitSuccess" />
-								</UserDefinedAction>
+						<Event name="ego_at_goal" priority="parallel">
+							<Action name="mark_ego_arrived">
+								<GlobalAction>
+									<ParameterAction parameterRef="ego_arrived">
+										<SetAction value="1" />
+									</ParameterAction>
+								</GlobalAction>
 							</Action>
 							<StartTrigger>
 								<ConditionGroup>
-									<Condition name="reach_goal" delay="0" conditionEdge="none">
+									<Condition name="ego_reached_goal" delay="0" conditionEdge="none">
 										<ByEntityCondition>
 											<TriggeringEntities triggeringEntitiesRule="any">
 												<EntityRef entityRef="ego" />
@@ -79,6 +144,87 @@
 														<WorldPosition x="135.0" y="-129.8" z="0.0" h="0" p="0" r="0" />
 													</Position>
 												</ReachPositionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="bg_av_1_at_goal" priority="parallel">
+							<Action name="mark_bg_av_1_arrived">
+								<GlobalAction>
+									<ParameterAction parameterRef="bg_av_1_arrived">
+										<SetAction value="1" />
+									</ParameterAction>
+								</GlobalAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="bg_av_1_reached_goal" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="bg_av_1" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<ReachPositionCondition tolerance="5.0">
+													<Position>
+														<WorldPosition x="110.0" y="-129.8" z="0.0" h="0" p="0" r="0" />
+													</Position>
+												</ReachPositionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="success" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="ego_arrived_set" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<ParameterCondition parameterRef="ego_arrived" value="1" rule="equalTo" />
+										</ByValueCondition>
+									</Condition>
+									<Condition name="bg_av_1_arrived_set" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<ParameterCondition parameterRef="bg_av_1_arrived" value="1" rule="equalTo" />
+										</ByValueCondition>
+									</Condition>
+									<Condition name="bg_av_1_stopped" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="bg_av_1" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<SpeedCondition value="0.1" rule="lessThan" />
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="collision" priority="parallel">
+							<Action name="exit_failure_collision">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="collision_ego_bg_av_1" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="ego" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<CollisionCondition>
+													<EntityRef entityRef="bg_av_1" />
+												</CollisionCondition>
 											</EntityCondition>
 										</ByEntityCondition>
 									</Condition>
