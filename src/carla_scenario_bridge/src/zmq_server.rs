@@ -71,7 +71,6 @@ impl ZmqServer {
                 }
             };
 
-
             // Decode, dispatch, encode, send -- a panic in a handler becomes a failure
             // response instead of the end of the process.
             let variant = peek_request_variant(&msg);
@@ -180,6 +179,9 @@ impl ZmqServer {
             ),
             simulation_request::Request::UpdateTrafficLights(req) => {
                 handle!(update_traffic_lights, UpdateTrafficLights, req)
+            }
+            simulation_request::Request::UpdateEntityGoal(req) => {
+                handle!(update_entity_goal, UpdateEntityGoal, req)
             }
         };
         let handler = started.elapsed();
@@ -384,6 +386,11 @@ fn encode_error_response(variant: Option<u32>, description: &str) -> Vec<u8> {
         Some(15) => simulation_response::Response::AttachImuSensor(api::AttachImuSensorResponse {
             result: Some(result),
         }),
+        Some(16) => {
+            simulation_response::Response::UpdateEntityGoal(api::UpdateEntityGoalResponse {
+                result: Some(result),
+            })
+        }
         // Field 1 is Initialize, and it is also the documented fallback for None and for
         // any field number this build does not know.
         _ => simulation_response::Response::Initialize(api::InitializeResponse {
@@ -438,6 +445,12 @@ mod tests {
             )),
             Some(15)
         );
+        assert_eq!(
+            variant_of(simulation_request::Request::UpdateEntityGoal(
+                api::UpdateEntityGoalRequest::default()
+            )),
+            Some(16)
+        );
     }
 
     #[test]
@@ -483,7 +496,7 @@ mod tests {
     /// Every variant must produce a failure carrying the description, whichever one it is.
     #[test]
     fn every_known_variant_round_trips_as_a_failure() {
-        for field in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15] {
+        for field in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16] {
             let bytes = encode_error_response(Some(field), "why");
             let decoded = SimulationResponse::decode(bytes.as_slice())
                 .unwrap_or_else(|e| panic!("field {field} failed to decode: {e}"));
@@ -506,6 +519,7 @@ mod tests {
                 simulation_response::Response::AttachPseudoTrafficLightDetector(r) => r.result,
                 simulation_response::Response::UpdateStepTime(r) => r.result,
                 simulation_response::Response::AttachImuSensor(r) => r.result,
+                simulation_response::Response::UpdateEntityGoal(r) => r.result,
             };
 
             let result = result.unwrap_or_else(|| panic!("field {field} produced no result"));
@@ -533,7 +547,10 @@ mod tests {
         let mut poisoned = None;
         let bytes = guarded_dispatch(&mut poisoned, Some(2), || panic!("entity map broke"));
         let why = failure_description(&bytes).expect("an UpdateFrame failure");
-        assert!(why.contains("csb internal error: entity map broke"), "{why}");
+        assert!(
+            why.contains("csb internal error: entity map broke"),
+            "{why}"
+        );
         assert_eq!(poisoned.as_deref(), Some("entity map broke"));
     }
 
@@ -547,22 +564,33 @@ mod tests {
         });
         assert!(!ran, "a poisoned session must not dispatch UpdateFrame");
         let why = failure_description(&bytes).expect("an UpdateFrame failure");
-        assert!(why.contains("earlier panic") && why.contains("Initialize"), "{why}");
+        assert!(
+            why.contains("earlier panic") && why.contains("Initialize"),
+            "{why}"
+        );
         assert!(poisoned.is_some());
     }
 
     #[test]
     fn initialize_clears_the_poison() {
         let mut poisoned = Some("earlier panic".to_string());
-        assert_eq!(guarded_dispatch(&mut poisoned, Some(1), ok_bytes), ok_bytes());
+        assert_eq!(
+            guarded_dispatch(&mut poisoned, Some(1), ok_bytes),
+            ok_bytes()
+        );
         assert!(poisoned.is_none());
-        assert_eq!(guarded_dispatch(&mut poisoned, Some(2), ok_bytes), ok_bytes());
+        assert_eq!(
+            guarded_dispatch(&mut poisoned, Some(2), ok_bytes),
+            ok_bytes()
+        );
     }
 
     #[test]
     fn a_panicking_initialize_keeps_the_session_poisoned() {
         let mut poisoned = Some("earlier panic".to_string());
-        let bytes = guarded_dispatch(&mut poisoned, Some(1), || panic!("{}", String::from("again")));
+        let bytes = guarded_dispatch(&mut poisoned, Some(1), || {
+            panic!("{}", String::from("again"))
+        });
         assert!(failure_description(&bytes).unwrap().contains("again"));
         assert_eq!(poisoned.as_deref(), Some("again"));
     }

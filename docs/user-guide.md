@@ -66,8 +66,11 @@ In the `.xosc`, name the map directory by path:
 
 The ego is the entity whose controller has `isEgo=true`; give it a goal with
 `AcquirePositionAction` or `AssignRouteAction` as usual. Other vehicles are SSv2-driven by
-default (exact choreography); see the design doc for `simulator_autopilot` (CARLA-driven
-traffic). Scenario files are never modified.
+default (exact choreography). Name a vehicle's controller `simulator_autopilot` and CARLA's
+Traffic Manager drives it with physics instead: give it a goal with `AcquirePositionAction`
+and a speed with an absolute `SpeedAction`, and it routes there and stops
+([design/scenario-authoring.md](design/scenario-authoring.md#vehicles-the-simulator-drives-simulator_autopilot);
+example `scenarios/town01_simulator_autopilot.xosc`). Scenario files are never modified.
 
 ## 4. Run
 

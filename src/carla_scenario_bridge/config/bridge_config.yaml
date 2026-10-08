@@ -162,3 +162,11 @@ substeps: 2
 # sweep per scan; a fixed `substeps: 2` at 20 Hz would give 0.025 s ticks and half-rotation
 # scans at 40 Hz. Remove this line to go back to the fixed `substeps` above.
 carla_tick_seconds: 0.05
+
+# CARLA's Traffic Manager drives every scenario entity whose controller is
+# `simulator_autopilot` (docs/design/scenario-authoring.md). csb runs it in its own process
+# and ticks it with the world, synchronously; `seed` is applied at every Initialize so the
+# simulator-driven traffic repeats run to run.
+traffic_manager:
+  port: 8000
+  seed: 2017

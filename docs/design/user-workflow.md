@@ -237,6 +237,68 @@ entity and changeable mid-run (`AssignControllerAction`):
 The controller names are **simulator-neutral**: `simulator_autopilot` means "whatever the
 simulator drives with"; another adapter maps it to its own driver or rejects it.
 
+### `simulator_autopilot` as built (roadmap 017 step 6)
+
+SSv2 never told the simulator who drives an entity, so the fork adds the minimum to the
+protocol (`simulation_api_schema.proto`) and keeps the scenario standard:
+
+- **`SpawnVehicleEntityRequest.behavior`** (field 6): the entity's controller name. The
+  interpreter already passes a non-ego controller's name to `traffic_simulator` as the
+  behavior-plugin name; for `simulator_autopilot` it now spawns a
+  `SimulatorDrivenVehicleEntity` (a `VehicleEntity` on the `do_nothing` plugin) instead of
+  loading a plugin of that name. That entity runs no behavior and does not even update the
+  do-nothing plugin (which would zero the twist the simulator reported); its status is
+  what `UpdateEntityStatus` returned, adopted as for every non-ego entity.
+- **`UpdateEntityGoal{name, waypoints[], clear, target_speed, has_target_speed}`** (oneof 16):
+  `requestAcquirePosition`, `requestAssignRoute` and absolute `requestSpeedChange` on such an
+  entity are queued; `API::updateFrame` sends the queue before the frame's
+  `UpdateEntityStatus`, and a refused goal throws (the scenario fails with the simulator's
+  reason). `cancelRequest` sends `clear`. Lane changes, relative speeds and trajectories
+  throw `SemanticError`; so does switching to or from the controller after the spawn.
+- **Other simulators**: `MultiServer` acknowledges `UpdateEntityGoal` itself, so a server
+  that drives nothing needs no change; `simple_sensor_simulator` refuses a
+  `simulator_autopilot` spawn rather than leave a vehicle that never moves.
+
+csb (`autopilot.rs`, `coordinator.rs`):
+
+- Spawn: physics on, parked, `csb_entity:<name>` role like every entity (reaped the same
+  way); one Traffic Manager per csb process (port and seed in `bridge.yaml`
+  `traffic_manager`), created at the first such spawn, synchronous whenever the world is.
+  **LibCarla ticks a synchronous Traffic Manager inside `world.tick()`** (verified on
+  0.9.16: a registered vehicle drives with world ticks alone, no `synchronous_tick`), so csb
+  remains the only ticker.
+- Hand-over when `UpdateEntityStatus.npc_logic_started` first arrives, so the vehicle waits
+  with SSv2's own NPCs; goals received earlier are kept for then.
+- Goals: Traffic Manager does not route between distant points -- given a path it takes, at
+  each junction, the branch nearest the next point. Measured on Town01 with Traffic Manager
+  alone: the goal as the only point missed 1 route in 4, points every 10 m along the route
+  missed one that the goal alone reached. csb therefore plans the lane route itself (Dijkstra
+  over `Map::topology()` segments sampled every 2 m, from the actor's lane position to the
+  goal's) and gives Traffic Manager one point 5 m past each junction on it, then the goal;
+  every probed route arrived, run to run identical with a fixed seed. Traffic Manager roams
+  on past the end of a path, so csb slows the vehicle into the goal (1.5 m/s²) and, within
+  0.5 m along the lane, unregisters it and brakes.
+- Status: `UpdateEntityStatus` returns CARLA's pose, twist and acceleration for these
+  entities (the ego's readback: origin offset undone, settle frames and median filter), and
+  never teleports them. Failures name the entity and fail the frame. Twist and acceleration
+  are now reported in the **entity's frame** (x forward), as SSv2 reads them; they used to
+  go out world-frame, which made a vehicle heading along y read as standing still (a
+  `SpeedCondition < 0.05` held at 2.8 m/s) and one heading along -x as reversing -- for the
+  ego too. The hand-over gets a 1 s settle like the spawn: Traffic Manager's launch from
+  the hand brake reads as 15.5 m/s² for a frame, then a steady ~5.2 m/s².
+- Signals: **starting a Traffic Manager resets every light group to its own cycle** (24 of
+  Town01's 36 lights RED after the first such spawn; the vehicle then waited at a red light
+  until the timeout). csb re-applies its signal state right after creating it: every mapped
+  light GREEN, then what the scenario has commanded this run.
+- Arrival: within 0.5 m of the goal csb asks Traffic Manager for 0 m/s and parks the vehicle
+  (unregistered, hand brake) once below 0.1 m/s; parking at the approach's 1 m/s read as
+  -8 m/s².
+- Teardown: despawn, Initialize and shutdown release vehicles from Traffic Manager before
+  destroying them; a CARLA restart shuts the old Traffic Manager down.
+
+The lane graph is CARLA's OpenDRIVE topology, not the Lanelet2 map: Traffic Manager follows
+CARLA's lanes, and routing on the same graph it drives keeps the two from disagreeing.
+
 ## Swap audit
 
 **Replace CARLA with simulator X.** Replace: the simulator adapter (csb → X's I1

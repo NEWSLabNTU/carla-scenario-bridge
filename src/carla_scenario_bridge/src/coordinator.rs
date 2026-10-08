@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::autopilot;
 use crate::config::{BackgroundAv, BridgeConfig, SensorReleaseConfig};
 use crate::map_resolver::{lanelet_map_file, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
@@ -37,6 +38,10 @@ const SETTLE_FRAMES: u32 = 15;
 /// same latency, the filter that actually matches the noise.
 const ACCEL_SMOOTHING_FRAMES: usize = 3;
 
+/// Frames after a hand-over to Traffic Manager during which the vehicle's acceleration is
+/// reported as zero (see `engage_autopilot`): one second at 20 Hz.
+const ENGAGE_SETTLE_FRAMES: u32 = 20;
+
 /// Extra height added on each spawn retry after a collision.
 const SPAWN_RETRY_STEP: f32 = 0.5;
 
@@ -57,6 +62,9 @@ enum SpawnKind {
     Ego,
     /// A scenario NPC vehicle. SSv2 computes its path and teleports it each frame.
     Npc,
+    /// A scenario NPC vehicle whose controller is `simulator_autopilot`: CARLA PhysX moves
+    /// it, Traffic Manager steers it, and SSv2 adopts the pose csb reads back (`autopilot`).
+    AutopilotNpc,
     /// A scenario pedestrian. Also teleported -- SSv2's behaviour plugins own the walk.
     Pedestrian,
     /// A static obstacle. Placed once and left alone unless SSv2 moves it.
@@ -97,7 +105,9 @@ impl SpawnKind {
     /// Blueprint used when the scenario's asset key does not name a CARLA blueprint.
     fn default_blueprint(self) -> &'static str {
         match self {
-            SpawnKind::Ego | SpawnKind::Npc | SpawnKind::BackgroundAv => "vehicle.tesla.model3",
+            SpawnKind::Ego | SpawnKind::Npc | SpawnKind::AutopilotNpc | SpawnKind::BackgroundAv => {
+                "vehicle.tesla.model3"
+            }
             SpawnKind::Pedestrian => "walker.pedestrian.0001",
             SpawnKind::MiscObject => "static.prop.streetbarrier",
         }
@@ -112,7 +122,7 @@ impl SpawnKind {
     fn entity_type(self) -> Option<EntityType> {
         match self {
             SpawnKind::Ego => Some(EntityType::Ego),
-            SpawnKind::Npc => Some(EntityType::Vehicle),
+            SpawnKind::Npc | SpawnKind::AutopilotNpc => Some(EntityType::Vehicle),
             SpawnKind::Pedestrian => Some(EntityType::Pedestrian),
             SpawnKind::MiscObject => Some(EntityType::MiscObject),
             SpawnKind::BackgroundAv => None,
@@ -126,14 +136,19 @@ impl SpawnKind {
     /// down and shoves it out of collisions before the next frame. The AWSIM pattern this
     /// design follows makes puppeteered actors kinematic for exactly this reason.
     fn physics_driven(self) -> bool {
-        // Both are driven by an Autoware through CARLA physics, so neither may be teleported.
-        matches!(self, SpawnKind::Ego | SpawnKind::BackgroundAv)
+        // Driven through CARLA physics -- by an Autoware, or by Traffic Manager -- so none of
+        // them may be teleported.
+        matches!(
+            self,
+            SpawnKind::Ego | SpawnKind::BackgroundAv | SpawnKind::AutopilotNpc
+        )
     }
 
     fn label(self) -> &'static str {
         match self {
             SpawnKind::Ego => "ego",
             SpawnKind::Npc => "NPC vehicle",
+            SpawnKind::AutopilotNpc => "simulator-driven vehicle",
             SpawnKind::Pedestrian => "pedestrian",
             SpawnKind::MiscObject => "misc object",
             SpawnKind::BackgroundAv => "background AV",
@@ -344,6 +359,13 @@ fn longitudinal_acceleration(ax: f64, ay: f64, yaw_rad: f64) -> f64 {
     ax * yaw_rad.cos() + ay * yaw_rad.sin()
 }
 
+/// A world-frame (ROS) planar vector in the frame of a body heading `yaw_rad` (ROS):
+/// x forward, y left.
+fn world_to_body(x: f64, y: f64, yaw_rad: f64) -> (f64, f64) {
+    let (sin, cos) = yaw_rad.sin_cos();
+    (x * cos + y * sin, -x * sin + y * cos)
+}
+
 /// Jerk from two consecutive longitudinal accelerations.
 ///
 /// Returns 0.0 for a non-positive `dt`, which keeps a bad step time from producing an
@@ -422,7 +444,11 @@ impl EpisodeReload for CoordinatorReload<'_> {
     }
 
     fn read_frame(&mut self) -> Result<(f64, f64)> {
-        let snapshot = self.coordinator.world.snapshot().wrap_err("world snapshot")?;
+        let snapshot = self
+            .coordinator
+            .world
+            .snapshot()
+            .wrap_err("world snapshot")?;
         let ts = snapshot.timestamp();
         self.f0 = Some(snapshot.frame() as u64);
         Ok((ts.elapsed_seconds, ts.delta_seconds))
@@ -475,6 +501,80 @@ fn is_entity_role_name(role: &str) -> bool {
 /// already. See the comment at its call in `spawn_entity`.
 fn sync_before_spawn(kind: SpawnKind, sync_mode_enabled: bool) -> bool {
     kind == SpawnKind::Ego && !sync_mode_enabled
+}
+
+/// Who drives a vehicle SSv2 spawns: its `behavior` is the entity's OpenSCENARIO
+/// controller name (or SSv2's plugin name), and only `simulator_autopilot` hands it to CARLA.
+fn vehicle_spawn_kind(is_ego: bool, behavior: &str) -> SpawnKind {
+    if is_ego {
+        SpawnKind::Ego
+    } else if behavior == autopilot::BEHAVIOR {
+        SpawnKind::AutopilotNpc
+    } else {
+        SpawnKind::Npc
+    }
+}
+
+/// Spacing of the points sampled along each lane for the lane graph [m].
+const LANE_SAMPLE_M: f64 = 2.0;
+
+/// Full brake and hand brake: how a vehicle waits for its driver (or its next goal).
+const PARKED_CONTROL: carla::rpc::VehicleControl = carla::rpc::VehicleControl {
+    throttle: 0.0,
+    steer: 0.0,
+    brake: 1.0,
+    hand_brake: true,
+    reverse: false,
+    manual_gear_shift: false,
+    gear: 0,
+};
+
+fn lane_key(waypoint: &carla::client::Waypoint) -> autopilot::LaneKey {
+    autopilot::LaneKey {
+        road: waypoint.road_id(),
+        section: waypoint.section_id(),
+        lane: waypoint.lane_id(),
+    }
+}
+
+/// A point of a Traffic Manager path. carla-rust's `set_custom_path` takes `AsRef<Location>`,
+/// which `Location` itself does not implement.
+struct PathPoint(Location);
+
+impl AsRef<Location> for PathPoint {
+    fn as_ref(&self) -> &Location {
+        &self.0
+    }
+}
+
+fn location_of(p: &autopilot::Point) -> Location {
+    Location {
+        x: p[0] as f32,
+        y: p[1] as f32,
+        z: p[2] as f32,
+    }
+}
+
+fn point_of(l: &Location) -> autopilot::Point {
+    [l.x as f64, l.y as f64, l.z as f64]
+}
+
+/// A `simulator_autopilot` entity: a CARLA vehicle Traffic Manager drives (see `autopilot`).
+struct AutopilotVehicle {
+    vehicle: carla::client::Vehicle,
+    /// Registered with Traffic Manager. Not before SSv2 starts its NPC logic: until then
+    /// SSv2's own NPCs stand still, and so does this one (parked by the spawn).
+    engaged: bool,
+    /// Stopped at its goal: released by Traffic Manager and braked, until a new goal.
+    parked: bool,
+    /// The scenario's absolute target speed [m/s]; `None` leaves TM's (the speed limit).
+    target_speed: Option<f64>,
+    /// The route to the current goal and the path TM follows for it.
+    route: Option<(autopilot::RouteProgress, Vec<autopilot::Point>)>,
+    /// The route's path has not been given to TM yet.
+    path_pending: bool,
+    /// The speed the approach to the goal started from.
+    approach_cruise: Option<f64>,
 }
 
 fn decide_frame_action(sync_mode_enabled: bool, has_ego: bool) -> FrameAction {
@@ -733,6 +833,18 @@ pub struct Coordinator {
     /// Time spent inside `world.tick()` since [`Coordinator::take_tick_time`] last read
     /// it, for the frame budget's processing time (which excludes it).
     tick_time: Duration,
+    /// CARLA's Traffic Manager, created on the first `simulator_autopilot` spawn. LibCarla
+    /// ticks it inside `world.tick()` when it is synchronous (verified on 0.9.16: a
+    /// registered vehicle drives with only world ticks), so csb stays the only ticker.
+    traffic_manager: Option<carla::traffic_manager::TrafficManager>,
+    /// The loaded town's map and lane graph, for routing simulator-driven vehicles. Built
+    /// on first use, dropped when the world changes.
+    road_graph: Option<(carla::client::Map, autopilot::RoadGraph)>,
+    /// The entities Traffic Manager drives, by SSv2 name.
+    autopilot: HashMap<String, AutopilotVehicle>,
+    /// The state the scenario last commanded per light (OpenDRIVE id), this run. Kept so
+    /// the lights can be put back after Traffic Manager's start resets them.
+    commanded_lights: HashMap<String, carla::rpc::TrafficLightState>,
 }
 
 impl Coordinator {
@@ -787,6 +899,10 @@ impl Coordinator {
             generate_signal_table: false,
             carla_unreachable: false,
             tick_time: Duration::ZERO,
+            traffic_manager: None,
+            road_graph: None,
+            autopilot: HashMap::new(),
+            commanded_lights: HashMap::new(),
         }
     }
 
@@ -1049,6 +1165,8 @@ impl Coordinator {
     /// its own is a success -- the requested end state holds either way. Never panics, so it
     /// is safe on the shutdown path.
     pub fn destroy_all_spawned(&mut self) -> TeardownReport {
+        // Traffic Manager lets go of its vehicles before they are destroyed.
+        self.release_autopilot_vehicles();
         if self.carla_unreachable {
             // One timeout per actor and sensor otherwise (gap 10). The ledger is kept for
             // the next teardown after a reconnect.
@@ -1116,6 +1234,11 @@ impl Coordinator {
         self.destroy_all_spawned();
         self.restore_traffic_lights();
         self.restore_async_mode();
+        if let Some(tm) = self.traffic_manager.take() {
+            if let Err(e) = tm.shutdown() {
+                tracing::warn!("Traffic Manager shutdown: {e}");
+            }
+        }
     }
 
     // --- Map and traffic lights ------------------------------------------------------
@@ -1164,6 +1287,7 @@ impl Coordinator {
             let world = prepared?;
             self.world_id = world.id().ok();
             self.world = world;
+            self.forget_road_graph();
             // The new episode's epoch, recorded before anything can kill this process: a
             // restart would otherwise resume the old episode's (gap 11).
             self.record_clock();
@@ -1374,13 +1498,19 @@ impl Coordinator {
 
         if self.generate_signal_table {
             let written = rs::write_table(&map_dir, &table.to_yaml()?)?;
-            tracing::info!("Traffic light table ({summary}) written to {}", written.display());
+            tracing::info!(
+                "Traffic light table ({summary}) written to {}",
+                written.display()
+            );
             return Ok(());
         }
 
         match rs::check_table(&path, &table)? {
             rs::Check::Matches => {
-                tracing::info!("Traffic light table {} matches CARLA ({summary})", path.display());
+                tracing::info!(
+                    "Traffic light table {} matches CARLA ({summary})",
+                    path.display()
+                );
                 Ok(())
             }
             rs::Check::Missing => {
@@ -1831,8 +1961,16 @@ impl Coordinator {
         self.world_id = world_id;
         self.consecutive_carla_failures = 0;
         self.carla_unreachable = false;
+        self.forget_road_graph();
         if restarted {
             self.forget_previous_server();
+            // Its Traffic Manager served the old server; LibCarla keeps one per port, so it
+            // must be shut down for the next use to start a fresh one.
+            if let Some(tm) = self.traffic_manager.take() {
+                if let Err(e) = tm.shutdown() {
+                    tracing::warn!("Traffic Manager of the old server: shutdown failed: {e}");
+                }
+            }
         }
 
         // Whatever CARLA we are now talking to, it is not holding our settings.
@@ -1894,7 +2032,10 @@ impl Coordinator {
     fn resume_clock(path: &std::path::Path, world_id: Option<u64>) -> EpisodeClock {
         use crate::clock_store::{load, resume, Resume};
         let Some(stored) = load(path) else {
-            tracing::info!("Episode clock: none recorded at {}; epoch 0", path.display());
+            tracing::info!(
+                "Episode clock: none recorded at {}; epoch 0",
+                path.display()
+            );
             return EpisodeClock::default();
         };
         match resume(stored, world_id) {
@@ -1966,6 +2107,7 @@ impl Coordinator {
         let forgotten = self.spawned_actors.len();
         self.spawned_actors.clear();
         self.entities.clear();
+        self.autopilot.clear();
         self.collision_monitor.abandon();
         self.previous_longitudinal_accel.clear();
         self.settle_frames.clear();
@@ -2061,6 +2203,13 @@ impl Coordinator {
             );
         }
         self.entities.clear();
+        self.commanded_lights.clear();
+        // The same seed every run, so simulator-driven traffic repeats.
+        if let Some(tm) = self.traffic_manager.as_mut() {
+            if let Err(e) = tm.set_random_device_seed(self.config.traffic_manager.seed) {
+                tracing::warn!("Could not reseed Traffic Manager: {e}");
+            }
+        }
 
         // Load the town the scenario was authored against. A mismatch is not a visible
         // failure -- every pose would be interpreted against whatever town CARLA happened
@@ -2101,8 +2250,6 @@ impl Coordinator {
             simulation_time_ns,
         }
     }
-
-
 
     /// Hold a freshly spawned ego still until its bridge says localization is on it.
     ///
@@ -2178,7 +2325,6 @@ impl Coordinator {
         }
     }
 
-
     /// Switch CARLA into synchronous mode at `self.step_time` divided by `self.substeps`.
     ///
     /// SSv2's frame still advances by `step_time`; it is delivered in `substeps` ticks, so
@@ -2193,6 +2339,10 @@ impl Coordinator {
             .apply_settings(&settings, Duration::from_secs(10))
             .wrap_err("apply settings")?;
         self.sync_mode_enabled = true;
+        if let Some(tm) = self.traffic_manager.as_mut() {
+            tm.set_synchronous_mode(true)
+                .wrap_err("Traffic Manager synchronous mode")?;
+        }
         tracing::info!(
             "CARLA sync mode enabled, fixed_delta_seconds={delta} ({} substep(s) per {}s \
              SSv2 frame), physics max_substep_delta_time={} x max_substeps={}",
@@ -2652,11 +2802,7 @@ impl Coordinator {
             .as_ref()
             .map(|p| p.name.clone())
             .unwrap_or_default();
-        let kind = if req.is_ego {
-            SpawnKind::Ego
-        } else {
-            SpawnKind::Npc
-        };
+        let kind = vehicle_spawn_kind(req.is_ego, &req.behavior);
 
         // One ego per session. A second would get the same role_name, and acb_bridge would
         // pick whichever it found first; the stock backend rejects it too.
@@ -2674,6 +2820,18 @@ impl Coordinator {
                 .as_ref()
                 .and_then(|p| p.bounding_box.as_ref()),
         );
+        // The Traffic Manager first: a simulator-driven vehicle nothing can drive must not
+        // be spawned and left parked.
+        if kind == SpawnKind::AutopilotNpc {
+            if let Err(e) = self.traffic_manager() {
+                return api::SpawnVehicleEntityResponse {
+                    result: Some(proto_err(format!(
+                        "Cannot spawn '{name}' ({}): {e:#}",
+                        autopilot::BEHAVIOR
+                    ))),
+                };
+            }
+        }
         let result = self.spawn_entity(
             &name,
             &req.asset_key,
@@ -2682,9 +2840,52 @@ impl Coordinator {
             kind,
             role_name.as_deref(),
         );
+        if result.success && kind == SpawnKind::AutopilotNpc {
+            if let Err(e) = self.track_autopilot_vehicle(&name) {
+                return api::SpawnVehicleEntityResponse {
+                    result: Some(proto_err(format!(
+                        "Spawned '{name}' but cannot drive it ({}): {e:#}",
+                        autopilot::BEHAVIOR
+                    ))),
+                };
+            }
+        }
         api::SpawnVehicleEntityResponse {
             result: Some(result),
         }
+    }
+
+    /// Start tracking a freshly spawned `simulator_autopilot` vehicle. It stays parked
+    /// until SSv2's NPC logic starts (see `drive_autopilot`).
+    fn track_autopilot_vehicle(&mut self, name: &str) -> Result<()> {
+        let actor_id = self
+            .entities
+            .get(name)
+            .map(|e| e.carla_actor_id)
+            .ok_or_else(|| eyre::eyre!("not registered after its spawn"))?;
+        let actor = self
+            .world
+            .actors()
+            .wrap_err("get actors")?
+            .find(actor_id)
+            .wrap_err("find actor")?
+            .ok_or_else(|| eyre::eyre!("actor {actor_id} not found"))?;
+        let carla::client::ActorKind::Vehicle(vehicle) = actor.into_kinds() else {
+            eyre::bail!("actor {actor_id} is not a vehicle");
+        };
+        self.autopilot.insert(
+            name.to_string(),
+            AutopilotVehicle {
+                vehicle,
+                engaged: false,
+                parked: false,
+                target_speed: None,
+                route: None,
+                path_pending: false,
+                approach_cruise: None,
+            },
+        );
+        Ok(())
     }
 
     pub fn spawn_pedestrian_entity(
@@ -2759,6 +2960,17 @@ impl Coordinator {
             self.entities.get(name).map(|e| e.entity_type),
             Some(EntityType::Ego)
         );
+
+        // Traffic Manager lets go of a simulator-driven vehicle before it is destroyed.
+        if let Some(ap) = self.autopilot.remove(name) {
+            if ap.engaged && !ap.parked && !self.carla_unreachable {
+                if let Some(tm) = self.traffic_manager.as_mut() {
+                    if let Err(e) = tm.unregister_vehicles(std::slice::from_ref(&ap.vehicle)) {
+                        tracing::warn!("Could not release '{name}' from Traffic Manager: {e}");
+                    }
+                }
+            }
+        }
 
         if self.carla_unreachable {
             // Every RPC below would wait out the client timeout (gap 10). The actor stays in
@@ -2872,6 +3084,7 @@ impl Coordinator {
         // server times out rather than refusing). The rest of the batch fails at once and
         // SSv2 ends the scenario on the failed frame (roadmap 016, gap 9).
         let mut carla_unreachable = self.carla_unreachable;
+        let mut autopilot_failures: Vec<String> = Vec::new();
 
         for entity_status in &req.status {
             let name = &entity_status.name;
@@ -2889,8 +3102,19 @@ impl Coordinator {
                 continue;
             };
             let is_ego = entity_type == EntityType::Ego;
+            let simulator_driven = self.autopilot.contains_key(name);
 
-            if is_ego && !req.overwrite_ego_status {
+            if simulator_driven {
+                // CARLA drives it: no teleport, the pose goes the other way (like the ego's).
+                if carla_unreachable {
+                    autopilot_failures.push(format!("{name}: skipped, CARLA unreachable"));
+                } else if let Err(e) = self.drive_autopilot(name, req.npc_logic_started) {
+                    tracing::warn!("Simulator autopilot for '{name}': {e:#}");
+                    autopilot_failures.push(format!("{name}: {e:#}"));
+                }
+            }
+
+            if (is_ego && !req.overwrite_ego_status) || simulator_driven {
                 // Read ego pose from CARLA physics
                 match self.read_actor_state(actor_id, origin_offset) {
                     Some((pose, action_status)) => {
@@ -2926,9 +3150,10 @@ impl Coordinator {
                         teleport_failures.push(format!("{name}: skipped, CARLA unreachable"));
                     } else if let Err(e) = {
                         let started = std::time::Instant::now();
-                        self.set_actor_transform(actor_id, &transform).inspect_err(|_| {
-                            carla_unreachable = started.elapsed() > SLOW_FAILURE;
-                        })
+                        self.set_actor_transform(actor_id, &transform)
+                            .inspect_err(|_| {
+                                carla_unreachable = started.elapsed() > SLOW_FAILURE;
+                            })
                     } {
                         // A failed teleport used to warn and still report success, so SSv2
                         // went on believing the NPC had moved -- the same silent divergence
@@ -2952,12 +3177,444 @@ impl Coordinator {
             self.carla_unreachable = true;
             tracing::warn!("A teleport timed out; CARLA treated as unreachable");
         }
-        let result = entity_status_result(&unknown, &teleport_failures);
+        let mut result = entity_status_result(&unknown, &teleport_failures);
+        if !autopilot_failures.is_empty() {
+            let earlier = if result.success {
+                String::from("UpdateEntityStatus: ")
+            } else {
+                format!("{}; ", result.description)
+            };
+            result = proto_err(format!(
+                "{earlier}the simulator autopilot failed for {}",
+                autopilot_failures.join("; ")
+            ));
+        }
 
         api::UpdateEntityStatusResponse {
             result: Some(result),
             status: updated,
         }
+    }
+
+    // --- Simulator-driven vehicles (simulator_autopilot) ------------------------------
+
+    /// The Traffic Manager, created on first use: synchronous whenever the world is, with
+    /// the configured seed, hybrid physics off (every vehicle simulated in full).
+    fn traffic_manager(&mut self) -> Result<&mut carla::traffic_manager::TrafficManager> {
+        if self.traffic_manager.is_none() {
+            let port = self.config.traffic_manager.port;
+            let seed = self.config.traffic_manager.seed;
+            let mut tm = self
+                .client
+                .instance_tm(port)
+                .wrap_err_with(|| format!("start Traffic Manager on port {port}"))?;
+            tm.set_synchronous_mode(self.sync_mode_enabled)
+                .wrap_err("Traffic Manager synchronous mode")?;
+            tm.set_hybrid_physics_mode(false)
+                .wrap_err("Traffic Manager hybrid physics")?;
+            tm.set_random_device_seed(seed)
+                .wrap_err("Traffic Manager seed")?;
+            tracing::info!(
+                "Traffic Manager on port {port}: synchronous={}, seed={seed}",
+                self.sync_mode_enabled
+            );
+            self.traffic_manager = Some(tm);
+            // Starting a Traffic Manager resets every light group to its own cycle (one
+            // green per junction, measured on 0.9.16: 24 of Town01's 36 lights RED after
+            // the first simulator_autopilot spawn). Put back what this run holds: GREEN for
+            // every mapped light, then whatever the scenario commanded.
+            self.set_mapped_lights_green();
+            let commanded: Vec<_> = self
+                .commanded_lights
+                .iter()
+                .map(|(od, state)| (od.clone(), state.clone()))
+                .collect();
+            for (od, state) in commanded {
+                if let Err(e) = self.set_signal_state(&od, state) {
+                    tracing::warn!("Could not re-apply the commanded state of light {od}: {e:#}");
+                }
+            }
+        }
+        Ok(self.traffic_manager.as_mut().expect("set above"))
+    }
+
+    /// Build the loaded town's lane graph if it is not built yet.
+    fn ensure_road_graph(&mut self) -> Result<()> {
+        if self.road_graph.is_some() {
+            return Ok(());
+        }
+        let started = Instant::now();
+        let map = self.world.map().wrap_err("get map")?;
+        let mut segments = Vec::new();
+        for (entry, exit) in map.topology().wrap_err("map topology")? {
+            let mut points = vec![point_of(&entry.transform().location)];
+            match entry.next_until_lane_end(LANE_SAMPLE_M) {
+                Ok(list) => points.extend(list.iter().map(|wp| point_of(&wp.transform().location))),
+                Err(e) => {
+                    tracing::debug!("Lane graph: could not sample a lane ({e}); using its ends")
+                }
+            }
+            let end = point_of(&exit.transform().location);
+            if points
+                .last()
+                .is_none_or(|p| (p[0] - end[0]).hypot(p[1] - end[1]) > 0.1)
+            {
+                points.push(end);
+            }
+            segments.push(autopilot::Segment {
+                key: lane_key(&entry),
+                is_junction: entry.is_junction(),
+                points,
+            });
+        }
+        let graph = autopilot::RoadGraph::new(segments);
+        if graph.is_empty() {
+            eyre::bail!("the map has no lane topology");
+        }
+        tracing::info!(
+            "Lane graph for {}: {} segments, built in {} ms",
+            map.name(),
+            graph.len(),
+            started.elapsed().as_millis()
+        );
+        self.road_graph = Some((map, graph));
+        Ok(())
+    }
+
+    /// Where a CARLA location lies on the lane graph (its driving lane, as `waypoint_at`
+    /// projects it).
+    fn locate_on_road(&self, location: &Location) -> Option<autopilot::OnRoad> {
+        let (map, graph) = self.road_graph.as_ref()?;
+        let waypoint = map.waypoint_at(location).ok()??;
+        graph.locate(lane_key(&waypoint), &point_of(location))
+    }
+
+    /// Plan the lane route from `from` through `waypoints` (the last is the goal), and the
+    /// path Traffic Manager is to follow for it.
+    fn plan_autopilot_route(
+        &mut self,
+        from: &Location,
+        waypoints: &[Location],
+    ) -> Result<(autopilot::RouteProgress, Vec<autopilot::Point>)> {
+        self.ensure_road_graph()?;
+        let mut at = self.locate_on_road(from).ok_or_else(|| {
+            eyre::eyre!(
+                "the vehicle at CARLA({:.1}, {:.1}) is not on a driving lane",
+                from.x,
+                from.y
+            )
+        })?;
+        let mut route: Vec<usize> = Vec::new();
+        let mut path = Vec::new();
+        let mut goal_s = 0.0;
+        for (i, waypoint) in waypoints.iter().enumerate() {
+            let to = self.locate_on_road(waypoint).ok_or_else(|| {
+                eyre::eyre!(
+                    "waypoint {i} at CARLA({:.1}, {:.1}) is not on a driving lane",
+                    waypoint.x,
+                    waypoint.y
+                )
+            })?;
+            let graph = &self.road_graph.as_ref().expect("built above").1;
+            let leg = graph.plan(at, to).ok_or_else(|| {
+                eyre::eyre!(
+                    "no lane route reaches waypoint {i} at CARLA({:.1}, {:.1}): the lanes do \
+                     not connect (a goal on another lane of the same road would need a lane \
+                     change, which is not planned)",
+                    waypoint.x,
+                    waypoint.y
+                )
+            })?;
+            path.extend(graph.tm_path(&leg, point_of(waypoint)));
+            let skip = usize::from(route.last() == leg.first());
+            route.extend_from_slice(&leg[skip..]);
+            at = to;
+            goal_s = to.s;
+        }
+        Ok((autopilot::RouteProgress::new(route, goal_s), path))
+    }
+
+    /// Hand a vehicle to Traffic Manager, with its target speed and route.
+    fn engage_autopilot(&mut self, name: &str, ap: &mut AutopilotVehicle) -> Result<()> {
+        self.traffic_manager()?
+            .register_vehicles(std::slice::from_ref(&ap.vehicle))
+            .wrap_err("register with Traffic Manager")?;
+        ap.engaged = true;
+        ap.parked = false;
+        // Traffic Manager launches from the hand brake with a jolt CARLA reports as up to
+        // 15.5 m/s^2 for a frame, decaying to TM's steady ~5.2 m/s^2 within a second
+        // (measured, Town01, tesla.model3). Like the spawn's settle, it is not driving
+        // behaviour; without this SSv2's performance check ends the scenario on it.
+        self.settle_frames
+            .insert(ap.vehicle.id(), ENGAGE_SETTLE_FRAMES);
+        self.apply_autopilot_settings(ap)?;
+        tracing::info!(
+            "'{name}' handed to Traffic Manager (target speed {}, {})",
+            ap.target_speed
+                .map_or("TM's".to_string(), |v| format!("{v:.2} m/s")),
+            match &ap.route {
+                Some((progress, path)) => format!(
+                    "route of {} lane segment(s), {} path point(s)",
+                    progress.route.len(),
+                    path.len()
+                ),
+                None => "no goal: roaming".to_string(),
+            }
+        );
+        Ok(())
+    }
+
+    /// Give Traffic Manager a registered vehicle's speed and, if new, its path.
+    fn apply_autopilot_settings(&mut self, ap: &mut AutopilotVehicle) -> Result<()> {
+        let tm = self.traffic_manager()?;
+        match ap.target_speed {
+            Some(v) => tm
+                .set_desired_speed(&ap.vehicle, autopilot::mps_to_kmh(v))
+                .wrap_err("set desired speed")?,
+            // Back to TM's own choice, the speed limit (this clears a desired speed).
+            None => tm
+                .set_percentage_speed_difference(&ap.vehicle, 0.0)
+                .wrap_err("reset speed")?,
+        }
+        if ap.path_pending {
+            match &ap.route {
+                Some((_, path)) => {
+                    let points: Vec<PathPoint> =
+                        path.iter().map(|p| PathPoint(location_of(p))).collect();
+                    // A lane change would leave the planned lanes.
+                    tm.set_auto_lane_change(&ap.vehicle, false)
+                        .wrap_err("disable lane changes")?;
+                    tm.set_custom_path(&ap.vehicle, &points, true)
+                        .wrap_err("set path")?;
+                }
+                None => {
+                    tm.remove_upload_path(ap.vehicle.id(), true)
+                        .wrap_err("remove path")?;
+                    tm.set_auto_lane_change(&ap.vehicle, true)
+                        .wrap_err("enable lane changes")?;
+                }
+            }
+            ap.path_pending = false;
+        }
+        ap.approach_cruise = None;
+        Ok(())
+    }
+
+    /// Stop a vehicle at its goal: Traffic Manager lets go (it would roam on past the end
+    /// of its path), and the brakes hold it until a new goal.
+    fn park_autopilot(&mut self, ap: &mut AutopilotVehicle) -> Result<()> {
+        if let Some(tm) = self.traffic_manager.as_mut() {
+            tm.unregister_vehicles(std::slice::from_ref(&ap.vehicle))
+                .wrap_err("release from Traffic Manager")?;
+        }
+        ap.vehicle
+            .apply_control(&PARKED_CONTROL)
+            .wrap_err("brake")?;
+        ap.parked = true;
+        Ok(())
+    }
+
+    /// One frame of a simulator-driven vehicle: hand it to Traffic Manager when SSv2's NPC
+    /// logic starts, slow it into its goal, park it there.
+    fn drive_autopilot(&mut self, name: &str, npc_logic_started: bool) -> Result<()> {
+        let Some(mut ap) = self.autopilot.remove(name) else {
+            return Ok(());
+        };
+        let outcome = self.drive_autopilot_vehicle(name, &mut ap, npc_logic_started);
+        self.autopilot.insert(name.to_string(), ap);
+        outcome
+    }
+
+    fn drive_autopilot_vehicle(
+        &mut self,
+        name: &str,
+        ap: &mut AutopilotVehicle,
+        npc_logic_started: bool,
+    ) -> Result<()> {
+        if !ap.engaged {
+            if npc_logic_started {
+                self.engage_autopilot(name, ap)?;
+            }
+            return Ok(());
+        }
+        if ap.parked {
+            return Ok(());
+        }
+        let location = ap.vehicle.location().wrap_err("read location")?;
+        let at = self.locate_on_road(&location);
+        let remaining = ap
+            .route
+            .as_mut()
+            .and_then(|(progress, _)| progress.observe(at));
+        tracing::debug!(
+            "'{name}' at CARLA({:.1}, {:.1}) on {at:?}, route {:?}, remaining {remaining:?}",
+            location.x,
+            location.y,
+            ap.route
+                .as_ref()
+                .map(|(p, _)| (&p.route, p.reached, p.goal_s))
+        );
+        let Some(remaining) = remaining else {
+            return Ok(());
+        };
+        let speed = ap
+            .vehicle
+            .velocity()
+            .map(|v| ((v.x * v.x + v.y * v.y) as f64).sqrt())
+            .unwrap_or(0.0);
+        if remaining <= autopilot::ARRIVE_DISTANCE {
+            // Let Traffic Manager bring it to rest first: setting the hand brake at the
+            // approach's 1 m/s stops it in one frame (measured -8 m/s^2 reported), more
+            // than a scenario's declared deceleration may allow.
+            if speed > autopilot::PARK_SPEED {
+                self.traffic_manager()?
+                    .set_desired_speed(&ap.vehicle, 0.0)
+                    .wrap_err("stop at the goal")?;
+                return Ok(());
+            }
+            self.park_autopilot(ap)?;
+            tracing::info!(
+                "'{name}' reached its goal ({:.2} m {} it along the lane); parked until a new goal",
+                remaining.abs(),
+                if remaining >= 0.0 { "short of" } else { "past" }
+            );
+            return Ok(());
+        }
+        let reference = ap
+            .approach_cruise
+            .or(ap.target_speed)
+            .unwrap_or(speed)
+            .max(1.0);
+        if remaining < autopilot::approach_window(reference) {
+            let cruise = *ap.approach_cruise.get_or_insert(reference);
+            let v = autopilot::approach_speed(remaining, cruise);
+            self.traffic_manager()?
+                .set_desired_speed(&ap.vehicle, autopilot::mps_to_kmh(v))
+                .wrap_err("set approach speed")?;
+        }
+        Ok(())
+    }
+
+    /// Release every simulator-driven vehicle from Traffic Manager (before their actors are
+    /// destroyed) and forget them.
+    fn release_autopilot_vehicles(&mut self) {
+        let vehicles: Vec<AutopilotVehicle> = self.autopilot.drain().map(|(_, ap)| ap).collect();
+        if self.carla_unreachable {
+            return;
+        }
+        let registered: Vec<carla::client::Vehicle> = vehicles
+            .into_iter()
+            .filter(|ap| ap.engaged && !ap.parked)
+            .map(|ap| ap.vehicle)
+            .collect();
+        if registered.is_empty() {
+            return;
+        }
+        if let Some(tm) = self.traffic_manager.as_mut() {
+            if let Err(e) = tm.unregister_vehicles(&registered) {
+                tracing::warn!(
+                    "Could not release {} vehicle(s) from Traffic Manager: {e}",
+                    registered.len()
+                );
+            }
+        }
+    }
+
+    /// The world changed (another town, or a new connection): the lane graph is stale.
+    fn forget_road_graph(&mut self) {
+        self.road_graph = None;
+    }
+
+    /// Point a simulator-driven entity at a new goal, route or target speed
+    /// (`UpdateEntityGoal`, sent by the SSv2 fork for `simulator_autopilot` entities).
+    pub fn update_entity_goal(
+        &mut self,
+        req: api::UpdateEntityGoalRequest,
+    ) -> api::UpdateEntityGoalResponse {
+        let name = req.name.clone();
+        let Some(mut ap) = self.autopilot.remove(&name) else {
+            let why = if self.entities.get(&name).is_some() {
+                format!(
+                    "'{name}' is not driven by the simulator (its controller is not {})",
+                    autopilot::BEHAVIOR
+                )
+            } else {
+                format!("Entity '{name}' not found")
+            };
+            return api::UpdateEntityGoalResponse {
+                result: Some(proto_err(why)),
+            };
+        };
+        let outcome = self.update_autopilot_goal(&name, &mut ap, &req);
+        self.autopilot.insert(name.clone(), ap);
+        api::UpdateEntityGoalResponse {
+            result: Some(match outcome {
+                Ok(()) => proto_ok(),
+                Err(e) => proto_err(format!("UpdateEntityGoal for '{name}': {e:#}")),
+            }),
+        }
+    }
+
+    fn update_autopilot_goal(
+        &mut self,
+        name: &str,
+        ap: &mut AutopilotVehicle,
+        req: &api::UpdateEntityGoalRequest,
+    ) -> Result<()> {
+        if self.carla_unreachable {
+            eyre::bail!("CARLA unreachable");
+        }
+        let origin_offset = self
+            .entities
+            .get(name)
+            .map(|e| e.origin_offset)
+            .unwrap_or_default();
+        let mut changed = false;
+        if req.has_target_speed {
+            if !(req.target_speed.is_finite() && req.target_speed >= 0.0) {
+                eyre::bail!("target speed {} m/s is not a speed", req.target_speed);
+            }
+            ap.target_speed = Some(req.target_speed);
+            changed = true;
+            tracing::info!("'{name}': target speed {:.2} m/s", req.target_speed);
+        }
+        if !req.waypoints.is_empty() {
+            // Where the CARLA actor's origin is when the entity stands on each waypoint.
+            let waypoints: Vec<Location> = req
+                .waypoints
+                .iter()
+                .map(|pose| ros_pose_to_carla_transform(pose, origin_offset).location)
+                .collect();
+            let from = ap.vehicle.location().wrap_err("read location")?;
+            let (progress, path) = self.plan_autopilot_route(&from, &waypoints)?;
+            let goal = waypoints.last().expect("non-empty");
+            tracing::info!(
+                "'{name}': goal CARLA({:.1}, {:.1}) via {} waypoint(s): {} lane segment(s), TM \
+                 path of {} point(s)",
+                goal.x,
+                goal.y,
+                waypoints.len() - 1,
+                progress.route.len(),
+                path.len()
+            );
+            ap.route = Some((progress, path));
+            ap.path_pending = true;
+            changed = true;
+        } else if req.clear {
+            ap.route = None;
+            ap.path_pending = true;
+            changed = true;
+            tracing::info!("'{name}': route cleared; roaming");
+        }
+        // Not yet handed over: kept for when SSv2's NPC logic starts.
+        if changed && ap.engaged {
+            if ap.parked {
+                self.engage_autopilot(name, ap)?;
+            } else {
+                self.apply_autopilot_settings(ap)?;
+            }
+        }
+        Ok(())
     }
 
     pub fn attach_lidar_sensor(
@@ -3036,8 +3693,11 @@ impl Coordinator {
                 continue;
             };
 
-            match self.set_signal_state(&opendrive_id, state) {
-                Ok(()) => applied += 1,
+            match self.set_signal_state(&opendrive_id, state.clone()) {
+                Ok(()) => {
+                    applied += 1;
+                    self.commanded_lights.insert(opendrive_id, state);
+                }
                 Err(e) => failures.push(format!("signal {} ({opendrive_id}): {e}", signal.id)),
             }
         }
@@ -3120,6 +3780,11 @@ impl Coordinator {
                     tracing::warn!("Failed to restore async mode: {e}");
                 } else {
                     self.sync_mode_enabled = false;
+                    if let Some(tm) = self.traffic_manager.as_mut() {
+                        if let Err(e) = tm.set_synchronous_mode(false) {
+                            tracing::warn!("Traffic Manager asynchronous mode: {e}");
+                        }
+                    }
                     tracing::info!("Restored CARLA to async mode");
                 }
             }
@@ -3348,7 +4013,10 @@ impl Coordinator {
         // Longitudinal acceleration, then its rate of change. CARLA reports an acceleration
         // vector but no jerk, so it is differenced across frames -- see
         // `longitudinal_acceleration` for why the heading projection is used.
-        let yaw_rad = (t.rotation.yaw as f64).to_radians();
+        // `ax`/`ay` are ROS-frame here, so the heading must be too: CARLA's yaw negated.
+        // (CARLA's yaw was passed before, which flipped the sign on any road not aligned
+        // with x -- a vehicle speeding up northbound read as braking at -15 m/s^2.)
+        let yaw_rad = -(t.rotation.yaw as f64).to_radians();
         let longitudinal = longitudinal_acceleration(ax, ay, yaw_rad);
         let linear_jerk = self.differentiate_acceleration(actor_id, longitudinal);
 
@@ -3370,6 +4038,15 @@ impl Coordinator {
             }
             _ => (ax, ay, az, linear_jerk),
         };
+
+        // SSv2's twist and accel are in the entity's own frame (linear.x = forward), as its
+        // behaviors write them and SpeedCondition reads them; CARLA's are world-frame.
+        // Reporting world-frame values made a vehicle driving along -x read as reversing,
+        // and one driving along y as standing still (measured: SpeedCondition < 0.05 m/s
+        // held for a simulator_autopilot vehicle moving at 2.8 m/s northbound).
+        let (vx, vy) = world_to_body(vx, vy, yaw_rad);
+        let (wx, wy) = world_to_body(wx, wy, yaw_rad);
+        let (ax, ay) = world_to_body(ax, ay, yaw_rad);
 
         let action_status = traffic_simulator_msgs::ActionStatus {
             // Left empty deliberately. `current_action` names the behaviour-plugin action
@@ -3635,6 +4312,10 @@ mod tests {
             "a background AV is driven by its own Autoware through CARLA physics"
         );
         assert!(!SpawnKind::Npc.physics_driven());
+        assert!(
+            SpawnKind::AutopilotNpc.physics_driven(),
+            "a simulator_autopilot vehicle is driven by Traffic Manager through CARLA physics"
+        );
         assert!(!SpawnKind::Pedestrian.physics_driven());
         assert!(!SpawnKind::MiscObject.physics_driven());
     }
@@ -3652,9 +4333,27 @@ mod tests {
     }
 
     #[test]
+    fn the_behavior_decides_who_drives_a_vehicle() {
+        assert_eq!(vehicle_spawn_kind(true, "Autoware"), SpawnKind::Ego);
+        assert_eq!(vehicle_spawn_kind(false, ""), SpawnKind::Npc);
+        assert_eq!(
+            vehicle_spawn_kind(false, "behavior_tree_plugin/VehicleBehaviorTree"),
+            SpawnKind::Npc
+        );
+        assert_eq!(
+            vehicle_spawn_kind(false, "simulator_autopilot"),
+            SpawnKind::AutopilotNpc
+        );
+    }
+
+    #[test]
     fn each_kind_maps_to_its_entity_type() {
         assert_eq!(SpawnKind::Ego.entity_type(), Some(EntityType::Ego));
         assert_eq!(SpawnKind::Npc.entity_type(), Some(EntityType::Vehicle));
+        assert_eq!(
+            SpawnKind::AutopilotNpc.entity_type(),
+            Some(EntityType::Vehicle)
+        );
         assert_eq!(
             SpawnKind::Pedestrian.entity_type(),
             Some(EntityType::Pedestrian)
@@ -3762,6 +4461,21 @@ mod tests {
 
     /// Jerk needs a signed scalar, so acceleration is projected onto the heading. The
     /// magnitude would report braking and accelerating identically.
+    #[test]
+    fn world_vectors_are_reported_in_the_body_frame() {
+        use std::f64::consts::{FRAC_PI_2, PI};
+        let close =
+            |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+        // Heading +x: unchanged.
+        assert!(close(world_to_body(3.0, 1.0, 0.0), (3.0, 1.0)));
+        // Heading -x at 3 m/s: forward, not reversing.
+        assert!(close(world_to_body(-3.0, 0.0, PI), (3.0, 0.0)));
+        // Heading +y at 2.8 m/s: forward, not standing still.
+        assert!(close(world_to_body(0.0, 2.8, FRAC_PI_2), (2.8, 0.0)));
+        // A world +x component seen heading +y is to the right (negative y).
+        assert!(close(world_to_body(1.0, 0.0, FRAC_PI_2), (0.0, -1.0)));
+    }
+
     #[test]
     fn longitudinal_acceleration_keeps_its_sign() {
         // Heading +x: accelerating forward is positive, braking negative.

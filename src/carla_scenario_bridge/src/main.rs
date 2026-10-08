@@ -1,3 +1,4 @@
+mod autopilot;
 mod clock_store;
 mod collision_monitor;
 mod config;

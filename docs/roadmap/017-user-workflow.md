@@ -131,13 +131,33 @@ swap audit).
       after 0 ms", success)
 
 ### 6. Background vehicles driven by the simulator
-- [ ] Check carla-rust's Traffic Manager bindings (fall back to a server-side alternative if
-      absent)
-- [ ] `simulator_autopilot` controller: csb turns physics on, hands the actor to Traffic
+- [x] Check carla-rust's Traffic Manager bindings (fall back to a server-side alternative if
+      absent): present (`Client::instance_tm`, register/unregister, `set_custom_path`,
+      `set_desired_speed`, sync mode, seed). Two catches, worked around in csb rather than
+      patched: `set_custom_path` takes `AsRef<Location>`, which `Location` does not
+      implement (a newtype), and `set_desired_speed` is km/h, not the m/s its doc says.
+      **LibCarla ticks a synchronous Traffic Manager inside `world.tick()`** (verified live,
+      0.9.16: a registered vehicle drives on world ticks alone), so csb stays the only ticker
+- [x] `simulator_autopilot` controller: csb turns physics on, hands the actor to Traffic
       Manager, returns CARLA's pose in `UpdateEntityStatus`; SSv2 behavior `do_nothing`
-      (verify the property name)
-- [ ] Goal-driven: `AcquirePositionAction` → lanelet route planned in csb → TM path;
-      `SpeedAction` → `set_desired_speed`; deterministic with a fixed TM seed in sync mode
+      (verify the property name). SSv2 sent no controller to the simulator, so the fork adds
+      `SpawnVehicleEntityRequest.behavior` and a `SimulatorDrivenVehicleEntity` (do_nothing
+      plugin, no behavior update); csb hands over at `npc_logic_started`, reads back pose,
+      twist (now entity-frame, for the ego too) and acceleration. Found on the way: starting
+      a TM resets all light groups (csb re-applies GREEN + commanded states), and TM's launch
+      jolt (15.5 m/s² for a frame) gets a 1 s settle
+- [x] Goal-driven: `AcquirePositionAction` → lanelet route planned in csb → TM path;
+      `SpeedAction` → `set_desired_speed`; deterministic with a fixed TM seed in sync mode.
+      As built: new `UpdateEntityGoal` request (fork); the route is planned on CARLA's lane
+      topology, not Lanelet2 (TM drives CARLA's lanes), and TM gets a point past each
+      junction plus the goal -- TM alone took a wrong branch on 1 of 4 sparse paths and on a
+      dense one; csb stops the vehicle at the goal (TM roams past a path's end). Lane changes,
+      relative speeds, trajectories and mid-run controller switches are scenario errors.
+      Live (2026-10-08): `town01_simulator_autopilot` (ego + SSv2 NPC + TM NPC) passed both
+      runs on the final build, after the fixes above; the TM NPC drove 5 lane segments / 2 junctions to its goal and parked
+      0.33 m short of it 617 frames after the hand-over in **both** of the last two runs
+      (seed 2017); `town01_engage_state` and `bench/town01_npc_10` still pass (npc_10:
+      processing p50 0.60 ms, tick p50 3.75 ms, 10 entities)
 - [ ] Background AVs move from `bridge_config.yaml` to scenario entities; the `agent`
       controller addresses a registered agent by entity name
 
@@ -153,8 +173,9 @@ swap audit).
 - [ ] Vehicle side in a **different** ROS domain from SSv2, started **after** the scenario
       launch: the scenario waits (`UNAVAILABLE`), then engages and passes
 - [ ] `ego.currentState` conditions (DRIVING, ARRIVED_GOAL) pass through the relay
-- [ ] A background vehicle on `simulator_autopilot` reaches its goal; one on the default
+- [x] A background vehicle on `simulator_autopilot` reaches its goal; one on the default
       controller follows its SSv2 route; both in one scenario with the ego
+      (`scenarios/town01_simulator_autopilot.xosc`, step 6)
 - [ ] RTC scenario on Autoware passes; on an agent without RTC it fails with `UNSUPPORTED`
 
 ## Acceptance

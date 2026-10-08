@@ -143,6 +143,15 @@ message SpawnVehicleEntityRequest {
   string asset_key = 3;                                    // Asset key of the entity simulator entity
   geometry_msgs.Pose pose = 4;                             // Entity initial pose
   double initial_speed = 5;                                // Entity initial speed
+  /**
+   * The entity's behavior: its OpenSCENARIO controller name, or the traffic_simulator plugin
+   * it runs ("Autoware" for the ego, empty for the default behavior). "simulator_autopilot"
+   * asks the simulator to drive the entity with its own driver: traffic_simulator runs no
+   * behavior for it, adopts the pose the simulator returns in UpdateEntityStatus, and forwards
+   * the entity's goals and target speed with UpdateEntityGoal. A simulator that cannot drive
+   * an entity itself must refuse the spawn.
+   */
+  string behavior = 6;
 }
 
 /**
@@ -356,6 +365,30 @@ message UpdateStepTimeResponse {
 }
 
 /**
+ * Requests a new goal, route or target speed for an entity the simulator drives itself
+ * (spawned with behavior "simulator_autopilot"). Sent by traffic_simulator before the
+ * frame's UpdateEntityStatus, once per scenario request.
+ *  - waypoints non-empty: replace the entity's route; the last waypoint is the goal.
+ *  - clear = true (waypoints empty): drop the route; the simulator's driver roams.
+ *  - has_target_speed: the absolute target speed [m/s]; otherwise the speed is unchanged.
+ * A simulator that drives no entity itself may answer success and ignore it.
+ **/
+message UpdateEntityGoalRequest {
+  string name = 1;                             // Entity name.
+  repeated geometry_msgs.Pose waypoints = 2;   // Route in the map frame; last = goal.
+  bool clear = 3;                              // Drop the current route.
+  double target_speed = 4;                     // Absolute target speed [m/s].
+  bool has_target_speed = 5;                   // target_speed is set.
+}
+
+/**
+ * Response of updating an entity's goal.
+ **/
+message UpdateEntityGoalResponse {
+  Result result = 1; // Result of [UpdateEntityGoalRequest](#UpdateEntityGoalRequest)
+}
+
+/**
  * Universal message for Request
  **/
 message SimulationRequest {
@@ -374,6 +407,7 @@ message SimulationRequest {
     AttachPseudoTrafficLightDetectorRequest attach_pseudo_traffic_light_detector = 13;
     UpdateStepTimeRequest update_step_time = 14;
     AttachImuSensorRequest attach_imu_sensor = 15;
+    UpdateEntityGoalRequest update_entity_goal = 16;
   }
 }
 
@@ -397,5 +431,6 @@ message SimulationResponse {
     AttachPseudoTrafficLightDetectorResponse attach_pseudo_traffic_light_detector = 13;
     UpdateStepTimeResponse update_step_time = 14;
     AttachImuSensorResponse attach_imu_sensor = 15;
+    UpdateEntityGoalResponse update_entity_goal = 16;
   }
 }

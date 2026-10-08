@@ -42,6 +42,70 @@ Driven by SSv2 by default: its behavior tree computes each pose and the bridge p
 CARLA actor there every frame, physics off -- exact and repeatable, but never pushed by a
 collision (see "Collisions" below). Every SSv2 action works on them.
 
+## Vehicles the simulator drives: `simulator_autopilot`
+
+Name a vehicle's controller `simulator_autopilot` and CARLA drives it instead of SSv2:
+Traffic Manager steers it with physics on, it brakes for vehicles ahead and for signals, and
+it can be pushed in a collision. The file stays standard OpenSCENARIO -- the controller name
+is the only marker:
+
+```xml
+<ScenarioObject name="npc_autopilot">
+  <Vehicle name="vehicle.tesla.model3" vehicleCategory="car"> ... </Vehicle>
+  <ObjectController>
+    <Controller name="simulator_autopilot"><Properties/></Controller>
+  </ObjectController>
+</ScenarioObject>
+...
+<Private entityRef="npc_autopilot">
+  <PrivateAction><TeleportAction> ...start... </TeleportAction></PrivateAction>
+  <PrivateAction><LongitudinalAction><SpeedAction>
+    <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time"/>
+    <SpeedActionTarget><AbsoluteTargetSpeed value="8.0"/></SpeedActionTarget>
+  </SpeedAction></LongitudinalAction></PrivateAction>
+  <PrivateAction><RoutingAction><AcquirePositionAction> ...goal... </AcquirePositionAction></RoutingAction></PrivateAction>
+</Private>
+```
+
+Example: `scenarios/town01_simulator_autopilot.xosc` (ego, an SSv2-driven NPC and a
+CARLA-driven NPC in one run).
+
+What happens:
+
+- **Start.** The vehicle is spawned with physics on and parked (hand brake) until SSv2
+  starts its NPC logic, like SSv2's own NPCs; then it is handed to Traffic Manager.
+- **Goal.** `AcquirePositionAction` (or `AssignRouteAction`: waypoints in order, the last is
+  the goal) goes to the bridge, which plans the lane route on CARLA's road topology and
+  gives Traffic Manager a point past every junction on it, then the goal. The vehicle stops
+  at the goal (≤ 0.5 m along its lane, decelerating at 1.5 m/s²) and stays parked until the
+  next goal. Without a goal it roams the town at Traffic Manager's choice.
+- **Speed.** An absolute `SpeedAction` target becomes Traffic Manager's desired speed. The
+  vehicle accelerates and brakes as its driver does, not with the action's dynamics; a
+  `step` SpeedAction completes at once as usual, others when the speed is reached.
+- **Pose.** SSv2 adopts the pose, velocity and acceleration CARLA reports every frame, so
+  `ReachPositionCondition`, `SpeedCondition`, distances and `CollisionCondition` see where
+  the vehicle really is. Declare a `Performance` that fits the driver: Traffic Manager
+  accelerates at about 5.2 m/s² from rest (the example declares 10).
+- **Repeatability.** Traffic Manager runs synchronously, ticked with the world, and is
+  reseeded at every scenario start (`traffic_manager.seed` in `bridge.yaml`): the same
+  scenario on the same CARLA drives the same way.
+
+Not supported -- each is an explicit scenario error, not a silent no-op:
+
+- `LaneChangeAction`, a relative `SpeedAction` (`RelativeTargetSpeed`), and
+  `FollowTrajectoryAction`: the driver decides lanes and speed profile.
+- Switching to or from `simulator_autopilot` with `AssignControllerAction` mid-run: the
+  simulator learns who drives an entity only at its spawn.
+- A goal the lane topology does not reach -- on another lane of the same road (that needs a
+  lane change, which the route does not plan) or behind a one-way end: the action fails with
+  the reason.
+- Pedestrians and misc objects: vehicles only.
+
+Limits worth knowing: a `TeleportAction` after the start is ignored (CARLA owns the pose);
+the route's lanes are followed with lane changes off, so a stopped vehicle ahead on a
+single-lane road holds it up; and with SSv2's own simulator (`simple_sensor_simulator`)
+the spawn is refused, since it has no driver of its own.
+
 ## Traffic lights: uncommanded means GREEN
 
 Applies to every scenario, managed ego or not (roadmap 015, "Signals from CARLA").

@@ -1,0 +1,379 @@
+<?xml version="1.0"?>
+<!--
+	Town01: three vehicles, three drivers, one scenario (roadmap 017 step 6).
+
+	  ego           Autoware (through the agent relay), goal by AcquirePositionAction, as in
+	                town01_ego_drive.xosc: westbound from x = 190.8 to x = 120.
+	  npc_route     the default controller: SSv2's behavior tree drives it 70 m along its lane
+	                (CARLA spawn point 22, heading north in ROS) and csb places it each frame.
+	  npc_autopilot controller simulator_autopilot: CARLA's Traffic Manager drives it with
+	                physics. Its AcquirePositionAction and SpeedAction go to the simulator
+	                (UpdateEntityGoal); csb plans the lane route (~200 m, two junctions, from
+	                CARLA spawn point 0) and stops it at the goal; SSv2 adopts CARLA's pose.
+
+	The three are on separate streets. Success when all three have reached their goals (each
+	ReachPositionCondition latches a parameter) and npc_autopilot stands still (SpeedCondition
+	on the speed CARLA reports: csb stops it at the goal); any collision between them, or
+	180 s, fails.
+	Starts are CARLA's own spawn points and goals are CARLA lane-centre waypoints, y flipped
+	into the ROS frame (yaw negated).
+-->
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-10-08T00:00:00+00:00" description="Town01: ego, an SSv2-driven NPC and a simulator-driven NPC" revMajor="1" revMinor="2" />
+	<ParameterDeclarations>
+		<ParameterDeclaration name="ego_arrived" parameterType="integer" value="0" />
+		<ParameterDeclaration name="npc_route_arrived" parameterType="integer" value="0" />
+		<ParameterDeclaration name="npc_autopilot_arrived" parameterType="integer" value="0" />
+	</ParameterDeclarations>
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
+	</RoadNetwork>
+	<Entities>
+		<ScenarioObject name="ego">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="Autoware">
+					<Properties>
+						<Property name="maxJerk" value="1.5" />
+						<Property name="minJerk" value="-1.5" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<ScenarioObject name="npc_route">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<ScenarioObject name="npc_autopilot">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="10.0" maxDeceleration="10.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="simulator_autopilot">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+	</Entities>
+	<Storyboard>
+		<Init>
+			<Actions>
+				<Private entityRef="ego">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="190.8" y="-130.1" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="120.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="npc_route">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="88.62" y="-226.91" z="0.3" h="-1.5708" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<LongitudinalAction>
+							<SpeedAction>
+								<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+								<SpeedActionTarget>
+									<AbsoluteTargetSpeed value="6.0" />
+								</SpeedActionTarget>
+							</SpeedAction>
+						</LongitudinalAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="88.45" y="-296.91" z="0.0" h="-1.5708" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="npc_autopilot">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="335.49" y="-273.74" z="0.3" h="-1.5708" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<LongitudinalAction>
+							<SpeedAction>
+								<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+								<SpeedActionTarget>
+									<AbsoluteTargetSpeed value="8.0" />
+								</SpeedActionTarget>
+							</SpeedAction>
+						</LongitudinalAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="396.32" y="-233.34" z="0.0" h="1.5708" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+			</Actions>
+		</Init>
+		<Story name="town01_simulator_autopilot">
+			<Act name="drive_act">
+				<ManeuverGroup maximumExecutionCount="1" name="judges">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="ego" />
+					</Actors>
+					<Maneuver name="end_conditions">
+						<Event name="ego_at_goal" priority="parallel">
+							<Action name="mark_ego_arrived">
+								<GlobalAction>
+									<ParameterAction parameterRef="ego_arrived">
+										<SetAction value="1" />
+									</ParameterAction>
+								</GlobalAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="ego_at_goal_reached" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="ego" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<ReachPositionCondition tolerance="5.0">
+													<Position>
+														<WorldPosition x="120.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
+													</Position>
+												</ReachPositionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="npc_route_at_goal" priority="parallel">
+							<Action name="mark_npc_route_arrived">
+								<GlobalAction>
+									<ParameterAction parameterRef="npc_route_arrived">
+										<SetAction value="1" />
+									</ParameterAction>
+								</GlobalAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="npc_route_at_goal_reached" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="npc_route" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<ReachPositionCondition tolerance="3.0">
+													<Position>
+														<WorldPosition x="88.45" y="-296.91" z="0.0" h="-1.5708" p="0" r="0" />
+													</Position>
+												</ReachPositionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="npc_autopilot_at_goal" priority="parallel">
+							<Action name="mark_npc_autopilot_arrived">
+								<GlobalAction>
+									<ParameterAction parameterRef="npc_autopilot_arrived">
+										<SetAction value="1" />
+									</ParameterAction>
+								</GlobalAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="npc_autopilot_at_goal_reached" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="npc_autopilot" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<ReachPositionCondition tolerance="3.0">
+													<Position>
+														<WorldPosition x="396.32" y="-233.34" z="0.0" h="1.5708" p="0" r="0" />
+													</Position>
+												</ReachPositionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="success" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="ego_arrived_set" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<ParameterCondition parameterRef="ego_arrived" value="1" rule="equalTo" />
+										</ByValueCondition>
+									</Condition>
+									<Condition name="npc_route_arrived_set" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<ParameterCondition parameterRef="npc_route_arrived" value="1" rule="equalTo" />
+										</ByValueCondition>
+									</Condition>
+									<Condition name="npc_autopilot_arrived_set" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<ParameterCondition parameterRef="npc_autopilot_arrived" value="1" rule="equalTo" />
+										</ByValueCondition>
+									</Condition>
+									<Condition name="npc_autopilot_stopped" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="npc_autopilot" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<SpeedCondition value="0.05" rule="lessThan" />
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="collision" priority="parallel">
+							<Action name="exit_failure_collision">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="collision_ego_npc_autopilot" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="ego" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<CollisionCondition>
+													<EntityRef entityRef="npc_autopilot" />
+												</CollisionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+								<ConditionGroup>
+									<Condition name="collision_ego_npc_route" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="ego" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<CollisionCondition>
+													<EntityRef entityRef="npc_route" />
+												</CollisionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+								<ConditionGroup>
+									<Condition name="collision_npc_route_npc_autopilot" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="npc_route" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<CollisionCondition>
+													<EntityRef entityRef="npc_autopilot" />
+												</CollisionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="timeout" priority="parallel">
+							<Action name="exit_failure">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="timeout_condition" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="180" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>

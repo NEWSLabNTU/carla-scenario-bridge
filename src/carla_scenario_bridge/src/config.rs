@@ -166,6 +166,28 @@ pub struct BackgroundAv {
     pub goal_pose: Option<PoseConfig>,
 }
 
+/// CARLA's Traffic Manager, which drives the entities whose controller is
+/// `simulator_autopilot` (see `autopilot`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TrafficManagerConfig {
+    /// TM port. csb runs the TM in its own process (LibCarla starts it on first use); a TM
+    /// another client already serves on this port is used instead.
+    pub port: u16,
+    /// Seed for TM's random choices (lane changes, roaming turns), set at every
+    /// Initialize, so a scenario's simulator-driven traffic repeats run to run.
+    pub seed: u64,
+}
+
+impl Default for TrafficManagerConfig {
+    fn default() -> Self {
+        Self {
+            port: 8000,
+            seed: 2017,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct BridgeConfig {
@@ -199,6 +221,8 @@ pub struct BridgeConfig {
     /// it hit (roadmap 014, gap 3). Diagnostic only: never changes SSv2's verdict. Unset
     /// means on -- read it through [`BridgeConfig::collision_monitor_enabled`].
     pub collision_monitor: Option<bool>,
+    /// Traffic Manager for simulator-driven entities.
+    pub traffic_manager: TrafficManagerConfig,
 }
 
 /// Off, because under a managed ego it cannot work -- see `warm_up_localization`.
