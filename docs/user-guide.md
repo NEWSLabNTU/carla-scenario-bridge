@@ -70,7 +70,10 @@ default (exact choreography). Name a vehicle's controller `simulator_autopilot` 
 Traffic Manager drives it with physics instead: give it a goal with `AcquirePositionAction`
 and a speed with an absolute `SpeedAction`, and it routes there and stops
 ([design/scenario-authoring.md](design/scenario-authoring.md#vehicles-the-simulator-drives-simulator_autopilot);
-example `scenarios/town01_simulator_autopilot.xosc`). Scenario files are never modified.
+example `scenarios/town01_simulator_autopilot.xosc`). Name it `agent` and an autopilot of its
+own drives it -- a second Autoware, say: start one more vehicle side for it with
+`entity:=<its name>` ([design/scenario-authoring.md](design/scenario-authoring.md#vehicles-an-autopilot-drives-agent);
+example `scenarios/town01_two_av.xosc`). Scenario files are never modified.
 
 ## 4. Run
 
@@ -88,6 +91,11 @@ ROS_DOMAIN_ID=9 play_launch launch csb_launch simulation.launch.xml \
 ROS_DOMAIN_ID=1 play_launch launch acb_launch carla_simulator.launch.xml \
     map_path:=<map dir> vehicle_name:=hero relay:=tcp://<simulation host>:5560 \
     [autoware_launch:=<your autoware.launch.xml>]
+
+# Terminal 3b -- one more vehicle side per entity whose controller is `agent`, e.g. bg_av_1
+ROS_DOMAIN_ID=2 play_launch launch acb_launch carla_simulator.launch.xml \
+    map_path:=<map dir> vehicle_name:=bg_av_1 entity:=bg_av_1 \
+    relay:=tcp://<simulation host>:5560
 
 # Terminal 4 -- one scenario, in the simulation side's domain; exits when it ends
 ROS_DOMAIN_ID=9 play_launch launch csb_launch scenario.launch.xml \

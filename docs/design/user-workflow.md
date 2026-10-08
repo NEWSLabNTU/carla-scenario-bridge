@@ -148,6 +148,33 @@ state, auto_mode, start_distance, finish_distance}`, only with the RTC capabilit
 `heartbeat`) and treats a peer silent for `PEER_TIMEOUT` = 3 s as gone. The relay then
 reports the entity `UNAVAILABLE`; the agent reconnects (backoff 1 → 5 s) and registers again.
 
+**Commanders** (added for the `agent` controller, roadmap 017 step 6). Besides agents, the
+relay accepts *commanders*: a client -- in practice a simulator adapter -- that commands the
+agent registered under an entity's name and reads its state. That is how a scenario reaches
+an agent-driven vehicle other than the ego, without the relay or the adapter learning
+anything about the other's side. Same transport, same `"v": 1`; an agent's messages are
+unchanged, and a `register` without `role` is an agent's, so existing agents need nothing.
+
+| type | direction | fields |
+|---|---|---|
+| `register` | commander → relay, first line | `role: "commander"`, `agent` (name, informational); no `entity` |
+| `registered` | relay → commander | `entity: ""` |
+| `command_for` | commander → relay | `id` (the commander's), `entity`, `command`, `args` (as in `command`), optional `timeout` (s, default 9, capped at 30) |
+| `query` | commander → relay | `id`, `entity` |
+| `reply` | relay → commander | `id`, `status`, `message`, `registered` (bool: an agent is registered as `entity`), `state` (that agent's latest, when it has one) |
+
+The relay forwards a `command_for` to the entity's agent as an ordinary `command` with an id
+of its own, and answers the commander with the agent's `reply` -- `status`, `message`, and the
+state that arrived with it (the ordering rule makes that the state the command produced). No
+agent: `FAILED`, `registered: false`. No answer within `timeout`: `FAILED`. A `query` is
+answered from memory at once: `OK` and the state, or `FAILED` and `registered: false`.
+Commanders exchange no heartbeats and are never timed out for silence (they are
+request/response clients; a closed socket ends them), own no entity, and cannot send agent
+messages (`state`, `reply`: `error`, closed). Requests on one connection are served
+concurrently; replies carry the commander's `id`. The relay keeps serving the concealer's ADAPI for its own
+`entity` (the ego) exactly as before; agents registered under other names are reachable only
+through commanders.
+
 **Relay mapping to the concealer** (`scenario_agent_relay/mapping.py`):
 
 | phase | localization | route | operation mode | concealer reads |
@@ -232,7 +259,7 @@ entity and changeable mid-run (`AssignControllerAction`):
 |---|---|---|
 | *(default)* | **SSv2 behavior tree**; the adapter places the actor kinematically each frame | scripted traffic, exact choreography; every SSv2 action; ~0.065 ms per NPC |
 | `simulator_autopilot` | **the simulator's own driver**: for CARLA, Traffic Manager with physics on. Goal-driven (`AcquirePositionAction` → a route csb plans on lanelet2, converted to a TM path) or roaming; speed via `set_desired_speed`. The adapter returns the simulator's pose and SSv2 adopts it (`api.cpp:113`: non-ego status is applied as returned); the entity's SSv2 behavior is `do_nothing` | ambient traffic with real dynamics |
-| `agent` | an agent registered under the entity's name (I3) -- e.g. a full Autoware | AV-vs-AV studies, at a full stack's cost |
+| `agent` | **an agent registered under the entity's name** (I3) -- e.g. a full Autoware on its own vehicle side. The adapter spawns the vehicle physics-on with the entity name as the simulator's vehicle name, forwards goals to the agent through the relay (as a commander), and returns the simulator's pose; SSv2's behavior is `do_nothing`, as for `simulator_autopilot` | AV-vs-AV studies, at a full stack's cost |
 
 The controller names are **simulator-neutral**: `simulator_autopilot` means "whatever the
 simulator drives with"; another adapter maps it to its own driver or rejects it.
@@ -299,6 +326,52 @@ csb (`autopilot.rs`, `coordinator.rs`):
 The lane graph is CARLA's OpenDRIVE topology, not the Lanelet2 map: Traffic Manager follows
 CARLA's lanes, and routing on the same graph it drives keeps the two from disagreeing.
 
+### `agent` as built (roadmap 017 step 6)
+
+Background AVs used to be listed in `bridge_config.yaml` (`background_avs`), spawned by csb
+at every `Initialize` and invisible to SSv2. They are now scenario entities:
+
+```xml
+<ScenarioObject name="bg_av_1"> ... <Controller name="agent"><Properties/></Controller> ...
+```
+
+- **SSv2 fork**: `agent` is handled exactly like `simulator_autopilot` -- a
+  `SimulatorDrivenVehicleEntity` (it records which of the two names it stands for), spawned
+  with `behavior: "agent"`; `AcquirePositionAction`, `AssignRouteAction` and an absolute
+  `SpeedAction` go out as `UpdateEntityGoal`; lane changes, relative speeds, trajectories and
+  controller switches are scenario errors. `simple_sensor_simulator` refuses the spawn.
+- **csb** (`agent_link.rs`, `coordinator.rs`):
+  - Spawn: physics on, parked (hand brake) like the ego, **`role_name` = the entity name**,
+    so the vehicle side started with `vehicle_name:=<entity>` attaches to it; not given to
+    Traffic Manager. Refused if the name is the ego's role name, a `csb_entity:` mark, or a
+    role another CARLA vehicle already has. Spawning succeeds whether or not an agent is
+    registered (a vehicle side may come up later).
+  - Reaping: these vehicles carry no `csb_entity:` mark (acb finds them by name), so csb
+    records their role names in a ledger on tmpfs (`$XDG_RUNTIME_DIR/carla-scenario-bridge/
+    agent-vehicles-<host>-<port>`, beside the episode clock) and the reaper at `Initialize`
+    destroys vehicles with those names, as it does the ego's `hero`.
+  - Commands: csb is a relay **commander** (`agent_relay` in `bridge.yaml`, default
+    `tcp://localhost:5560`; ROS parameter `agent_relay`; `simulation.launch.xml` points it at
+    its own relay). After the spawn it sends `teleported` with the spawn pose (retried until
+    an agent is registered); `UpdateEntityGoal` becomes `set_speed_limit` (absolute target
+    speed) and `set_goal` (waypoints, the last is the goal) or `clear_goal`; despawn,
+    `Initialize` and shutdown send `stop`. All of it from a worker thread, in order per
+    entity, never inside a frame: a goal is held until SSv2's NPC logic has started (as for
+    `simulator_autopilot`) **and** the agent reports a phase that takes goals (`IDLE` and
+    later) -- acb's agent refuses one while re-localizing after `teleported`.
+  - Failures are honest: `UpdateEntityGoal` for an entity with no registered agent fails at
+    once, naming the entity and the `entity:=` to start its vehicle side with (one
+    synchronous relay `query`, answered from memory); a goal the agent refuses (`FAILED`,
+    `UNSUPPORTED`) or a relay that is gone becomes the entity's error, and the next
+    `UpdateEntityStatus` fails the frame with it, so SSv2 ends the scenario.
+  - Status: `UpdateEntityStatus` returns CARLA's pose, entity-frame twist and acceleration
+    for it -- the ego's and `simulator_autopilot`'s readback -- and never teleports it.
+- **Vehicle side**: `csb_launch background_av.launch.xml entity:=<name> relay:=...` is the
+  acb CARLA profile with the agent registered as `<name>` and `vehicle_name` = `<name>`;
+  `just bg-av` runs it in domain 2.
+- **Speed**: an absolute `SpeedAction` is the agent's speed *limit*, not a target: the
+  autopilot drives its own profile under it.
+
 ## Swap audit
 
 **Replace CARLA with simulator X.** Replace: the simulator adapter (csb → X's I1
@@ -354,7 +427,8 @@ Remaining couplings, accepted:
                 <name>.xosc        # LogicFile filepath = <map dir>; entities and controllers
 ```
 
-Background vehicles are entities in the `.xosc`, not entries in `bridge.yaml`.
+Background vehicles are entities in the `.xosc`, not entries in `bridge.yaml`
+(`background_avs` is refused since roadmap 017 step 6).
 
 ## A session
 
@@ -370,6 +444,10 @@ play_launch launch scenario_agent_relay relay.launch.xml
 ROS_DOMAIN_ID=7 play_launch launch acb_launch carla_simulator.launch.xml \
     autoware_launch:=<their autoware.launch.xml> map_path:=<map dir> \
     vehicle_name:=hero entity:=ego relay:=tcp://<sim host>:5560
+# ... and one per background AV (an entity with controller `agent`)
+ROS_DOMAIN_ID=8 play_launch launch acb_launch carla_simulator.launch.xml \
+    autoware_launch:=<their autoware.launch.xml> map_path:=<map dir> \
+    vehicle_name:=bg_av_1 entity:=bg_av_1 relay:=tcp://<sim host>:5560
 
 # A scenario; exits on its own; repeat
 play_launch launch csb_launch scenario.launch.xml scenario:=<scenario dir>/<name>.xosc

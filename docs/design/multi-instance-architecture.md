@@ -6,6 +6,13 @@ over a single shared CARLA world.
 This document supersedes the parts of [architecture.md](architecture.md) that assume a
 single Autoware instance and a single ROS domain. Where the two disagree, this document wins.
 
+> **Superseded in part (roadmap 017 step 6, 2026-10-08):** background AVs are no longer
+> declared in `bridge_config.yaml` (`background_avs`) and invisible to SSv2. They are
+> scenario entities whose controller is `agent`, spawned per scenario with `role_name` = the
+> entity name and driven through the agent relay; SSv2 sees them. See
+> [user-workflow.md](user-workflow.md#agent-as-built-roadmap-017-step-6). The domain and
+> sensor-ownership material below still holds.
+
 **Status**: implemented and verified end to end on 2026-08-27 with two Autoware instances
 driving two CARLA vehicles at once — see [Verified two-instance run](#verified-two-instance-run).
 The gap table below is older than that run and marks what has since been closed.

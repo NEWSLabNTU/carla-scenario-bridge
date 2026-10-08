@@ -106,6 +106,66 @@ the route's lanes are followed with lane changes off, so a stopped vehicle ahead
 single-lane road holds it up; and with SSv2's own simulator (`simple_sensor_simulator`)
 the spawn is refused, since it has no driver of its own.
 
+## Vehicles an autopilot drives: `agent`
+
+Name a vehicle's controller `agent` and an autopilot of its own drives it -- typically a
+full Autoware on its own vehicle side, the same stack as the ego's. This is how a scenario
+has more than one autonomous vehicle (SSv2 allows one ego), and the extra ones are ordinary
+scenario entities: conditions, distances and `CollisionCondition` see them.
+
+```xml
+<ScenarioObject name="bg_av_1">
+  <Vehicle name="vehicle.tesla.model3" vehicleCategory="car"> ... </Vehicle>
+  <ObjectController>
+    <Controller name="agent"><Properties/></Controller>
+  </ObjectController>
+</ScenarioObject>
+...
+<Private entityRef="bg_av_1">
+  <PrivateAction><TeleportAction> ...start... </TeleportAction></PrivateAction>
+  <PrivateAction><RoutingAction><AcquirePositionAction> ...goal... </AcquirePositionAction></RoutingAction></PrivateAction>
+</Private>
+```
+
+Example: `scenarios/town01_two_av.xosc` (the ego and `bg_av_1` in one lane; `just two-av`).
+
+The entity's name is the link to its vehicle side: start one per such entity, with
+`entity:=<name>` (and `vehicle_name:=<name>`, the default in `csb_launch
+background_av.launch.xml`) and the simulation side's relay, in a ROS domain of its own:
+
+```bash
+ROS_DOMAIN_ID=2 play_launch launch csb_launch background_av.launch.xml \
+    entity:=bg_av_1 map_path:=<map dir> relay:=tcp://<simulation host>:5560
+```
+
+What happens:
+
+- **Start.** The bridge spawns the vehicle with physics on, parked, and with CARLA
+  `role_name` = the entity name, which is how that vehicle side's `acb_bridge` finds it. It
+  tells the agent where the vehicle is (`teleported`); Autoware re-localizes there.
+- **Goal.** `AcquirePositionAction` (or `AssignRouteAction`: waypoints in order, the last is
+  the goal) becomes the agent's goal once SSv2's NPC logic has started and the agent has
+  localized; the autopilot plans its own route, engages and drives.
+- **Speed.** An absolute `SpeedAction` target becomes the autopilot's speed *limit*.
+- **Pose.** SSv2 adopts the pose, velocity and acceleration CARLA reports every frame, as for
+  `simulator_autopilot`.
+- **End.** Despawn (and the next scenario's start) tells the agent to stop. The vehicle side
+  is long-lived and serves the next scenario.
+
+Fails, explicitly:
+
+- A goal for an entity no agent is registered for: the action fails at once and names the
+  `entity:=` to start. The spawn itself succeeds -- a vehicle side may start late; it is
+  told where its vehicle is as soon as it registers.
+- A goal the autopilot refuses (e.g. Autoware's "The planned route is empty" for a goal
+  behind the vehicle or on no lane): the next frame fails with the autopilot's reason.
+- `LaneChangeAction`, a relative `SpeedAction`, `FollowTrajectoryAction`, and switching to or
+  from `agent` mid-run, as for `simulator_autopilot`; a name equal to the ego's CARLA role
+  (`hero`), or one another CARLA vehicle already has.
+
+Background AVs used to be declared in `bridge.yaml` (`background_avs`), outside the
+scenario and invisible to SSv2; that key is now refused.
+
 ## Traffic lights: uncommanded means GREEN
 
 Applies to every scenario, managed ego or not (roadmap 015, "Signals from CARLA").

@@ -47,7 +47,7 @@ swap audit).
 
 ### 1. csb as a ROS node
 - [x] csb reads ROS params `carla_host`, `carla_port`, `ssv2_port`, `config_file`,
-      `background_avs`, `reconnect_wait_seconds`; env vars stay as overrides (file < env <
+      `background_avs` (now `agent_relay`, step 6), `reconnect_wait_seconds`; env vars stay as overrides (file < env <
       params). **No ROS client library**: csb has no topics, so it parses `--ros-args`
       (`-p`, `--params-file`) itself (`ros_args.rs`, 4 tests)
 - [x] Default config is the installed `share/carla_scenario_bridge/config/bridge_config.yaml`,
@@ -158,8 +158,30 @@ swap audit).
       0.33 m short of it 617 frames after the hand-over in **both** of the last two runs
       (seed 2017); `town01_engage_state` and `bench/town01_npc_10` still pass (npc_10:
       processing p50 0.60 ms, tick p50 3.75 ms, 10 entities)
-- [ ] Background AVs move from `bridge_config.yaml` to scenario entities; the `agent`
-      controller addresses a registered agent by entity name
+- [x] Background AVs move from `bridge_config.yaml` to scenario entities; the `agent`
+      controller addresses a registered agent by entity name. As built (design doc,
+      "`agent` as built"): the fork treats `agent` like `simulator_autopilot`
+      (SimulatorDrivenVehicleEntity, `behavior: "agent"`, goals as `UpdateEntityGoal`); the
+      relay accepts **commanders** (`register` with `role: "commander"`, `command_for`,
+      `query`; replies carry `registered` and the agent's state; agents unchanged); csb spawns
+      the vehicle physics-on with `role_name` = entity name (reaped via a tmpfs ledger, not
+      the `csb_entity:` mark), sends `teleported` with the spawn pose, forwards goals from a
+      worker thread once NPC logic runs and the agent can take one, `stop` on despawn, and
+      reads the pose back. `background_avs` (file key, ROS param, `CSB_BACKGROUND_AVS`) is
+      removed and refused with that message; `background_av.launch.xml` / `just bg-av` run
+      the agent with `entity:=`. Tests: csb 182 (agent_link: queue gating, retries, errors,
+      relay wire format against a fake relay, ledger; config; spawn kinds), relay 84
+      (commander query/command/timeout/no agent, silent commander kept, register+query in one
+      packet), acb_pilot 30 (protocol copy in sync). Live (2026-10-08): `just two-av`
+      (`town01_two_av.xosc`: ego in domain 1, `bg_av_1` driven by its own Autoware in
+      domain 2, scenario in 9) **passed twice**; bg_av_1 localized at its spawn pose ~10 s
+      after `teleported`, took its goal, arrived and was judged by SSv2 (ReachPosition +
+      stopped). First attempt failed on bg_av_1's declared 10 m/s² bound (Autoware's launch
+      off the parked hand brake read 13.3 m/s²); it now declares the ego's 15.
+      `town01_simulator_autopilot` and `town01_engage_state` still pass. With the
+      background stack stopped the scenario fails at once: "no agent is registered with the
+      agent relay (tcp://localhost:5560) as 'bg_av_1' (controller agent); start its vehicle
+      side with entity:=bg_av_1"
 
 ### 7. Documentation
 - [ ] User guide: install, prepare a map dir and a scenario dir, the four commands, both
