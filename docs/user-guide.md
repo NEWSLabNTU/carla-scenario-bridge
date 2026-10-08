@@ -126,5 +126,8 @@ three components with CARLA settings. Turn any of those off to keep your own:
   registered with the relay (`relay:=` wrong or unreachable). The relay logs every agent
   that registers; the scenario proceeds as soon as one does (SSv2 waits up to its
   `initialize_duration`).
-- **Without a scenario**: `relay:=` empty and `goal_poses_file:=<yaml>` makes the vehicle
-  side drive to a local goal on its own -- a quick check that Autoware and CARLA work.
+- **Without a scenario**: leave `relay` unset (launch rejects an empty `relay:=`) and pass
+  `goal_poses_file:=<yaml>` (`goal_pose: {x, y, qz, qw}`): the vehicle side drives to that
+  goal on its own -- a quick check that Autoware and CARLA work. Nothing else may hold CARLA
+  then (stop the simulation side: it restores CARLA to free-running when it exits), and the
+  vehicle must exist, e.g. `ros2 launch acb_scenario single_vehicle_scenario.launch.xml`.

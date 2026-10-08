@@ -84,8 +84,13 @@ swap audit).
 - [x] CARLA overrides switchable: `carla_localization`, `carla_perception`, `carla_system`
       (default true); with one off, the user's `autoware.launch.xml` launches that component
 - [x] csb's `ego_av.launch.xml` and `background_av.launch.xml` reduce to includes of it
-- [ ] An Autoware started this way attaches to a CARLA vehicle and drives a route set by hand
-      (RViz), with no scenario running
+- [x] An Autoware started this way attaches to a CARLA vehicle and drives with no scenario
+      running (2026-10-08): simulation side stopped (csb restored CARLA to async), `hero`
+      spawned by acb's `single_vehicle_scenario`, the profile started with
+      `goal_poses_file:=scenarios/ego_poses.yaml` and no relay: IDLE → goal → engaged →
+      DRIVING → ARRIVED in 93 s. A goal from the file stands in for one clicked in RViz; both
+      reach Autoware's same routing API. (An empty `relay:=` is rejected by launch; leave it
+      unset.)
 
 ### 5. Agent protocol, relay, Autoware agent
 - [x] Schema with a version field -- **newline-delimited JSON over plain TCP**, `"v": 1`
@@ -223,13 +228,23 @@ swap audit).
 
 ## Acceptance
 
-- A user runs a scenario with only `play_launch launch` / `ros2 run` and the vendor CARLA
-  binary, from a scenario dir and a map dir outside this repo
-- SSv2 and Autoware run in different ROS domains, started in either order
-- Every scenario feature in the design's interface table works through the relay, with
-  Autoware-specific ones degrading explicitly on another autopilot
-- No component writes into another's files: the user's `.xosc` and the map dir are read-only
-  at run time
-- Swap audit holds in the code: csb and acb_bridge are the only CARLA-specific components on
-  the command path; the relay and acb_agent have no CARLA dependency
-- Existing scenarios (014–016) still pass
+All met (2026-10-08):
+
+- [x] A user runs a scenario with only `play_launch launch` / `ros2 run` and the vendor CARLA
+  binary, from a scenario dir and a map dir outside this repo -- step 8
+- [x] SSv2 and Autoware run in different ROS domains, started in either order -- step 8
+  (vehicle side started 40 s after the scenario; the usual order passes everywhere else)
+- [x] Every scenario feature in the design's interface table works through the relay, with
+  Autoware-specific ones degrading explicitly on another autopilot -- teleport, goals,
+  speed limit, stop, `ego.currentState`, through the relay in every run; RTC at the relay
+  interface (UNSUPPORTED from an agent without it). An RTC *scenario* needs an Autoware
+  with `enable_rtc` turned on, which stock 1.5 does not have
+- [x] No component writes into another's files: the user's `.xosc` (the runner preprocesses a
+  copy) and the map dir (the signal table is generated offline, only checked at run time)
+  are read-only at run time
+- [x] Swap audit holds in the code: csb and acb_bridge are the only CARLA-specific components
+  on the command path; `scenario_agent_relay` and the acb agent import nothing of CARLA
+- [x] Existing scenarios still pass on the final build: `town01_traffic_light`,
+  `town01_rear_contact`, `town01_pedestrian`, `town02_episode_change`, `town01_ego_drive`,
+  `town01_engage_state`, `town01_two_av`, `town01_simulator_autopilot`,
+  `bench/town01_npc_10`
