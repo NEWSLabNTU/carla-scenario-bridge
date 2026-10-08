@@ -184,21 +184,42 @@ swap audit).
       side with entity:=bg_av_1"
 
 ### 7. Documentation
-- [ ] User guide: install, prepare a map dir and a scenario dir, the four commands, both
-      sides on separate hosts or domains
-- [ ] README rewritten to the user guide; `ssv2-launch-configuration.md` updated or retired
-- [ ] Justfile recipes reduced to the commands in the guide plus developer conveniences
+- [x] User guide (`docs/user-guide.md`): install, prepare a map dir and a scenario dir, the
+      four commands, both sides on separate hosts or domains, your own Autoware
+- [x] README rewritten to the user guide; `ssv2-launch-configuration.md` marked superseded
+      for the run workflow (kept as SSv2 parameter background)
+- [x] Justfile recipes reduced to the commands in the guide plus developer conveniences:
+      `run` = `simulation.launch.xml`, `ego-av`/`bg-av` = the acb profile, `scenario` =
+      `scenario.launch.xml` (no copy, no mode switch); health gates and `two-av` remain as
+      developer conveniences
 
 ### 8. Live verification
-- [ ] A scenario dir and map dir outside the repo; the four commands from the guide, no
-      justfile; `town01_ego_drive` and `town01_engage_state` pass
-- [ ] Vehicle side in a **different** ROS domain from SSv2, started **after** the scenario
-      launch: the scenario waits (`UNAVAILABLE`), then engages and passes
-- [ ] `ego.currentState` conditions (DRIVING, ARRIVED_GOAL) pass through the relay
+- [x] A scenario dir and map dir outside the repo; the four commands from the guide, no
+      justfile; `town01_ego_drive` and `town01_engage_state` pass (2026-10-08: map dir and
+      scenarios under the session scratchpad, `LogicFile` an absolute path there; plain
+      `play_launch launch` of `simulation.launch.xml`, `carla_simulator.launch.xml`,
+      `scenario.launch.xml`; both passed)
+- [x] Vehicle side in a **different** ROS domain from SSv2, started **after** the scenario
+      launch: the scenario waits (`UNAVAILABLE`), then engages and passes. Scenario launched
+      00:56:21, vehicle side (domain 1) 40 s later; agent registered, ADAPI offered,
+      teleported → IDLE → set_goal → DRIVING → ARRIVED; verdict 00:58:06, success. Needed
+      a fork change: the concealer's initial change_to_stop now waits for the service
+      within `initialize_duration` instead of a fixed 180 s (SSv2 `efe7f87f8`)
+- [x] `ego.currentState` conditions (DRIVING, ARRIVED_GOAL) pass through the relay
+      (`town01_engage_state`, every run above)
 - [x] A background vehicle on `simulator_autopilot` reaches its goal; one on the default
       controller follows its SSv2 route; both in one scenario with the ego
       (`scenarios/town01_simulator_autopilot.xosc`, step 6)
-- [ ] RTC scenario on Autoware passes; on an agent without RTC it fails with `UNSUPPORTED`
+- [x] RTC through the relay, verified at the interface (2026-10-08): the relay's
+      `/api/external/set/rtc_commands` (scenario domain) reached Autoware through the agent
+      and returned Autoware's verdict (`cooperate -> FAILED` for an unknown uuid); against a
+      fake agent without RTC the same call returned `success=False` with
+      `cooperate -> UNSUPPORTED: this autopilot has no RTC`.
+      **Not run as a scenario**: stock Autoware 1.5 sets `enable_rtc: false` for every
+      behavior module (autoware_launch planning config), so cooperation requests are never
+      raised and an RTC scenario has nothing to approve. Running one needs a vehicle side
+      whose Autoware enables RTC for the module the scenario commands -- the user's planning
+      configuration, outside this project
 
 ## Acceptance
 
