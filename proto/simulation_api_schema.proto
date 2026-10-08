@@ -148,8 +148,10 @@ message SpawnVehicleEntityRequest {
    * it runs ("Autoware" for the ego, empty for the default behavior). "simulator_autopilot"
    * asks the simulator to drive the entity with its own driver: traffic_simulator runs no
    * behavior for it, adopts the pose the simulator returns in UpdateEntityStatus, and forwards
-   * the entity's goals and target speed with UpdateEntityGoal. A simulator that cannot drive
-   * an entity itself must refuse the spawn.
+   * the entity's goals and target speed with UpdateEntityGoal. "agent" is the same to
+   * traffic_simulator, but the simulator side hands the goals to an agent (an autopilot such
+   * as Autoware) registered under the entity's name instead of its own driver. A simulator
+   * that cannot drive an entity that way must refuse the spawn.
    */
   string behavior = 6;
 }
@@ -366,7 +368,7 @@ message UpdateStepTimeResponse {
 
 /**
  * Requests a new goal, route or target speed for an entity the simulator drives itself
- * (spawned with behavior "simulator_autopilot"). Sent by traffic_simulator before the
+ * (spawned with behavior "simulator_autopilot" or "agent"). Sent by traffic_simulator before the
  * frame's UpdateEntityStatus, once per scenario request.
  *  - waypoints non-empty: replace the entity's route; the last waypoint is the goal.
  *  - clear = true (waypoints empty): drop the route; the simulator's driver roams.
