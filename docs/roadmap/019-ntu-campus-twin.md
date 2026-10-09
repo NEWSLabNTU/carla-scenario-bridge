@@ -1,4 +1,4 @@
-# Phase 018: NTU Campus Digital Twin
+# Phase 019: NTU Campus Digital Twin
 
 Build a drivable twin of the NTU campus from the data we already hold, and use it to examine
 how realistic CARLA's camera and lidar can get on a real site. Everything is measured against
@@ -14,7 +14,8 @@ frame transform). NAS originals: `~/nas/autoveh/dataset/2026-04_ntu_map`,
 `~/nas/autoveh/dataset/2026-05-15 NTU pointcloud map`.
 **Depends on**: [009](009-map-and-traffic-lights.md) (map resolution, signal tables),
 [017](017-user-workflow.md) (map dir layout, `--generate-signal-table`).
-**Relates to**: CARLA 0.10 support in carla-rust (`CARLA_VERSION`), acb vehicle model
+**Relates to**: [018](018-install-and-world-config.md) (CARLA version as a carla-rust feature,
+run-time version check), acb vehicle model
 (0.10 uses Chaos vehicles; roadmap [014](014-feature-completeness.md) gap 8).
 
 ## Problem
@@ -103,9 +104,11 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
       `pointcloud_map.pcd`, projector, `carla/traffic_lights.yaml`)
 
 ### 6. Import into CARLA
-- [ ] Stand up CARLA 0.10 on this host (16 GB+ VRAM recommended, 130 GB disk); build csb/acb
-      with `CARLA_VERSION=0.10.0`; record what breaks (steering getter returns 0, Chaos
-      vehicle tuning)
+- [ ] Stand up CARLA 0.10.0 on this host (16 GB+ VRAM recommended, 130 GB disk; package in
+      `~/Downloads`). Build csb/acb against it by switching the `carla` dependency feature
+      `carla-0916` → `carla-0100` in both workspaces (018); the bridges refuse a version
+      mismatch at connect. Record what breaks (steering getter returns 0, Chaos vehicle
+      tuning, town list)
 - [ ] Import route r02 first (smaller): fbx tiles + xodr into a CARLA 0.10 source build,
       Nanite on the meshes
 - [ ] Same scene into 0.9.16 for comparison, if the import path allows

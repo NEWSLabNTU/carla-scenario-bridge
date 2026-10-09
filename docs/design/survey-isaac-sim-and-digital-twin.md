@@ -183,7 +183,7 @@ the splats exactly.
 ### 3.5 Realistic rendering without NuRec
 
 Constraint: one RTX 5090 (32 GB), Linux, closed loop with Autoware at sensor rate, and both
-CARLA versions available to the bridge (`CARLA_VERSION=0.9.16` default, 0.10 selectable).
+CARLA versions available to the bridge (carla-rust feature `carla-0916` default, `carla-0100` selectable; roadmap 018).
 
 | Route | Camera realism | Lidar consistency | Closed loop | VRAM / effort | Verdict |
 |---|---|---|---|---|---|
@@ -253,7 +253,7 @@ rates with RTX on; RTX lidar needs one render product per sensor)*.
 
 Ordered by value per effort. Each ends in a measurement, not an opinion.
 
-1. **CARLA 0.10 baseline.** Bring up 0.10.x on this host, `CARLA_VERSION=0.10.0 just build`,
+1. **CARLA 0.10 baseline.** Bring up 0.10.x on this host, build with the `carla-0100` feature,
    run one SSv2 scenario on a 0.10 town. Measure tick time with the full ego sensor set and
    VRAM headroom; list what breaks in acb (steering, Chaos tuning).
 2. **GLIM → Autoware map dir.** One capture of a known site (campus loop). GLIM → PCD →
@@ -313,7 +313,7 @@ camera, so the vendor almost certainly has the images and the camera trajectory.
 
 ### Next steps for this site
 
-Tracked as roadmap phase [018](../roadmap/018-ntu-campus-twin.md).
+Tracked as roadmap phase [019](../roadmap/019-ntu-campus-twin.md).
 
 Each produces something we can look at in CARLA, in order:
 

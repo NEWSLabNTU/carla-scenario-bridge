@@ -34,9 +34,9 @@ what unblocks what.
 - [017: User Workflow and the Vehicle Agent](017-user-workflow.md) — ROS-native workflow from a scenario dir and a map dir; csb as a ROS node; an agent protocol and relay so SSv2 and Autoware need no shared domain and CARLA/Autoware are swappable ([design/user-workflow.md](../design/user-workflow.md))
 - [018: Install and World Config](018-install-and-world-config.md) — `rosdep install` + `colcon build` for users (CARLA version as a carla-rust feature, color_names submodule), `ros2 run acb_launch setup_autoware_data`, weather as bridge services — **complete 2026-10-10**
 
-## Real-site twin and realistic rendering (018-)
+## Real-site twin and realistic rendering (019-)
 
-- [018: NTU Campus Digital Twin](018-ntu-campus-twin.md) — twin of the NTU campus from the vendor MLS scan and our Autoware maps; full re-tiling (the vendor's tiles are truncated at 2^32-1 points), road/building meshes, vegetation proxies, Lanelet2 regulatory elements + xodr, CARLA 0.10 import, lidar and camera realism measured against the real cloud ([design/survey-isaac-sim-and-digital-twin.md](../design/survey-isaac-sim-and-digital-twin.md))
+- [019: NTU Campus Digital Twin](019-ntu-campus-twin.md) — twin of the NTU campus from the vendor MLS scan and our Autoware maps; full re-tiling (the vendor's tiles are truncated at 2^32-1 points), road/building meshes, vegetation proxies, Lanelet2 regulatory elements + xodr, CARLA 0.10 import, lidar and camera realism measured against the real cloud ([design/survey-isaac-sim-and-digital-twin.md](../design/survey-isaac-sim-and-digital-twin.md))
 
 ### Why this order
 
