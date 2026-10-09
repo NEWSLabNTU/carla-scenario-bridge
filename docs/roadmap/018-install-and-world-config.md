@@ -117,13 +117,33 @@ wheel the user must install, and no hook into map loads).
 
 ## Steps
 
-1. - [ ] carla-rust: version features, precedence (`CARLA_VERSION` > feature), error when
+1. - [x] carla-rust: version features, precedence (`CARLA_VERSION` > feature), error when
    neither or two; unit check that each feature selects its cfg; push to main; csb + acb pins
    and `features = ["carla-0916"]`; `cargo check` with no env succeeds in both workspaces.
-2. - [ ] Runtime version check in csb and acb; message tested against a faked mismatch.
-3. - [ ] `color_names` as a submodule; rosdep keys complete (`rosdep check` clean); user
+   *carla-rust `e06de1c` on master (features `carla-0914/0915/0916/0100`, also exported as
+   `carla::CARLA_VERSION`). With `CARLA_VERSION` unset: `docs-only,carla-0915|0916|0100` set
+   `carla_version_0915|0916|0100`; `carla-0915,carla-0916` fails "conflicting CARLA version
+   features enabled: carla-0915, carla-0916"; no feature fails "no CARLA version selected";
+   `CARLA_VERSION=0.9.15` + `carla-0916` gives 0915; a full `carla-0916` check downloads the
+   0.9.16 prebuilt. `cargo check` with no env: csb and acb (acb_bridge, carla_pcd_gen,
+   carla_manual_control) both compile, carla build output `carla_version_0916`.*
+2. - [x] Runtime version check in csb and acb; message tested against a faked mismatch.
+   *`carla_version.rs` in both (`check(built_for, server)`; release = major.minor.patch, so
+   0.9.16 vs 0.9.15 is refused; build suffixes like `-dirty` ignored; an unparsable server
+   version is refused). Unit tests: 0.9.16 vs 0.9.16-dirty ok, vs 0.9.15 / 0.10.0 refused
+   with both versions in the message. csb: refused like a failed connect (startup loop and
+   `reconnect_carla`); acb: `connect_to_carla` returns the error and the bridge exits.
+   `just test` 187/187; acb nextest 10/10 (5 version tests). The rebuilt simulation side
+   logged `CARLA server version 0.9.16 matches this build (0.9.16)` on connect (2026-10-10).*
+3. - [x] `color_names` as a submodule; rosdep keys complete (`rosdep check` clean); user
    install section rewritten to rosdep + colcon; justfile `install-deps` reduced to the
    developer extras (nightly, nextest).
+   *`src/color_names` submodule at `c6a3227` (OUXT-Polaris master). csb `package.xml` gains
+   `protobuf-dev` (protoc + libprotobuf) and `libzmq3-dev`; acb drops the unresolvable keys
+   `rclrs`, `rosidl_runtime_rs` (crates) and `cargo-ament-build` (obsolete tool).
+   `rosdep check --from-paths src --ignore-src -r`: every key resolves; on this host only
+   SSv2's test/lint deps are uninstalled (python3-xmlschema, yamale, replay-testing,
+   ament-cmake-clang-format, ouxt-lint-common), and `rosdep install --simulate` exits 0.*
 4. - [ ] `setup_autoware_data` in acb_launch; launch-time writable check; script retired.
 5. - [ ] `csb_interfaces` + rclrs node in csb; set/get weather services; `weather` param and
    launch arg; re-apply after map load; `scripts/set_weather.py` retired.

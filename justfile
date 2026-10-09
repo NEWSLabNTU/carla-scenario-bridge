@@ -27,18 +27,16 @@ autoware_setup := env_var_or_default('AUTOWARE_SETUP', '/opt/autoware/1.5.0/setu
 default:
     @just --list
 
-# Install prerequisites (Rust toolchain, colcon-cargo, system libraries)
+# Developer extras on top of the user install (nightly rustfmt for `just check`/`format`,
+# cargo-nextest for `just test`). The install itself -- rustup, colcon-cargo-ros2,
+# `rosdep install --from-paths src --ignore-src -y` for the system libraries -- is
+# docs/user-guide.md section 1.
 install-deps:
     #!/usr/bin/env bash
     set -e
-
-    # Rust toolchain (via rustup)
     if ! command -v rustup &>/dev/null; then
-        echo "Installing Rust toolchain via rustup..."
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        source "$HOME/.cargo/env"
-    else
-        echo "Rust toolchain already installed ($(rustc --version))"
+        echo "rustup not found: install Rust first (docs/user-guide.md, section 1)." >&2
+        exit 1
     fi
 
     # Nightly toolchain (for cargo fmt)
@@ -57,44 +55,7 @@ install-deps:
         echo "cargo-nextest already installed"
     fi
 
-    # System libraries
-    echo "Installing system libraries..."
-    sudo apt-get update
-    sudo apt-get install -y \
-        libclang-dev \
-        protobuf-compiler \
-        libzmq3-dev
-
-    # colcon-cargo-ros2 for ament_cargo build type (generates rosidl_cargo
-    # bindings for custom msg packages like autoware_adapi_v1_msgs; the older
-    # colcon-cargo/colcon-ros-cargo combo only patches prebuilt /opt/ros crates
-    # and cannot see workspace-local or Autoware message packages)
-    if python3 -c "import colcon_cargo" &>/dev/null || python3 -c "import colcon_ros_cargo" &>/dev/null; then
-        echo "Removing conflicting colcon-cargo/colcon-ros-cargo..."
-        pip uninstall -y colcon-cargo colcon-ros-cargo
-    fi
-    if ! python3 -c "import colcon_cargo_ros2" &>/dev/null; then
-        echo "Installing colcon-cargo-ros2..."
-        pip install colcon-cargo-ros2
-    else
-        echo "colcon-cargo-ros2 already installed"
-    fi
-
-    # pip may have pulled a newer setuptools into ~/.local, which shadows the apt one and
-    # breaks colcon --symlink-install. Keep the system setuptools in front.
-    setuptools_path=$(python3 -c 'import setuptools; print(setuptools.__file__)')
-    case "$setuptools_path" in
-        /usr/lib/python3/dist-packages/*) ;;
-        *)
-            echo ""
-            echo "WARNING: setuptools now resolves to $setuptools_path"
-            echo "  A pip-installed setuptools shadows the system one and makes every"
-            echo "  Python package fail with 'option --editable not recognized'."
-            echo "  Run: pip uninstall -y setuptools"
-            ;;
-    esac
-
-    echo "All prerequisites installed."
+    echo "Developer extras installed."
 
 # Fail fast if a pip setuptools shadows the system one.
 #

@@ -98,23 +98,23 @@ ls -l install/acb_bridge/lib/acb_bridge/acb_bridge \
 tr '\0' '\n' < /proc/$(pgrep -f 'acb_bridge/acb_bridge' | head -1)/cmdline | head -1
 ```
 
-### Never build or check with bare cargo
+### The CARLA version is a Cargo feature
 
-carla-rust exposes a **different API per CARLA version**, selected by the `CARLA_VERSION`
-environment variable that the justfile sets to 0.9.16. Under 0.9.x a wheel's position is
-`WheelPhysicsControl::position`; under 0.10 the same field is `offset`. A bare
-`cargo build` or `cargo check` does not set the variable, so cargo silently selects the
-0.10 API and reports correct 0.9.16 code as "no field `position`".
+carla-rust exposes a **different API per CARLA version**. Under 0.9.x a wheel's position is
+`WheelPhysicsControl::position`; under 0.10 the same field is `offset`. The version is now
+pinned in both workspaces' `Cargo.toml` by `features = ["carla-0916"]` on the `carla`
+dependency (carla-rust `e06de1c`, roadmap 018), so a bare `cargo build`/`cargo check` and a
+plain `colcon build` compile the 0.9.16 API with no environment at all.
 
-That error is convincing and wrong, and acting on it has already changed a correct field
-access into a broken one and back again. If a build error names a missing field on a
-carla-rust type, check `CARLA_VERSION` before believing it:
-
-```bash
-just build          # sets CARLA_VERSION=0.9.16
-just check          # same, so clippy sees the API the build uses
-CARLA_VERSION=0.9.16 cargo check    # if you must call cargo directly
-```
+- `CARLA_VERSION`, when set, still **overrides** the feature (the justfile sets 0.9.16).
+  A stray `CARLA_VERSION=0.10.0` in your shell therefore still builds the wrong API and
+  reports correct code as "no field `position`" -- check `echo $CARLA_VERSION` before
+  believing an error about a missing field on a carla-rust type.
+- No feature and no `CARLA_VERSION` is a **build error** (carla-rust no longer falls back to
+  0.10 silently); two version features in one dependency graph is a build error naming both.
+- At run time the bridges compare the version they were built for (`carla::CARLA_VERSION`)
+  with the server's on every connect and refuse a mismatch with both versions in the message
+  (csb retries as for an unreachable server; acb exits).
 
 ### Keep the system setuptools
 `--symlink-install` makes colcon run `setup.py develop --editable`, which setuptools removed
@@ -126,8 +126,8 @@ error: option --editable not recognized
 ```
 
 colcon aborts the remaining packages after the first failure, so a Rust-only change looks
-broken when it never compiled. `just build` checks for this up front and refuses to start;
-`just install-deps` warns if a `pip install` pulled setuptools in. Fix with:
+broken when it never compiled. `just build` checks for this up front and refuses to start.
+A plain `colcon build` (no `--symlink-install`, the user path) is not affected. Fix with:
 
 ```bash
 pip uninstall -y setuptools   # falls back to the apt package

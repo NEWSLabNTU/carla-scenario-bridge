@@ -5,7 +5,9 @@ members = [
 ]
 
 [workspace.dependencies]
-carla = "0.14.0"
+# The feature names the CARLA this workspace talks to; carla-rust refuses to build without
+# one (CARLA_VERSION, when set, still overrides it).
+carla = { version = "0.14.0", features = ["carla-0916"] }
 
 [patch.crates-io]
 # 68aef48 stops a sensor before destroying it in destroy_with_children: an orphaned
@@ -21,7 +23,9 @@ carla = "0.14.0"
 # rejects a null pointer even at length zero, and an actor with no attributes -- or a lidar
 # frame with no returns -- produced exactly that. The abort does not unwind, so a caller
 # cannot defend against it.
-carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "bd9c7b3" }
+# e06de1c selects the CARLA version with a cargo feature (carla-0916 above) instead of the
+# CARLA_VERSION env var alone, whose absence silently built the 0.10 API.
+carla = { git = "https://github.com/jerry73204/carla-rust.git", rev = "e06de1c" }
 
 [profile.dev-release]
 inherits = "release"

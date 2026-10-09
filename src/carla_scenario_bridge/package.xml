@@ -7,7 +7,12 @@
   <maintainer email="maintainer@example.com">Maintainer</maintainer>
   <license>Apache-2.0</license>
 
+  <!-- System libraries the build needs (installed by rosdep install): libclang for
+       carla-rust's autocxx bindings, protoc for prost-build (SSv2's .proto files), libzmq
+       for the zmq crate (SSv2's simulation_interface transport). -->
   <build_depend>libclang-dev</build_depend>
+  <build_depend>protobuf-dev</build_depend>
+  <depend>libzmq3-dev</depend>
 
   <export>
     <build_type>ament_cargo</build_type>

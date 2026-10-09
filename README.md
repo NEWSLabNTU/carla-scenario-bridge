@@ -37,31 +37,15 @@ start order:
 - **ROS 2 Humble** — [installation guide](https://docs.ros.org/en/humble/Installation.html)
 - **Autoware** — pre-built packages or source install ([docs](https://autowarefoundation.github.io/autoware-documentation/main/installation/))
 
-Clone the repository with submodules:
+Install and build with ROS tools ([User Guide, section 1](docs/user-guide.md#1-install)
+has the details); Rust (rustup) and `pip install colcon-cargo-ros2` first:
 
 ```bash
 git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-bridge.git
 cd carla-scenario-bridge
-```
-
-Install build dependencies (Rust toolchain, colcon-cargo, system libraries):
-
-```bash
-just install-deps
-```
-
-This installs the Rust stable + nightly toolchains, `cargo-nextest`, `colcon-cargo`/`colcon-ros-cargo` (for building Rust ament packages), and system libraries (`libclang-dev`, `protobuf-compiler`, `libzmq3-dev`).
-
-### Build
-
-Source the ROS environment, then build:
-
-```bash
-# If using direnv, the environment is sourced automatically.
-# Otherwise, source manually:
-source /opt/ros/humble/setup.bash
-
-just build
+source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash
+rosdep install --from-paths src --ignore-src -y
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
 
 ### Run
@@ -129,7 +113,7 @@ just check        # Format check (nightly) + clippy
 just test         # Run tests with cargo-nextest
 just ci           # Build + check + test
 just format       # Auto-format with cargo +nightly fmt
-just install-deps # Install build prerequisites
+just install-deps # Developer extras (nightly rustfmt, cargo-nextest)
 ```
 
 ## Related Projects

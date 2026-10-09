@@ -21,19 +21,32 @@ replacement with a web UI, per-node logs and crash recovery.
 ## 1. Install
 
 - CARLA 0.9.16 (vendor package), ROS 2 Humble, Autoware 1.5.0 (or your own build).
-- This repository with submodules, built once:
+- Once per machine, the two things rosdep cannot install: Rust (rustup) and colcon's Rust
+  plugin.
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+pip install colcon-cargo-ros2
+```
+
+- This repository with its submodules, its system dependencies, and one build:
 
 ```bash
 git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-bridge.git
-cd carla-scenario-bridge && just install-deps && just build
+cd carla-scenario-bridge
+source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash
+rosdep install --from-paths src --ignore-src -y
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash        # in every terminal below, after Autoware's setup.bash
 ```
 
+The build targets CARLA 0.9.16: the version is pinned by the `carla-0916` feature in the
+workspace `Cargo.toml`, and the bridges refuse to talk to a server of another version (both
+versions are in the error). A clone made without `--recurse-submodules` is completed with
+`git submodule update --init --recursive`.
+
 Fresh-machine notes:
 
-- `src/color_names` is not a submodule and not packaged; SSv2's build needs it:
-  `git clone --depth 1 https://github.com/OUXT-Polaris/color_names.git src/color_names`.
-- `pip install xmlschema`, or `scenario_test_runner` exits on import.
 - Autoware's `data_path` must be writable (TensorRT writes each engine next to its ONNX file);
   the CARLA profile defaults to `~/autoware_data` -- populate it once with acb's
   `scripts/link_autoware_data.sh`.

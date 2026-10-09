@@ -1,5 +1,6 @@
 mod agent_link;
 mod autopilot;
+mod carla_version;
 mod clock_store;
 mod collision_monitor;
 mod config;
@@ -144,6 +145,18 @@ fn connect_to_carla(host: &str, port: u16, shutdown: &AtomicBool) -> Option<Clie
                     tracing::warn!("Failed to set timeout: {e}, retrying in 5s...");
                     std::thread::sleep(Duration::from_secs(5));
                     continue;
+                }
+                // A server of another CARLA release is refused like an unreachable one.
+                match carla_version::verify(&client) {
+                    Ok(server) => tracing::info!(
+                        "CARLA server version {server} matches this build ({})",
+                        carla_version::BUILT_FOR
+                    ),
+                    Err(e) => {
+                        tracing::error!("Refusing CARLA at {host}:{port}: {e}; retrying in 5s...");
+                        std::thread::sleep(Duration::from_secs(5));
+                        continue;
+                    }
                 }
                 match client.world() {
                     Ok(_) => {

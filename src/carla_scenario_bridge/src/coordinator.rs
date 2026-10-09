@@ -1915,6 +1915,12 @@ impl Coordinator {
         client
             .set_timeout(Duration::from_secs(30))
             .map_err(|e| eyre::eyre!("set timeout: {e}"))?;
+        // A restarted server may be another CARLA release; refuse it like a failed connect.
+        let server_version = crate::carla_version::verify(&client).map_err(|e| eyre::eyre!(e))?;
+        tracing::info!(
+            "CARLA server version {server_version} matches this build ({})",
+            crate::carla_version::BUILT_FOR
+        );
         let world = client.world().map_err(|e| eyre::eyre!("get world: {e}"))?;
 
         let world_id = world.id().ok();
