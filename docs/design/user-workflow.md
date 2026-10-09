@@ -243,7 +243,9 @@ watch Autoware's own pipeline, not just ADAPI states:
 ## Simulation side
 
 - **csb** (CARLA's SSv2 adapter, I1) becomes a ROS node: params `carla_host`, `carla_port`,
-  `ssv2_port`, `config_file`; `bridge.launch.xml` with `respawn="true"`.
+  `ssv2_port`, `config_file`, `weather`; `bridge.launch.xml` with `respawn="true"`. It serves
+  the world-configuration services `/carla/set_weather` and `/carla/get_weather`
+  (`csb_interfaces`, roadmap 018) -- simulator-specific, outside the five interfaces above.
 - **agent relay** is its **own** package and node (`scenario_agent_relay`), not part of csb:
   it speaks I2 and I3 only, so it survives a simulator swap. One relay per scenario domain.
 - `csb_launch/scenario.launch.xml`: `scenario:=` plus a few knobs; runs SSv2 with

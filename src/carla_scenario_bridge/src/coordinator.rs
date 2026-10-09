@@ -417,6 +417,8 @@ use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs::{self, BoundingBox};
 use crate::sensor_release::SensorReleaseNotifier;
+use crate::weather::{Weather, WeatherRequest};
+use crate::world_services::WeatherReply;
 
 /// `(elapsed_seconds, delta_seconds)` of `world`'s current snapshot.
 fn read_frame_of(world: &World) -> Result<(f64, f64)> {
@@ -871,6 +873,10 @@ pub struct Coordinator {
     agent_vehicles: HashSet<String>,
     /// Where their role names are recorded for a later csb's reaper (`agent_link`).
     agent_ledger: PathBuf,
+    /// The weather the user asked for -- the `weather` parameter, then the last
+    /// `/carla/set_weather` -- with a label for logs. Re-applied after every map load and
+    /// reconnect, because CARLA resets it with the world. `None`: leave CARLA's.
+    requested_weather: Option<(String, Weather)>,
 }
 
 impl Coordinator {
@@ -890,6 +896,9 @@ impl Coordinator {
         let clock_path = crate::clock_store::path_for(&carla_host, carla_port);
         let agent_ledger = agent_link::ledger_path(&carla_host, carla_port);
         let episode_clock = Self::resume_clock(&clock_path, world_id);
+        // Validated by BridgeConfig::validate, so an unknown name cannot get this far.
+        let requested_weather =
+            crate::weather::preset(config.weather.trim()).map(|(name, w)| (name.to_string(), w));
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -933,6 +942,71 @@ impl Coordinator {
             agent_link: None,
             agent_vehicles: HashSet::new(),
             agent_ledger,
+            requested_weather,
+        }
+    }
+
+    // --- World configuration (roadmap 018) ---------------------------------------------
+
+    /// Apply the requested weather to the current world, if there is one. `why` names the
+    /// occasion for the log (connect, map load, reconnect).
+    pub fn reapply_weather(&mut self, why: &str) {
+        let Some((label, w)) = self.requested_weather.clone() else {
+            return;
+        };
+        match self.world.set_weather(&w.to_carla()) {
+            Ok(()) => tracing::info!("Weather {label} applied ({why})"),
+            Err(e) => tracing::warn!("Could not apply weather {label} ({why}): {e}"),
+        }
+    }
+
+    /// CARLA's current weather.
+    pub fn weather(&self) -> Result<Weather> {
+        self.world
+            .weather()
+            .map(|w| Weather::from(&w))
+            .map_err(|e| eyre::eyre!("get weather: {e}"))
+    }
+
+    /// `/carla/set_weather`: remember the request, apply it, and report what CARLA holds
+    /// afterwards. Remembered even when applying fails (CARLA unreachable), so the next
+    /// reconnect applies it.
+    pub fn set_weather(&mut self, request: WeatherRequest) -> WeatherReply {
+        let (label, w) = match request {
+            WeatherRequest::Preset(name, w) => (name.to_string(), w),
+            WeatherRequest::Parameters(fields) => match self.weather() {
+                Ok(current) => ("custom".to_string(), current.with_user_fields(fields)),
+                Err(e) => return WeatherReply::failed(format!("{e}; nothing changed"), None),
+            },
+        };
+        self.requested_weather = Some((label.clone(), w));
+        if let Err(e) = self.world.set_weather(&w.to_carla()) {
+            return WeatherReply::failed(
+                format!("set weather {label}: {e}; kept, and applied on the next connect"),
+                None,
+            );
+        }
+        tracing::info!("Weather {label} applied (set_weather)");
+        match self.weather() {
+            Ok(now) => WeatherReply::ok(
+                now,
+                format!("weather {label} applied; kept across map loads"),
+            ),
+            Err(e) => WeatherReply::failed(format!("applied {label}, but {e}"), None),
+        }
+    }
+
+    /// `/carla/get_weather`.
+    pub fn get_weather(&self) -> WeatherReply {
+        match self.weather() {
+            Ok(w) => {
+                let kept = match &self.requested_weather {
+                    Some((label, _)) => format!("bridge keeps {label} across map loads"),
+                    None => "bridge leaves the weather to CARLA".to_string(),
+                };
+                WeatherReply::ok(w, kept)
+            }
+            Err(e) => WeatherReply::failed(e.to_string(), None),
         }
     }
 
@@ -1353,6 +1427,8 @@ impl Coordinator {
             self.froze_traffic_lights.mark_restored();
             self.held_light_timings.clear();
             tracing::info!("Map '{town}' loaded");
+            // The new world came with its town's default weather.
+            self.reapply_weather("map load");
         }
 
         self.load_signal_map(&town, lanelet2_map_path)
@@ -1950,6 +2026,8 @@ impl Coordinator {
         self.held_light_timings.clear();
 
         tracing::info!("Reconnected to CARLA; synchronous mode will be re-applied next frame");
+        // A restarted server came back with its default weather.
+        self.reapply_weather("reconnect");
         Ok(())
     }
 

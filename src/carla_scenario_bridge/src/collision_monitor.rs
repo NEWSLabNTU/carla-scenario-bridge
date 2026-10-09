@@ -351,7 +351,10 @@ impl CollisionMonitor {
             // destructor aborts). One handle per CARLA restart.
             std::mem::forget(sensor);
             self.drain(|_| None);
-            tracing::info!("{} (sensor abandoned: CARLA restarted)", self.log.summary(&ego_name));
+            tracing::info!(
+                "{} (sensor abandoned: CARLA restarted)",
+                self.log.summary(&ego_name)
+            );
             self.log = CollisionLog::default();
         }
     }

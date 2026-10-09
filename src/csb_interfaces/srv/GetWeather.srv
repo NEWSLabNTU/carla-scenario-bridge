@@ -1,0 +1,9 @@
+# CARLA's current weather.
+#
+#   ros2 service call /carla/get_weather csb_interfaces/srv/GetWeather
+---
+bool success
+string message
+Weather weather
+# The CARLA preset these values match, empty if none.
+string preset

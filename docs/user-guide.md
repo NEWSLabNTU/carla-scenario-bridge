@@ -48,12 +48,14 @@ versions are in the error). A clone made without `--recurse-submodules` is compl
 Fresh-machine notes:
 
 - Autoware's `data_path` must be writable (TensorRT writes each engine next to its ONNX file);
-  the CARLA profile defaults to `~/autoware_data` -- populate it once with acb's
-  `scripts/link_autoware_data.sh`.
+  the CARLA profile defaults to `~/autoware_data`. Populate it once:
+  `ros2 run acb_launch setup_autoware_data` (mirrors `/opt/autoware/1.5.0/data`; pass
+  `SRC DST` for other locations). `carla_simulator.launch.xml` refuses to start, naming that
+  command, while `data_path` is missing or read-only.
 - If `traffic_simulator` fails to find a dependency's headers after that dependency built,
   delete `build/traffic_simulator`: its CMake cache remembers the failed configure.
-- CARLA's default Town01 weather is overcast and raining; `scripts/set_weather.py ClearNoon`
-  sets clear weather, which persists in the server across runs.
+- CARLA's default Town01 weather is overcast and raining; start the simulation side with
+  `weather:=ClearNoon` for a clear sky ([5. Configure the CARLA world](#5-configure-the-carla-world)).
 
 ## 2. Prepare a map directory
 
@@ -111,7 +113,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
 # Terminal 2 -- simulation side, long-lived: the bridge (restarted if it crashes) and the
 # agent relay (TCP 5560), in the ROS domain scenarios will run in
 ROS_DOMAIN_ID=9 play_launch launch csb_launch simulation.launch.xml \
-    [config_file:=<scenario dir>/bridge.yaml]
+    [config_file:=<scenario dir>/bridge.yaml] [weather:=ClearNoon]
 
 # Terminal 3 -- vehicle side, any ROS domain, any host, any time
 ROS_DOMAIN_ID=1 play_launch launch acb_launch carla_simulator.launch.xml \
@@ -143,7 +145,33 @@ three components with CARLA settings. Turn any of those off to keep your own:
 | `carla_perception:=false` | selectable `lidar_detection_model`, fusion-only traffic lights (signals arrive from CARLA over V2X) |
 | `carla_system:=false` | component-state topics, MRM parameters and diagnostic graph matching CARLA's sensors |
 
-## 5. When things go wrong
+## 5. Configure the CARLA world
+
+The bridge owns the simulation side's CARLA connection, so world settings are ROS services
+on it, in the simulation side's domain (`csb_interfaces`):
+
+```bash
+ROS_DOMAIN_ID=9 ros2 service call /carla/set_weather csb_interfaces/srv/SetWeather "{preset: ClearNoon}"
+ROS_DOMAIN_ID=9 ros2 service call /carla/get_weather csb_interfaces/srv/GetWeather
+
+# explicit values instead of a preset (fields not given are 0; use_parameters guards an
+# empty request): cloudiness, precipitation, precipitation_deposits, wind_intensity,
+# fog_density, fog_distance, wetness, sun_azimuth_angle, sun_altitude_angle
+ROS_DOMAIN_ID=9 ros2 service call /carla/set_weather csb_interfaces/srv/SetWeather \
+    "{use_parameters: true, weather: {cloudiness: 30.0, sun_altitude_angle: 60.0, fog_distance: 0.75}}"
+```
+
+Presets are CARLA's (`carla.WeatherParameters`): `ClearNoon`, `CloudyNoon`, `WetNoon`,
+`WetCloudyNoon`, `SoftRainNoon`, `MidRainyNoon`, `HardRainNoon`, the same for `Sunset`
+(`MidRainSunset`) and `Night` (`MidRainyNight`), and `DustStorm`; case is ignored. Both
+services answer with the resulting values and the preset they match.
+
+Every map load resets CARLA's weather to the town's default. The bridge keeps the weather
+you asked for -- `weather:=` on `simulation.launch.xml` (or `weather:` in `bridge.yaml`),
+then the last `set_weather` -- and applies it again after every map load and CARLA restart,
+so it holds across scenarios on different towns. Empty (the default) leaves CARLA's own.
+
+## 6. When things go wrong
 
 - **CARLA dies**: the running scenario fails within ~30 s; restart CARLA; the next scenario
   waits for it (up to 240 s) and runs.

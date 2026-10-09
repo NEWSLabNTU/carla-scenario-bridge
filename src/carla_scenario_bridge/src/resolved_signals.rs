@@ -312,7 +312,9 @@ mod tests {
 
         let mut changed = table();
         changed.signals.pop();
-        assert!(matches!(check_table(&path, &changed).unwrap(), Check::Differs(d) if d.contains("signals")));
+        assert!(
+            matches!(check_table(&path, &changed).unwrap(), Check::Differs(d) if d.contains("signals"))
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 

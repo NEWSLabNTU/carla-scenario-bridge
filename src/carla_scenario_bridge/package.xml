@@ -14,6 +14,10 @@
   <build_depend>protobuf-dev</build_depend>
   <depend>libzmq3-dev</depend>
 
+  <!-- The /carla/* world services (rclrs node). rclrs itself is a crate, not a rosdep key. -->
+  <depend>rcl</depend>
+  <depend>csb_interfaces</depend>
+
   <export>
     <build_type>ament_cargo</build_type>
   </export>

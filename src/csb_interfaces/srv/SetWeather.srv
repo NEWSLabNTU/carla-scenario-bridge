@@ -1,0 +1,20 @@
+# Set CARLA's weather, by preset or by value. The bridge remembers it and re-applies it
+# after every map load, so it survives a scenario on another town.
+#
+#   ros2 service call /carla/set_weather csb_interfaces/srv/SetWeather "{preset: ClearNoon}"
+#   ros2 service call /carla/set_weather csb_interfaces/srv/SetWeather
+#     "{use_parameters: true, weather: {cloudiness: 30.0, sun_altitude_angle: 60.0}}"
+
+# A CARLA preset name (ClearNoon, CloudySunset, HardRainNight, ...; case-insensitive).
+# Takes precedence over `weather`.
+string preset
+# With no preset: true applies every field of `weather`. Guards against an empty request
+# silently setting all-zero weather.
+bool use_parameters
+Weather weather
+---
+bool success
+string message
+# The weather CARLA reports after the change, and the preset it matches (empty if none).
+Weather weather
+string preset

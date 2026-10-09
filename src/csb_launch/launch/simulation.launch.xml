@@ -5,6 +5,9 @@
   run any number of scenarios (scenario.launch.xml) and start vehicle sides in any domain.
 
     play_launch launch csb_launch simulation.launch.xml [config_file:=...] [carla_host:=...]
+        [weather:=ClearNoon]
+
+  The bridge serves /carla/set_weather and /carla/get_weather (csb_interfaces/srv) here.
 -->
 <launch>
   <arg name="config_file" default="$(find-pkg-share carla_scenario_bridge)/config/bridge_config.yaml"/>
@@ -13,12 +16,15 @@
   <arg name="ssv2_port" default=""/>
   <arg name="entity" default="ego" description="the scenario entity the relay serves"/>
   <arg name="agent_port" default="5560" description="TCP port vehicle agents connect to"/>
+  <arg name="weather" default=""
+       description="CARLA weather preset (ClearNoon, CloudySunset, ...) kept across map loads; empty keeps the config file's (default: leave CARLA's)"/>
 
   <include file="$(find-pkg-share carla_scenario_bridge)/launch/bridge.launch.xml">
     <arg name="config_file" value="$(var config_file)"/>
     <arg name="carla_host" value="$(var carla_host)"/>
     <arg name="carla_port" value="$(var carla_port)"/>
     <arg name="ssv2_port" value="$(var ssv2_port)"/>
+    <arg name="weather" value="$(var weather)"/>
     <!-- Entities with controller `agent` are driven through this same relay. -->
     <arg name="agent_relay" value="tcp://localhost:$(var agent_port)"/>
   </include>

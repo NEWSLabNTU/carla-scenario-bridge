@@ -106,7 +106,13 @@ mod tests {
 
     #[test]
     fn records_round_trip_exactly() {
-        for c in [stored(), StoredClock { last_frame: None, ..stored() }] {
+        for c in [
+            stored(),
+            StoredClock {
+                last_frame: None,
+                ..stored()
+            },
+        ] {
             assert_eq!(decode(&encode(&c)), Some(c));
         }
         assert_eq!(decode("garbage"), None);

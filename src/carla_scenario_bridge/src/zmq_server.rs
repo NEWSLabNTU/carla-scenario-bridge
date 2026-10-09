@@ -1,6 +1,6 @@
 use prost::Message;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
 use crate::coordinator::Coordinator;
@@ -8,6 +8,7 @@ use crate::frame_stats::{FrameStats, Outcome, RequestKind, SUMMARY_WINDOW_FRAMES
 use crate::proto::simulation_api_schema::{
     self as api, simulation_request, simulation_response, SimulationRequest, SimulationResponse,
 };
+use crate::world_services::WorldCommand;
 
 // No idle watchdog. Until roadmap 015 step 7 the bridge handed CARLA back to async after
 // 10 s without a request (300 s with an ego), so the world would not stay frozen if a
@@ -25,10 +26,18 @@ pub struct ZmqServer {
     /// and CARLA disagreeing (docs/design/failure-and-frame-budget.md, "Panics").
     poisoned: Option<String>,
     frame_stats: FrameStats,
+    /// Requests from the ROS services (`world_services`), applied between SSv2 requests on
+    /// this thread, which owns the CARLA client.
+    world_commands: Option<mpsc::Receiver<WorldCommand>>,
 }
 
 impl ZmqServer {
-    pub fn new(ctx: &zmq::Context, port: u16, coordinator: Coordinator) -> eyre::Result<Self> {
+    pub fn new(
+        ctx: &zmq::Context,
+        port: u16,
+        coordinator: Coordinator,
+        world_commands: Option<mpsc::Receiver<WorldCommand>>,
+    ) -> eyre::Result<Self> {
         let socket = ctx.socket(zmq::REP)?;
         let endpoint = format!("tcp://*:{port}");
         socket.bind(&endpoint)?;
@@ -38,7 +47,26 @@ impl ZmqServer {
             coordinator,
             poisoned: None,
             frame_stats: FrameStats::new(),
+            world_commands,
         })
+    }
+
+    /// Apply whatever the ROS services have queued. Between SSv2 requests, so never in the
+    /// middle of a frame's ticks or a map load.
+    fn serve_world_commands(&mut self) {
+        let Some(rx) = &self.world_commands else {
+            return;
+        };
+        while let Ok(cmd) = rx.try_recv() {
+            match cmd {
+                WorldCommand::SetWeather(request, reply) => {
+                    let _ = reply.send(self.coordinator.set_weather(request));
+                }
+                WorldCommand::GetWeather(reply) => {
+                    let _ = reply.send(self.coordinator.get_weather());
+                }
+            }
+        }
     }
 
     /// Run the server loop until shutdown is signaled.
@@ -46,6 +74,7 @@ impl ZmqServer {
         tracing::info!("ZMQ server ready, waiting for SSv2 requests...");
 
         while !shutdown.load(Ordering::SeqCst) {
+            self.serve_world_commands();
             // Poll with 100ms timeout so we can check shutdown
             let mut items = [self.socket.as_poll_item(zmq::POLLIN)];
             match zmq::poll(&mut items, 100) {

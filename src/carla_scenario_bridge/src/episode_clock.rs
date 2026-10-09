@@ -247,7 +247,11 @@ mod tests {
         // Town01 -> Town02: F0 769975, E0 13.738989307, F1 769977, E1 0.050000001.
         let e0 = 13.738989307_f64;
         let got = old_episode_last_elapsed(e0, d, 769_975, 769_977, d).unwrap();
-        assert_eq!(got, e0 + d, "k_old = 1: the stream's last old frame was F0 + 1");
+        assert_eq!(
+            got,
+            e0 + d,
+            "k_old = 1: the stream's last old frame was F0 + 1"
+        );
         // Synthetic: k_old extra old frames and n_new new ones.
         for k_old in 0..=5_u64 {
             for n_new in 1..=3_u64 {
@@ -267,10 +271,26 @@ mod tests {
 
     #[test]
     fn frame_count_refuses_numbers_that_are_not_a_synchronous_load() {
-        assert_eq!(old_episode_last_elapsed(1.0, 0.0, 10, 12, 0.05), None, "no step");
-        assert_eq!(old_episode_last_elapsed(1.0, 0.05, 12, 10, 0.05), None, "frames backwards");
-        assert_eq!(old_episode_last_elapsed(1.0, 0.05, 10, 12, 0.5), None, "more new frames than frames");
-        assert_eq!(old_episode_last_elapsed(1.0, 0.05, 10, 5000, 0.05), None, "implausible count");
+        assert_eq!(
+            old_episode_last_elapsed(1.0, 0.0, 10, 12, 0.05),
+            None,
+            "no step"
+        );
+        assert_eq!(
+            old_episode_last_elapsed(1.0, 0.05, 12, 10, 0.05),
+            None,
+            "frames backwards"
+        );
+        assert_eq!(
+            old_episode_last_elapsed(1.0, 0.05, 10, 12, 0.5),
+            None,
+            "more new frames than frames"
+        );
+        assert_eq!(
+            old_episode_last_elapsed(1.0, 0.05, 10, 5000, 0.05),
+            None,
+            "implausible count"
+        );
     }
 
     #[test]

@@ -25,6 +25,9 @@ just test     # Run tests
 - **AWSIM pattern**: SSv2 puppeteers NPCs via `set_transform()`, CARLA owns ego physics
 - **Sensors**: Reject SSv2 `AttachSensor` requests (`Success=false`); CARLA sensors publish via autoware_carla_bridge
 - **Traffic lights**: Freeze CARLA's built-in cycling, set states per SSv2 commands
+- **World config**: ROS services on the bridge (`/carla/set_weather`, `/carla/get_weather`,
+  `csb_interfaces`), applied on the ZMQ thread between SSv2 requests; the requested weather
+  (param `weather`, then the last set) is re-applied after every map load and reconnect
 - **Coordinate conversion**: SSv2 uses ROS right-handed frame; CARLA uses left-handed (Y-flip)
 - **Vehicle interface**: autoware_carla_bridge handles `/vehicle/status/*` and `/control/command/*`; SSv2's `AutowareUniverse` (concealer) should be disabled
 
@@ -40,11 +43,14 @@ just test     # Run tests
 │   │   ├── entity_manager.rs   # SSv2 name ↔ CARLA actor ID mapping
 │   │   ├── coordinate_conversion.rs  # ROS ↔ CARLA frame conversion
 │   │   ├── traffic_light_mapper.rs   # Lanelet signal ID ↔ CARLA actor (Phase 4)
+│   │   ├── weather.rs          # Weather presets, kept across map loads (018)
+│   │   ├── world_services.rs   # rclrs node: /carla/set_weather, /carla/get_weather
 │   │   └── proto.rs            # Generated protobuf type re-exports
 │   ├── build.rs                # prost-build proto compilation
 │   ├── config/bridge_config.yaml
 │   ├── Cargo.toml
 │   └── package.xml
+├── src/csb_interfaces/     # rosidl: Weather.msg, SetWeather.srv, GetWeather.srv
 ├── proto/                  # SSv2 protobuf definitions (8 .proto files)
 ├── scenarios/              # Example OpenSCENARIO test files
 ├── docs/

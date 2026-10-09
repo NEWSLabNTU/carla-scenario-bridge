@@ -49,6 +49,14 @@ map_alias: {}
 # here (`background_avs`); that key is now refused -- declare them in the scenario.
 agent_relay: "tcp://localhost:5560"
 
+# CARLA weather (roadmap 018): a preset name -- ClearNoon, CloudyNoon, WetNoon,
+# WetCloudyNoon, SoftRainNoon, MidRainyNoon, HardRainNoon, the same for Sunset (MidRainSunset)
+# and Night (MidRainyNight), or DustStorm. Applied on connect and again after every map load,
+# since each load resets CARLA to the town's default (Town01's is overcast and raining).
+# Empty leaves CARLA's. The ROS parameter / launch arg `weather` overrides it, and
+# `/carla/set_weather` replaces it at run time (also kept across map loads).
+weather: ""
+
 # Telling the sensor bridges before we despawn something.
 #
 # acb attaches sensors to the vehicles this bridge spawns and listens to their streams, so

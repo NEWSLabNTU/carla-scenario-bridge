@@ -182,6 +182,9 @@ pub struct BridgeConfig {
     /// (`tcp://host:port`; empty = the default). csb connects to it as a commander (see
     /// `agent_link`). Read it through [`BridgeConfig::agent_relay`].
     pub agent_relay: String,
+    /// CARLA weather preset (`ClearNoon`, ...) applied on connect and after every map load;
+    /// empty leaves CARLA's (roadmap 018). `/carla/set_weather` replaces it at run time.
+    pub weather: String,
 }
 
 const DEFAULT_AGENT_RELAY: &str = "tcp://localhost:5560";
@@ -269,7 +272,7 @@ impl BridgeConfig {
     }
 
     /// Apply ROS parameters (`carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
-    /// `reconnect_wait_seconds`) over the file and the environment: a launch file's explicit
+    /// `reconnect_wait_seconds`, `weather`) over the file and the environment: a launch file's explicit
     /// value is the most specific statement of intent. A malformed number is an error, not
     /// a silent default.
     pub fn apply_ros_params(&mut self, params: &crate::ros_args::RosParams) -> Result<()> {
@@ -297,6 +300,11 @@ impl BridgeConfig {
         }
         if let Some(relay) = params.get("agent_relay").filter(|v| !v.is_empty()) {
             self.agent_relay = relay.to_string();
+        }
+        if let Some(weather) = params.get("weather").filter(|v| !v.trim().is_empty()) {
+            crate::weather::preset_or_err(weather.trim())
+                .map_err(|e| eyre::eyre!("parameter weather:={weather}: {e}"))?;
+            self.weather = weather.trim().to_string();
         }
         if params.get("background_avs").is_some_and(|v| !v.is_empty()) {
             bail!("{}", REMOVED_BACKGROUND_AVS);
@@ -331,6 +339,10 @@ impl BridgeConfig {
             bail!("ego.role_name is empty; acb_bridge finds the ego by it");
         }
         crate::agent_link::parse_relay_address(self.agent_relay()).wrap_err("agent_relay")?;
+        if !self.weather.trim().is_empty() {
+            crate::weather::preset_or_err(self.weather.trim())
+                .map_err(|e| eyre::eyre!("weather: {e}"))?;
+        }
         Ok(())
     }
 
@@ -440,6 +452,41 @@ mod tests {
         .expect("parses");
         config.apply_ros_params(&params).expect("applies");
         assert_eq!(config.agent_relay(), "tcp://h:1");
+    }
+
+    #[test]
+    fn weather_comes_from_file_or_parameter_and_must_be_a_preset() {
+        let params = |v: &str| {
+            crate::ros_args::RosParams::from_args([
+                "--ros-args".to_string(),
+                "-p".to_string(),
+                format!("weather:={v}"),
+            ])
+            .expect("parses")
+        };
+        // Unset: leave CARLA's.
+        let config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        assert_eq!(config.weather, "");
+        assert!(config.validate().is_ok());
+
+        let mut config: BridgeConfig =
+            serde_yaml::from_str("weather: CloudyNoon\n").expect("parses");
+        assert!(config.validate().is_ok());
+        // An empty parameter (the launch default) keeps the file's.
+        config.apply_ros_params(&params("")).expect("applies");
+        assert_eq!(config.weather, "CloudyNoon");
+        config
+            .apply_ros_params(&params("ClearNoon"))
+            .expect("applies");
+        assert_eq!(config.weather, "ClearNoon");
+
+        let err = config.apply_ros_params(&params("Sunny")).unwrap_err();
+        assert!(
+            format!("{err}").contains("unknown weather preset 'Sunny'"),
+            "{err}"
+        );
+        let config: BridgeConfig = serde_yaml::from_str("weather: Sunny\n").expect("parses");
+        assert!(config.validate().is_err());
     }
 
     #[test]

@@ -16,6 +16,8 @@ mod resolved_signals;
 mod ros_args;
 mod sensor_release;
 mod traffic_light_mapper;
+mod weather;
+mod world_services;
 mod zmq_server;
 
 use carla::client::Client;
@@ -71,6 +73,14 @@ fn main() -> Result<()> {
         "  Agent relay (controller `agent`): {}",
         config.agent_relay()
     );
+    tracing::info!(
+        "  Weather: {}",
+        if config.weather.is_empty() {
+            "CARLA's (not set)"
+        } else {
+            config.weather.as_str()
+        }
+    );
 
     let shutdown = Arc::new(AtomicBool::new(false));
     {
@@ -109,8 +119,21 @@ fn main() -> Result<()> {
         return result;
     }
 
+    // The configured weather, now that there is a world to apply it to.
+    coord.reapply_weather("connect");
+
+    // World configuration services. Served from their own thread, applied on this one.
+    // Without them the bridge still serves SSv2, so a ROS failure is loud but not fatal.
+    let world_commands = match world_services::start(shutdown.clone()) {
+        Ok(rx) => Some(rx),
+        Err(e) => {
+            tracing::error!("{e:#}; /carla/* services are unavailable");
+            None
+        }
+    };
+
     let zmq_ctx = zmq::Context::new();
-    let mut server = zmq_server::ZmqServer::new(&zmq_ctx, ssv2_port, coord)?;
+    let mut server = zmq_server::ZmqServer::new(&zmq_ctx, ssv2_port, coord, world_commands)?;
 
     // Run server loop
     server.run(shutdown);

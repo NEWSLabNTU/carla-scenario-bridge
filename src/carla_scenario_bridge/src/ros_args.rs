@@ -39,14 +39,18 @@ impl RosParams {
                 "--ros-args" => in_ros_args = true,
                 "--" => in_ros_args = false,
                 "-p" | "--param" if in_ros_args => {
-                    let kv = it.next().ok_or_else(|| eyre::eyre!("{arg} needs name:=value"))?;
+                    let kv = it
+                        .next()
+                        .ok_or_else(|| eyre::eyre!("{arg} needs name:=value"))?;
                     let (k, v) = kv
                         .split_once(":=")
                         .ok_or_else(|| eyre::eyre!("{arg} {kv}: expected name:=value"))?;
                     params.insert(k.to_string(), unquote(v).to_string());
                 }
                 "--params-file" if in_ros_args => {
-                    let file = it.next().ok_or_else(|| eyre::eyre!("--params-file needs a path"))?;
+                    let file = it
+                        .next()
+                        .ok_or_else(|| eyre::eyre!("--params-file needs a path"))?;
                     params.extend(params_file(Path::new(&file))?);
                 }
                 // Arguments with a value we do not use.
@@ -72,7 +76,8 @@ fn unquote(v: &str) -> &str {
 /// The `ros__parameters` of `/**` and of this node (with or without a leading slash), in
 /// that order, flattened to strings.
 fn params_file(path: &Path) -> Result<HashMap<String, String>> {
-    let text = std::fs::read_to_string(path).wrap_err_with(|| format!("read {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).wrap_err_with(|| format!("read {}", path.display()))?;
     parse_params_yaml(&text).wrap_err_with(|| format!("parse {}", path.display()))
 }
 
@@ -82,7 +87,11 @@ fn parse_params_yaml(text: &str) -> Result<HashMap<String, String>> {
     let Some(map) = doc.as_mapping() else {
         return Ok(out);
     };
-    let wanted = ["/**".to_string(), NODE_NAME.to_string(), format!("/{NODE_NAME}")];
+    let wanted = [
+        "/**".to_string(),
+        NODE_NAME.to_string(),
+        format!("/{NODE_NAME}"),
+    ];
     for key in &wanted {
         let Some(section) = map
             .get(serde_yaml::Value::String(key.clone()))

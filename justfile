@@ -327,7 +327,8 @@ run:
         --log-dir play_log/bridge \
         csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
-        ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"}
+        ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"} \
+        ${WEATHER:+weather:="$WEATHER"}
 
 # Start CARLA simulator as a background service
 carla-start:

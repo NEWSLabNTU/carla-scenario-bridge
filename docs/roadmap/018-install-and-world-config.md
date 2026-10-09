@@ -59,7 +59,7 @@ workspaces depend on carla-rust.
 ### Runtime version check
 
 csb and acb compare the version they were built for (`carla::VERSION` / carla-sys's
-`CARLA_VERSION`) with `client.server_version()` on every connect. Major.minor mismatch:
+`CARLA_VERSION`) with `client.server_version()` on every connect. A different release (major.minor.patch, suffixes such as `-dirty` ignored):
 refuse with both versions in the message. A client built for 0.9.16 against a 0.9.15 server
 today fails somewhere in RPC with a msgpack error.
 
@@ -144,9 +144,33 @@ wheel the user must install, and no hook into map loads).
    `rosdep check --from-paths src --ignore-src -r`: every key resolves; on this host only
    SSv2's test/lint deps are uninstalled (python3-xmlschema, yamale, replay-testing,
    ament-cmake-clang-format, ouxt-lint-common), and `rosdep install --simulate` exits 0.*
-4. - [ ] `setup_autoware_data` in acb_launch; launch-time writable check; script retired.
-5. - [ ] `csb_interfaces` + rclrs node in csb; set/get weather services; `weather` param and
+4. - [x] `setup_autoware_data` in acb_launch; launch-time writable check; script retired.
+   *acb `ccfc64c`: `scripts/link_autoware_data.sh` → `acb_launch/scripts/setup_autoware_data`
+   (`install(PROGRAMS)`, header kept, `--help`); `ros2 run acb_launch setup_autoware_data
+   /opt/autoware/1.5.0/data <tmp>` linked 171 files. `carla_simulator.launch.xml` includes
+   `check_data_path.launch.py` (an `OpaqueFunction` that raises) right after declaring
+   `data_path`: `play_launch dump`/`launch` and `ros2 launch` with `data_path:=/nonexistent`
+   or the root-owned `/opt/autoware/1.5.0/data` exit 1 with "data_path ... does not exist /
+   is not writable ... Populate it with: ros2 run acb_launch setup_autoware_data"; a
+   writable path resolves silently (148 nodes); `ros2 launch --show-args` is unaffected. The
+   acb demo launch and justfile defaulted to a read-only / missing data path and now default
+   to `~/autoware_data` too.*
+5. - [x] `csb_interfaces` + rclrs node in csb; set/get weather services; `weather` param and
    launch arg; re-apply after map load; `scripts/set_weather.py` retired.
+   *`src/csb_interfaces` (`Weather.msg`, `SetWeather.srv`: `preset` or `use_parameters` +
+   `weather`; `GetWeather.srv`; both answer with the resulting values and matching preset).
+   csb `world_services.rs`: rclrs 0.7 node `carla_scenario_bridge` on its own thread, async
+   services that hand a `WorldCommand` to the ZMQ thread (which owns CARLA) and reply once it
+   is applied between SSv2 requests. `weather.rs`: CARLA's 22 presets under their Python names
+   (values from carla-rust `rpc::weather`), case/`_`-insensitive. Param `weather` (config file
+   key, ROS param, `bridge.launch.xml`/`simulation.launch.xml weather:=`, `WEATHER=` for
+   `just run`), validated at start. Applied on connect; re-applied after every `load_world`
+   and every reconnect. `just test` 196/196 (9 new), `just check` clean. Live, 2026-10-10:
+   set `{preset: ClearNoon}` → `success=True ... preset='ClearNoon'` (from CARLA's default
+   cloudiness 60 / precipitation 40); `town02_episode_change` passed, the bridge logged
+   `Map 'Town02' loaded` then `Weather ClearNoon applied (map load)`, and get_weather after
+   it returned `preset='ClearNoon'`. `{}` and `{preset: Sunny}` are refused with the preset
+   list.*
 6. - [ ] Docs: user guide, CLAUDE.md ("never bare cargo" rewritten), acb README.
 
 ## Acceptance
