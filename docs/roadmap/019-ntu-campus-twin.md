@@ -104,6 +104,12 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
       `pointcloud_map.pcd`, projector, `carla/traffic_lights.yaml`)
 
 ### 6. Import into CARLA
+- [x] CARLA 0.10.0 Linux package downloaded and extracted to
+      `~/Downloads/Carla-0.10.0-Linux-Shipping` (2026-10-10; 10.4 GB tarball, 20 GB
+      extracted; Python wheels cp38–cp312 in `PythonAPI/carla/dist`). It ships four maps
+      only: `Town10HD_Opt`, `Mine_01`, `OpenDriveMap`, `EmptyMap`. **No Town01**, so the
+      existing Town01 scenarios and map dirs do not carry over; a 0.10 baseline needs a
+      Town10HD map dir (Lanelet2 + PCD + signal table) or the twin itself
 - [ ] Stand up CARLA 0.10.0 on this host (16 GB+ VRAM recommended, 130 GB disk; package in
       `~/Downloads`). Build csb/acb against it by switching the `carla` dependency feature
       `carla-0916` → `carla-0100` in both workspaces (018); the bridges refuse a version

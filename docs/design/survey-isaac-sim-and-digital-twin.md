@@ -200,7 +200,8 @@ Mine map; 16 GB VRAM and driver ≥550 recommended, 130 GB disk. Known costs for
   steering curve (roadmap 014 gap 8) and the longitudinal tuning are 0.9.16 measurements and
   must be redone. The 0.10 steering-angle getter returns 0 (ssv2-feature-completeness.md).
 - Town availability differs from 0.9.16; our scenarios and map dirs are Town01-based.
-  *Check which towns 0.10.x ships before porting a scenario.*
+  The 0.10.0 package ships only `Town10HD_Opt`, `Mine_01`, `OpenDriveMap` and `EmptyMap`
+  (checked 2026-10-10), so a 0.10 baseline needs a new map dir.
 - Traffic-light signal tables must be regenerated per map; the generator already refuses
   stale tables.
 
