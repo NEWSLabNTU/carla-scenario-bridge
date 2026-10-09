@@ -171,17 +171,38 @@ wheel the user must install, and no hook into map loads).
    `Map 'Town02' loaded` then `Weather ClearNoon applied (map load)`, and get_weather after
    it returned `preset='ClearNoon'`. `{}` and `{preset: Sunny}` are refused with the preset
    list.*
-6. - [ ] Docs: user guide, CLAUDE.md ("never bare cargo" rewritten), acb README.
+6. - [x] Docs: user guide, CLAUDE.md ("never bare cargo" rewritten), acb README.
+   *User guide: `setup_autoware_data` in the fresh-machine notes, `weather:=` on the
+   simulation side, new section 5 "Configure the CARLA world" (both services, presets,
+   persistence across map loads). acb README: "Autoware data directory (once per machine)".
+   CLAUDE.md: "The CARLA version is a Cargo feature" (db094cf) plus the world-config design
+   note and the new files; `design/user-workflow.md` lists the `weather` param and services.*
 
 ## Acceptance
 
-- A fresh clone, on a machine with ROS, Autoware and Rust, builds with exactly the commands
+Met 2026-10-10.
+
+- [x] A fresh clone, on a machine with ROS, Autoware and Rust, builds with exactly the commands
   in the user guide; no `just`, no env var.
-- `colcon build` with `CARLA_VERSION` unset compiles the 0.9.16 API; with
+  *`git clone --recurse-submodules` of `14132d1` into a scratch dir (submodules acb
+  `ccfc64c`, color_names `c6a3227`, SSv2 `efe7f87`); `rosdep install --from-paths src
+  --ignore-src -y --simulate` exits 0 (only SSv2's test/lint deps listed, as in step 3);
+  `colcon build --packages-up-to carla_scenario_bridge csb_interfaces --cmake-args
+  -DCMAKE_BUILD_TYPE=Release` with `CARLA_VERSION` unset: 2 packages, 3 min 8 s, its own
+  target dir. The whole workspace (50 packages) builds the same way in the main checkout.
+  Note: `-DCMAKE_BUILD_TYPE=Release` does not reach cargo -- colcon-cargo-ros2 built the
+  Rust crates in the `dev` profile.*
+- [x] `colcon build` with `CARLA_VERSION` unset compiles the 0.9.16 API; with
   `CARLA_VERSION=0.9.15` it compiles 0.9.15's.
-- `ros2 service call /carla/set_weather ... "{preset: ClearNoon}"` changes the sky, and it
+  *Fresh clone: carla's build script emitted `carla_version=0.9.16` /
+  `carla_version_0916`. The 0.9.15 override: step 1.*
+- [x] `ros2 service call /carla/set_weather ... "{preset: ClearNoon}"` changes the sky, and it
   is still ClearNoon after a scenario that loads Town02.
-- `town01_traffic_light` passes on the rebuilt stack (regression).
+  *Step 5: cloudiness 60 / rain 40 → ClearNoon; after `town02_episode_change` (passed)
+  get_weather returned `preset='ClearNoon'`; the following Town01 load re-applied it too.*
+- [x] `town01_traffic_light` passes on the rebuilt stack (regression).
+  *Passed 2026-10-10 (failures=0) on rebuilt acb `ccfc64c` + csb, ego stack started with
+  `just ego-av` (data_path check passed silently), weather ClearNoon.*
 
 ## Later
 
