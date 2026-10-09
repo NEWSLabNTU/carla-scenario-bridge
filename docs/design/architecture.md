@@ -76,27 +76,24 @@ child process to kill, so a run ends without tearing Autoware down and the next 
 the same stack. Verified live: two consecutive scenarios on one stack both drove
 (phase 012).
 
-Whether SSv2 drives the ego's *autonomy* is now a choice, made per run by `managed_ego`:
+SSv2 still drives the ego's *autonomy* -- initial pose, goal, speed limit, engage, the
+ego-state conditions -- through its concealer, but the concealer no longer talks to Autoware
+directly (roadmap 017). It calls the ADAPI subset it always called, served in SSv2's own ROS
+domain by `scenario_agent_relay`, which forwards each call to the **vehicle agent**
+registered under the ego's entity name; the agent (acb's `acb_pilot agent`) drives Autoware's
+API locally, in whatever domain -- or host -- the vehicle side runs. So:
 
-| | `managed_ego:=true` (default) | `managed_ego:=false` |
+| | Before 017 | Now |
 |---|---|---|
-| Who routes and engages the ego | SSv2's `FieldOperatorApplication` (concealer) | `acb_pilot`'s `auto_drive`, as for every background AV |
-| Ego's `ROS_DOMAIN_ID` | SSv2's, because the concealer talks plain ROS | its own, like any other AV |
-| `/clock` in that domain | SSv2 publishes it; `acb_bridge` runs `publish_clock:=false` | `acb_bridge` publishes it |
-| Ego autonomy actions in the `.xosc` | honored | hard error naming the parameter |
-| Ego goal | the scenario's `AcquirePositionAction` | the pilot's poses file |
+| Who routes and engages the ego | the concealer, over ROS | the concealer, through the relay and the agent |
+| Ego's `ROS_DOMAIN_ID` | SSv2's (or its own, with `managed_ego:=false` and no ego autonomy in the scenario) | any; SSv2's domain holds only SSv2 and the relay |
+| Start order | Autoware first | either |
+| Ego goal | the scenario's (or a pilot's poses file) | the scenario's |
 
-`managed_ego:=true` is upstream behavior and phase 012's. `launch_autoware:=false` means
-"do not fork", not "run without Autoware": `EgoEntity` inherits the concealer as a base
-class, so it is always constructed and every subscription, service client and state machine
-stays wired — which is why the concealer can drive a stack it did not start.
-
-`managed_ego:=false` (phase 013, carried on the NEWSLabNTU fork) makes that base class inert
-instead. Nothing in SSv2 then touches the ego's autonomy, so **every** Autoware in the
-system is launched, routed and engaged the same way, and SSv2's domain contains only SSv2.
-The cost is that the ego's goal is stated in the pilot's poses file rather than the
-scenario, and ego-state conditions never fire; see
-[scenario-authoring.md](scenario-authoring.md) for the rules that follow from this.
+`managed_ego:=false` (phase 013) is retired. Background vehicles are scenario entities whose
+controller chooses the driver: SSv2 (default), CARLA's Traffic Manager
+(`simulator_autopilot`), or a registered agent (`agent`). Details, the agent protocol and
+the swap audit: [user-workflow.md](user-workflow.md).
 
 SSv2's `AutowareUniverse` (concealer) must be **disabled** for vehicle status topics, since `autoware_carla_bridge` publishes them from real CARLA state. The `simulate_localization` parameter must be `false` so Autoware runs its real GNSS->NDT pipeline.
 
@@ -155,8 +152,6 @@ Both processes connect to the same CARLA server. Responsibilities are split:
 | Sensor data -> ROS 2 | No | Yes |
 | Vehicle status -> ROS 2 | No | Yes |
 | Control commands -> CARLA | No | Yes (actuation_cmd -> apply_control) |
-| Clock publishing | No | Domain-dependent — see [multi-instance-architecture.md](multi-instance-architecture.md#clock-ownership). Whoever shares a domain with SSv2 yields `/clock` to it: with `managed_ego:=true` that is the ego's domain, and `acb_bridge` is launched there with `publish_clock:=false`. With `managed_ego:=false` no stack shares SSv2's domain and every `acb_bridge` publishes its own |
+| Clock publishing | No (reports CARLA time to SSv2) | Yes, in its own domain, from CARLA's frame time -- see [time-and-ticking.md](time-and-ticking.md) |
 | Traffic light control | Yes (freeze + set_state) | No |
-| CARLA world.tick() | Yes (via UpdateFrame) | No (passive wait_for_tick) |
-
-The bridge must switch from active `world.tick()` (current `demo_scenario.py` role) to passive `wait_for_tick_or_timeout()` since this adapter now owns the tick.
+| CARLA world.tick() | Yes (via UpdateFrame); the only ticker | No (follows `on_tick`) |

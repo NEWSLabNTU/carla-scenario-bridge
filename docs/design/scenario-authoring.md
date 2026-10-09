@@ -183,12 +183,13 @@ the next command or the next `Initialize`.
 
 - To stop the ego at an intersection, command that signal. Do not rely on the state a previous
   run or CARLA's own cycle left a light in; it is reset to GREEN.
-- "Mapped" means listed in the resolved table the bridge writes beside the Lanelet2 map at
-  `Initialize` (`traffic_lights.resolved.yaml`, logged with its path): Lanelet2 traffic light
-  ways matched to a CARLA light by position, plus `config/traffic_lights_<town>.yaml`. CARLA
+- "Mapped" means listed in the map dir's `carla/traffic_lights.yaml`, generated once per
+  map (`carla_scenario_bridge --generate-signal-table <map dir>`) and checked against CARLA
+  at every `Initialize`: Lanelet2 traffic light ways matched to a CARLA light by position,
+  plus `config/traffic_lights_<town>.yaml`. CARLA
   lights the Lanelet2 map does not reference keep their frozen state; Autoware cannot see them.
 - SSv2's own V2X publisher (`publish_conventional_traffic_signals`) is off in
-  `carla_scenario.launch.xml`; turning it on as well would put two sources on the arbiter's
+  `scenario.launch.xml`; turning it on as well would put two sources on the arbiter's
   input. SSv2 itself still treats an uncommanded signal as having no state, so conditions on
   a signal's state only see what the scenario commanded.
 

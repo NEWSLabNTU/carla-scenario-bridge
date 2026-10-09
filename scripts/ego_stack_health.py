@@ -27,14 +27,7 @@ publisher on each planning output and asks play_launch's ledger for crashed comp
 With `--reload-failed` it asks play_launch to load a crashed composable again and waits for
 the publishers to come back, which is the containment for a race nothing upstream fixes.
 
-An unmanaged ego needs one more thing. With the concealer inert nothing in SSv2
-routes or engages it -- `acb_pilot`'s `auto_drive` is the only thing that does, and it is
-an ordinary node that can exit on its own (it has a deadline, and it fails if no vehicle
-ever appears). If it is already gone when a scenario starts, the ego spawns, sits still,
-and the run dies at the storyboard's timeout naming nothing. `--require-pilot` turns that
-into a refusal that names the pilot.
-
-    ROS_DOMAIN_ID=1 scripts/ego_stack_health.py [--timeout 10] [--require-pilot]
+    ROS_DOMAIN_ID=1 scripts/ego_stack_health.py [--timeout 10]
                                                 [--web-port 8082] [--reload-failed]
 """
 
@@ -57,10 +50,6 @@ PLANNING_TOPICS = (
     "/planning/scenario_planning/lane_driving/behavior_planning/path",
     "/planning/scenario_planning/trajectory",
 )
-
-# The node `acb_pilot`'s auto_drive entry point creates. Only required for an
-# unmanaged ego, where it stands in for the concealer.
-PILOT_NODE = "auto_drive"
 
 
 def play_launch_get(port: int, path: str):
@@ -112,12 +101,6 @@ def main() -> int:
         type=float,
         default=10.0,
         help="seconds to wait for the topic to appear with a live publisher",
-    )
-    ap.add_argument(
-        "--require-pilot",
-        action="store_true",
-        help="also require acb_pilot's auto_drive node (an unmanaged ego has no other "
-        "way to be routed or engaged)",
     )
     ap.add_argument(
         "--web-port",
@@ -184,20 +167,9 @@ def main() -> int:
                         f"{args.web_port}/api/nodes/<name>/load`, or restart `just ego-av`."
                     )
                     return 1
-                if args.require_pilot and PILOT_NODE not in (
-                    n for n, _ns in node.get_node_names_and_namespaces()
-                ):
-                    print(
-                        f"[ego-health] not ready: the ADAPI is up but {PILOT_NODE} is "
-                        "not running. An unmanaged ego is routed and engaged only by "
-                        "acb_pilot; without it the ego would spawn and never move. "
-                        "Check the pilot's log under play_log/ego/*/node/auto_drive."
-                    )
-                    return 1
                 print(f"[ego-health] ok: {REQUIRED_TOPIC} has a publisher and planning "
                       "publishes; the ego stack is up"
-                      + (f" (reloaded {', '.join(reloaded)})" if reloaded else "")
-                      + (f", and {PILOT_NODE} is running" if args.require_pilot else ""))
+                      + (f" (reloaded {', '.join(reloaded)})" if reloaded else ""))
                 return 0
             rclpy.spin_once(node, timeout_sec=0.2)
         print(f"[ego-health] not ready: nothing publishes {REQUIRED_TOPIC} after "

@@ -6,12 +6,16 @@ over a single shared CARLA world.
 This document supersedes the parts of [architecture.md](architecture.md) that assume a
 single Autoware instance and a single ROS domain. Where the two disagree, this document wins.
 
-> **Superseded in part (roadmap 017 step 6, 2026-10-08):** background AVs are no longer
-> declared in `bridge_config.yaml` (`background_avs`) and invisible to SSv2. They are
-> scenario entities whose controller is `agent`, spawned per scenario with `role_name` = the
-> entity name and driven through the agent relay; SSv2 sees them. See
-> [user-workflow.md](user-workflow.md#agent-as-built-roadmap-017-step-6). The domain and
-> sensor-ownership material below still holds.
+> **Superseded in part (roadmap 017, 2026-10-08).** Current architecture:
+> [user-workflow.md](user-workflow.md) (two sides, agent relay, controllers), clock:
+> [time-and-ticking.md](time-and-ticking.md), failures:
+> [failure-and-frame-budget.md](failure-and-frame-budget.md). Background vehicles are now
+> scenario entities SSv2 sees, driven by SSv2, by CARLA's Traffic Manager
+> (`simulator_autopilot`) or by a registered agent (`agent`); `bridge_config.yaml`'s
+> `background_avs`, the per-domain `auto_drive` pilot and the managed/unmanaged split are
+> gone. Still authoritative here: the authority model, actor classes and why puppeteered
+> actors are kinematic, sensor ownership per domain, and the verified-run invariants. The
+> sections marked *(historical)* below record the 2026-08 design.
 
 **Status**: implemented and verified end to end on 2026-08-27 with two Autoware instances
 driving two CARLA vehicles at once — see [Verified two-instance run](#verified-two-instance-run).
@@ -20,8 +24,9 @@ The gap table below is older than that run and marks what has since been closed.
 ## Scope
 
 One SSv2 instance drives one scenario ego. Additional Autoware instances run as *background
-AVs*: real Autoware stacks driving real CARLA vehicles, outside SSv2's model. CARLA's Traffic
-Manager is not used anywhere.
+AVs*: real Autoware stacks driving real CARLA vehicles -- since roadmap 017 as scenario
+entities with the `agent` controller; CARLA's Traffic Manager drives only entities whose
+controller is `simulator_autopilot`.
 
 ## Authority model
 
@@ -77,14 +82,10 @@ the ego, `acb_pilot` for each background AV.
 
 ### Consequence: background AVs are invisible to SSv2
 
-SSv2's collision detection, `ReachPositionCondition`, `DistanceCondition` and the rest do not
-see background AVs. They exist to the other stacks only as LiDAR returns and camera pixels. A
-background AV can collide with the scenario ego and SSv2 will still report `exitSuccess`.
-
-This is accepted for v1. The extension point, if they later need to be scored: register each
-background AV with SSv2 as a **misc-object entity** whose pose `csb_bridge` writes from CARLA
-readback every frame. SSv2 then tracks them without trying to control them. That is the same
-read-PhysX-report-to-SSv2 path already used for the ego, so no new machinery is required.
+*(historical)* True until roadmap 017. A background AV is now a scenario entity with the
+`agent` controller: csb spawns it and reports CARLA's pose for it every frame, so SSv2's
+collision and position conditions see it -- the extension point this section anticipated,
+taken through the simulator-driven entity path rather than a misc object.
 
 ### Consequence: puppeteered actors are kinematic
 
@@ -211,12 +212,10 @@ ordinary obstacle. SSv2 does not know it exists.
 
 ### Why no Traffic Manager
 
-TM-driven ambient traffic would give realistic physics and light-obeying behaviour, but makes
-scenario execution non-deterministic and SSv2's position and timing conditions unreliable.
-Determinism wins: every moving actor is either scripted by the `.xosc` or driven by a real
-Autoware stack. The "Ambient Background Traffic" option in
-[roadmap/004-traffic-lights-environment.md](../roadmap/004-traffic-lights-environment.md) is
-rejected by this decision.
+*(historical)* The 2026-08 decision rejected Traffic Manager for determinism. Roadmap 017
+reversed it per entity: `simulator_autopilot` hands one scenario vehicle to TM with a fixed
+seed in synchronous mode (repeatable to the frame in the measured runs), while every other
+actor stays scripted or Autoware-driven. Ambient, unscripted traffic is still not used.
 
 ## Components
 
@@ -277,34 +276,21 @@ needs no change — each background `acb_bridge` is launched with its own `role_
 
 ### Per-domain pilot
 
-The concealer exists only in the ego's domain, so every background domain needs something
-else to set a route and engage. That is `acb_pilot`'s `auto_drive` node, launched by
-`background_av.launch.xml` (skip with `use_pilot:=false`). It waits for the AD API services,
-waits for GNSS-driven localization to reach `INITIALIZED`, sets the route, engages
-autonomous mode, and exits when the route state reaches `ARRIVED` — nonzero on any failure,
-so a pilot that could not engage is visible in the process table, not just in a vehicle that
-never moves.
-
-Its one input is the `poses_file` parameter, exposed as the `goal_poses_file` launch
-argument: a YAML whose `goal_pose` is `{x, y, z, qx, qy, qz, qw}` in the map frame. This is
-deliberately not derived from `bridge_config.yaml`'s `goal_pose: {x, y, z, yaw}` — the pilot
-lives in a read-only submodule and takes a file path, not an inline pose, and converting at
-launch time would mean generating files from XML. acb_pilot ships per-town examples under
-its `config/poses/` share directory, and `ros2 run acb_pilot capture_poses` records new ones
-from RViz goal clicks.
-
-The pilot adds no startup-order constraint: it only ever waits, so it comes up with the rest
-of the domain's stack.
+*(historical)* Replaced by the vehicle agent (`acb_pilot agent`, roadmap 017), started by
+the acb CARLA profile in every vehicle domain. With `relay:=` it takes goals from the
+scenario through `scenario_agent_relay`; without, it drives to a local `goal_poses_file`, as
+the old `auto_drive` pilot did.
 
 ### SSv2 / concealer
 
-Our `launch.hpp` patch hardcodes `--web-addr 0.0.0.0:8082` for the Autoware it forks. This is
-fine for one ego and collides for anything more. Parameterise it before a second play_launch-
-managed Autoware exists in the same host.
+The concealer launches nothing (`launch_autoware:=false`, phase 012; `launch.hpp` is
+upstream's) and reaches the ego only through the agent relay (roadmap 017).
 
 ## Data flow
 
 ### Startup
+
+*(historical: today's order is any order -- see [../user-guide.md](../user-guide.md))*
 
 ```
 1. CARLA server up

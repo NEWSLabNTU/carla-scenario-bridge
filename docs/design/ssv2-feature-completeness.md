@@ -95,10 +95,10 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
 
 ## 3. Ego / Autoware contract
 
-The fork (`managed_ego`, 5 commits, +197/−78, `docs/design/fork-policy.md`) does not change
-the ego data path. It makes concealer's ADAPI role inert (initialize, route, engage, RTC,
-velocity limit, emergency and MRM monitoring) when `managed_ego:=false`; routing and engage
-move to acb's pilot inside the ego's own ROS domain.
+Updated 2026-10-09 (roadmap 017). The concealer's ADAPI role (initialize, route, engage,
+RTC, velocity limit, emergency and MRM monitoring) is now served by `scenario_agent_relay`
+in SSv2's domain and carried out by the ego's vehicle agent in its own; the ego data path
+below is unchanged. `managed_ego:=false` is retired.
 
 | SSv2 / Autoware expects | Provider today | Gap |
 |---|---|---|
@@ -107,11 +107,11 @@ move to acb's pilot inside the ego's own ROS domain.
 | `control_cmd`, `gear_cmd`, `turn_indicators_cmd`, `hazard_lights_cmd`, `emergency_cmd` | acb applies all | – |
 | `/localization/kinematic_state` | GNSS→NDT→EKF by default; direct publish behind `publish_direct_localization` | – |
 | `/localization/acceleration` | EKF only | – |
-| `/clock` | managed: SSv2 at 10 Hz, acb `publish_clock:=false`; unmanaged: acb at 20 Hz | 20 Hz raises control_cmd rate past what acb drains (roadmap 013:617) |
-| Traffic-light recognition topic (`/perception/traffic_light_recognition/...`, or `/v2x/traffic_signals`) | **nobody**. Bridge sets CARLA lights only; camera pipeline yields 1 RED / 2 AMBER / 104 UNKNOWN | ego sits at stop line regardless of commanded state (roadmap 009:502-510). Decision 2026-08-28 (009:876-908): bridge publishes `TrafficLightGroupArray` keyed by lanelet regulatory ID, flag default off. Unimplemented |
+| `/clock` | acb, from CARLA's frame time, in every vehicle domain (015) | – |
+| Traffic-light recognition topic (`/perception/traffic_light_recognition/external/traffic_signals`) | acb, from CARLA's lights via the map dir's `carla/traffic_lights.yaml` (015, 017); camera recognition off (`fusion_only`) | – |
 | Detection-sensor scenario knobs (`isClairvoyant`, `detectedObject*Delay/StdDev/MissingProbability`, `randomSeed`) | dead: Attach rejected, acb ground-truth objects optional and un-noised | scenarios that tune perception faults have no effect |
-| Ego velocity limit (`/api/autoware/set/velocity_limit`) | managed only; silently dropped unmanaged | – |
-| Emergency / MRM / `/autoware/state` monitoring | managed only | an Autoware emergency will not fail an unmanaged scenario |
+| Ego velocity limit (`/api/autoware/set/velocity_limit`) | relay → agent → Autoware (017) | – |
+| Emergency / MRM / `/autoware/state` monitoring | agent `fault` → relay → concealer (017) | – |
 
 ## 4. Lessons from `tier4/carla-autoware-native`
 

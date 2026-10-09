@@ -40,5 +40,5 @@ play_log/
 record.json
 
 # Dependency cloned by hand (not vendored): SSv2 needs color_names, which is not in
-# any Debian and not a submodule here. See docs/CHECKPOINT.md.
+# any Debian and not a submodule here. See docs/user-guide.md (fresh-machine notes).
 /src/color_names/

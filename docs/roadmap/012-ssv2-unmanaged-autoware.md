@@ -1,5 +1,7 @@
 # Phase 012: SSv2-Unmanaged Autoware
 
+> **Partly superseded by [017](017-user-workflow.md) (2026-10-08).** SSv2 still launches no Autoware, but the concealer no longer shares the ego's ROS domain: it reaches the ego through the agent relay. The same-domain requirement and startup order described here are gone. Kept as history.
+
 SSv2 stops *launching* the ego's Autoware. Every Autoware stack — ego and background alike —
 is brought up by our launch files, and the SSv2 checkout carries zero local patches. SSv2
 keeps driving the ego's autonomy (initialize, route, engage) through the concealer, which

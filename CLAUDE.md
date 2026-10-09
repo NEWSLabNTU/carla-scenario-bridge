@@ -253,6 +253,15 @@ waiting on `/tmp/scenario_test_runner/result.junit.xml` has that string on its c
 and dies with the stale processes. Keep the string out of any long-lived command line (read
 the path from a variable set in a different process, or wait on the play_launch log instead).
 
+### Never destroy a vehicle while its sensors are attached
+
+Destroy an actor's children first, in every client and language: in Rust
+`ActorBase::destroy_with_children()`; in Python sweep `sensor.*` actors whose `parent.id` is
+the vehicle before `vehicle.destroy()` (acb's `demo_scenario.py::destroy_attached_sensors`).
+CARLA leaves a destroyed vehicle's sensors alive and ticking, and an orphaned IMU segfaults
+the server (`AInertialMeasurementUnit::ComputeGyroscope`, its owner check compiled out of the
+Shipping build): three of eight runs once died that way, 24-40 s in.
+
 ### Talking to the stack from outside a launch
 
 Every ROS tool that must see the ego stack -- `scripts/ego_stack_health.py`, `ros2 topic`,

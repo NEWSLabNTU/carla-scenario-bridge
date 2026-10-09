@@ -27,7 +27,7 @@ what unblocks what.
 - [010: Multi-Instance](010-multi-instance.md) — config loading, role names, background AVs
 - [011: Robustness](011-robustness.md) — tick timeouts, ego respawn, duplicate-publisher hazards
 - [012: SSv2-Unmanaged Autoware](012-ssv2-unmanaged-autoware.md) — SSv2 stops *launching* Autoware (`launch_autoware:=false` against our externally-launched ego stack); kills the last SSv2 patch. Spike done 2026-08-08
-- [013: Unmanaged Ego on the Fork](013-forked-unmanaged-ego.md) — `managed_ego:=false` patch on the NEWSLabNTU fork; ego gets its own domain, pilot, and clock like every background AV
+- [013: Unmanaged Ego on the Fork](013-forked-unmanaged-ego.md) — `managed_ego:=false` patch on the NEWSLabNTU fork; ego gets its own domain, pilot, and clock like every background AV — superseded by 017
 - [014: Feature Completeness](014-feature-completeness.md) — pose reference-point offset, collision truth, NPC velocity, and a hardening batch from the 2026-09-25 audit ([design/ssv2-feature-completeness.md](../design/ssv2-feature-completeness.md))
 - [015: CARLA as Time and Signal Source](015-carla-as-time-and-signal-source.md) — one simulation clock (CARLA's, reported to SSv2 and published by acb in every domain) and signal state read from CARLA's lights, replacing 014's learned offsets and SSv2-domain-only V2X
 - [016: Robustness and Performance](016-robustness-and-performance.md) — every fault ends the scenario in bounded time and the next one runs unattended; csb supervised, epoch persisted; frame budget measured (20 NPCs p95 1.79 ms)
@@ -61,7 +61,7 @@ stack and passes again on the same stack immediately afterwards (007's acceptanc
 2026-08-12) — no restarts of anything between runs. The full causal
 anatomy of getting there — five stacked availability bugs, the double-`/clock`
 killer, PhysX acceleration jolts — is in [012](012-ssv2-unmanaged-autoware.md).
-Operational recipe and traps: `docs/CHECKPOINT.md` at the repo root docs dir.
+Operational recipe: [docs/user-guide.md](../user-guide.md); traps: `CLAUDE.md`.
 
 Per-phase state:
 

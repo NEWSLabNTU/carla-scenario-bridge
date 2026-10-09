@@ -29,6 +29,19 @@ cd carla-scenario-bridge && just install-deps && just build
 source install/setup.bash        # in every terminal below, after Autoware's setup.bash
 ```
 
+Fresh-machine notes:
+
+- `src/color_names` is not a submodule and not packaged; SSv2's build needs it:
+  `git clone --depth 1 https://github.com/OUXT-Polaris/color_names.git src/color_names`.
+- `pip install xmlschema`, or `scenario_test_runner` exits on import.
+- Autoware's `data_path` must be writable (TensorRT writes each engine next to its ONNX file);
+  the CARLA profile defaults to `~/autoware_data` -- populate it once with acb's
+  `scripts/link_autoware_data.sh`.
+- If `traffic_simulator` fails to find a dependency's headers after that dependency built,
+  delete `build/traffic_simulator`: its CMake cache remembers the failed configure.
+- CARLA's default Town01 weather is overcast and raining; `scripts/set_weather.py ClearNoon`
+  sets clear weather, which persists in the server across runs.
+
 ## 2. Prepare a map directory
 
 One directory per CARLA town, in Autoware's map layout plus one CARLA file:

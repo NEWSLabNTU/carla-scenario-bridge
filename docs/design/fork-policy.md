@@ -11,13 +11,30 @@ current, and what has to be true before a patch is added to it.
 |---|---|
 | Branch | `managed-ego-unforked` |
 | Upstream base | `3370c817e` (version 25.0.22) |
-| Diff against base | 8 files, +197/-78 |
-| Series | 5 commits, `4bb48c980` … `463c02946` |
+| Diff against base | 30 files, +1659/-142 (2026-10-09) |
+| Series | 20 commits, `4bb48c980` … `efe7f87f8` |
 
-The whole diff is the `managed_ego` feature (phase 013) plus one engage-outcome fix. Every
-carried patch is behavioural and offerable upstream: there are no build hacks, no vendoring,
-and no local-environment adjustments. `concealer/launch.hpp` in particular is
-byte-identical to upstream — phase 012 removed the two patches that used to live there.
+What the series carries, by theme (each commit is one reviewable change):
+
+- **Engage and startup** (012-013, 017): `arrived_goal` as a successful engage outcome; the
+  concealer waits for localization to reach the initial pose, leaves a reused Autoware in
+  STOP, and waits for `change_to_stop` within `initialize_duration`.
+- **`managed_ego`** (013): an inert concealer for an externally driven ego. Kept, default
+  `true`, but no longer used here -- the agent relay (017) replaced the domain split it
+  existed for.
+- **Simulator time** (014-015): `simulation_time_ns` in the protocol, `clock_source`
+  parameter (ROS time from the simulator), initial pose and ARRIVED_GOAL judged in
+  Autoware's time base.
+- **Honest failures** (016): a bounded wait for simulator responses
+  (`SIMULATOR_RESPONSE_TIMEOUT`), a failed frame ends the scenario.
+- **Scenario files** (017): the `$(env NAME [default])` substitution; the runner never
+  rewrites the user's `.xosc`.
+- **Simulator-driven entities** (017): controllers `simulator_autopilot` and `agent`, the
+  `behavior` field at spawn and the `UpdateEntityGoal` request.
+
+Every carried patch is behavioural and offerable upstream: no build hacks, no vendoring, no
+local-environment adjustments, and each is inert unless its option or controller is used.
+`concealer/launch.hpp` is byte-identical to upstream.
 
 ## What the fork may carry
 
@@ -35,7 +52,8 @@ byte-identical to upstream — phase 012 removed the two patches that used to li
   our domains, our CARLA setup or our host belong in this repo — in `csb_launch`, the
   justfile, or config — where they cost nothing to rebase.
 - Anything that changes stock behavior when the new option is not used. Every patch must be
-  inert by default; `managed_ego` defaults to `true` and a default run is upstream's.
+  inert by default: a scenario that uses none of the new options or controllers runs as
+  upstream's does.
 - Anything that cannot be re-derived by hand. A series small enough to reapply manually is
   the ceiling, because that is the actual fallback when a rebase goes badly.
 
@@ -47,8 +65,9 @@ Rebase onto each upstream release we pin, not continuously. The steps:
 2. Build it (colcon Release, ROS humble + Autoware 1.5.0).
 3. Push the branch to NEWSLabNTU **before** bumping the pin here — a pin to a commit that
    exists only locally breaks `git submodule update` for everyone else.
-4. Run both modes. `managed_ego:=true` must still engage and drive (this is the test that
-   the series is inert by default); `managed_ego:=false` must still reach `exitSuccess`.
+4. Run the regression set (`town01_ego_drive`, `town01_engage_state`,
+   `town01_simulator_autopilot`, `town01_two_av`): the ego must engage and drive through the
+   relay, and the simulator-driven entities must reach their goals.
 5. Bump the submodule pin here in its own commit.
 
 The last rebase (2026-08-28) was clean despite two series touching

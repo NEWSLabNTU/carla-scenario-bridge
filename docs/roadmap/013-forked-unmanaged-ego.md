@@ -1,5 +1,7 @@
 # Phase 013: Unmanaged Ego on the NEWSLabNTU Fork
 
+> **Superseded by [017](017-user-workflow.md) (2026-10-08).** The unmanaged ego this phase built (`managed_ego:=false`, the ego in its own domain driven by `auto_drive`) is retired: SSv2 now reaches an ego in any domain through the agent relay, with every ego-state condition intact. The fork keeps the `managed_ego` parameter (default `true`, unused here). Kept as history.
+
 Complete what [012](012-ssv2-unmanaged-autoware.md) could not: SSv2 neither launches *nor
 drives* the ego's Autoware. The 012 spike showed this is impossible against stock SSv2 —
 the storyboard is gated on concealer engagement. The NEWSLabNTU fork

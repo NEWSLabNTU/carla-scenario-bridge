@@ -1,5 +1,7 @@
 # Phase 010: Multi-Instance and Background AVs
 
+> **Partly superseded by [017](017-user-workflow.md) (2026-10-08).** Background AVs are scenario entities with the `agent` controller, not `bridge_config.yaml` `background_avs`; the per-domain `auto_drive` pilot is the vehicle agent; `scripts/two_av_run.sh` is removed (use `just two-av`). Kept as history.
+
 Several Autoware stacks driving real vehicles in one CARLA world.
 
 **Source**: gaps 9-10 from
