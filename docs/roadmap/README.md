@@ -32,6 +32,7 @@ what unblocks what.
 - [015: CARLA as Time and Signal Source](015-carla-as-time-and-signal-source.md) — one simulation clock (CARLA's, reported to SSv2 and published by acb in every domain) and signal state read from CARLA's lights, replacing 014's learned offsets and SSv2-domain-only V2X
 - [016: Robustness and Performance](016-robustness-and-performance.md) — every fault ends the scenario in bounded time and the next one runs unattended; csb supervised, epoch persisted; frame budget measured (20 NPCs p95 1.79 ms)
 - [017: User Workflow and the Vehicle Agent](017-user-workflow.md) — ROS-native workflow from a scenario dir and a map dir; csb as a ROS node; an agent protocol and relay so SSv2 and Autoware need no shared domain and CARLA/Autoware are swappable ([design/user-workflow.md](../design/user-workflow.md))
+- [018: Install and World Config](018-install-and-world-config.md) — `rosdep install` + `colcon build` for users (CARLA version as a carla-rust feature, color_names submodule), `ros2 run acb_launch setup_autoware_data`, weather as bridge services
 
 ### Why this order
 
