@@ -12,7 +12,8 @@ ZMQ+Protobuf adapter that makes CARLA a backend for tier4/scenario_simulator_v2 
 ## Build & Run
 
 ```bash
-just build    # Build with colcon + cargo
+just setup    # One-time: the user install (rustup, colcon plugin, submodules, rosdep) + dev tools
+just build    # The user's colcon build, plus --symlink-install and the dev-release profile
 just clean    # Clean artifacts
 just run      # Simulation side: bridge + agent relay (simulation.launch.xml)
 just check    # Format + clippy

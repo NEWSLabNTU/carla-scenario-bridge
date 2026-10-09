@@ -1,7 +1,6 @@
 # carla-scenario-bridge -- SSv2 ZMQ backend for CARLA
 set dotenv-load
 
-carla_version := env_var_or_default('CARLA_VERSION', '0.9.16')
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 ssv2_port := env_var_or_default('SSV2_PORT', '5555')
 map_name := env_var_or_default('MAP_NAME', 'Town01')
@@ -27,35 +26,51 @@ autoware_setup := env_var_or_default('AUTOWARE_SETUP', '/opt/autoware/1.5.0/setu
 default:
     @just --list
 
-# Developer extras on top of the user install (nightly rustfmt for `just check`/`format`,
-# cargo-nextest for `just test`). The install itself -- rustup, colcon-cargo-ros2,
-# `rosdep install --from-paths src --ignore-src -y` for the system libraries -- is
-# docs/user-guide.md section 1.
-install-deps:
+# The user install of docs/user-guide.md section 1 (rustup, colcon-cargo-ros2,
+# submodules, `rosdep install`), plus developer extras (nightly rustfmt for
+# `just check`/`format`, cargo-nextest for `just test`). Safe to re-run.
+#
+# One-time setup: rustup, colcon plugin, submodules, rosdep, dev tools
+setup:
     #!/usr/bin/env bash
     set -e
+    cd "{{project}}"
+
+    # Rust: the same rustup install the user guide gives
     if ! command -v rustup &>/dev/null; then
-        echo "rustup not found: install Rust first (docs/user-guide.md, section 1)." >&2
-        exit 1
+        echo "Installing Rust via rustup..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source "$HOME/.cargo/env"
     fi
 
-    # Nightly toolchain (for cargo fmt)
-    if ! rustup toolchain list | grep -q nightly; then
-        echo "Installing Rust nightly toolchain..."
-        rustup toolchain install nightly
-    else
-        echo "Rust nightly toolchain already installed"
+    # colcon's Rust plugin. The older colcon-cargo/colcon-ros-cargo pair conflicts with it.
+    if python3 -c "import colcon_cargo" &>/dev/null || python3 -c "import colcon_ros_cargo" &>/dev/null; then
+        echo "Removing conflicting colcon-cargo/colcon-ros-cargo..."
+        pip uninstall -y colcon-cargo colcon-ros-cargo
+    fi
+    python3 -c "import colcon_cargo_ros2" &>/dev/null || pip install colcon-cargo-ros2
+
+    # Initialise missing submodules only: a plain `update` would move a submodule you are
+    # working in back to its pinned commit.
+    if git submodule status --recursive | grep -q '^-'; then
+        git submodule update --init --recursive
     fi
 
-    # cargo-nextest (for just test)
-    if ! command -v cargo-nextest &>/dev/null; then
-        echo "Installing cargo-nextest..."
-        cargo install cargo-nextest --locked
-    else
-        echo "cargo-nextest already installed"
-    fi
+    # System dependencies, exactly as a user installs them
+    source /opt/ros/humble/setup.bash
+    source "{{autoware_setup}}"
+    rosdep install --from-paths src --ignore-src -y
 
-    echo "Developer extras installed."
+    # Developer extras
+    rustup toolchain list | grep -q nightly || rustup toolchain install nightly
+    command -v cargo-nextest &>/dev/null || cargo install cargo-nextest --locked
+
+    # pip may have pulled a newer setuptools into ~/.local, which shadows the apt one and
+    # breaks `colcon build --symlink-install`.
+    just _check-setuptools || true
+    echo "Setup done. Next: just build"
+
+alias install-deps := setup
 
 # Fail fast if a pip setuptools shadows the system one.
 #
@@ -78,12 +93,18 @@ _check-setuptools:
             ;;
     esac
 
-# Build all packages
+# The user guide's `colcon build`, plus developer flags: --symlink-install (edit Python
+# and launch files without rebuilding), the dev-release cargo profile, no tests. The CARLA
+# version comes from the `carla-0916` feature in Cargo.toml, as for users; an exported
+# CARLA_VERSION overrides it.
+#
+# Build all packages (developer flags on the user's colcon build)
 build: _check-setuptools
     #!/usr/bin/env bash
     set -e
-    export CARLA_VERSION={{carla_version}}
-    #source "{{project}}/install/setup.bash"
+    cd "{{project}}"
+    source /opt/ros/humble/setup.bash
+    source "{{autoware_setup}}"
     export CMAKE_POLICY_VERSION_MINIMUM=3.5
     colcon build \
         --base-paths src \
@@ -106,13 +127,6 @@ check:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
-    # carla-rust exposes a different API per CARLA version, selected by CARLA_VERSION:
-    # 0.9.x has WheelPhysicsControl::position, 0.10 has offset. Without this export
-    # clippy compiles against 0.10 while `just build` and `just run` compile against
-    # 0.9.16, so `just check` can pass on code the real build rejects -- and can reject
-    # code the real build accepts, which is how a correct field access was "fixed" into
-    # a broken one and back again.
-    export CARLA_VERSION={{carla_version}}
     cargo +nightly fmt --check
     cargo clippy --all-targets -- -D warnings
 
@@ -121,8 +135,6 @@ test:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
-    # Same reason as `check`: tests must compile against the CARLA API the build uses.
-    export CARLA_VERSION={{carla_version}}
     cargo nextest run --no-tests pass --no-fail-fast
 
 # Run CI checks: build, check (format + clippy), and tests

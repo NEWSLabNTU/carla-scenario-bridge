@@ -107,13 +107,13 @@ Developers have the same as `just run`, `just ego-av` and `just scenario <file>`
 
 ```bash
 just              # List all recipes
-just build        # Build with colcon + cargo
+just setup        # One-time: rustup, colcon-cargo-ros2, submodules, rosdep install, dev tools
+just build        # The user's colcon build + --symlink-install, dev-release profile
 just clean        # Remove build artifacts
 just check        # Format check (nightly) + clippy
 just test         # Run tests with cargo-nextest
 just ci           # Build + check + test
 just format       # Auto-format with cargo +nightly fmt
-just install-deps # Developer extras (nightly rustfmt, cargo-nextest)
 ```
 
 ## Related Projects
