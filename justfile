@@ -112,6 +112,19 @@ build: _check-setuptools
         --cargo-args --profile dev-release \
         --cmake-args -DBUILD_TESTING=OFF
 
+    # colcon-cargo-ros2 writes this workspace's message patches into acb's Cargo.lock too,
+    # as `[[patch.unused]]` entries (csb_interfaces is not an acb dependency). Undo that, and
+    # only that, so the acb submodule does not show a modified lock after every build here.
+    lock=src/autoware_carla_bridge/Cargo.lock
+    if ! git -C src/autoware_carla_bridge diff --quiet -- Cargo.lock; then
+        if git -C src/autoware_carla_bridge diff -U0 -- Cargo.lock | grep -E '^[+-][^+-]' \
+            | grep -vqE '^[+-](\[\[patch\.unused\]\]|name = "[a-z0-9_]+"|version = "0\.0\.0")$'; then
+            echo "note: $lock changed beyond [[patch.unused]]; left as is" >&2
+        else
+            git -C src/autoware_carla_bridge checkout -- Cargo.lock
+        fi
+    fi
+
 # Remove build artifacts
 clean:
     rm -rf build install log .cargo/config.toml target
