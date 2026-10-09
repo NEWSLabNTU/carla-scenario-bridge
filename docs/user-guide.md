@@ -36,7 +36,7 @@ git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-brid
 cd carla-scenario-bridge
 source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash
 rosdep install --from-paths src --ignore-src -y
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --cargo-args --release
 source install/setup.bash        # in every terminal below, after Autoware's setup.bash
 ```
 

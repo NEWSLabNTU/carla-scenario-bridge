@@ -71,7 +71,7 @@ cd carla-scenario-bridge
 # once per machine: Rust (rustup) and the Rust colcon plugin -- the two things rosdep can't
 curl https://sh.rustup.rs -sSf | sh && pip install colcon-cargo-ros2
 rosdep install --from-paths src --ignore-src -y
-colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --cargo-args --release
 ```
 
 - `color_names` becomes a submodule at `src/color_names` (upstream OUXT-Polaris, pinned).
@@ -191,7 +191,8 @@ Met 2026-10-10.
   -DCMAKE_BUILD_TYPE=Release` with `CARLA_VERSION` unset: 2 packages, 3 min 8 s, its own
   target dir. The whole workspace (50 packages) builds the same way in the main checkout.
   Note: `-DCMAKE_BUILD_TYPE=Release` does not reach cargo -- colcon-cargo-ros2 built the
-  Rust crates in the `dev` profile.*
+  Rust crates in the `dev` profile, so the guide adds `--cargo-args --release` (fresh
+  clone rebuilt that way: installed bridge is the `release/` binary).*
 - [x] `colcon build` with `CARLA_VERSION` unset compiles the 0.9.16 API; with
   `CARLA_VERSION=0.9.15` it compiles 0.9.15's.
   *Fresh clone: carla's build script emitted `carla_version=0.9.16` /
