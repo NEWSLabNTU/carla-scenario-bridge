@@ -238,8 +238,19 @@ by 10 % at 20 km/h, 15–17 % at 40 and 25–27 % at 80. Wheel slew is ~150 °/s
       `scratchpad/steer30`): compensation on **1.0000** [IQR 1.0000–1.0000] over 123 samples at
       28.4–30.4 km/h; off **0.8763** against curve(30.2) = 0.8745; A/B 1.141 against 1/curve
       1.1435
-- [ ] Steer rate limit and first-order lag in acb config, default off, values from SSv2
-      #1849 as the documented starting point (20 °/s, τ=0.2 s) — unchanged, still optional
+- [x] Steer rate limit and first-order lag in acb config, default off, values from SSv2
+      #1849 as the documented starting point (20 °/s, τ=0.2 s). acb `ce30a90`:
+      `steer_rate_limit_deg_s`, `steer_time_constant_s` (acb_bridge params, the CARLA profile
+      and `ego_av` pass them through; `just ego-av` reads `STEER_RATE_LIMIT_DEG_S` /
+      `STEER_TIME_CONSTANT_S`). The commanded tire angle is filtered in simulation time, lag
+      then rate limit, before the steering-curve compensation; a step never integrates more
+      than 0.5 s, so a paused simulation does not jump. 4 unit tests.
+      Live 2026-10-09, `town01_traffic_light`, measured wheel angle, rates over 0.5 s
+      windows: at 5 °/s, Autoware commanded up to **16.2 °/s** and the wheels moved at
+      **5.2 °/s**; the scenario passed. At #1849's 20 °/s + τ 0.2 s it also passed, but the
+      limit barely binds there: Autoware's own commands peak at ~25 °/s on this route.
+      Found on the way: an integer value (`20`) for these double parameters stopped
+      acb_bridge at startup (`OverrideValueTypeMismatch`); the launch file now coerces to float
 
 ### Traffic-light scenario stalls between lights (found 2026-09-27, fixed 2026-09-28)
 
