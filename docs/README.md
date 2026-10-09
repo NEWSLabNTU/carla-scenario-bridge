@@ -6,6 +6,7 @@
 - [SSv2 Protocol](design/ssv2-protocol.md) - ZMQ+Protobuf message reference
 - [User Guide](user-guide.md) - install, map and scenario directories, running
 - [User workflow and the vehicle agent](design/user-workflow.md) - two sides, interfaces, swapping CARLA or Autoware
+- [Survey: Isaac Sim and digital twins](design/survey-isaac-sim-and-digital-twin.md) - off-road WG Isaac sim, NuRec, GLIM, Lanelet2 tooling, proposed spikes
 - [SSv2 Launch Configuration](design/ssv2-launch-configuration.md) - SSv2 parameter background (run workflow superseded by the user guide)
 
 ## Roadmap
