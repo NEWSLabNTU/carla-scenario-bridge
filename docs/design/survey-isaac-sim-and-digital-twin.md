@@ -1,6 +1,6 @@
 # Survey: Autoware on Isaac Sim, and a fast digital-twin pipeline for our stack
 
-**Date**: 2026-10-09, revised 2026-10-10 (NuRec ruled out; §3.5 added). **Status**: survey,
+**Date**: 2026-10-09, revised 2026-10-10 (NuRec ruled out; §3.5 added; §5 NTU data). **Status**: survey,
 nothing built or measured on this host. Claims are from the sources linked
 at the end; anything marked *unverified* is inference that a spike must confirm.
 
@@ -270,6 +270,71 @@ Ordered by value per effort. Each ends in a measurement, not an opinion.
 7. **Isaac feasibility, only if lidar/radar fidelity becomes the blocker.** Run the off-road
    sim; prototype a minimal SSv2 backend (Initialize, Spawn, UpdateEntityStatus, UpdateFrame)
    against Isaac Python and measure lockstep tick time with one RTX lidar + 6 cameras.
+
+## 5. First site: NTU campus (data on hand, 2026-10-10)
+
+Local copy and provenance: `/mnt/disk1/ntu-campus-twin/README.md`.
+
+### What we have
+
+| Source | Content | Frame | Notes |
+|---|---|---|---|
+| Autoware map `2026-04_ntu_map` r01, r02 | Lanelet2 + PCD (x y z intensity, no color), 4.1 M and 2.5 M points | MGRS 51RUH | Lanelets are `road` with thin solid lines only; **no regulatory elements** (lights, stop lines, crosswalks) |
+| Vendor MLS `2026-05-15`, `台大las.laz` (51 GB) | ~5.52 G points, **RGB**, GPS time, ASPRS classes | TWD97/TM2 (EPSG:3826) | LiDAR360MLS; 1113 m x 649 m; covers both routes |
+| Earlier CARLA experiment (June 2026) | 0.05 downsample imported into CARLA UE4 as a point-cloud asset; RGB + lidar videos | — | See below |
+| `2026-08-20 GLIM pointcloud mapping bags` | Basement, lidar + IMU only | — | Not campus; no images |
+
+No camera images of the campus are on hand. LiDAR360MLS systems colorize from a panoramic
+camera, so the vendor almost certainly has the images and the camera trajectory.
+
+### Findings
+
+1. **The vendor's derived files are truncated.** The LAZ is LAS 1.2, whose 32-bit header
+   count saturates at 4 294 967 295. The PDAL-made `tiles_50m`, `tiles_100m` and `downsample`
+   sets each sum to exactly that count (or a downsample of it) and end at X = 304653. That
+   loses ~22 % of the points, and the east ~200 m of route r01 (it runs to X 304853).
+   Regenerate from the LAZ with a reader that streams to end of file.
+2. **The vendor cloud aligns with our Autoware map by a constant shift.** TWD97 → UTM 51N →
+   MGRS-local, then subtract (−0.288, +0.216, +17.26) m. After the shift, r02's PCD matches
+   the vendor cloud: median 0.068 m, p90 0.227 m, 87 % within 0.2 m. The 17 m in Z is a
+   vertical datum difference. So the colored cloud, and anything built from it, drops into the
+   frame Autoware already localizes in. Only translation was solved. On r01 (sampled from the
+   truncated tiles) the shift solves to (−0.477, +0.184, +17.27) m, within 0.19 m of r02's,
+   with median 0.128 m but p90 5.1 m. The tail is likely r01 map areas missing from the
+   sampled vendor tiles; recheck once full tiles exist (next step 1).
+3. **The vendor RGB is usable.** Ground points are mid-grey (mean RGB 94/90/84), not white.
+   The white floor in the earlier CARLA clips is the scene, not the data.
+4. **The earlier CARLA import proves the gap §3.5 predicts.** Point sprites give a recognisable
+   but noisy camera view, and CARLA's raycast lidar returns only the floor: the
+   point-cloud asset has no collision. Camera and lidar disagree completely.
+5. **Classes make a split scene cheap.** In a 6-tile sample: high vegetation 46 %,
+   unclassified 40 %, ground 5 %, building 4 %, low vegetation 3 %. NTU's roads are lined
+   with trees, so vegetation dominates.
+
+### Next steps for this site
+
+Each produces something we can look at in CARLA, in order:
+
+1. **Regenerate full tiles** from the LAZ in the Autoware frame (shift applied), keeping
+   RGB and class. Also write a 0.2 m `pointcloud_map.pcd` covering both routes and compare
+   it with r01/r02 for localization.
+2. **Road surface from class 2.** 2.5D Delaunay or heightfield mesh, textured by a top-down
+   orthophoto rasterized from ground-point RGB at 2–3 cm. Lane paint should survive at that
+   density. This replaces the white floor and gives the lidar the real road.
+3. **Buildings from class 6.** Poisson mesh per tile, vertex colour or baked texture.
+4. **Vegetation (classes 3, 5).** Keep as points for the camera (UE point-cloud plugin, or
+   splats later), with coarse convex or voxel proxies as collision so the lidar sees trees.
+   Instanced UE foliage matched to trunk positions is the alternative if points look poor.
+5. **Unclassified (40 %).** Inspect: poles, signs, parked cars, people. Parked cars and
+   pedestrians are baked into the scan and must be removed or accepted as static.
+6. **Lanelet2 completion.** Add traffic lights, stop lines and crosswalks to r01/r02, then
+   produce an xodr that agrees with it for CARLA.
+7. **Import into CARLA 0.10 first** (Nanite meshes, Lumen) and into 0.9.16 only for comparison.
+   Measure: camera frames vs the vendor render, and lidar scans in CARLA vs the real cloud at
+   the same pose (the real cloud is the ground truth for the lidar).
+8. **Ask the vendor for the panoramic images and camera trajectory.** They unlock better
+   textures and a gsplat reconstruction for the camera layer (§3.5 C/E). This is the
+   single most valuable data request.
 
 ## Sources
 
