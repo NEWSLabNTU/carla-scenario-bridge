@@ -26,3 +26,4 @@ Audit-driven, from the 2026-07-28 workflow audit:
 - [009: Map and Traffic Lights](roadmap/009-map-and-traffic-lights.md) - map loading, signal mapping, recognition
 - [010: Multi-Instance](roadmap/010-multi-instance.md) - config loading, role names, background AVs
 - [011: Robustness](roadmap/011-robustness.md) - tick timeouts, ego respawn, duplicate publishers
+- [018: NTU Campus Digital Twin](roadmap/018-ntu-campus-twin.md) - real-site twin, CARLA 0.10 import, sensor realism measured

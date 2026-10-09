@@ -313,6 +313,8 @@ camera, so the vendor almost certainly has the images and the camera trajectory.
 
 ### Next steps for this site
 
+Tracked as roadmap phase [018](../roadmap/018-ntu-campus-twin.md).
+
 Each produces something we can look at in CARLA, in order:
 
 1. **Regenerate full tiles** from the LAZ in the Autoware frame (shift applied), keeping
