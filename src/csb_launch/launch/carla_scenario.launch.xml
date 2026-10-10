@@ -4,7 +4,7 @@
   <arg name="scenario"/>
   <arg name="managed_ego" default="true" description="ignored; retired in roadmap 017"/>
   <arg name="port" default="5555"/>
-  <arg name="global_timeout" default="600"/>
+  <arg name="global_timeout" default="400"/>
   <include file="$(find-pkg-share csb_launch)/launch/scenario.launch.xml">
     <arg name="scenario" value="$(var scenario)"/>
     <arg name="port" value="$(var port)"/>

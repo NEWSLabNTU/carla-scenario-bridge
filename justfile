@@ -473,36 +473,11 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # a different ADAPI service. Every ROS process in the pipeline must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     goal_poses_file="${EGO_GOAL_POSES_FILE:-}"
+    relay="${EGO_RELAY-tcp://localhost:{{agent_port}}}"
     clock="${ACB_PUBLISH_CLOCK:-true}"
     # Any domain works since roadmap 017: the scenario reaches this ego through the agent
     # relay (TCP), not over ROS. Kept apart from the scenario domain on purpose.
     export ROS_DOMAIN_ID={{ego_domain}}
-    setsid ros2 launch autoware_iv_internal_api_adaptor internal_api_adaptor.launch.py &
-    internal_api_pid=$!
-    setsid ros2 launch autoware_iv_external_api_adaptor external_api_adaptor.launch.py &
-    external_api_pid=$!
-    trap 'kill -- -$internal_api_pid -$external_api_pid 2>/dev/null' EXIT INT TERM
-    # --load-node-timeout 120: the startup burst (93 composables + CARLA on one
-    # host) can push a container's first LoadNode reply past the 30 s default;
-    # a timed-out load falls into play_launch's awaiting-ComponentEvent limbo
-    # and the member stays "pending" forever, silently missing ADAPI services.
-    # --load-total-budget 600: this is the per-composable budget while a container is
-    # busy, and it is what actually kills the traffic-light inference nodes. At 180 the
-    # car classifier, the pedestrian classifier and the fine detector were reported
-    # "still constructing" at 90 s, 125 s and 160 s and then LOAD_FAILED at exactly
-    # 180 s -- three of 89 composables missing, with the rest of the stack healthy.
-    #
-    # The symptom is not an error anywhere downstream. The map-based detector still
-    # publishes regions of interest, fusion still publishes, and the classifier simply
-    # never publishes at all: a full 215 m drive past a commanded red produced regions
-    # on 27 of 139 samples and not one colour, because the node that assigns colours was
-    # never loaded. play_launch's own help names this case -- "raise for containers whose
-    # composable ctors block for minutes (e.g. TensorRT engine builds)" -- and 600 is its
-    # default.
-    #
-    # The cost is that a genuinely lost load self-heals in ten minutes rather than three.
-    # That is the right trade here: a lost load is rare and visible, while a silently
-    # missing classifier looks like a perception problem and has cost days.
     # A ROS launch argument cannot carry an empty value -- `goal_poses_file:=` is rejected
     # as "malformed launch argument", and the failure comes minutes in, after the whole
     # parse. The launch file already declares a default for it, so pass the argument only
@@ -531,29 +506,34 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # where it wrote, e.g. its fallback for a read-only map dir); empty turns it off.
     tl_map="${TRAFFIC_LIGHT_MAP_PATH-{{map_path}}/carla/traffic_lights.yaml}"
     tl_map="${tl_map:-none}"
-    # Not exec: the trap above has to survive to clean up the API adaptors.
-    # --enforce-rules off: play_launch 0.12 defaults to `warn`, which turns on LD_PRELOAD
+    # The user's vehicle side, exactly (docs/user-guide.md section 4, Terminal 3):
+    # acb_launch carla_simulator.launch.xml under play_launch with the guide's flags, so a
+    # dev run proves what users get. Everything below is a launch argument, visible here;
+    # nothing runs beside the launch (the deprecated API the agent's velocity limit needs is
+    # in it: launch_deprecated_api, default true).
+    #
+    # --enforce-rules off: play_launch defaults to `warn`, which turns on LD_PRELOAD
     # interception of every DDS take and logs each event at DEBUG into play_launch.log and
     # interception/events.jsonl. With no contract files to enforce that is pure overhead, and
     # on 2026-09-27 one 50-minute ego stack wrote 169 GB of it and filled the disk.
-    #
-    # --composable-respawn on-crash (play_launch >= 873b0744): reload a composable whose
-    # isolated process crashed (behavior_path_planner, autoware_universe#12460), backing off
-    # and giving up after 5 crashes in 300 s. Autoware's containers declare no respawn, so
-    # `inherit` would never fire. The scenario gate's ego_stack_health.py --reload-failed
-    # stays as the backstop for a composable that gave up.
-    play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8082 \
+    # --parser python: the Rust parser resolves $(find-pkg-share) against /opt/ros/humble
+    # before the Autoware overlay, so autoware_vehicle_velocity_converter got the apt
+    # package's 1.9.0 param file (no frame_id) beside Autoware 1.5.0's binary, which aborts.
+    # --composable-respawn on-crash: Autoware 1.5.0's behavior_path_planner aborts now and
+    # then on a new route (autoware_universe#12460, once in 27 UC-ACC variants on
+    # 2026-10-10); its containers declare no respawn, so without this the stack never
+    # plans again. The guide's command carries it too.
+    exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8082 \
         --composable-respawn on-crash \
-        --load-node-timeout 120 \
-        --load-total-budget 600 \
         --log-dir play_log/ego \
-        csb_launch ego_av.launch.xml \
+        acb_launch carla_simulator.launch.xml \
         map_path:="{{map_path}}" \
+        vehicle_name:=hero \
         carla_port:={{carla_port}} \
-        relay:="${EGO_RELAY-tcp://localhost:{{agent_port}}}" \
+        ${relay:+relay:="$relay"} \
         publish_clock:=$clock \
+        rviz:="${LAUNCH_RVIZ:-false}" \
         report_measured_steering:="${REPORT_MEASURED_STEERING:-false}" \
-        launch_rviz:="${LAUNCH_RVIZ:-false}" \
         steering_multiplier:="${STEERING_MULTIPLIER:-1.0}" \
         steer_rate_limit_deg_s:="${STEER_RATE_LIMIT_DEG_S:-0.0}" \
         steer_time_constant_s:="${STEER_TIME_CONSTANT_S:-0.0}" \
@@ -563,6 +543,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         traffic_light_map_path:="$tl_map" \
         accel_map_path:="$accel_map" \
         brake_map_path:="$brake_map" \
+        ${LIDAR_DETECTION_MODEL:+lidar_detection_model:="$LIDAR_DETECTION_MODEL"} \
         "${optional_args[@]}"
 
 # Launch one background AV's vehicle side -- Autoware + acb_bridge + vehicle agent -- in its

@@ -4,8 +4,13 @@
   agent relay vehicles attach to. Start once, in the ROS domain scenarios will run in; then
   run any number of scenarios (scenario.launch.xml) and start vehicle sides in any domain.
 
-    play_launch launch csb_launch simulation.launch.xml [config_file:=...] [carla_host:=...]
+    play_launch launch FLAGS \
+        csb_launch simulation.launch.xml [config_file:=...] [carla_host:=...] \
         [weather:=ClearNoon]
+
+    FLAGS are the play_launch options enforce-rules off, web-addr 127.0.0.1:8084
+    (each with a double-hyphen prefix, which an XML comment cannot contain);
+    docs/user-guide.md section 4 says why.
 
   The bridge serves /carla/set_weather and /carla/get_weather (csb_interfaces/srv) here.
 -->

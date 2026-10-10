@@ -5,8 +5,13 @@
   <output_directory>/scenario_test_runner/result.junit.xml (default
   /tmp/scenario_test_runner/result.junit.xml), beside the preprocessed copy and logs.
 
-    play_launch launch csb_launch scenario.launch.xml \
+    play_launch launch FLAGS \
+        csb_launch scenario.launch.xml \
         scenario:=<scenario dir>/<name>.xosc [output_directory:=<dir>]
+
+    FLAGS are the play_launch options enforce-rules off, parser python, web-addr 127.0.0.1:8081
+    (each with a double-hyphen prefix, which an XML comment cannot contain);
+    docs/user-guide.md section 4 says why.
 
   SSv2's runner empties the subdirectories of <output_directory>/scenario_test_runner at
   startup, so give each concurrent or to-be-kept run its own output_directory
@@ -20,14 +25,22 @@
   <!-- User-configurable arguments -->
   <arg name="scenario" description="Path to .xosc scenario file" />
   <arg name="port" default="5555" description="ZMQ port for adapter connection" />
-  <arg name="global_timeout" default="600" description="Scenario timeout in seconds" />
+  <!-- Wall-clock cap on one scenario run (each variant of a YAML scenario), init included.
+       The longest starter scenario takes 190 s end to end (town01_traffic_light; awf/
+       variants 64-126 s); 400 is twice that. A scenario of your own that drives longer
+       needs global_timeout:= raised. -->
+  <arg name="global_timeout" default="400" description="Scenario timeout in seconds" />
   <arg name="output_directory" default="/tmp"
        description="Run output root; the verdict is &lt;output_directory&gt;/scenario_test_runner/result.junit.xml" />
   <!-- The concealer's deadline is ABSOLUTE (FieldOperatorApplication construction +
-       initialize_duration) and shared by every wait up to and including engage, so
-       it must cover localization + routing + the diagnostics gate converging on
-       this slow host, not just "init". -->
-  <arg name="initialize_duration" default="480" description="Autoware init-through-engage budget in seconds" />
+       initialize_duration) and shared by every wait up to and including engage:
+       localization at the start pose, routing, engage. It was 480 (roadmap 012) when the
+       ego's Autoware started with the scenario; since roadmap 017 the vehicle side is up
+       before the scenario starts, and scenario start to engage measured 52 s at worst
+       (median ~20 s; 33 starts over basic/ and awf/, 2026-10-10), so 120 is over twice that.
+       The relay offers the ego's ADAPI only while its agent is registered, so a vehicle
+       side that is down fails the scenario within this budget, with the reason. -->
+  <arg name="initialize_duration" default="120" description="Autoware init-through-engage budget in seconds" />
   <!-- Simulated seconds per real second. Below 1 the frame loop still runs at
        global_frame_rate but each frame advances step_time = factor / frame_rate, so the
        world (CARLA physics included) moves slower than wall time, and so does the CARLA
@@ -38,9 +51,9 @@
        description="SSv2's ROS time: simulator (CARLA time, phase 015), follows_simulation_time (014) or frames (stock); see below" />
 
   <!-- The ego's Autoware is NOT launched from here. launch_autoware:=false makes SSv2's
-       concealer connect to the Autoware already running in this ROS domain — bring it up
-       first with ego_av.launch.xml and wait for ADAPI: the concealer's constructor queues
-       a ChangeToStop call with a 180 s service timeout, so a late stack fails slowly. -->
+       concealer use the ADAPI the agent relay serves in this domain for the ego's vehicle
+       side (acb_launch carla_simulator.launch.xml, any domain): bring that up first. The
+       concealer's first call (change_to_stop) waits for it within initialize_duration. -->
   <group>
   <!-- SSv2's V2I channel publishes on the arbiter's V2X input every frame, upstream behaviour
        independent of publish_conventional_traffic_signals: with no V2I lights in the

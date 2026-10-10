@@ -110,6 +110,67 @@ ros2 run csb_launch run_suite <scenario file or dir>... --output <results dir> \
    `import -window root -display :5`) under `docs/proof/020/`, with an index (`README.md`)
    saying what each one shows.
 
+   **Proof run 1 findings and fixes (2026-10-10).** Run 1 (screenshots in the scratch index,
+   not yet under `docs/proof/020/`) got `basic/` to 4/7 and `awf/` to 0/36. Fixed since, and
+   verified on this host with the guide's own commands (vehicle side
+   `acb_launch carla_simulator.launch.xml`, not `just ego-av`):
+
+   - *Velocity limit missing on the guide's vehicle side* -- `/api/autoware/set/velocity_limit`
+     (internal API adaptor) was started by `just ego-av` outside any launch; the agent's
+     `set_speed_limit` failed and every AWF variant aborted. acb `carla_simulator.launch.xml`
+     now passes Autoware's own `launch_deprecated_api` (default true) to
+     `autoware.launch.xml`; the justfile's out-of-launch `ros2 launch` adaptors are gone.
+   - *`map_based_prediction` abort* (`NoSuchAttributeError: Could not find 1`) in
+     town01_pedestrian, after which later scenarios hung in PLANNING: 65 of Town01's 300
+     lanelets (kerb strips) had no `subtype`; `PredictorVru` calls `attribute(Subtype)` on
+     every lanelet near a pedestrian. `scripts/repair_lanelet_subtypes.py` (run by
+     `download_maps.sh`) tags them `subtype=unknown`. Dev runs had masked it with
+     `--composable-respawn on-crash`; `basic/` then went 7/7 on the guide's command
+     without that flag.
+   - *`behavior_path_planner` abort on a new route* (`failed to add guard condition to wait
+     set`, autoware_universe#12460): once in 27 UC-ACC variants on the guide path, after
+     which 18 variants failed in PLANNING. Not fixable here; the guide's vehicle-side
+     command now carries `--composable-respawn on-crash` (Autoware's containers declare
+     no respawn), and so does `just ego-av`.
+   - *play_launch flags*: every command shows `--enforce-rules off`, `--parser python`
+     (vehicle side, scenario) and a distinct `--web-addr`; install via `pip install
+     play_launch==0.13.1`. The Rust parser's "dropped `frame_id`" was really a
+     wrong-prefix lookup: it resolved `$(find-pkg-share autoware_vehicle_velocity_converter)`
+     to `/opt/ros/humble` (the apt package 1.9.0, whose param file has no `frame_id`) while
+     running Autoware 1.5.0's binary from `/opt/autoware/1.5.0` -- to be fixed upstream.
+   - *Guide*: map town per scenario set, RViz (`rviz:=false`), readiness signals, PLANNING /
+     WAITING_FOR_ENGAGE troubleshooting, `pose_instability_detector`'s exit after a
+     teleport (harmless, unfixed Autoware behaviour), "crash recovery" wording.
+   - *run_suite*: relay pre-flight (no agent: 7 scenarios failed in 15 s, was 480 s each),
+     no default per-file cap (UC-ACC needs 2258 s), `TIMEOUT after N s` on the line.
+   - *Lidar detector default*: `centerpoint` passed `basic/` 7/7 and UC-ACC 27/27 but
+     UC-AEB only 2/9 (ego hit the standing pedestrian); `clustering` 9/9. acb's profile
+     now defaults to `clustering`, as dev runs always had.
+   - *CARLA wedged by an early client*: a restarted CARLA serves RPC before its first map
+     is loaded; the bridge reconnected then and sent settings / `load_world`, wedging it
+     three times in a row. The bridge now waits for a map name before talking to it.
+   - *Long waits*, measured and bounded (table in the user guide, section 4 "Timeouts"):
+
+     | Wait | Old | New | Why |
+     |---|---|---|---|
+     | `initialize_duration` | 480 s | 120 s | start to engage 52 s worst, ~20 s median (33 starts) |
+     | concealer first `change_to_stop` | max(180 s, budget) | budget | relay offers it only while an agent is registered |
+     | concealer service availability | 180 s | 30 s | relay services discovered in 1-2 s |
+     | velocity limit / route retries | 30 | 5 | persistent refusal is not transient |
+     | clear route / engage / enable / RTC retries | 30 | 10 | ~30-60 s |
+     | `SIMULATOR_RESPONSE_TIMEOUT` (non-Initialize) | 420 s | 90 s | bridge's CARLA RPC timeout 30 s + 10 s |
+     | `SIMULATOR_INITIALIZE_TIMEOUT` (new) | 420 s | 300 s | CARLA wait 120 s + town load |
+     | bridge `reconnect_wait_seconds` | 240 s | 120 s | CARLA restarts served a map in 25-51 s |
+     | `global_timeout` | 600 s | 400 s | longest variant 190 s |
+     | `run_suite --timeout-per-scenario` | 1800 s | 0 (none) | SSv2 bounds each variant |
+
+     A single scenario with no agent registered now fails in 132 s with "the ego's Autoware is
+     not reachable: is its vehicle side up and its agent registered" (was 480 s+).
+
+   Results with the fixes: `basic/` 7/7 in one run (570 s; again 605 s on 2026-10-11 after the last SSv2 change); `awf/` ACC 27/27 (2258 s) with
+   `centerpoint`, AEB 9/9 (541 s) with `clustering`; on the guide's command with the `clustering` default and `--composable-respawn on-crash`, ACC 27/27 (2337 s) and AEB 9/9 (623 s). Step 6 stays open
+   for a fresh proof run.
+
 ## Acceptance
 
 - `ros2 run csb_launch run_suite $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic --output <dir>`

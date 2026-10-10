@@ -15,8 +15,18 @@ Two sides run independently and meet only in CARLA and the map directory:
 
 They need not share a ROS domain, a host, or a start order.
 
-Use `play_launch launch <pkg> <file>` wherever you would type `ros2 launch`; it is a drop-in
-replacement with a web UI, per-node logs and crash recovery.
+Use `play_launch launch <pkg> <file>` wherever you would type `ros2 launch`; it runs the same
+launch files with a web UI and per-node logs (`play_log/<time>/node/<name>/{out,err}`), and
+restarts the nodes a launch file declares `respawn="true"` (the bridge, here). Other nodes
+that crash stay down, except composable nodes on the vehicle side, which
+`--composable-respawn on-crash` reloads. Every command below carries the flags it needs:
+
+| Flag | Where | Why |
+|---|---|---|
+| `--enforce-rules off` | every launch | the default (`warn`) intercepts and logs every DDS message of every node; one ego stack wrote 169 GB of it in 50 minutes |
+| `--parser python` | vehicle side, scenario | play_launch's default Rust parser resolves some Autoware packages to the wrong install prefix on hosts that also have `ros-humble-autoware-*` packages, and the vehicle side starts with a node missing; SSv2's launch needs the Python parser too |
+| `--composable-respawn on-crash` | vehicle side | reloads a composable node whose process crashed. Autoware 1.5.0's `behavior_path_planner` aborts now and then when a new route arrives (`failed to add guard condition to wait set`, autoware_universe#12460; once in 27 UC-ACC variants here); without a reload the vehicle side cannot plan again and every later scenario fails in PLANNING. Autoware's containers declare no respawn, so only this flag brings it back |
+| `--web-addr 127.0.0.1:<port>` | every launch | each launch serves a web UI, 8080 by default; two on one port collide. This guide uses 8084 (simulation side), 8082 (vehicle side), 8083 (second vehicle side), 8081 (scenario) |
 
 ## 1. Install
 
@@ -28,6 +38,16 @@ replacement with a web UI, per-node logs and crash recovery.
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 pip install colcon-cargo-ros2
 ```
+
+- play_launch, the launcher every command below uses (PyPI; tested with 0.13.1):
+
+```bash
+sudo apt install libz3-dev ros-humble-rclcpp-components ros-humble-class-loader
+pip install play_launch==0.13.1        # installs ~/.local/bin/play_launch
+play_launch --version
+```
+
+  Optional, once: `play_launch setcap` (sudo) lets it record per-process I/O.
 
 - This repository with its submodules, its system dependencies, and one build:
 
@@ -84,7 +104,12 @@ download link (`scripts/download_maps.sh`) is dead at the time of writing, so th
 public download yet; providing the maps is a separate effort. With a copy of the pack,
 `CSB_MAP_SOURCE=<pack dir> scripts/download_maps.sh` installs it under
 `data/carla-autoware-bridge/<Town>/` with the projector fix SSv2 needs; then generate each
-town's `carla/traffic_lights.yaml` as above. Keep the towns side by side in one directory --
+town's `carla/traffic_lights.yaml` as above. The script also repairs two defects of the
+pack, idempotently (`scripts/repair_lanelet_traffic_lights.py`, `scripts/repair_lanelet_subtypes.py`;
+run them on a copy you installed another way): traffic lights whose type tags are empty
+(invisible to Autoware and SSv2), and lanelets with no `subtype` tag -- the kerb strips beside
+every road -- which make Autoware's `map_based_prediction` abort as soon as a pedestrian is
+near one (`lanelet::NoSuchAttributeError: Could not find 1`). Keep the towns side by side in one directory --
 the scenarios below find them as `$(env CARLA_MAPS)/<Town>`:
 
 ```bash
@@ -108,6 +133,14 @@ $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/
 
 They name their map as `$(env CARLA_MAPS)/<Town>`: export `CARLA_MAPS` (section 2) in the
 terminal that runs them.
+
+**Which town the vehicle side loads.** The vehicle side's `map_path` is fixed when it starts,
+and it must be the town the scenario drives in: every starter scenario with an ego, in
+`basic/`, `multi_av/` and `awf/`, is Town01, so start the vehicle side with
+`map_path:=$CARLA_MAPS/Town01`. `town02_episode_change` has no ego; it only makes CARLA load
+Town02, and the next Town01 scenario loads Town01 back. A scenario whose ego drives another
+town needs a vehicle side started with that town's map: with the wrong one, localization
+never converges and the scenario fails waiting for the ego (section 6).
 
 For your own:
 
@@ -144,23 +177,44 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
 
 # Terminal 2 -- simulation side, long-lived: the bridge (restarted if it crashes) and the
 # agent relay (TCP 5560), in the ROS domain scenarios will run in
-ROS_DOMAIN_ID=9 play_launch launch csb_launch simulation.launch.xml \
+ROS_DOMAIN_ID=9 play_launch launch --enforce-rules off --web-addr 127.0.0.1:8084 \
+    csb_launch simulation.launch.xml \
     [config_file:=<scenario dir>/bridge.yaml] [weather:=ClearNoon]
 
 # Terminal 3 -- vehicle side, any ROS domain, any host, any time
-ROS_DOMAIN_ID=1 play_launch launch acb_launch carla_simulator.launch.xml \
-    map_path:=<map dir> vehicle_name:=hero relay:=tcp://<simulation host>:5560 \
-    [autoware_launch:=<your autoware.launch.xml>]
+ROS_DOMAIN_ID=1 play_launch launch --enforce-rules off --parser python \
+    --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
+    acb_launch carla_simulator.launch.xml \
+    map_path:=$CARLA_MAPS/Town01 vehicle_name:=hero relay:=tcp://<simulation host>:5560 \
+    [rviz:=false] [autoware_launch:=<your autoware.launch.xml>]
 
 # Terminal 3b -- one more vehicle side per entity whose controller is `agent`, e.g. bg_av_1
-ROS_DOMAIN_ID=2 play_launch launch acb_launch carla_simulator.launch.xml \
-    map_path:=<map dir> vehicle_name:=bg_av_1 entity:=bg_av_1 \
-    relay:=tcp://<simulation host>:5560
+ROS_DOMAIN_ID=2 play_launch launch --enforce-rules off --parser python \
+    --composable-respawn on-crash --web-addr 127.0.0.1:8083 \
+    acb_launch carla_simulator.launch.xml \
+    map_path:=$CARLA_MAPS/Town01 vehicle_name:=bg_av_1 entity:=bg_av_1 \
+    relay:=tcp://<simulation host>:5560 rviz:=false
 
 # Terminal 4 -- one scenario, in the simulation side's domain; exits when it ends
-ROS_DOMAIN_ID=9 play_launch launch csb_launch scenario.launch.xml \
+ROS_DOMAIN_ID=9 play_launch launch --enforce-rules off --parser python \
+    --web-addr 127.0.0.1:8081 \
+    csb_launch scenario.launch.xml \
     scenario:=<scenario dir>/my_scenario.xosc [output_directory:=<dir>]
 ```
+
+**When each part is ready.** Start them in this order and wait for each:
+
+- CARLA serves its RPC port: `ss -lnt | grep ':2000 '` lists it. Its own log prints nothing
+  useful; a cold headless start takes from under a minute (NVIDIA Vulkan) to about three.
+- The simulation side logs `ZMQ server ready` (the bridge) and `Relaying entity 'ego'`
+  (the relay). It waits for CARLA by itself if started first.
+- The vehicle side logs `Startup complete: all nodes ready (nodes 50/50, ...)` from
+  play_launch -- check that the counts are whole -- and the relay then logs
+  `entity 'ego': agent acb_agent registered`. About a minute on a warm host; the first
+  start builds TensorRT engines and takes several.
+
+**RViz.** The vehicle side opens Autoware's RViz on `$DISPLAY` by default. Pass `rviz:=false`
+on a headless host or for a second vehicle side.
 
 The verdict is in `<output_directory>/scenario_test_runner/result.junit.xml`
 (`output_directory` defaults to `/tmp`), beside SSv2's preprocessed copy of the scenario and
@@ -175,17 +229,28 @@ export CARLA_MAPS=<map root>
 ros2 run csb_launch run_suite \
     $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic \
     --output ~/csb_results/basic \
-    [--domain 9] [--timeout-per-scenario 1800] [-- global_timeout:=900 ...]
+    [--domain 9] [--relay tcp://<simulation host>:5560] [--timeout-per-scenario S] \
+    [-- global_timeout:=900 ...]
 ```
 
 Arguments are scenario files (`.xosc`, `.yaml`) or directories (every scenario file in them,
 sorted, recursively). Each scenario runs to its end, one after another, through
 `scenario.launch.xml` (with `play_launch`, or `ros2 launch` without it), in its own process
 group and with its own `output_directory:=<output>/<scenario name>/`; arguments after `--`
-go to every `scenario.launch.xml`. A scenario still running after
-`--timeout-per-scenario` seconds (default 1800, for all its variants; 0 for none) is killed
-and recorded as an error. `--domain` (default `$ROS_DOMAIN_ID`, else 9) must be the
+go to every `scenario.launch.xml`. `--domain` (default `$ROS_DOMAIN_ID`, else 9) must be the
 simulation side's domain.
+
+Before each scenario, a pre-flight asks the agent relay (`--relay`, default
+`tcp://localhost:5560`) whether the vehicle agent of every entity the scenario needs is
+registered: the ego, and each entity whose controller is `agent`. If one is not, that
+scenario fails at once (`Preflight: no vehicle agent registered ... as 'ego'`) instead of
+waiting out the scenario's timeouts. `--no-preflight` skips the check.
+
+`--timeout-per-scenario` caps one scenario file's wall-clock time, all its variants
+together; a scenario that hits it is killed and its line says `TIMEOUT after N s`. There is
+no cap by default (0): SSv2 already ends every variant at `global_timeout`, and one YAML
+file can expand to many variants -- `awf/` UC-ACC is 27, which took over 2000 s. In CI set a
+cap above the suite's longest file (`awf/`: UC-ACC took 2258 s, UC-AEB 541 s).
 
 Each scenario prints one line (`PASS`/`FAIL`, testcases passed, time, the first failure),
 and the results directory holds:
@@ -213,8 +278,39 @@ three components with CARLA settings. Turn any of those off to keep your own:
 | Argument | CARLA setting it applies |
 |---|---|
 | `carla_localization:=false` | CARLA-tuned NDT/EKF/pose-initializer parameters |
-| `carla_perception:=false` | selectable `lidar_detection_model`, fusion-only traffic lights (signals arrive from CARLA over V2X) |
+| `carla_perception:=false` | selectable `lidar_detection_model` (default `clustering`, CPU; `centerpoint` is TensorRT), fusion-only traffic lights (signals arrive from CARLA over V2X) |
 | `carla_system:=false` | component-state topics, MRM parameters and diagnostic graph matching CARLA's sensors |
+| `launch_deprecated_api:=false` | Autoware's deprecated API, which serves the velocity limit a scenario's absolute `SpeedAction` sets (the `awf/` use cases fail without it) |
+
+The lidar detector defaults to `clustering` because it is the one that passes on CARLA: the
+`awf/` standing-pedestrian use case went 9/9 with it and 2/9 with `centerpoint`
+(2026-10-10, same host and build). `lidar_detection_model:=centerpoint` selects the other.
+
+### Timeouts
+
+A broken setup should fail in a minute or two, naming the cause, and a healthy run should
+never sit in a fixed wait. These are the waits on the scenario path and what bounds them;
+tune them where named.
+
+| Wait | Where to tune | Old | New | Why |
+|---|---|---|---|---|
+| Vehicle agent registered? | `run_suite --relay`, `--no-preflight` | none (the scenario waited) | checked before each scenario, fails at once | an unregistered agent can only time out |
+| Init through engage | `scenario.launch.xml initialize_duration:=` | 480 s | 120 s | scenario start to engage measured 52 s at worst (median ~20 s, 33 starts, basic/ and awf/); 480 dates from roadmap 012, when Autoware started with the scenario |
+| First call to the ego's Autoware (`change_to_stop`) | follows `initialize_duration` | max(180 s, budget) | the budget | the relay offers it exactly while an agent is registered; the 180 s floor outlived its reason |
+| Any other ADAPI service to appear | SSv2 fork | 180 s | 30 s | the relay's services are discovered in a second or two |
+| Velocity limit retries | SSv2 fork | 30 x 3 s (90-180 s) | 5 (15-30 s) | a refusal means the vehicle side lacks the API (section 6), not a transient |
+| Route retries | SSv2 fork | 30 x (10 + 10 s) | 5 | Autoware is waiting for a route when it is sent; a refused route stays refused |
+| Clear route / engage / enable control / RTC retries | SSv2 fork | 30 x 3 s | 10 | rides out a transient refusal, fails a persistent one in about a minute |
+| One simulator response (frame, spawn, despawn) | env `SIMULATOR_RESPONSE_TIMEOUT` | 420 s | 90 s | the bridge's own CARLA RPC timeout is 30 s (+10 s settings); a dead bridge is reported in 1.5 min |
+| Simulator `Initialize` | env `SIMULATOR_INITIALIZE_TIMEOUT` | 420 s | 300 s | covers the CARLA wait below plus a town load (bridge's 120 s map-load RPC timeout) |
+| CARLA gone at `Initialize` | `bridge.yaml carla.reconnect_wait_seconds` | 240 s | 120 s | a CARLA restart serves its map in 25-51 s when the host is not saturated (three restarts, 2026-10-10); raise it where CARLA restarts unattended and slowly |
+| One scenario (variant) | `scenario.launch.xml global_timeout:=` | 600 s | 400 s | longest variant measured 190 s (town01_traffic_light, end to end) |
+| One scenario file, all variants | `run_suite --timeout-per-scenario` | 1800 s | none (0) | SSv2 bounds each variant; a fixed cap killed UC-ACC (27 variants) in proof run 1 |
+
+Unchanged, already short: the agent's own waits (10 s for fresh scans, 5 localization
+initialize attempts 2 s apart, 30 s to converge on the teleported pose, 2 s for a command to
+take effect), the relay's 10 s command timeout and the bridge's 15 s read timeout on it, and
+the bridge's 120 s RPC timeout for a CARLA town load (measured 44-71 s).
 
 ## 5. Configure the CARLA world
 
@@ -245,12 +341,35 @@ so it holds across scenarios on different towns. Empty (the default) leaves CARL
 ## 6. When things go wrong
 
 - **CARLA dies**: the running scenario fails within ~30 s; restart CARLA; the next scenario
-  waits for it (up to 240 s) and runs.
-- **The bridge dies**: the launch restarts it; the next scenario cleans up after it.
-- **A scenario waits for the ego**: the vehicle side is not up, or its agent has not
-  registered with the relay (`relay:=` wrong or unreachable). The relay logs every agent
-  that registers; the scenario proceeds as soon as one does (SSv2 waits up to its
-  `initialize_duration`).
+  waits for it (up to `carla.reconnect_wait_seconds`, 120 s) and runs.
+- **CARLA just started**: it opens its RPC port before its first map is loaded; the bridge
+  waits until CARLA reports a map ("CARLA is still loading its first map" in its log) before
+  sending it anything, since settings or a map load in that window can hang CARLA for good.
+- **The bridge dies**: the launch restarts it (`respawn="true"`); the running scenario fails
+  within 90 s (`SIMULATOR_RESPONSE_TIMEOUT`), and the next one cleans up after it.
+- **A scenario waits for the ego, or fails with "is not ready" / "agent relay"**: the vehicle
+  side is not up, or its agent has not registered with the relay (`relay:=` wrong or
+  unreachable). The relay logs every agent that registers; a single scenario proceeds as soon
+  as one does and fails after `initialize_duration` (120 s) naming the relay; `run_suite`'s
+  pre-flight fails the scenario at once.
+- **A scenario fails in PLANNING or WAITING_FOR_ENGAGE** ("Simulator waited for the Autoware
+  state to transition to WAITING_FOR_ENGAGE, but time is up"): the vehicle side is up but
+  cannot plan or engage. Most often a node in it has exited: play_launch logs `Exited` and
+  `Check play_log/.../node/<name>` for it, its web UI (port 8082 above) shows it stopped,
+  and `play_log/<time>/node/<name>/err` says why. Restart the vehicle side; nothing on the
+  simulation side needs restarting. `map_based_prediction` aborting with
+  `Could not find 1` is a map without lanelet subtypes (section 2); `behavior_path_planner`
+aborting is an Autoware bug that `--composable-respawn on-crash` recovers from (the scenario
+it hits fails, the next one runs). Otherwise check that its
+  `map_path` is the scenario's town (section 3).
+- **"Requested the service /api/autoware/set/velocity_limit 5 times"**: the vehicle side
+  lacks Autoware's deprecated API, which serves the velocity limit scenarios set with an
+  absolute `SpeedAction` (every `awf/` scenario). `carla_simulator.launch.xml` starts it
+  (`launch_deprecated_api:=true`, the default); a launch passing `false` loses it.
+- **`pose_instability_detector` exits** (`cannot store a negative time point in
+  rclcpp::Time`, in its `err`): an Autoware diagnostic node that does not survive the ego
+  being teleported to a new scenario's start. It only feeds a localization diagnostic;
+  driving and verdicts are unaffected.
 - **Without a scenario**: leave `relay` unset (launch rejects an empty `relay:=`) and pass
   `goal_poses_file:=<yaml>` (`goal_pose: {x, y, qz, qw}`): the vehicle side drives to that
   goal on its own -- a quick check that Autoware and CARLA work. Nothing else may hold CARLA

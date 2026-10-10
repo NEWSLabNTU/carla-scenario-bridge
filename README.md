@@ -54,11 +54,15 @@ See the **[User Guide](docs/user-guide.md)**: prepare a map directory and a scen
 directory, then
 
 ```bash
-./CarlaUE4.sh -RenderOffScreen                                        # CARLA
-ROS_DOMAIN_ID=9 play_launch launch csb_launch simulation.launch.xml  # bridge + relay
-ROS_DOMAIN_ID=1 play_launch launch acb_launch carla_simulator.launch.xml \
-    map_path:=<map dir> relay:=tcp://localhost:5560                   # your Autoware
-ROS_DOMAIN_ID=9 play_launch launch csb_launch scenario.launch.xml scenario:=<file>.xosc
+./CarlaUE4.sh -RenderOffScreen -nosound                                    # CARLA
+ROS_DOMAIN_ID=9 play_launch launch --enforce-rules off --web-addr 127.0.0.1:8084 \
+    csb_launch simulation.launch.xml                                       # bridge + relay
+ROS_DOMAIN_ID=1 play_launch launch --enforce-rules off --parser python \
+    --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
+    acb_launch carla_simulator.launch.xml \
+    map_path:=$CARLA_MAPS/Town01 relay:=tcp://localhost:5560              # your Autoware
+ROS_DOMAIN_ID=9 play_launch launch --enforce-rules off --parser python \
+    --web-addr 127.0.0.1:8081 csb_launch scenario.launch.xml scenario:=<file>.xosc
 ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
     $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic --output <dir>  # a set
 ```
@@ -66,8 +70,9 @@ ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
 Starter scenarios (package `csb_examples`) need only `CARLA_MAPS`, the directory holding the
 converted towns.
 
-`play_launch launch` is a drop-in for `ros2 launch` with crash recovery and a web UI.
-Developers have the same as `just run`, `just ego-av` and `just scenario <file>`.
+`play_launch launch` (`pip install play_launch`) runs `ros2 launch` files with per-node logs
+and a web UI; the user guide explains each flag. Developers have the same launches as
+`just run`, `just ego-av` and `just scenario <file>`.
 
 ## Project Structure
 

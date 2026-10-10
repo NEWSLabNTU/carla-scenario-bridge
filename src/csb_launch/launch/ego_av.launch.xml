@@ -16,7 +16,16 @@
       Exactly one /clock publisher per domain; a second makes localization log
       "Detected jump back in time. Clearing TF buffer".
 
-      play_launch launch csb_launch ego_av.launch.xml map_path:=/path/to/Town01
+      play_launch launch FLAGS \
+          csb_launch ego_av.launch.xml map_path:=/path/to/Town01
+
+    FLAGS are the play_launch options enforce-rules off, parser python, composable-respawn on-crash,
+    web-addr 127.0.0.1:8082
+    (each with a double-hyphen prefix, which an XML comment cannot contain);
+    docs/user-guide.md section 4 says why.
+
+    `just ego-av` and the user guide start acb_launch carla_simulator.launch.xml directly;
+    this file keeps the CPU-only perception defaults for demo.launch.xml.
 
     Start this BEFORE the scenario launch and wait for Autoware's ADAPI to come up: the
     concealer's constructor queues a ChangeToStop call with a 180 s service timeout, so
@@ -113,19 +122,8 @@
     <arg name="brake_map_path" value="$(var brake_map_path)" />
   </include>
 
-  <!-- 3. The tier4 external API adaptor. SSv2's concealer calls
-       /api/autoware/set/velocity_limit (a 180 s service timeout, then
-       AutowareError) and nothing in the acb Autoware profile provides it.
-
-       Launched OUTSIDE this file for now (see `just ego-av`): with the adaptor
-       inside this ~50-process launch, the concealer repeatedly failed to match
-       its service within 180 s (observed under both multicast and
-       loopback-unicast CycloneDDS configs), while a standalone adaptor process
-       was matched promptly. Cause not yet understood - suspected discovery
-       scaling on a host with lo-multicast disabled. -->
-
-  <arg name="launch_api_adaptor" default="false" />
-  <group if="$(var launch_api_adaptor)">
-    <include file="$(find-pkg-share autoware_iv_external_api_adaptor)/launch/external_api_adaptor.launch.py" />
-  </group>
+  <!-- The velocity-limit API SSv2's SpeedActions need (/api/autoware/set/velocity_limit,
+       reached through the relay and the vehicle agent) comes from Autoware's deprecated
+       API, which carla_simulator.launch.xml turns on (launch_deprecated_api, default true).
+       Nothing runs beside this launch. -->
 </launch>

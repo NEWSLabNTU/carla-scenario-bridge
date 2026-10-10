@@ -19,8 +19,14 @@
     2 and up background AVs; 0 stays empty so that no unconfigured ROS process on the host can
     join a run. `just bg-av` does this for you.
 
-      ROS_DOMAIN_ID=2 play_launch launch csb_launch background_av.launch.xml \
+      ROS_DOMAIN_ID=2 play_launch launch FLAGS \
+          csb_launch background_av.launch.xml \
           entity:=bg_av_1 map_path:=/path/to/Town01 relay:=tcp://sim-host:5560
+
+    FLAGS are the play_launch options enforce-rules off, parser python, composable-respawn on-crash,
+    web-addr 127.0.0.1:8083
+    (each with a double-hyphen prefix, which an XML comment cannot contain);
+    docs/user-guide.md section 4 says why.
 
     Long-lived, like the ego stack: one start serves consecutive scenarios, and it may come
     up before or after a scenario starts (the bridge tells the agent where its vehicle is as
