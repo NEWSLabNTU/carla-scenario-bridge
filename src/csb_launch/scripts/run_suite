@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Run a set of scenarios one after another and keep every verdict.
+
+    ros2 run csb_launch run_suite <scenario file or dir>... --output <results dir> \\
+        [--domain 9] [--timeout-per-scenario S] [-- <extra scenario.launch.xml args>]
+
+Each scenario runs through `play_launch launch csb_launch scenario.launch.xml` (or
+`ros2 launch` when play_launch is not installed) with its own
+`output_directory:=<results>/<scenario stem>`, in its own process group, so a scenario
+that overruns --timeout-per-scenario is killed alone. Afterwards every
+`<results>/<stem>/scenario_test_runner/result.junit.xml` is merged into
+`<results>/suite.junit.xml` (one testcase per scenario variant, classname = stem); a
+scenario that left no verdict is recorded as an error with the reason.
+
+The simulation side and the vehicle side(s) must already be up, as for one scenario.
+Exit status is 0 only if every testcase of every scenario passed.
+"""
+
+import argparse
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Optional
+
+SCENARIO_SUFFIXES = (".xosc", ".yaml", ".yml")
+JUNIT_RELPATH = Path("scenario_test_runner") / "result.junit.xml"
+
+
+@dataclass
+class Case:
+    name: str
+    classname: str
+    kind: str = "pass"  # pass | failure | error
+    type: str = ""
+    message: str = ""
+    time: Optional[str] = None
+
+
+@dataclass
+class ScenarioResult:
+    stem: str
+    path: Path
+    output: Path
+    seconds: float = 0.0
+    exit_code: Optional[int] = None
+    timed_out: bool = False
+    cases: List[Case] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        return bool(self.cases) and all(c.kind == "pass" for c in self.cases)
+
+
+# ---------------------------------------------------------------------------------------
+# Scenario discovery
+# ---------------------------------------------------------------------------------------
+
+
+def collect_scenarios(inputs: List[str]) -> List[Path]:
+    """Files as given, directories expanded (recursively, sorted) to their scenario files."""
+    found: List[Path] = []
+    for arg in inputs:
+        p = Path(arg).expanduser().resolve()
+        if p.is_dir():
+            found.extend(
+                sorted(f for f in p.rglob("*") if f.is_file() and f.suffix in SCENARIO_SUFFIXES)
+            )
+        elif p.is_file():
+            found.append(p)
+        else:
+            raise FileNotFoundError(f"no such scenario file or directory: {arg}")
+    return found
+
+
+def unique_stems(paths: List[Path]) -> List[str]:
+    """One output directory name per scenario; repeated stems get _2, _3, ..."""
+    seen: dict = {}
+    stems = []
+    for p in paths:
+        n = seen.get(p.stem, 0) + 1
+        seen[p.stem] = n
+        stems.append(p.stem if n == 1 else f"{p.stem}_{n}")
+    return stems
+
+
+# ---------------------------------------------------------------------------------------
+# JUnit
+# ---------------------------------------------------------------------------------------
+
+
+def read_cases(junit: Path, classname: str) -> List[Case]:
+    """Testcases of one SSv2 result.junit.xml (testsuites > testsuite > testcase)."""
+    root = ET.parse(junit).getroot()
+    cases = []
+    for tc in root.iter("testcase"):
+        case = Case(name=tc.get("name", ""), classname=classname, time=tc.get("time"))
+        for kind in ("failure", "error"):
+            el = tc.find(kind)
+            if el is not None:
+                case.kind = kind
+                case.type = el.get("type", "")
+                case.message = el.get("message", "") or (el.text or "").strip()
+                break
+        cases.append(case)
+    return cases
+
+
+def collect_result(result: ScenarioResult) -> None:
+    """Fill result.cases from its junit, or with one error saying why there is none."""
+    junit = result.output / JUNIT_RELPATH
+    reason = None
+    if result.timed_out:
+        reason = f"timed out after {result.seconds:.0f} s; launch killed"
+    if junit.is_file():
+        try:
+            result.cases = read_cases(junit, result.stem)
+        except ET.ParseError as e:
+            reason = f"unreadable {junit}: {e}"
+            result.cases = []
+        if result.cases and not result.timed_out:
+            return
+        if result.cases and result.timed_out:
+            # Variants that finished before the cap keep their verdicts; the overrun is added.
+            result.cases.append(Case(result.stem + " (timeout)", result.stem, "error",
+                                     "Timeout", reason))
+            return
+        reason = reason or f"{junit} has no testcases"
+    if reason is None:
+        reason = f"no {JUNIT_RELPATH} written (launch exit code {result.exit_code})"
+    result.cases = [Case(result.stem, result.stem, "error", "NoVerdict", reason)]
+
+
+def build_suite_xml(results: List[ScenarioResult], name: str = "csb_suite") -> ET.ElementTree:
+    cases = [c for r in results for c in r.cases]
+    failures = sum(c.kind == "failure" for c in cases)
+    errors = sum(c.kind == "error" for c in cases)
+    total_time = sum(r.seconds for r in results)
+    counts = {"tests": str(len(cases)), "failures": str(failures), "errors": str(errors),
+              "time": f"{total_time:.1f}"}
+    root = ET.Element("testsuites", name=name, **counts)
+    suite = ET.SubElement(root, "testsuite", name=name, **counts)
+    for c in cases:
+        attrs = {"name": c.name, "classname": c.classname}
+        if c.time is not None:
+            attrs["time"] = c.time
+        tc = ET.SubElement(suite, "testcase", **attrs)
+        if c.kind != "pass":
+            el = ET.SubElement(tc, c.kind, type=c.type, message=c.message)
+            el.text = c.message
+    if hasattr(ET, "indent"):
+        ET.indent(root, "  ")
+    return ET.ElementTree(root)
+
+
+def summary_line(r: ScenarioResult) -> str:
+    n = len(r.cases)
+    ok = sum(c.kind == "pass" for c in r.cases)
+    head = "PASS" if r.passed else "FAIL"
+    line = f"[run_suite] {head} {r.stem}: {ok}/{n} passed in {r.seconds:.0f} s"
+    bad = [c for c in r.cases if c.kind != "pass"]
+    if bad:
+        first = bad[0]
+        msg = " ".join(first.message.split())[:160]
+        line += f" -- {first.name}: {first.type} {msg}".rstrip()
+    return line
+
+
+# ---------------------------------------------------------------------------------------
+# Running
+# ---------------------------------------------------------------------------------------
+
+
+def launch_command(scenario: Path, output: Path, extra: List[str]) -> List[str]:
+    launch_args = [
+        "csb_launch", "scenario.launch.xml",
+        f"scenario:={scenario}",
+        f"output_directory:={output}",
+        *extra,
+    ]
+    if shutil.which("play_launch"):
+        # --parser python: scenario_test_runner.launch.py imports launch actions the Rust
+        # parser cannot resolve. --enforce-rules off: interception logging fills disks.
+        # Web UI on 8081, the scenario stack's port by this project's convention (the
+        # default, 8080, is not reserved for it).
+        return ["play_launch", "launch", "--enforce-rules", "off", "--parser", "python",
+                "--web-addr", "127.0.0.1:8081",
+                "--log-dir", str(output / "play_log"), *launch_args]
+    return ["ros2", "launch", *launch_args]
+
+
+def signal_group(pgid: int, sig: int) -> bool:
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def group_alive(pgid: int) -> bool:
+    return signal_group(pgid, 0)
+
+
+def stop_group(pgid: int, grace: float = 20.0) -> None:
+    """SIGINT, then SIGTERM, then SIGKILL the whole group until nothing in it is left."""
+    for sig, wait in ((signal.SIGINT, grace), (signal.SIGTERM, grace / 2), (signal.SIGKILL, 5)):
+        if not signal_group(pgid, sig):
+            return
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            if not group_alive(pgid):
+                return
+            time.sleep(0.5)
+
+
+def run_one(scenario: Path, stem: str, results_dir: Path, extra: List[str],
+            timeout: Optional[float], env: dict) -> ScenarioResult:
+    output = results_dir / stem
+    output.mkdir(parents=True, exist_ok=True)
+    # SSv2's runner empties its subdirectories at startup but leaves its own top-level
+    # files, a previous verdict among them; never let a stale one stand in for this run.
+    stale = output / JUNIT_RELPATH
+    if stale.exists():
+        stale.unlink()
+    result = ScenarioResult(stem=stem, path=scenario, output=output)
+    cmd = launch_command(scenario, output, extra)
+    log = output / "launch.log"
+    start = time.monotonic()
+    with open(log, "w") as logf:
+        logf.write("$ " + " ".join(cmd) + "\n")
+        logf.flush()
+        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+        try:
+            result.exit_code = proc.wait(timeout=timeout if timeout and timeout > 0 else None)
+        except subprocess.TimeoutExpired:
+            result.timed_out = True
+            stop_group(proc.pid)
+            result.exit_code = proc.wait()
+        except KeyboardInterrupt:
+            stop_group(proc.pid)
+            raise
+    # The launch ended on its own; anything it left behind in its group goes too.
+    if group_alive(proc.pid):
+        stop_group(proc.pid, grace=10.0)
+    result.seconds = time.monotonic() - start
+    collect_result(result)
+    return result
+
+
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    extra: List[str] = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, extra = argv[:i], argv[i + 1:]
+    ap = argparse.ArgumentParser(
+        prog="run_suite",
+        description="Run scenarios one after another through csb_launch scenario.launch.xml "
+                    "and merge their verdicts into <output>/suite.junit.xml.",
+        epilog="Arguments after -- are passed to scenario.launch.xml (e.g. global_timeout:=900).",
+    )
+    ap.add_argument("scenarios", nargs="+", help="scenario files (.xosc/.yaml) or directories")
+    ap.add_argument("--output", "-o", required=True, type=Path, help="results directory")
+    ap.add_argument("--domain", type=int,
+                    default=int(os.environ.get("ROS_DOMAIN_ID") or 9),
+                    help="ROS_DOMAIN_ID of the scenario side (default: $ROS_DOMAIN_ID or 9)")
+    ap.add_argument("--timeout-per-scenario", type=float, default=1800.0, metavar="S",
+                    help="wall-clock cap per scenario file in seconds, all its variants "
+                         "included (default 1800; 0 = none)")
+    args = ap.parse_args(argv)
+    args.extra = extra
+    return args
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        scenarios = collect_scenarios(args.scenarios)
+    except FileNotFoundError as e:
+        print(f"[run_suite] {e}", file=sys.stderr)
+        return 2
+    if not scenarios:
+        print("[run_suite] no scenario files (.xosc, .yaml, .yml) found", file=sys.stderr)
+        return 2
+    results_dir = args.output.expanduser().resolve()
+    results_dir.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, ROS_DOMAIN_ID=str(args.domain))
+    stems = unique_stems(scenarios)
+    print(f"[run_suite] {len(scenarios)} scenario(s), domain {args.domain}, results in "
+          f"{results_dir}", flush=True)
+
+    results: List[ScenarioResult] = []
+    suite_path = results_dir / "suite.junit.xml"
+    try:
+        for i, (scenario, stem) in enumerate(zip(scenarios, stems), 1):
+            print(f"[run_suite] ({i}/{len(scenarios)}) {stem}: {scenario}", flush=True)
+            r = run_one(scenario, stem, results_dir, args.extra,
+                        args.timeout_per_scenario, env)
+            results.append(r)
+            print(summary_line(r), flush=True)
+            # Written after every scenario, so an interrupted suite still leaves a verdict.
+            build_suite_xml(results).write(suite_path, encoding="utf-8", xml_declaration=True)
+    except KeyboardInterrupt:
+        print("[run_suite] interrupted", file=sys.stderr)
+        build_suite_xml(results).write(suite_path, encoding="utf-8", xml_declaration=True)
+        return 130
+
+    passed = sum(r.passed for r in results)
+    print(f"[run_suite] {passed}/{len(results)} scenario(s) passed; {suite_path}", flush=True)
+    return 0 if passed == len(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

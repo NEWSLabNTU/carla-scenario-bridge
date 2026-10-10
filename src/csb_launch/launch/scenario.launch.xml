@@ -2,9 +2,15 @@
 <!--
   Run one scenario against a running simulator adapter (carla_scenario_bridge
   bridge.launch.xml). Exits when the scenario ends; the verdict is in
-  /tmp/scenario_test_runner/result.junit.xml.
+  <output_directory>/scenario_test_runner/result.junit.xml (default
+  /tmp/scenario_test_runner/result.junit.xml), beside the preprocessed copy and logs.
 
-    play_launch launch csb_launch scenario.launch.xml scenario:=<scenario dir>/<name>.xosc
+    play_launch launch csb_launch scenario.launch.xml \
+        scenario:=<scenario dir>/<name>.xosc [output_directory:=<dir>]
+
+  SSv2's runner empties the subdirectories of <output_directory>/scenario_test_runner at
+  startup, so give each concurrent or to-be-kept run its own output_directory
+  (`ros2 run csb_launch run_suite` does this per scenario).
 
   The scenario file is read, never modified (SSv2 preprocesses a copy in its output dir).
   It names its map directory in RoadNetwork/LogicFile, e.g. "$(env CARLA_MAPS)/Town01".
@@ -15,6 +21,8 @@
   <arg name="scenario" description="Path to .xosc scenario file" />
   <arg name="port" default="5555" description="ZMQ port for adapter connection" />
   <arg name="global_timeout" default="600" description="Scenario timeout in seconds" />
+  <arg name="output_directory" default="/tmp"
+       description="Run output root; the verdict is &lt;output_directory&gt;/scenario_test_runner/result.junit.xml" />
   <!-- The concealer's deadline is ABSOLUTE (FieldOperatorApplication construction +
        initialize_duration) and shared by every wait up to and including engage, so
        it must cover localization + routing + the diagnostics gate converging on
@@ -116,6 +124,7 @@
     <arg name="scenario" value="$(var scenario)" />
     <arg name="port" value="$(var port)" />
     <arg name="global_timeout" value="$(var global_timeout)" />
+    <arg name="output_directory" value="$(var output_directory)" />
     <arg name="initialize_duration" value="$(var initialize_duration)" />
   </include>
   </group>
