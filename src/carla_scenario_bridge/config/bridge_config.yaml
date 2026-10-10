@@ -11,9 +11,12 @@
 carla:
   host: "localhost"
   port: 2000
-  # Initialize waits this long for a CARLA that is gone (restarting: ~182 s headless at
-  # Epic) before failing the scenario. docs/design/failure-and-frame-budget.md
-  reconnect_wait_seconds: 240
+  # Initialize waits this long for a CARLA that is gone (restarting) before failing the
+  # scenario. A restart with Vulkan pinned to the NVIDIA card serves RPC in ~50 s; 120 is
+  # twice that, and a scenario started with no CARLA at all fails in two minutes. Raise it
+  # on a host where CARLA takes longer (a cold headless start at Epic took 182 s).
+  # docs/design/failure-and-frame-budget.md
+  reconnect_wait_seconds: 120
 
 # SSv2 ZMQ server. Overridden by SSV2_PORT.
 ssv2:

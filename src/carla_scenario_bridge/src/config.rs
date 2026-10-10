@@ -44,7 +44,7 @@ impl Default for CarlaConfig {
         Self {
             host: default_carla_host(),
             port: default_carla_port(),
-            reconnect_wait_seconds: 240,
+            reconnect_wait_seconds: 120,
         }
     }
 }

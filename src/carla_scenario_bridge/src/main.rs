@@ -182,6 +182,11 @@ fn connect_to_carla(host: &str, port: u16, shutdown: &AtomicBool) -> Option<Clie
                     }
                 }
                 match client.world() {
+                    // A starting CARLA serves RPC before its first map is loaded (empty map
+                    // name); anything sent to it then can wedge it. Wait for the map.
+                    Ok(world) if world.map().map(|m| m.name()).unwrap_or_default().is_empty() => {
+                        tracing::warn!("CARLA is still loading its first map, retrying in 5s...");
+                    }
                     Ok(_) => {
                         tracing::info!("Connected to CARLA at {host}:{port}");
                         return Some(client);

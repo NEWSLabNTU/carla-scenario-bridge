@@ -1998,6 +1998,14 @@ impl Coordinator {
             crate::carla_version::BUILT_FOR
         );
         let world = client.world().map_err(|e| eyre::eyre!("get world: {e}"))?;
+        // A starting CARLA serves RPC before its first map is loaded; the map name is empty
+        // until then. Settings or a load_world sent in that window wedged the server for
+        // good (three restarts in a row on 2026-10-10, each fed apply_settings or
+        // load_world while it held ''), so a server without a map is not reachable yet.
+        let map_name = world.map().map(|m| m.name()).unwrap_or_default();
+        if map_name.is_empty() {
+            eyre::bail!("CARLA is still loading its first map");
+        }
 
         let world_id = world.id().ok();
         let restarted = world_id.is_none() || world_id != self.world_id;

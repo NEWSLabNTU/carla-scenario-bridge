@@ -32,7 +32,7 @@ whole cycle hold:
 
 - **Initialize waits for CARLA.** A restarted server needs ~3 min before it serves RPC (182 s
   headless at Epic). `Initialize` probes the connection; if it is dead it retries the
-  reconnect every 5 s up to `carla.reconnect_wait_seconds` (default 240) and only then
+  reconnect every 5 s up to `carla.reconnect_wait_seconds` (default 120) and only then
   fails. A scenario started while CARLA is still coming up waits instead of failing.
 - **Time continues.** A restarted CARLA starts `elapsed_seconds` at 0. csb treats the restart
   as an episode change whose last old frame is the last frame csb observed:

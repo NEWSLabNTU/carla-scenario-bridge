@@ -190,6 +190,8 @@ class RelayNode(Node):
 
     def _publish_once(self, topic, key, publisher, message):
         """Latched topics: publish on change only, as Autoware does."""
+        if getattr(self, "closing", False) or not rclpy.ok():
+            return
         if self._latched.get(topic) != key:
             self._latched[topic] = key
             publisher.publish(message)
@@ -378,6 +380,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        # Ctrl-C has already shut the context down; stopping the server closes agent
+        # sessions, whose presence callbacks would publish into it and exit non-zero.
+        node.closing = True
         node.server.stop()
         node.destroy_node()
         rclpy.try_shutdown()
