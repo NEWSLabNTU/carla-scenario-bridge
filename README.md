@@ -59,7 +59,12 @@ ROS_DOMAIN_ID=9 play_launch launch csb_launch simulation.launch.xml  # bridge + 
 ROS_DOMAIN_ID=1 play_launch launch acb_launch carla_simulator.launch.xml \
     map_path:=<map dir> relay:=tcp://localhost:5560                   # your Autoware
 ROS_DOMAIN_ID=9 play_launch launch csb_launch scenario.launch.xml scenario:=<file>.xosc
+ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
+    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic --output <dir>  # a set
 ```
+
+Starter scenarios (package `csb_examples`) need only `CARLA_MAPS`, the directory holding the
+converted towns.
 
 `play_launch launch` is a drop-in for `ros2 launch` with crash recovery and a web UI.
 Developers have the same as `just run`, `just ego-av` and `just scenario <file>`.
@@ -78,12 +83,13 @@ Developers have the same as `just run`, `just ego-av` and `just scenario <file>`
 │   │   │   ├── coordinate_conversion.rs
 │   │   │   └── traffic_light_mapper.rs
 │   │   └── build.rs                # prost-build proto compilation
-│   ├── csb_launch/                 # simulation, scenario, ego and demo launch files
+│   ├── csb_launch/                 # simulation, scenario, ego and demo launch files; run_suite
+│   ├── csb_examples/               # starter scenarios: basic/, multi_av/, awf/ (installed)
 │   ├── scenario_agent_relay/       # the scenario's side of the vehicle agent protocol
 │   ├── autoware_carla_bridge/      # Submodule — sensor/vehicle interface
 │   └── scenario_simulator_v2/      # Submodule — scenario framework
 ├── proto/                          # SSv2 protobuf definitions (8 .proto files)
-├── scenarios/                      # Example OpenSCENARIO files
+├── scenarios/                      # benchmark scenarios (bench/) and goal-pose files
 ├── docs/
 │   ├── design/                     # Architecture, protocol, launch config
 │   ├── roadmap/                    # phased roadmap
@@ -111,7 +117,7 @@ just setup        # One-time: rustup, colcon-cargo-ros2, submodules, rosdep inst
 just build        # The user's colcon build + --symlink-install, dev-release profile
 just clean        # Remove build artifacts
 just check        # Format check (nightly) + clippy
-just test         # Run tests with cargo-nextest
+just test         # Run tests with cargo-nextest, and run_suite's unit tests
 just ci           # Build + check + test
 just format       # Auto-format with cargo +nightly fmt
 ```

@@ -77,7 +77,39 @@ ros2 run carla_scenario_bridge carla_scenario_bridge --generate-signal-table <ma
 The bridge checks it at every scenario start and refuses to run with a table that no longer
 matches CARLA. The map directory is read-only at run time.
 
+**Where the maps come from.** This project runs on the CARLA towns converted for Autoware by
+TUM's [carla-autoware-bridge](https://github.com/TUMFTM/Carla-Autoware-Bridge) (map pack
+copyright 2024 TUM, LGPL-3.0; its `LICENSE.md` ships in each town directory). The pack's
+download link (`scripts/download_maps.sh`) is dead at the time of writing, so there is no
+public download yet; providing the maps is a separate effort. With a copy of the pack,
+`CSB_MAP_SOURCE=<pack dir> scripts/download_maps.sh` installs it under
+`data/carla-autoware-bridge/<Town>/` with the projector fix SSv2 needs; then generate each
+town's `carla/traffic_lights.yaml` as above. Keep the towns side by side in one directory --
+the scenarios below find them as `$(env CARLA_MAPS)/<Town>`:
+
+```bash
+export CARLA_MAPS=<repo>/data/carla-autoware-bridge     # holds Town01/, Town02/, ...
+```
+
 ## 3. Prepare a scenario directory
+
+**Starter scenarios** are installed with the workspace, no scenario directory needed
+(package `csb_examples`; each scenario, its town and what it checks are listed in its
+[README](../src/csb_examples/README.md)):
+
+```
+$(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/
+    basic/      this project's Town01/Town02 scenarios (ego drive, traffic light, pedestrian,
+                rear contact, engage state, simulator autopilot, Town02 episode change)
+    multi_av/   town01_two_av.xosc: needs a second vehicle side, entity bg_av_1 (Terminal 3b)
+    awf/        AWF ODD use cases UC-ACC-001-0001 and UC-AEB-001-0001 (Apache-2.0), YAML with
+                ScenarioModifiers: one run per parameter combination (27 and 9)
+```
+
+They name their map as `$(env CARLA_MAPS)/<Town>`: export `CARLA_MAPS` (section 2) in the
+terminal that runs them.
+
+For your own:
 
 ```
 <scenario dir>/  my_scenario.xosc
@@ -98,10 +130,10 @@ default (exact choreography). Name a vehicle's controller `simulator_autopilot` 
 Traffic Manager drives it with physics instead: give it a goal with `AcquirePositionAction`
 and a speed with an absolute `SpeedAction`, and it routes there and stops
 ([design/scenario-authoring.md](design/scenario-authoring.md#vehicles-the-simulator-drives-simulator_autopilot);
-example `scenarios/town01_simulator_autopilot.xosc`). Name it `agent` and an autopilot of its
+example `src/csb_examples/scenarios/basic/town01_simulator_autopilot.xosc`). Name it `agent` and an autopilot of its
 own drives it -- a second Autoware, say: start one more vehicle side for it with
 `entity:=<its name>` ([design/scenario-authoring.md](design/scenario-authoring.md#vehicles-an-autopilot-drives-agent);
-example `scenarios/town01_two_av.xosc`). Scenario files are never modified.
+example `src/csb_examples/scenarios/multi_av/town01_two_av.xosc`). Scenario files are never modified.
 
 ## 4. Run
 
@@ -127,10 +159,49 @@ ROS_DOMAIN_ID=2 play_launch launch acb_launch carla_simulator.launch.xml \
 
 # Terminal 4 -- one scenario, in the simulation side's domain; exits when it ends
 ROS_DOMAIN_ID=9 play_launch launch csb_launch scenario.launch.xml \
-    scenario:=<scenario dir>/my_scenario.xosc
+    scenario:=<scenario dir>/my_scenario.xosc [output_directory:=<dir>]
 ```
 
-The verdict is in `/tmp/scenario_test_runner/result.junit.xml`.
+The verdict is in `<output_directory>/scenario_test_runner/result.junit.xml`
+(`output_directory` defaults to `/tmp`), beside SSv2's preprocessed copy of the scenario and
+its logs. SSv2 empties that directory's subdirectories when a run starts and the next run
+overwrites the verdict, so give every run you want to keep its own `output_directory`.
+
+### Many scenarios: `run_suite`
+
+```bash
+# Terminal 4, instead of one scenario
+export CARLA_MAPS=<map root>
+ros2 run csb_launch run_suite \
+    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic \
+    --output ~/csb_results/basic \
+    [--domain 9] [--timeout-per-scenario 1800] [-- global_timeout:=900 ...]
+```
+
+Arguments are scenario files (`.xosc`, `.yaml`) or directories (every scenario file in them,
+sorted, recursively). Each scenario runs to its end, one after another, through
+`scenario.launch.xml` (with `play_launch`, or `ros2 launch` without it), in its own process
+group and with its own `output_directory:=<output>/<scenario name>/`; arguments after `--`
+go to every `scenario.launch.xml`. A scenario still running after
+`--timeout-per-scenario` seconds (default 1800, for all its variants; 0 for none) is killed
+and recorded as an error. `--domain` (default `$ROS_DOMAIN_ID`, else 9) must be the
+simulation side's domain.
+
+Each scenario prints one line (`PASS`/`FAIL`, testcases passed, time, the first failure),
+and the results directory holds:
+
+```
+<output>/suite.junit.xml                      every testcase of every scenario (classname =
+                                              scenario name; one per variant of a YAML
+                                              scenario); a scenario with no verdict is an
+                                              error saying why
+<output>/<scenario>/scenario_test_runner/     its own result.junit.xml, preprocessed copy, logs
+<output>/<scenario>/launch.log, play_log/     the launch's output
+```
+
+The exit status is 0 only if every testcase passed. Like a single scenario, a suite needs the
+simulation side and the vehicle side(s) already up; scenarios that load another town
+(`town02_episode_change`) make CARLA switch towns, and the next scenario switches back.
 
 ### Your own Autoware
 

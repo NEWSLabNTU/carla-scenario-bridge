@@ -75,19 +75,40 @@ ros2 run csb_launch run_suite <scenario file or dir>... --output <results dir> \
 
 ## Steps
 
-1. - [ ] `output_directory:=` on `scenario.launch.xml`; verified with a non-default path.
-2. - [ ] `csb_examples` with `basic/` and `multi_av/`; installed; README; guide points at it.
-3. - [ ] AWF use cases in `awf/`: lanelet IDs checked against our Town01, adapted, both run
+1. - [x] `output_directory:=` on `scenario.launch.xml`; verified with a non-default path.
+   2026-10-10: `OUTPUT_DIR=<scratch>/020-step1 just scenario .../town01_ego_drive.xosc` left
+   its PASS verdict at `<dir>/scenario_test_runner/result.junit.xml`; `/tmp`'s untouched.
+   `just scenario` passes `OUTPUT_DIR` (default `/tmp`), `two-av` reads it.
+2. - [x] `csb_examples` with `basic/` and `multi_av/`; installed; README; guide points at it.
+   `git mv` from `scenarios/` (which keeps `bench/` and the goal-pose files); justfile
+   defaults, design docs and acb's `run_scenarios.sh` follow. Installs to
+   `share/csb_examples/scenarios/{basic,multi_av,awf}` + `README.md`.
+3. - [x] AWF use cases in `awf/`: lanelet IDs checked against our Town01, adapted, both run
    (all modifier variants) on the CARLA pipeline; results recorded.
-4. - [ ] `run_suite`: per-scenario output dirs, timeout, `suite.junit.xml`, exit code; run on
-   `basic/` end to end.
-5. - [ ] User guide: starter scenarios, `output_directory`, `run_suite`, map source note.
+   No shared ids; AWF 1071 = our 5230, same geometry to 0.01 m (by lat/lon -- our pack's
+   `local_x/y` tags are 0.9 m stale), so ids remapped, `s` kept. Ego box placeholders set to
+   acb_vehicle (upstream's put the car 1.39 m off the localization pose: 9/9 AEB failed
+   before engage). Then AEB variant 5 failed on a -6.6 m/s^2 stop spike: acb locked the
+   handbrake while the car still rolled at ~0.8 m/s (pipeline fault, not Autoware: it
+   commanded <= 3.4); acb now holds only below 0.1 m/s. Final: ACC 27/27, AEB 9/9
+   (`csb_examples/README.md`, `docs/proof/020/`).
+4. - [x] `run_suite`: per-scenario output dirs, timeout, `suite.junit.xml`, exit code; run on
+   `basic/` end to end. `src/csb_launch/scripts/run_suite` (stdlib only), 10 unit tests in
+   `src/csb_launch/test/` (run by `just test`). `basic/` 7/7 PASS back to back, twice
+   (540 s, and 563 s after the acb handbrake fix), one testcase each in
+   `suite.junit.xml`; `awf/` 36 testcases, 2/2 PASS.
+5. - [x] User guide: starter scenarios, `output_directory`, `run_suite`, map source note
+   (TUM pack, LGPL-3.0, download link dead, `CARLA_MAPS`); README command list.
 6. - [ ] **First-user proof run**: an agent given only the repository URL, the user guide and
    the host's prerequisites (ROS, Autoware 1.5.0, CARLA 0.9.16, the converted maps) follows
    the guide verbatim -- clone, rosdep, colcon build, CARLA, simulation side, vehicle side,
    `run_suite` over `basic/` -- in a fresh directory, without this repo's justfile or
    scripts, and reports every place the guide was wrong, missing or ambiguous. Fixes land in
    the guide; the run is repeated until it is clean.
+   Proof runs record screenshots on a local VNC display
+   (`vncserver :5 -geometry 1920x1080 -SecurityTypes None -localhost`, captured with
+   `import -window root -display :5`) under `docs/proof/020/`, with an index (`README.md`)
+   saying what each one shows.
 
 ## Acceptance
 
