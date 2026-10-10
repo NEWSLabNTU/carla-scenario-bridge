@@ -2,7 +2,8 @@
 """Run a set of scenarios one after another and keep every verdict.
 
     ros2 run csb_launch run_suite <scenario file or dir>... --output <results dir> \\
-        [--domain 9] [--timeout-per-scenario S] [-- <extra scenario.launch.xml args>]
+        [--domain 9] [--timeout-per-scenario S] [--relay tcp://localhost:5560]
+        [--no-preflight] [-- <extra scenario.launch.xml args>]
 
 Each scenario runs through `play_launch launch csb_launch scenario.launch.xml` (or
 `ros2 launch` when play_launch is not installed) with its own
@@ -13,23 +14,33 @@ that overruns --timeout-per-scenario is killed alone. Afterwards every
 scenario that left no verdict is recorded as an error with the reason.
 
 The simulation side and the vehicle side(s) must already be up, as for one scenario.
-Exit status is 0 only if every testcase of every scenario passed.
+Before each scenario a pre-flight asks the agent relay whether the vehicle agent of every
+entity the scenario needs (its ego, and each entity whose controller is `agent`) is
+registered; if one is not, the scenario fails at once with that reason instead of waiting
+out SSv2's initialize timeout. Exit status is 0 only if every testcase of every scenario
+passed.
 """
 
 import argparse
+import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from urllib.parse import urlparse
 
 SCENARIO_SUFFIXES = (".xosc", ".yaml", ".yml")
 JUNIT_RELPATH = Path("scenario_test_runner") / "result.junit.xml"
+DEFAULT_RELAY = "tcp://localhost:5560"
+EGO_CONTROLLER = "Autoware"  # SSv2: isEgo=true or a controller of this name is the ego
+AGENT_CONTROLLER = "agent"  # this project: an autopilot behind the relay drives it
 
 
 @dataclass
@@ -50,6 +61,8 @@ class ScenarioResult:
     seconds: float = 0.0
     exit_code: Optional[int] = None
     timed_out: bool = False
+    timeout: Optional[float] = None
+    preflight_error: Optional[str] = None
     cases: List[Case] = field(default_factory=list)
 
     @property
@@ -113,10 +126,16 @@ def read_cases(junit: Path, classname: str) -> List[Case]:
 
 def collect_result(result: ScenarioResult) -> None:
     """Fill result.cases from its junit, or with one error saying why there is none."""
+    if result.preflight_error is not None:
+        result.cases = [Case(result.stem, result.stem, "error", "Preflight",
+                             result.preflight_error)]
+        return
     junit = result.output / JUNIT_RELPATH
     reason = None
     if result.timed_out:
-        reason = f"timed out after {result.seconds:.0f} s; launch killed"
+        cap = result.timeout if result.timeout else result.seconds
+        reason = (f"TIMEOUT after {cap:.0f} s (--timeout-per-scenario); launch killed "
+                  f"after {result.seconds:.0f} s")
     if junit.is_file():
         try:
             result.cases = read_cases(junit, result.stem)
@@ -163,12 +182,145 @@ def summary_line(r: ScenarioResult) -> str:
     ok = sum(c.kind == "pass" for c in r.cases)
     head = "PASS" if r.passed else "FAIL"
     line = f"[run_suite] {head} {r.stem}: {ok}/{n} passed in {r.seconds:.0f} s"
+    if r.timed_out:
+        cap = r.timeout if r.timeout else r.seconds
+        line += f" -- TIMEOUT after {cap:.0f} s"
     bad = [c for c in r.cases if c.kind != "pass"]
     if bad:
         first = bad[0]
         msg = " ".join(first.message.split())[:160]
         line += f" -- {first.name}: {first.type} {msg}".rstrip()
     return line
+
+
+# ---------------------------------------------------------------------------------------
+# Pre-flight: are the scenario's vehicle agents registered with the relay?
+# ---------------------------------------------------------------------------------------
+
+
+def _is_true(value) -> bool:
+    return str(value).strip().lower() == "true"
+
+
+def _objects_xml(path: Path) -> List[Tuple[str, str, bool]]:
+    root = ET.parse(path).getroot()
+    objects = []
+    for obj in root.iter("ScenarioObject"):
+        ctrl = obj.find(".//ObjectController/Controller")
+        name = ctrl.get("name", "") if ctrl is not None else ""
+        is_ego = ctrl is not None and any(
+            p.get("name") == "isEgo" and _is_true(p.get("value"))
+            for p in ctrl.iter("Property"))
+        objects.append((obj.get("name", ""), name, is_ego))
+    return objects
+
+
+def _objects_yaml(path: Path) -> List[Tuple[str, str, bool]]:
+    import yaml  # ROS ships PyYAML; only needed for YAML scenarios
+
+    objects = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "ScenarioObject":
+                    for obj in value if isinstance(value, list) else [value]:
+                        if isinstance(obj, dict):
+                            objects.append(_yaml_object(obj))
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(yaml.safe_load(path.read_text()))
+    return objects
+
+
+def _yaml_object(obj: dict) -> Tuple[str, str, bool]:
+    ctrl = ((obj.get("ObjectController") or {}).get("Controller")) or {}
+    props = ((ctrl.get("Properties") or {}).get("Property")) or []
+    if isinstance(props, dict):
+        props = [props]
+    is_ego = any(isinstance(p, dict) and p.get("name") == "isEgo" and _is_true(p.get("value"))
+                 for p in props)
+    return str(obj.get("name", "")), str(ctrl.get("name", "") or ""), is_ego
+
+
+def required_agents(scenario: Path, ego_entity: str = "ego") -> List[str]:
+    """Relay entities a scenario needs: `ego_entity` if it has an ego (isEgo=true or the
+    controller SSv2 calls Autoware -- the relay serves the ego under its configured entity,
+    whatever the scenario names it), plus every entity whose controller is `agent`.
+    A file that cannot be read needs nothing here; the launch reports it properly."""
+    try:
+        if scenario.suffix == ".xosc":
+            objects = _objects_xml(scenario)
+        else:
+            objects = _objects_yaml(scenario)
+    except Exception:  # noqa: BLE001 -- unparseable is the launch's error to report
+        return []
+    needed = []
+    if any(is_ego or ctrl == EGO_CONTROLLER for _, ctrl, is_ego in objects):
+        needed.append(ego_entity)
+    for name, ctrl, is_ego in objects:
+        if ctrl == AGENT_CONTROLLER and not is_ego and name and name not in needed:
+            needed.append(name)
+    return needed
+
+
+def relay_address(url: str) -> Tuple[str, int]:
+    """tcp://host:port (or host:port) -> (host, port)."""
+    parsed = urlparse(url if "://" in url else "tcp://" + url)
+    if parsed.scheme != "tcp" or not parsed.hostname or not parsed.port:
+        raise ValueError(f"relay address must be tcp://host:port, got {url!r}")
+    return parsed.hostname, parsed.port
+
+
+def query_agents(relay: str, entities: List[str], timeout: float = 5.0) -> dict:
+    """Ask the relay, as a commander, whether an agent is registered for each entity.
+    Returns {entity: (registered, phase or "")}. Raises OSError/ValueError on a relay
+    that cannot be reached or does not answer."""
+    host, port = relay_address(relay)
+    answers = {}
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.settimeout(timeout)
+        f = s.makefile("rw")
+        msgs = [{"type": "register", "role": "commander", "agent": "run_suite"}]
+        msgs += [{"type": "query", "id": i, "entity": e} for i, e in enumerate(entities, 1)]
+        for m in msgs:
+            f.write(json.dumps({**m, "v": 1}) + "\n")
+        f.flush()
+        for line in f:
+            m = json.loads(line)
+            if m.get("type") != "reply" or not isinstance(m.get("id"), int):
+                continue
+            i = m["id"]
+            if 1 <= i <= len(entities):
+                phase = (m.get("state") or {}).get("phase", "") or ""
+                answers[entities[i - 1]] = (bool(m.get("registered")), phase)
+            if len(answers) == len(entities):
+                return answers
+    raise OSError("the relay closed the connection before answering")
+
+
+def preflight(scenario: Path, relay: str, ego_entity: str = "ego") -> Optional[str]:
+    """None if every agent the scenario needs is registered, else why the scenario
+    cannot run."""
+    entities = required_agents(scenario, ego_entity)
+    if not entities:
+        return None
+    try:
+        answers = query_agents(relay, entities)
+    except (OSError, ValueError) as e:
+        return (f"pre-flight: agent relay {relay} unreachable ({e}); start the simulation "
+                f"side (csb_launch simulation.launch.xml) or pass --relay / --no-preflight")
+    missing = [e for e in entities if not answers.get(e, (False, ""))[0]]
+    if not missing:
+        return None
+    return (f"pre-flight: no vehicle agent registered with the relay {relay} as "
+            f"{', '.join(repr(e) for e in missing)}; start that vehicle side "
+            f"(acb_launch carla_simulator.launch.xml relay:={relay} entity:={missing[0]}) "
+            f"and wait until it has registered, or check it for exited nodes")
 
 
 # ---------------------------------------------------------------------------------------
@@ -219,7 +371,8 @@ def stop_group(pgid: int, grace: float = 20.0) -> None:
 
 
 def run_one(scenario: Path, stem: str, results_dir: Path, extra: List[str],
-            timeout: Optional[float], env: dict) -> ScenarioResult:
+            timeout: Optional[float], env: dict, relay: Optional[str] = DEFAULT_RELAY,
+            ego_entity: str = "ego") -> ScenarioResult:
     output = results_dir / stem
     output.mkdir(parents=True, exist_ok=True)
     # SSv2's runner empties its subdirectories at startup but leaves its own top-level
@@ -227,7 +380,13 @@ def run_one(scenario: Path, stem: str, results_dir: Path, extra: List[str],
     stale = output / JUNIT_RELPATH
     if stale.exists():
         stale.unlink()
-    result = ScenarioResult(stem=stem, path=scenario, output=output)
+    result = ScenarioResult(stem=stem, path=scenario, output=output,
+                            timeout=timeout if timeout and timeout > 0 else None)
+    if relay:
+        result.preflight_error = preflight(scenario, relay, ego_entity)
+        if result.preflight_error is not None:
+            collect_result(result)
+            return result
     cmd = launch_command(scenario, output, extra)
     log = output / "launch.log"
     start = time.monotonic()
@@ -269,9 +428,21 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--domain", type=int,
                     default=int(os.environ.get("ROS_DOMAIN_ID") or 9),
                     help="ROS_DOMAIN_ID of the scenario side (default: $ROS_DOMAIN_ID or 9)")
-    ap.add_argument("--timeout-per-scenario", type=float, default=1800.0, metavar="S",
+    # No cap by default: SSv2 already ends every variant at the scenario's own timeout,
+    # while one YAML file can expand to dozens of variants (awf/ UC-ACC: 27, measured at
+    # over 2000 s), which no fixed cap fits without also being too long to catch a hang
+    # promptly. Set one in CI as a backstop against a wedged launch.
+    ap.add_argument("--timeout-per-scenario", type=float, default=0.0, metavar="S",
                     help="wall-clock cap per scenario file in seconds, all its variants "
-                         "included (default 1800; 0 = none)")
+                         "included (default 0 = none; SSv2 times out each variant itself)")
+    ap.add_argument("--relay", default=DEFAULT_RELAY, metavar="URL",
+                    help="agent relay to check before each scenario that its vehicle "
+                         f"agents are registered (default {DEFAULT_RELAY})")
+    ap.add_argument("--ego-entity", default="ego", metavar="NAME",
+                    help="entity the relay serves the ego as (simulation.launch.xml "
+                         "entity:=, default ego)")
+    ap.add_argument("--no-preflight", action="store_true",
+                    help="skip the relay check and run every scenario regardless")
     args = ap.parse_args(argv)
     args.extra = extra
     return args
@@ -300,7 +471,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         for i, (scenario, stem) in enumerate(zip(scenarios, stems), 1):
             print(f"[run_suite] ({i}/{len(scenarios)}) {stem}: {scenario}", flush=True)
             r = run_one(scenario, stem, results_dir, args.extra,
-                        args.timeout_per_scenario, env)
+                        args.timeout_per_scenario, env,
+                        relay=None if args.no_preflight else args.relay,
+                        ego_entity=args.ego_entity)
             results.append(r)
             print(summary_line(r), flush=True)
             # Written after every scenario, so an interrupted suite still leaves a verdict.
