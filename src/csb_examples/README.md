@@ -10,8 +10,7 @@ ros2 run csb_launch run_suite $SCENARIOS/basic --output ~/csb_results/basic
 
 Every file names its map as `$(env CARLA_MAPS)/<Town>`, so `CARLA_MAPS` must point at the
 directory of converted towns (the TUM carla-autoware-bridge pack; see the user guide). Run a
-single one with `play_launch launch --enforce-rules off --parser python --web-addr
-127.0.0.1:8081 csb_launch scenario.launch.xml scenario:=$SCENARIOS/basic/town01_ego_drive.xosc
+single one with `play_launch launch --web-addr 127.0.0.1:8081 csb_launch scenario.launch.xml scenario:=$SCENARIOS/basic/town01_ego_drive.xosc
 output_directory:=<dir>`. All of them assume the simulation side (CARLA,
 `simulation.launch.xml`) and the ego's vehicle side are up, as for any scenario; every one
 with an ego drives in Town01, so start the vehicle side with `map_path:=$CARLA_MAPS/Town01`.

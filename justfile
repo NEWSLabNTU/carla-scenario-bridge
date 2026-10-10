@@ -340,7 +340,7 @@ run:
     # The simulation side: the bridge and the agent relay, in the scenario domain.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{scenario_domain}}
-    exec play_launch launch --enforce-rules off --web-addr 0.0.0.0:8084 \
+    exec play_launch launch --web-addr 0.0.0.0:8084 \
         --log-dir play_log/bridge \
         csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
@@ -512,19 +512,14 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # nothing runs beside the launch (the deprecated API the agent's velocity limit needs is
     # in it: launch_deprecated_api, default true).
     #
-    # --enforce-rules off: play_launch defaults to `warn`, which turns on LD_PRELOAD
-    # interception of every DDS take and logs each event at DEBUG into play_launch.log and
-    # interception/events.jsonl. With no contract files to enforce that is pure overhead, and
-    # on 2026-09-27 one 50-minute ego stack wrote 169 GB of it and filled the disk.
-    # --parser python: the Rust parser resolves $(find-pkg-share) against /opt/ros/humble
-    # before the Autoware overlay, so autoware_vehicle_velocity_converter got the apt
-    # package's 1.9.0 param file (no frame_id) beside Autoware 1.5.0's binary, which aborts.
-    # --composable-respawn on-crash: Autoware 1.5.0's behavior_path_planner aborts now and
-    # then on a new route (autoware_universe#12460, once in 27 UC-ACC variants on
-    # 2026-10-10); its containers declare no respawn, so without this the stack never
-    # plans again. The guide's command carries it too.
-    exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8082 \
-        --composable-respawn on-crash \
+    # --container-mode isolated --composable-respawn on-crash: Autoware 1.5.0's
+    # behavior_path_planner aborts now and then on a new route (autoware_universe#12460, once
+    # in 27 UC-ACC variants on 2026-10-10); its containers declare no respawn, so without a
+    # reload the stack never plans again. A composable can only be reloaded alone when it is
+    # a process of its own, which is play_launch's isolated mode (0.15 defaults to observable,
+    # one process per container, as ros2 launch). The guide's command carries both.
+    exec play_launch launch --web-addr 0.0.0.0:8082 \
+        --container-mode isolated --composable-respawn on-crash \
         --log-dir play_log/ego \
         acb_launch carla_simulator.launch.xml \
         map_path:="{{map_path}}" \
@@ -571,8 +566,8 @@ bg-av entity="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-a
     # play_launch rejects an empty `name:=`, so optional arguments go in only when set.
     optional_args=()
     [ -n "${BG_GOAL_POSES_FILE:-}" ] && optional_args+=(goal_poses_file:="$BG_GOAL_POSES_FILE")
-    exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:{{web_port}} \
-        --composable-respawn on-crash \
+    exec play_launch launch --web-addr 0.0.0.0:{{web_port}} \
+        --container-mode isolated --composable-respawn on-crash \
         --load-node-timeout 120 \
         --load-total-budget 180 \
         --log-dir play_log/bg-{{entity}} \
@@ -641,9 +636,7 @@ scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
     # The scenario file is read, never modified: SSv2's runner preprocesses a copy in its
     # output directory (fork, roadmap 017).
-    # --parser python: scenario_test_runner.launch.py imports launch.actions the
-    # Rust parser's embedded Python cannot resolve (EmitEvent)
-    exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8081 \
+    exec play_launch launch --web-addr 0.0.0.0:8081 \
         --log-dir play_log/scenario \
         csb_launch scenario.launch.xml \
         scenario:="$(realpath "{{scenario_file}}")" \
@@ -661,7 +654,7 @@ e2e scenario_file=(project + "/src/csb_examples/scenarios/basic/town01_ego_drive
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
     export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
-    exec play_launch launch --enforce-rules off --parser python --web-addr 0.0.0.0:8080 \
+    exec play_launch launch --web-addr 0.0.0.0:8080 \
         csb_launch demo.launch.xml \
         scenario:="$(realpath "{{scenario_file}}")" \
         map_path:="$CARLA_MAPS/{{map_name}}" \

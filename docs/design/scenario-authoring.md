@@ -134,8 +134,8 @@ The entity's name is the link to its vehicle side: start one per such entity, wi
 background_av.launch.xml`) and the simulation side's relay, in a ROS domain of its own:
 
 ```bash
-ROS_DOMAIN_ID=2 play_launch launch --enforce-rules off --parser python \
-    --composable-respawn on-crash --web-addr 127.0.0.1:8083 \
+ROS_DOMAIN_ID=2 play_launch launch \
+    --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8083 \
     csb_launch background_av.launch.xml \
     entity:=bg_av_1 map_path:=<map dir> relay:=tcp://<simulation host>:5560
 ```

@@ -289,13 +289,14 @@ pattern the calling shell does not contain, or `ps -eo comm` and match the prefi
 
 ### play_launch interception fills the disk
 
-play_launch 0.12 defaults to `--enforce-rules warn`, which enables LD_PRELOAD interception
-of every DDS take in every node and logs each event at DEBUG to `play_launch.log` plus
-`interception/events.jsonl`. One 50-minute ego stack wrote **169 GB** of it on 2026-09-27
-and took the volume to 0 bytes free, which then failed a colcon install and a git checkout
-mid-way. There are no contract files in this workspace, so nothing is enforced either way.
-Every `play_launch launch` in the justfile now passes `--enforce-rules off`; keep it on any
-new invocation, and if `df` moves faster than a build explains, look at `play_log/*/` first:
+play_launch before 0.15 defaulted to `--enforce-rules warn`, which enabled LD_PRELOAD
+interception of every DDS take in every node and logged each event at DEBUG to
+`play_launch.log` plus `interception/events.jsonl`. One 50-minute ego stack wrote **169 GB**
+of it on 2026-09-27 and took the volume to 0 bytes free, which then failed a colcon install
+and a git checkout mid-way. 0.15.0 (2026-10-11) intercepts only when a contract resolves or
+`--enforce-rules` is given, and logs events at trace; this workspace has no contracts, so
+nothing intercepts. Require play_launch >= 0.15.1 (`play_launch --version`; 0.15.1 also honours SSv2's on_exit=ShutdownOnce under the default Rust parser), and if `df` moves
+faster than a build explains, look at `play_log/*/` first:
 
 ```bash
 du -sh play_log/ego/*/play_launch.log play_log/ego/*/interception 2>/dev/null | sort -rh | head

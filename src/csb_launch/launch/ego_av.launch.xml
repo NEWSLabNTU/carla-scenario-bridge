@@ -19,7 +19,7 @@
       play_launch launch FLAGS \
           csb_launch ego_av.launch.xml map_path:=/path/to/Town01
 
-    FLAGS are the play_launch options enforce-rules off, parser python, composable-respawn on-crash,
+    FLAGS are the play_launch options container-mode isolated, composable-respawn on-crash,
     web-addr 127.0.0.1:8082
     (each with a double-hyphen prefix, which an XML comment cannot contain);
     docs/user-guide.md section 4 says why.

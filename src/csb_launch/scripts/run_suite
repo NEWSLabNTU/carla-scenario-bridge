@@ -336,11 +336,10 @@ def launch_command(scenario: Path, output: Path, extra: List[str]) -> List[str]:
         *extra,
     ]
     if shutil.which("play_launch"):
-        # --parser python: scenario_test_runner.launch.py imports launch actions the Rust
-        # parser cannot resolve. --enforce-rules off: interception logging fills disks.
-        # Web UI on 8081, the scenario stack's port by this project's convention (the
+        # play_launch >= 0.15.1: defaults as ros2 launch (no interception without a
+        # contract, ament_index package lookup). Web UI on 8081, the scenario stack's port by this project's convention (the
         # default, 8080, is not reserved for it).
-        return ["play_launch", "launch", "--enforce-rules", "off", "--parser", "python",
+        return ["play_launch", "launch",
                 "--web-addr", "127.0.0.1:8081",
                 "--log-dir", str(output / "play_log"), *launch_args]
     return ["ros2", "launch", *launch_args]

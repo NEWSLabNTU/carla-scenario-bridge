@@ -23,10 +23,13 @@ that crash stay down, except composable nodes on the vehicle side, which
 
 | Flag | Where | Why |
 |---|---|---|
-| `--enforce-rules off` | every launch | the default (`warn`) intercepts and logs every DDS message of every node; one ego stack wrote 169 GB of it in 50 minutes |
-| `--parser python` | vehicle side, scenario | play_launch's default Rust parser resolves some Autoware packages to the wrong install prefix on hosts that also have `ros-humble-autoware-*` packages, and the vehicle side starts with a node missing; SSv2's launch needs the Python parser too |
-| `--composable-respawn on-crash` | vehicle side | reloads a composable node whose process crashed. Autoware 1.5.0's `behavior_path_planner` aborts now and then when a new route arrives (`failed to add guard condition to wait set`, autoware_universe#12460; once in 27 UC-ACC variants here); without a reload the vehicle side cannot plan again and every later scenario fails in PLANNING. Autoware's containers declare no respawn, so only this flag brings it back |
+| `--container-mode isolated --composable-respawn on-crash` | vehicle side | reloads a composable node whose process crashed. Autoware 1.5.0's `behavior_path_planner` aborts now and then when a new route arrives (`failed to add guard condition to wait set`, autoware_universe#12460; once in 27 UC-ACC variants here); without a reload the vehicle side cannot plan again and every later scenario fails in PLANNING. Autoware's containers declare no respawn, so only this brings it back, and a composable can be reloaded alone only when it is a process of its own (`isolated`; play_launch's default, `observable`, keeps one process per container as `ros2 launch` does) |
 | `--web-addr 127.0.0.1:<port>` | every launch | each launch serves a web UI, 8080 by default; two on one port collide. This guide uses 8084 (simulation side), 8082 (vehicle side), 8083 (second vehicle side), 8081 (scenario) |
+
+Everything else is play_launch's default, which since 0.15.1 matches `ros2 launch`: no
+interception layer unless a contract asks for one, packages found the way `ament_index` finds
+them, one process per container. Any `ros2 launch` command here works as well, without the
+web UI and without the vehicle side's crash recovery.
 
 ## 1. Install
 
@@ -39,11 +42,11 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 pip install colcon-cargo-ros2
 ```
 
-- play_launch, the launcher every command below uses (PyPI; tested with 0.13.1):
+- play_launch, the launcher every command below uses (PyPI; 0.15.1 or newer -- 0.15.1 is the first to end a scenario stack when its runner exits under the default parser):
 
 ```bash
 sudo apt install libz3-dev ros-humble-rclcpp-components ros-humble-class-loader
-pip install play_launch==0.13.1        # installs ~/.local/bin/play_launch
+pip install 'play_launch>=0.15.1'      # installs ~/.local/bin/play_launch
 play_launch --version
 ```
 
@@ -177,26 +180,26 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
 
 # Terminal 2 -- simulation side, long-lived: the bridge (restarted if it crashes) and the
 # agent relay (TCP 5560), in the ROS domain scenarios will run in
-ROS_DOMAIN_ID=9 play_launch launch --enforce-rules off --web-addr 127.0.0.1:8084 \
+ROS_DOMAIN_ID=9 play_launch launch --web-addr 127.0.0.1:8084 \
     csb_launch simulation.launch.xml \
     [config_file:=<scenario dir>/bridge.yaml] [weather:=ClearNoon]
 
 # Terminal 3 -- vehicle side, any ROS domain, any host, any time
-ROS_DOMAIN_ID=1 play_launch launch --enforce-rules off --parser python \
-    --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
+ROS_DOMAIN_ID=1 play_launch launch \
+    --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
     acb_launch carla_simulator.launch.xml \
     map_path:=$CARLA_MAPS/Town01 vehicle_name:=hero relay:=tcp://<simulation host>:5560 \
     [rviz:=false] [autoware_launch:=<your autoware.launch.xml>]
 
 # Terminal 3b -- one more vehicle side per entity whose controller is `agent`, e.g. bg_av_1
-ROS_DOMAIN_ID=2 play_launch launch --enforce-rules off --parser python \
-    --composable-respawn on-crash --web-addr 127.0.0.1:8083 \
+ROS_DOMAIN_ID=2 play_launch launch \
+    --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8083 \
     acb_launch carla_simulator.launch.xml \
     map_path:=$CARLA_MAPS/Town01 vehicle_name:=bg_av_1 entity:=bg_av_1 \
     relay:=tcp://<simulation host>:5560 rviz:=false
 
 # Terminal 4 -- one scenario, in the simulation side's domain; exits when it ends
-ROS_DOMAIN_ID=9 play_launch launch --enforce-rules off --parser python \
+ROS_DOMAIN_ID=9 play_launch launch \
     --web-addr 127.0.0.1:8081 \
     csb_launch scenario.launch.xml \
     scenario:=<scenario dir>/my_scenario.xosc [output_directory:=<dir>]

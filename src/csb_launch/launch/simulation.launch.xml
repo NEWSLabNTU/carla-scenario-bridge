@@ -8,7 +8,7 @@
         csb_launch simulation.launch.xml [config_file:=...] [carla_host:=...] \
         [weather:=ClearNoon]
 
-    FLAGS are the play_launch options enforce-rules off, web-addr 127.0.0.1:8084
+    FLAGS are the play_launch option web-addr 127.0.0.1:8084
     (each with a double-hyphen prefix, which an XML comment cannot contain);
     docs/user-guide.md section 4 says why.
 

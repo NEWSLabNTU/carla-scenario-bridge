@@ -22,10 +22,11 @@
        description="tcp://host:port of the agent relay that drives entities with controller `agent`; empty keeps the config file's (default tcp://localhost:5560)"/>
   <arg name="weather" default=""
        description="CARLA weather preset (ClearNoon, CloudySunset, HardRainNight, ...) applied on connect and after every map load; empty keeps the config file's (default: leave CARLA's). Change at run time with /carla/set_weather"/>
-  <arg name="respawn_delay" default="2.0" description="seconds before restarting a crashed bridge"/>
 
   <node pkg="carla_scenario_bridge" exec="carla_scenario_bridge" name="carla_scenario_bridge"
-        output="screen" respawn="true" respawn_delay="$(var respawn_delay)">
+        output="screen" respawn="true" respawn_delay="2.0">
+    <!-- respawn_delay is a literal: stock `ros2 launch` (Humble) compares it as a float and
+         rejects a substitution ('<' not supported between 'str' and 'float'). -->
     <param name="config_file" value="$(var config_file)"/>
     <param name="carla_host" value="$(var carla_host)"/>
     <param name="carla_port" value="$(var carla_port)"/>

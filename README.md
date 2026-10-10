@@ -55,13 +55,13 @@ directory, then
 
 ```bash
 ./CarlaUE4.sh -RenderOffScreen -nosound                                    # CARLA
-ROS_DOMAIN_ID=9 play_launch launch --enforce-rules off --web-addr 127.0.0.1:8084 \
+ROS_DOMAIN_ID=9 play_launch launch --web-addr 127.0.0.1:8084 \
     csb_launch simulation.launch.xml                                       # bridge + relay
-ROS_DOMAIN_ID=1 play_launch launch --enforce-rules off --parser python \
-    --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
+ROS_DOMAIN_ID=1 play_launch launch \
+    --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
     acb_launch carla_simulator.launch.xml \
     map_path:=$CARLA_MAPS/Town01 relay:=tcp://localhost:5560              # your Autoware
-ROS_DOMAIN_ID=9 play_launch launch --enforce-rules off --parser python \
+ROS_DOMAIN_ID=9 play_launch launch \
     --web-addr 127.0.0.1:8081 csb_launch scenario.launch.xml scenario:=<file>.xosc
 ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
     $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic --output <dir>  # a set
