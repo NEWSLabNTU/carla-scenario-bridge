@@ -97,6 +97,9 @@ YAML
         fi
     done
     python3 "$(dirname "$0")/repair_lanelet_traffic_lights.py" "$OUT"
+    # Some lanelets ship with no subtype at all (kerb strips, mostly), which makes
+    # Autoware's map_based_prediction abort as soon as a pedestrian is near one.
+    python3 "$(dirname "$0")/repair_lanelet_subtypes.py" "$OUT"
 
     if [ "$found" -eq 0 ]; then
         echo "ERROR: no town directories with lanelet2_map.osm under $MAP_SOURCE" >&2
@@ -131,6 +134,8 @@ echo "Checksum verified."
 unzip -q -o "$ZIP" -d "$OUT"
 echo "Maps extracted to $OUT"
 ls "$OUT"
+python3 "$(dirname "$0")/repair_lanelet_traffic_lights.py" "$OUT"
+python3 "$(dirname "$0")/repair_lanelet_subtypes.py" "$OUT"
 
 # Clean up zip
 rm -f "$ZIP"
