@@ -58,17 +58,55 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
       (truncated, ~400 GB). LAZ size matches the NAS original
 - [x] Align vendor cloud to r02: translation-only ICP, median 0.068 m, p90 0.227 m, 87 %
       within 0.2 m
-- [ ] Re-check alignment on r01 with full tiles. Sampled from the truncated tiles, r01 solves
-      to (−0.477, +0.184, +17.27) m, median 0.128 m but p90 5.1 m; decide whether one T
-      serves both routes or each needs its own (and whether rotation matters)
+- [x] Re-checked both routes against the full tiles (2026-10-11,
+      `scripts/ntu_twin/align_route.py`, reports in `/mnt/disk1/ntu-campus-twin/alignment/`;
+      16 tiles per route, 0.1 m voxels, route PCD → vendor):
+
+      | Route | Translation-only t (m) | Median | p90 | Rigid yaw / pitch / roll (deg) |
+      |---|---|---|---|---|
+      | r02 | (−0.565, +0.207, +17.302) | 0.084 | 3.68* | 0.028 / 0.007 / 0.093 |
+      | r01 | (−0.517, +0.185, +17.289) | 0.096 | 0.45 | −0.027 / −0.016 / 0.031 |
+
+      \* Two south tiles of r02 (1043_1350, 1044_1350) have no matching vendor surface, and
+      ICP diverges there by 7–9 m. They account for r02's p90; elsewhere per-tile p90 is
+      0.1–0.5 m.
+
+  - **Mean shifts agree to 5 cm**, so a common shift of about (−0.54, +0.20, +17.30) m
+    serves both routes on average. Rotation is negligible: 0.03° over 500 m is about 0.25 m.
+  - **Our route PCDs drift internally against the vendor scan.** Per-tile shifts vary by
+    0.3–0.6 m in X, about 0.2 m in Y and 0.3 m in Z. Over r02 the variation is close to
+    linear (rms 3–4 cm), consistent with that map being about 0.05% larger than the scan.
+    On r01 the pattern differs and is less linear (rms 5–9 cm). The drift is per route,
+    not one global similarity; the UTM grid scale (k ≈ 0.99987) explains only 0.013%
+  - **Decision:** export the twin's Autoware `pointcloud_map.pcd` from the vendor tiles
+    (common shift applied). The PCD Autoware localizes on and the world CARLA renders are
+    then the same geometry by construction. The r01/r02 Lanelet2 maps were drawn on the
+    old PCDs and inherit their drift, up to ±0.3 m. Re-register their nodes with a
+    per-route correction field from these reports, or redraw them over the new PCD (step 5)
 
 ### 1. Full tiles in the map frame
-- [ ] Reader that streams the LAZ to end of file, not to the header count (laspy + lazrs, or
-      PDAL with the count overridden); report the true point count
-- [ ] Re-tile to 50 m in the Autoware frame (shift applied), keeping RGB, intensity, class,
-      GPS time; LAS 1.4 output so counts are 64-bit
-- [ ] Sanity: tiles reach X 304853 (east end of r01); summed count equals the true count
-- [ ] Write a 0.2 m `pointcloud_map.pcd` (+ metadata) covering both routes; compare NDT
+- [x] Reader that walks the LAZ chunk table instead of the header count
+      (`scripts/ntu_twin/retile_laz.py`, laspy 2.7 + lazrs in
+      `/mnt/disk1/ntu-campus-twin/.venv`). **True count: 5 523 612 787 points**, which is
+      110 472 full 50 000-point chunks plus a partial last chunk. Fixed-size chunk tables do
+      not record the last chunk's count. Decoding it from a stream cut at its last byte fails
+      after 12 789 points; the final 2 are dropped as possible decoder overrun, so the count
+      is exact to within 2 points (2026-10-11)
+- [x] Re-tiled to 167 tiles of 50 m in `/mnt/disk1/ntu-campus-twin/tiles_50m_mgrs/`
+      (`tile_<floor(x/50)>_<floor(y/50)>.laz`, LAS 1.4, point format 3, 1 mm, all
+      attributes kept; `tiles.json` has per-tile counts and bounds). Frame: MGRS 51RUH local,
+      fitted from pyproj by a quadratic (max error 0.001 mm; per-point check against pyproj
+      max 0.7 mm = output quantization). **Z stays in the vendor datum and the ICP shift is
+      not applied**: it is a fitted value that may differ per route, so exports apply it.
+      122 GB (the source LAZ is 51 GB; per-tile ordering compresses worse)
+- [x] Sanity: summed tile count equals the true count exactly; extent X 51965.0–53081.8,
+      Y 67424.4–68065.9 (MGRS-local), past r01's east end (53038.6)
+- Process note: pass 2 first held whole tiles in RAM in 12 workers. The kernel OOM killer
+  then took a CARLA server and four of another user's processes. It now streams 5 M-point
+  slices; ten writers stayed under 4 GB in total. On this shared host, bound memory first
+  and check `free -g` before adding workers
+- [ ] Write a 0.2 m `pointcloud_map.pcd` (+ metadata) covering both routes from the tiles,
+      with the common shift (−0.54, +0.20, +17.30) m applied (see the step 0 decision); compare NDT
       localization on it against r01/r02's own PCDs in a rosbag replay or in CARLA
 
 ### 2. Scene classes
@@ -110,11 +148,36 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
       only: `Town10HD_Opt`, `Mine_01`, `OpenDriveMap`, `EmptyMap`. **No Town01**, so the
       existing Town01 scenarios and map dirs do not carry over; a 0.10 baseline needs a
       Town10HD map dir (Lanelet2 + PCD + signal table) or the twin itself
-- [ ] Stand up CARLA 0.10.0 on this host (16 GB+ VRAM recommended, 130 GB disk; package in
-      `~/Downloads`). Build csb/acb against it by switching the `carla` dependency feature
-      `carla-0916` → `carla-0100` in both workspaces (018); the bridges refuse a version
-      mismatch at connect. Record what breaks (steering getter returns 0, Chaos vehicle
-      tuning, town list)
+- [x] CARLA 0.10.0 runs on this host (2026-10-11; `scripts/ntu_twin/carla010_probe.py`,
+      client venv `/mnt/disk1/ntu-campus-twin/.venv-carla010`, results in
+      `/mnt/disk1/ntu-campus-twin/carla010_probe/`). Start:
+      `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json setsid ./CarlaUnreal.sh
+      -carla-rpc-port=2100 -nosound -RenderOffScreen`. RPC is up in 15–30 s. Findings:
+  - **VRAM is the constraint on this shared GPU.** Idle Town10HD takes 6.7 GB, and 10.5 GB
+    with sensors. With another user holding 23.5 GB, six 1080p cameras crashed the server:
+    `Out of memory on Vulkan`, then SIGSEGV. Check `nvidia-smi` before a run
+  - **Frame cost, with each tick waiting for every sensor's frame:** median 38 ms for one
+    1920x1080 camera plus a 128-channel lidar at 20 Hz, and 61 ms with two cameras. That is
+    about 23 ms per extra camera, so an Autoware-like six-camera rig would run near
+    0.33x real time at 20 Hz. Tick without sensors: 1.4 ms
+  - The server lists two maps, `Town10HD_Opt` (15 traffic lights, 155 spawn points) and
+    `Mine_01`. There are 11 vehicle blueprints, and `vehicle.lincoln.mkz` is present
+  - `get_wheel_steer_angle()` raises `RuntimeError: std::exception` on every call. That is
+    worse than the "returns 0" recorded in ssv2-feature-completeness
+  - Wheel physics has no world position: `offset`, `location` and `old_location` all
+    read zero. Chaos wheel fields replace PhysX's (`cornering_stiffness`, `spring_rate`,
+    `suspension_*`, `wheel_load_ratio`, ...). Vehicle physics control adds
+    `torque_curve`, `steering_curve`, `forward_gear_ratios` and others
+  - Control works and is deterministic: throttle 0.6 reached 13.1 m/s in 5 s, and runs
+    that apply control once or every tick matched exactly
+  - **csb compiles unchanged against 0.10**: `CARLA_VERSION=0.10.0 cargo check` passes
+    with a separate target dir. **acb fails in one place**: `carla_vehicle.rs:162-164`
+    reads wheel `position` to find the rear axle. 0.10 has no such field and no non-zero
+    replacement (above), so the rear-axle reference needs another source there, such as
+    the bounding box or a per-blueprint table
+- [ ] Fix acb's rear-axle lookup for 0.10, build both workspaces with `carla-0100`, and run
+      one scenario on Town10HD_Opt (needs a Town10HD map dir: Lanelet2 + PCD + signal
+      table)
 - [ ] Import route r02 first (smaller): fbx tiles + xodr into a CARLA 0.10 source build,
       Nanite on the meshes
 - [ ] Same scene into 0.9.16 for comparison, if the import path allows

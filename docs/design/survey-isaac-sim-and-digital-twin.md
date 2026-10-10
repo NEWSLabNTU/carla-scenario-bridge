@@ -301,8 +301,10 @@ camera, so the vendor almost certainly has the images and the camera trajectory.
    vertical datum difference. So the colored cloud, and anything built from it, drops into the
    frame Autoware already localizes in. Only translation was solved. On r01 (sampled from the
    truncated tiles) the shift solves to (−0.477, +0.184, +17.27) m, within 0.19 m of r02's,
-   with median 0.128 m but p90 5.1 m. The tail is likely r01 map areas missing from the
-   sampled vendor tiles; recheck once full tiles exist (next step 1).
+   with median 0.128 m but p90 5.1 m. Rechecked on the full re-tile (2026-10-11): the two
+   routes' mean shifts agree to 5 cm, about (−0.54, +0.20, +17.30) m. Our route maps drift
+   internally against the scan by up to ±0.3 m, so the twin's PCD is exported from the
+   vendor cloud (roadmap 019 step 0).
 3. **The vendor RGB is usable.** Ground points are mid-grey (mean RGB 94/90/84), not white.
    The white floor in the earlier CARLA clips is the scene, not the data.
 4. **The earlier CARLA import proves the gap §3.5 predicts.** Point sprites give a recognisable
