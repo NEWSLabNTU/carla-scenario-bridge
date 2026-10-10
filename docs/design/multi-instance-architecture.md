@@ -120,7 +120,7 @@ What follows:
   agrees with SSv2 on ego contacts **provided the contact lasts more than one frame**: csb
   applies SSv2's NPC pose one frame after SSv2 computes it, so a scenario that ends on the
   first frame of overlap ends before CARLA ever ticks with the bodies touching
-  (`scenarios/town01_rear_contact.xosc`; [scenario-authoring.md](scenario-authoring.md)).
+  (`src/csb_examples/scenarios/basic/town01_rear_contact.xosc`; [scenario-authoring.md](scenario-authoring.md)).
 - **NPC velocity comes from acb, not CARLA.** CARLA ignores `set_target_velocity` and
   `WalkerControl` on a physics-off actor (`get_velocity()` stays 0.000; 1.504 m/s for the
   same call with physics on, roadmap 014). acb differentiates each actor's snapshot pose on
@@ -160,7 +160,7 @@ duplicate is rejected at startup.
 with background AVs switched on -- they are opt-in:
 
 ```bash
-CSB_BACKGROUND_AVS=all just e2e scenarios/town01_ego_drive.xosc   # exports ROS_DOMAIN_ID=1 itself
+CSB_BACKGROUND_AVS=all just e2e src/csb_examples/scenarios/basic/town01_ego_drive.xosc   # exports ROS_DOMAIN_ID=1 itself
 ```
 
 `csb_bridge` loads the map, spawns `bg_av_1` at `Initialize`, then spawns the ego when SSv2
@@ -417,7 +417,7 @@ as a gap, not resolved by this document.
 
 ### End-to-end
 
-- Single-ego scenario reaches `exitSuccess` (`scenarios/town01_ego_drive.xosc`)
+- Single-ego scenario reaches `exitSuccess` (`src/csb_examples/scenarios/basic/town01_ego_drive.xosc`)
 - Exactly one `/clock` publisher per domain; no "jump back in time" in any localization node
 - Sensor stamp epoch agrees with `/clock` epoch to within one step time
 - Two-domain run: scenario ego plus one background AV, both localize and drive
@@ -440,7 +440,7 @@ just carla-start                     # one server, shared
 CSB_BACKGROUND_AVS=all just run      # csb: the only ticker, the only vehicle spawner
 just ego-av                          # Autoware + acb_bridge, ROS domain 1, web UI 8082
 just bg-av                           # Autoware + acb_bridge + pilot, domain 2, web UI 8083
-just scenario scenarios/town01_ego_drive.xosc
+just scenario src/csb_examples/scenarios/basic/town01_ego_drive.xosc
 ```
 
 Both vehicles drove, under their own stacks, at the same time:

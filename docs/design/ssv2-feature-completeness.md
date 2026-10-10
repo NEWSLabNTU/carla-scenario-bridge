@@ -79,7 +79,7 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
   colliders active). The ego can be shoved by a teleported NPC that SSv2 never registers as a
   collision, or SSv2 can report one that CARLA never rendered. Nothing compares the two.
 - **Pose reference point.** Scenario vehicles declare `BoundingBox/Center x="1.5"` (e.g.
-  `scenarios/town01_two_av.xosc:13`): the SSv2 entity origin is the rear axle. A CARLA vehicle's
+  `src/csb_examples/scenarios/multi_av/town01_two_av.xosc:13`): the SSv2 entity origin is the rear axle. A CARLA vehicle's
   origin is near its bbox centre. `ros_pose_to_carla_transform` (C:2399) and
   `coordinate_conversion.rs` apply no offset. **Measured 2026-09-25** (`scripts/pose_offset_probe.py`):
   the bridge maps the SSv2 pose to the CARLA actor origin 1:1 (Δ 0.000 m on spawn, teleport and

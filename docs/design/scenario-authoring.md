@@ -67,7 +67,7 @@ is the only marker:
 </Private>
 ```
 
-Example: `scenarios/town01_simulator_autopilot.xosc` (ego, an SSv2-driven NPC and a
+Example: `src/csb_examples/scenarios/basic/town01_simulator_autopilot.xosc` (ego, an SSv2-driven NPC and a
 CARLA-driven NPC in one run).
 
 What happens:
@@ -127,7 +127,7 @@ scenario entities: conditions, distances and `CollisionCondition` see them.
 </Private>
 ```
 
-Example: `scenarios/town01_two_av.xosc` (the ego and `bg_av_1` in one lane; `just two-av`).
+Example: `src/csb_examples/scenarios/multi_av/town01_two_av.xosc` (the ego and `bg_av_1` in one lane; `just two-av`).
 
 The entity's name is the link to its vehicle side: start one per such entity, with
 `entity:=<name>` (and `vehicle_name:=<name>`, the default in `csb_launch
@@ -204,4 +204,4 @@ collisions" for a run SSv2 scored as a collision. Delay the exit (e.g. `delay="3
 `CollisionCondition`'s `Condition`) when the CARLA side matters. Also remember that NPCs are
 kinematic: one never moves when hit, and two NPCs pass through each other in CARLA (see
 [multi-instance-architecture.md](multi-instance-architecture.md#consequence-puppeteered-actors-are-kinematic)).
-Example: `scenarios/town01_rear_contact.xosc`.
+Example: `src/csb_examples/scenarios/basic/town01_rear_contact.xosc`.

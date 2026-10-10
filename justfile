@@ -149,12 +149,14 @@ test:
     set -e
     source install/setup.bash
     cargo nextest run --no-tests pass --no-fail-fast
+    # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)
+    python3 -m pytest -q src/csb_launch/test
 
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
 
 # Two Autoware stacks, one scenario, end to end. RECORD=1 for a screencast.
-two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
+two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two_av.xosc"): _require-carla
     #!/usr/bin/env bash
     set -u
     # What "two Autoware" means here: the ego's stack and one background AV's, each a full
@@ -282,7 +284,9 @@ two-av scenario_file=(project + "/scenarios/town01_two_av.xosc"): _require-carla
     fi
 
     echo "[two-av] running $(basename "{{scenario_file}}")"
-    junit=/tmp/scenario_test_runner/result.junit.xml
+    # `just scenario` writes under OUTPUT_DIR (default /tmp), like scenario.launch.xml's
+    # output_directory:=.
+    junit="${OUTPUT_DIR:-/tmp}/scenario_test_runner/result.junit.xml"
     rm -f "$junit"
     just scenario "{{scenario_file}}" 2>&1 | tail -5 || true
 
@@ -373,8 +377,8 @@ vehicle-params blueprint="vehicle.tesla.model3" *args:
 # and reports non-OK diagnostics. Exit status is 0 only if every run passed every check.
 #
 # Usage: just acceptance [scenario] [runs]
-#        just acceptance scenarios/town01_ego_drive.xosc 3
-acceptance scenario=(project + "/scenarios/town01_ego_drive.xosc") runs="1" domain="":
+#        just acceptance src/csb_examples/scenarios/basic/town01_ego_drive.xosc 3
+acceptance scenario=(project + "/src/csb_examples/scenarios/basic/town01_ego_drive.xosc") runs="1" domain="":
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
@@ -563,7 +567,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
 
 # Launch one background AV's vehicle side -- Autoware + acb_bridge + vehicle agent -- in its
 # own ROS domain. The background AV is a scenario entity whose controller is `agent`
-# (scenarios/town01_two_av.xosc): csb spawns it with role_name = the entity name, and this
+# (src/csb_examples/scenarios/multi_av/town01_two_av.xosc): csb spawns it with role_name = the entity name, and this
 # stack's agent registers with the agent relay under that name and takes the scenario's goals.
 # Long-lived, like `just ego-av`, and startable before or after the scenario.
 #
@@ -638,6 +642,7 @@ _clear-stale-scenario:
     fi
 
 # Usage: just scenario /path/to/scenario.xosc
+#        OUTPUT_DIR=/tmp/run1 just scenario ...   # verdict: $OUTPUT_DIR/scenario_test_runner/result.junit.xml
 scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     #!/usr/bin/env bash
     set -e
@@ -661,11 +666,12 @@ scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
         --log-dir play_log/scenario \
         csb_launch scenario.launch.xml \
         scenario:="$(realpath "{{scenario_file}}")" \
+        output_directory:="${OUTPUT_DIR:-/tmp}" \
         port:={{ssv2_port}}
 
 # Run the full stack: adapter + bridge + SSv2 + Autoware (CARLA must be running)
 # Usage: just e2e [scenario_file]
-e2e scenario_file=(project + "/scenarios/town01_ego_drive.xosc") map_name=map_name:
+e2e scenario_file=(project + "/src/csb_examples/scenarios/basic/town01_ego_drive.xosc") map_name=map_name:
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"

@@ -52,7 +52,8 @@ just test     # Run tests
 │   └── package.xml
 ├── src/csb_interfaces/     # rosidl: Weather.msg, SetWeather.srv, GetWeather.srv
 ├── proto/                  # SSv2 protobuf definitions (8 .proto files)
-├── scenarios/              # Example OpenSCENARIO test files
+├── src/csb_examples/       # Starter scenarios (basic/, multi_av/, awf/), installed
+├── scenarios/              # Benchmark scenarios (bench/), goal-pose files
 ├── docs/
 │   ├── design/             # Architecture, protocol, launch config docs
 │   └── roadmap/            # Phase 1-5 roadmap with task checklists
