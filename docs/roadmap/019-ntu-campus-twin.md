@@ -176,8 +176,12 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
     replacement (above), so the rear-axle reference needs another source there, such as
     the bounding box or a per-blueprint table
 - [ ] Fix acb's rear-axle lookup for 0.10, build both workspaces with `carla-0100`, and run
-      one scenario on Town10HD_Opt (needs a Town10HD map dir: Lanelet2 + PCD + signal
-      table)
+      one scenario on Town10HD_Opt. Map dir source: TUM's CARLA→Autoware pack, which has
+      Town10 (Lanelet2 with 34 traffic-light tags, PCD, projector `local`). The pristine copy
+      is in `/mnt/disk1/carla-maps-tum/` (from NAS `CARLA-map-from-TUM`, checksums
+      verified 2026-10-11; LGPL-3.0, TUM). It is identical to `data/carla-autoware-bridge/Town10`.
+      Still needed: a signal table generated against 0.10's Town10HD_Opt, and a check that
+      the PCD matches 0.10's remodeled Town10
 - [ ] Import route r02 first (smaller): fbx tiles + xodr into a CARLA 0.10 source build,
       Nanite on the meshes
 - [ ] Same scene into 0.9.16 for comparison, if the import path allows
