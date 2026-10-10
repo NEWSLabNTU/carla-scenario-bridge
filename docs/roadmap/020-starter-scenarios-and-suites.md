@@ -99,7 +99,7 @@ ros2 run csb_launch run_suite <scenario file or dir>... --output <results dir> \
    `suite.junit.xml`; `awf/` 36 testcases, 2/2 PASS.
 5. - [x] User guide: starter scenarios, `output_directory`, `run_suite`, map source note
    (TUM pack, LGPL-3.0, download link dead, `CARLA_MAPS`); README command list.
-6. - [ ] **First-user proof run**: an agent given only the repository URL, the user guide and
+6. - [x] **First-user proof run**: an agent given only the repository URL, the user guide and
    the host's prerequisites (ROS, Autoware 1.5.0, CARLA 0.9.16, the converted maps) follows
    the guide verbatim -- clone, rosdep, colcon build, CARLA, simulation side, vehicle side,
    `run_suite` over `basic/` -- in a fresh directory, without this repo's justfile or
@@ -109,6 +109,17 @@ ros2 run csb_launch run_suite <scenario file or dir>... --output <results dir> \
    (`vncserver :5 -geometry 1920x1080 -SecurityTypes None -localhost`, captured with
    `import -window root -display :5`) under `docs/proof/020/`, with an index (`README.md`)
    saying what each one shows.
+
+   **Proof run 2 (2026-10-11): clean.** A fresh agent, guide only, on play_launch's defaults:
+   `basic/` 7/7 (532 s), `awf/` UC-ACC 27/27 (2200 s), UC-AEB 9/9 (720 s); build 9 min 21 s.
+   Screenshots: `docs/proof/020/first-user/`. Between the runs play_launch itself was fixed to
+   behave as `ros2 launch` (0.15.0/0.15.1: interception only with a contract, ament_index
+   package lookup, one process per container, `on_exit=Shutdown` under the Rust parser), so
+   the guide's commands carry no `--enforce-rules`/`--parser` flags. Its remaining findings
+   were wording (where readiness lines are logged, node counts, CARLA path, README parity,
+   setcap warning, RViz between scenarios) and are fixed; one stays open by decision:
+   **maps have no public download** (the TUM pack's link is dead), now stated up front in the
+   README and section 2.
 
    **Proof run 1 findings and fixes (2026-10-10).** Run 1 (screenshots in the scratch index,
    not yet under `docs/proof/020/`) got `basic/` to 4/7 and `awf/` to 0/36. Fixed since, and

@@ -36,6 +36,10 @@ start order:
 - **CARLA 0.9.16** — [installation guide](https://carla.readthedocs.io/en/0.9.16/start_quickstart/)
 - **ROS 2 Humble** — [installation guide](https://docs.ros.org/en/humble/Installation.html)
 - **Autoware** — pre-built packages or source install ([docs](https://autowarefoundation.github.io/autoware-documentation/main/installation/))
+- **Converted CARLA maps** — one Autoware map directory per town (Lanelet2 + point cloud). The
+  TUM pack this project uses has no working public download at the moment; see
+  [User Guide, section 2](docs/user-guide.md#2-prepare-a-map-directory). Without maps nothing
+  can run.
 
 Install and build with ROS tools ([User Guide, section 1](docs/user-guide.md#1-install)
 has the details); Rust (rustup) and `pip install colcon-cargo-ros2` first:
@@ -43,7 +47,7 @@ has the details); Rust (rustup) and `pip install colcon-cargo-ros2` first:
 ```bash
 git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-bridge.git
 cd carla-scenario-bridge
-source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash
+source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash   # e.g. /opt/autoware/1.5.0
 rosdep install --from-paths src --ignore-src -y
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --cargo-args --release
 ```
@@ -54,17 +58,18 @@ See the **[User Guide](docs/user-guide.md)**: prepare a map directory and a scen
 directory, then
 
 ```bash
-./CarlaUE4.sh -RenderOffScreen -nosound                                    # CARLA
+<CARLA_0.9.16>/CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000  # CARLA
 ROS_DOMAIN_ID=9 play_launch launch --web-addr 127.0.0.1:8084 \
     csb_launch simulation.launch.xml                                       # bridge + relay
 ROS_DOMAIN_ID=1 play_launch launch \
     --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
     acb_launch carla_simulator.launch.xml \
-    map_path:=$CARLA_MAPS/Town01 relay:=tcp://localhost:5560              # your Autoware
+    map_path:=$CARLA_MAPS/Town01 vehicle_name:=hero relay:=tcp://localhost:5560  # your Autoware
 ROS_DOMAIN_ID=9 play_launch launch \
     --web-addr 127.0.0.1:8081 csb_launch scenario.launch.xml scenario:=<file>.xosc
+export CARLA_MAPS=<maps dir>       # holds Town01/, Town02/, ... (every terminal above too)
 ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
-    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic --output <dir>  # a set
+    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic --output <results dir>  # a set
 ```
 
 Starter scenarios (package `csb_examples`) need only `CARLA_MAPS`, the directory holding the

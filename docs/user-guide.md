@@ -50,15 +50,16 @@ pip install 'play_launch>=0.15.1'      # installs ~/.local/bin/play_launch
 play_launch --version
 ```
 
-  Optional, once: `play_launch setcap` (sudo) lets it record per-process I/O.
+  Optional, once: `play_launch setcap` (sudo) lets it record per-process I/O. Without it each
+  launch warns `play_launch_io_helper lacks cap_sys_ptrace`; that is harmless.
 
 - This repository with its submodules, its system dependencies, and one build:
 
 ```bash
 git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-bridge.git
 cd carla-scenario-bridge
-source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash
-rosdep install --from-paths src --ignore-src -y
+source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash   # e.g. /opt/autoware/1.5.0
+rosdep install --from-paths src --ignore-src -y   # prints only a summary when all is present
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --cargo-args --release
 source install/setup.bash        # in every terminal below, after Autoware's setup.bash
 ```
@@ -81,6 +82,12 @@ Fresh-machine notes:
   `weather:=ClearNoon` for a clear sky ([5. Configure the CARLA world](#5-configure-the-carla-world)).
 
 ## 2. Prepare a map directory
+
+> **You need converted maps before anything runs.** This project uses the TUM
+> carla-autoware-bridge map pack (LGPL-3.0), and that pack's public download link is dead at
+> the moment; obtaining or generating maps is a separate effort (see "Where the maps come
+> from" below). If someone has given you the pack, point `CARLA_MAPS` at the directory that
+> holds `Town01/`, `Town02/`, ...
 
 One directory per CARLA town, in Autoware's map layout plus one CARLA file:
 
@@ -176,7 +183,7 @@ example `src/csb_examples/scenarios/multi_av/town01_two_av.xosc`). Scenario file
 ```bash
 # Terminal 1 -- CARLA (headless; pin Vulkan to the NVIDIA card on hybrid-GPU hosts)
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
-  ./CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000
+  <CARLA_0.9.16>/CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000
 
 # Terminal 2 -- simulation side, long-lived: the bridge (restarted if it crashes) and the
 # agent relay (TCP 5560), in the ROS domain scenarios will run in
@@ -209,15 +216,21 @@ ROS_DOMAIN_ID=9 play_launch launch \
 
 - CARLA serves its RPC port: `ss -lnt | grep ':2000 '` lists it. Its own log prints nothing
   useful; a cold headless start takes from under a minute (NVIDIA Vulkan) to about three.
-- The simulation side logs `ZMQ server ready` (the bridge) and `Relaying entity 'ego'`
-  (the relay). It waits for CARLA by itself if started first.
-- The vehicle side logs `Startup complete: all nodes ready (nodes 50/50, ...)` from
-  play_launch -- check that the counts are whole -- and the relay then logs
+- The simulation side's bridge logs `ZMQ server ready` and its relay `Relaying entity 'ego'`.
+  Under play_launch these are in the per-node logs, not on the launch's console:
+  `play_log/latest/node/carla_scenario_bridge/out` and
+  `play_log/latest/node/scenario_agent_relay/err`. It waits for CARLA by itself if started
+  first.
+- The vehicle side logs `Startup complete: all nodes ready (nodes 63/63, containers 18/18,
+  composable 127/127)` from play_launch (the counts depend on your Autoware; check that each
+  is whole) -- and the relay then logs
   `entity 'ego': agent acb_agent registered`. About a minute on a warm host; the first
   start builds TensorRT engines and takes several.
 
 **RViz.** The vehicle side opens Autoware's RViz on `$DISPLAY` by default. Pass `rviz:=false`
-on a headless host or for a second vehicle side.
+on a headless host or for a second vehicle side. It shows the ego, its route and the objects
+it perceives while a scenario runs; between scenarios the ego is parked and its readouts
+(speed, distance to goal) keep their last values -- that is not a frozen RViz.
 
 The verdict is in `<output_directory>/scenario_test_runner/result.junit.xml`
 (`output_directory` defaults to `/tmp`), beside SSv2's preprocessed copy of the scenario and

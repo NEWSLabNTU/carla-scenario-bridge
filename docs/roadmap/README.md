@@ -33,7 +33,7 @@ what unblocks what.
 - [016: Robustness and Performance](016-robustness-and-performance.md) — every fault ends the scenario in bounded time and the next one runs unattended; csb supervised, epoch persisted; frame budget measured (20 NPCs p95 1.79 ms)
 - [017: User Workflow and the Vehicle Agent](017-user-workflow.md) — ROS-native workflow from a scenario dir and a map dir; csb as a ROS node; an agent protocol and relay so SSv2 and Autoware need no shared domain and CARLA/Autoware are swappable ([design/user-workflow.md](../design/user-workflow.md))
 - [018: Install and World Config](018-install-and-world-config.md) — `rosdep install` + `colcon build` for users (CARLA version as a carla-rust feature, color_names submodule), `ros2 run acb_launch setup_autoware_data`, weather as bridge services — **complete 2026-10-10**
-- [020: Starter Scenarios and Suites](020-starter-scenarios-and-suites.md) — installed starter scenarios (`csb_examples`, incl. AWF ODD use cases), `output_directory:=`, `ros2 run csb_launch run_suite`, and a first-user proof run of the guide
+- [020: Starter Scenarios and Suites](020-starter-scenarios-and-suites.md) — **complete** (first-user proof run clean, 2026-10-11) — installed starter scenarios (`csb_examples`, incl. AWF ODD use cases), `output_directory:=`, `ros2 run csb_launch run_suite`, and a first-user proof run of the guide
 
 ## Real-site twin and realistic rendering (019-)
 
