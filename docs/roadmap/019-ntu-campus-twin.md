@@ -174,14 +174,62 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
     with a separate target dir. **acb fails in one place**: `carla_vehicle.rs:162-164`
     reads wheel `position` to find the rear axle. 0.10 has no such field and no non-zero
     replacement (above), so the rear-axle reference needs another source there, such as
-    the bounding box or a per-blueprint table
-- [ ] Fix acb's rear-axle lookup for 0.10, build both workspaces with `carla-0100`, and run
-      one scenario on Town10HD_Opt. Map dir source: TUM's CARLA→Autoware pack, which has
-      Town10 (Lanelet2 with 34 traffic-light tags, PCD, projector `local`). The pristine copy
-      is in `/mnt/disk1/carla-maps-tum/` (from NAS `CARLA-map-from-TUM`, checksums
-      verified 2026-10-11; LGPL-3.0, TUM). It is identical to `data/carla-autoware-bridge/Town10`.
-      Still needed: a signal table generated against 0.10's Town10HD_Opt, and a check that
-      the PCD matches 0.10's remodeled Town10
+    the bounding box or a per-blueprint table (resolved in the next item: `base_link_offset_x` from `vehicle_config.yaml`)
+- [x] **CARLA 0.10 baseline passes** (2026-10-11). `scenarios/carla0100/town10_ego_drive.xosc`
+      (Town10HD_Opt, vehicle.lincoln.mkz, 80 m on one lane) passed twice in a row on the same
+      stacks. The run took 35.5 s simulated in about 38 s wall (real-time factor about 0.93), with
+      no collisions. CARLA used 4.2 GB of VRAM, the ego stack 0.5 GB. Setup, run commands and
+      every local change: `/mnt/disk1/carla-maps-0100/README.md`. Build tree: git worktree
+      `~/repos/csb-carla0100`, branch `carla-0100` (local only). acb branch `carla-0100` is on
+      origin. What it took, in the order it surfaced:
+  - **CARLA config ("lean").** `-ini:` command-line overrides are ignored by the packaged
+    build; the loose `Config/DefaultEngine.ini` is read. Hardware ray tracing, Lumen, virtual
+    shadow maps and distance fields off, texture pool 1500 MB. Results (Town10HD_Opt, one
+    1080p camera plus a 128-channel lidar, every sensor awaited each tick):
+
+    | Profile | RPC up | VRAM peak | Frame median / p95 |
+    |---|---|---|---|
+    | stock (Epic, HW RT) | 12.1 s | 8443 MiB | 54 / 83 ms |
+    | pool 1500 | 8.0 s | 8375 MiB | 45 / 81 ms |
+    | + no HW RT | 8.0 s | 7297 MiB | 61 / 72 ms |
+    | **lean** (+ no Lumen/VSM/DF) | **8.0 s** | **4626 MiB** | **33 / 49 ms** |
+    | `-quality-level=Low` | 10.1 s | 7757 MiB | 197 / 414 ms -- slower, never use |
+
+    Lean loses bounce lighting (darker, flatter shadows); geometry, textures and markings are
+    unchanged. Stock config: `DefaultEngine.ini.orig`. Bench: `scripts/ntu_twin/carla010_bench.py`.
+  - **acb, shareable (branch `carla-0100`).** A build script derives `cfg(carla_0100)` with
+    carla-rust's own precedence. Under it, the rear axle comes from `base_link_offset_x` (no
+    wheel positions on 0.10), the steering geometry has no Ackermann term, steering is reported
+    from the command (`get_wheel_steer_angle` raises), and the steering law is quadratic.
+    `base_link_offset_x` can now come from `vehicle_config.yaml`. The ray-cast lidar drops
+    returns inside the parent's bounding box: 0.10's lidar hits its own vehicle and 0.9.16's
+    did not. 552 hood returns per sweep were a "route-obstacle" in the ego's footprint and held
+    it still. 0.9.16 builds unchanged; tests pass for both versions.
+  - **Measured for vehicle.lincoln.mkz on 0.10.** Rear axle 1.478 m behind the actor origin
+    (zero-lateral-velocity point in a slalom, 5 cm spread). Steady-state curvature quadratic in
+    the steer command: 0.0033 / 0.0135 / 0.0305 1/m at 0.1 / 0.2 / 0.3. **Launch dead zone**:
+    from standstill nothing up to 0.385 throttle, then 0.39 engages gear 1. The 0.9.16 Model 3
+    pedal map's 0.19 for +0.5 m/s^2 never moved it, and a map whose rows bracket the step still
+    interpolates into it. Low-speed pedal maps from `scripts/ntu_twin/probe_pedals_0100.py`,
+    with a sharp 0.3899 / 0.395 step.
+  - **Map and route.** SSv2's Lanelet2 loader rejected TUM Town10's `right_of_way` 37142 (no
+    right-of-way lanelet; unreferenced, removed). Static geometry still matches: lidar against
+    TUM PCD, median 0.11 m. But TUM lanelets are 0.4-0.6 m off 0.10's lanes in places, and
+    NDT localization agrees with the map, not with CARLA, settling 0.6 m to the side. With
+    that offset the start planner chose a backward pull-out, and reverse does not actuate here.
+    Start planner off in the worktree, and the route limited to stretches where every 2 m
+    stays within 0.6 m and 10 degrees of a lanelet (`scripts/ntu_twin/town10_0100_check.py`).
+  - **Ego blueprint.** SSv2 sends the ego with an empty asset key. csb's built-in fallback is
+    `vehicle.tesla.model3`, so the 0.10 bridge config maps `""` to `vehicle.lincoln.mkz`.
+  - **Open, not fixed:** 0.10's GNSS comes out with Y mirrored (y = -57.43 at a true +57.75).
+    acb's latitude negation suits 0.9.16 and doubles up on 0.10; the baseline initializes from
+    the scenario pose, so it did not matter here. The 0.9.16 Python client segfaults against
+    0.10 (`std::bad_alloc`), so the pre-run health check needs the 0.10 module on `PYTHONPATH`;
+    it still segfaulted once at random. acb's `wait_for_tick` throws `std::exception` in
+    bursts (10 per run, mostly at attach and after despawn) and reconnects.
+  - **Main tree, not 0.10-specific:** the justfile's `--composable-respawn` needs a play_launch
+    newer than the installed 0.10.0 (play_launch `873b0744`). `just ego-av` fails at startup
+    on this host until play_launch is rebuilt and reinstalled.
 - [ ] Import route r02 first (smaller): fbx tiles + xodr into a CARLA 0.10 source build,
       Nanite on the meshes
 - [ ] Same scene into 0.9.16 for comparison, if the import path allows
