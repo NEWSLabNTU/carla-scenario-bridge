@@ -28,6 +28,7 @@
 //! Verified against the TUM-converted Town01 map: 36 traffic light ways, each with two
 //! nodes at `ele=5.0`, spanning x 75..350 and y -333..4.5.
 
+use crate::coordinate_conversion::MapOrigin;
 use eyre::{Result, WrapErr};
 use std::collections::HashMap;
 use std::path::Path;
@@ -88,9 +89,10 @@ pub struct TrafficLightElement {
 impl TrafficLightElement {
     /// Position in CARLA's left-handed frame.
     ///
-    /// Lanelet2 local coordinates are ROS-frame, so only the Y sign differs.
-    pub fn carla_position(&self) -> (f64, f64, f64) {
-        (self.x, -self.y, self.z)
+    /// Lanelet2 local coordinates are the map frame: right-handed, offset from CARLA's world
+    /// by `origin` (zero for the TUM towns, where only the Y sign differs).
+    pub fn carla_position(&self, origin: MapOrigin) -> (f64, f64, f64) {
+        origin.map_to_carla(self.x, self.y, self.z)
     }
 
     /// Planar distance to a CARLA-frame point.
@@ -98,8 +100,8 @@ impl TrafficLightElement {
     /// Height is deliberately excluded: the lanelet element sits at the mapped bulb height
     /// while CARLA reports the actor's own origin, and the two need not agree. Traffic
     /// lights are far enough apart horizontally that x/y alone identifies them.
-    pub fn planar_distance_to_carla(&self, cx: f64, cy: f64) -> f64 {
-        let (sx, sy, _) = self.carla_position();
+    pub fn planar_distance_to_carla(&self, origin: MapOrigin, cx: f64, cy: f64) -> f64 {
+        let (sx, sy, _) = self.carla_position(origin);
         ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt()
     }
 }
@@ -332,7 +334,7 @@ mod tests {
             z: 5.0,
             regulatory_element_ids: vec![],
         };
-        let (x, y, z) = e.carla_position();
+        let (x, y, z) = e.carla_position(MapOrigin::default());
         assert!((x - 348.70).abs() < 1e-9);
         assert!((y + 4.53).abs() < 1e-9, "Y must be negated, got {y}");
         assert!((z - 5.0).abs() < 1e-9);
@@ -348,7 +350,7 @@ mod tests {
             regulatory_element_ids: vec![],
         };
         // CARLA-frame position is (10, 20, 5). A point 3m away in x, at any height.
-        assert!((e.planar_distance_to_carla(13.0, 20.0) - 3.0).abs() < 1e-9);
+        assert!((e.planar_distance_to_carla(MapOrigin::default(), 13.0, 20.0) - 3.0).abs() < 1e-9);
     }
 
     #[test]
@@ -543,7 +545,7 @@ mod real_map_tests {
 
             for l in &lights {
                 assert!(l.z.is_finite() && l.x.is_finite() && l.y.is_finite());
-                let (cx, cy, _) = l.carla_position();
+                let (cx, cy, _) = l.carla_position(MapOrigin::default());
                 assert!((cy + l.y).abs() < 1e-9, "Y must be flipped");
                 assert!((cx - l.x).abs() < 1e-9, "X must be unchanged");
             }

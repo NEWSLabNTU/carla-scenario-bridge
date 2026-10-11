@@ -156,6 +156,7 @@ pub struct MatchReport {
 pub fn match_signals(
     lanelet: &[crate::lanelet_map::TrafficLightElement],
     carla: &[CarlaSignal],
+    origin: crate::coordinate_conversion::MapOrigin,
 ) -> MatchReport {
     // Consider every candidate pair within tolerance, closest first, and take greedily.
     // With tens of lights per map the quadratic scan is irrelevant, and it makes the
@@ -163,7 +164,7 @@ pub fn match_signals(
     let mut candidates: Vec<(f64, i32, &str)> = Vec::new();
     for element in lanelet {
         for signal in carla {
-            let d = element.planar_distance_to_carla(signal.x, signal.y);
+            let d = element.planar_distance_to_carla(origin, signal.x, signal.y);
             if d <= SIGNAL_MATCH_TOLERANCE_M {
                 candidates.push((d, element.way_id, signal.opendrive_id.as_str()));
             }
@@ -283,6 +284,34 @@ pub fn signal_uses_arrows(signal: &TrafficSignal) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::coordinate_conversion::MapOrigin;
+
+    /// Matching for a map authored in CARLA's frame (origin zero), as the TUM towns are.
+    fn match_signals(
+        lanelet: &[crate::lanelet_map::TrafficLightElement],
+        carla: &[CarlaSignal],
+    ) -> MatchReport {
+        super::match_signals(lanelet, carla, MapOrigin::default())
+    }
+
+    #[test]
+    fn matching_applies_the_map_origin() {
+        // A surveyed map: the light at map (52948.7, 67804.5) is CARLA (348.7, -4.5) once
+        // the origin (52600, 67800) is taken off and Y flipped.
+        let origin = MapOrigin {
+            x: 52600.0,
+            y: 67800.0,
+            z: 0.0,
+        };
+        let lanelet = [element(43733, 52948.7, 67804.5)];
+        let report = super::match_signals(&lanelet, &[carla("45", 348.7, -4.5)], origin);
+        assert_eq!(report.matched.len(), 1, "{report:?}");
+        let report = match_signals(&lanelet, &[carla("45", 348.7, -4.5)]);
+        assert!(
+            report.matched.is_empty(),
+            "without the origin it is 85 km away"
+        );
+    }
 
     /// State for a signal built from the given bulbs.
     fn state_of(bulbs: Vec<TrafficLight>) -> TrafficLightState {

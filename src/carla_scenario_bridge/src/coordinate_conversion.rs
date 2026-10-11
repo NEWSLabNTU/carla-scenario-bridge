@@ -19,6 +19,39 @@ pub fn carla_to_ros_position(x: f64, y: f64, z: f64) -> (f64, f64, f64) {
     (x, -y, z)
 }
 
+/// Where CARLA's world origin sits in the Autoware map frame, in metres.
+///
+/// The TUM towns' Lanelet2 maps are authored in CARLA's frame, so for them this is zero.
+/// A surveyed map is not: the NTU campus Lanelet2 coordinates are MGRS grid metres, about
+/// (52 600, 67 800), and its OpenDRIVE is converted with that offset subtracted so CARLA's
+/// world stays near its origin (a CARLA location is f32, ~8 mm apart at 65 km). Every
+/// map-frame position crossing into or out of CARLA goes through this:
+/// `map = Y-flip(carla) + origin`. Rotations are unaffected; the conversion does not rotate.
+///
+/// Read from `<map dir>/carla/map_origin.yaml` (see `map_resolver::load_map_origin`);
+/// acb reads the same file, and the two must agree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapOrigin {
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub z: f64,
+}
+
+impl MapOrigin {
+    /// A map-frame position to CARLA's frame.
+    pub fn map_to_carla(&self, x: f64, y: f64, z: f64) -> (f64, f64, f64) {
+        ros_to_carla_position(x - self.x, y - self.y, z - self.z)
+    }
+
+    /// A CARLA position to the map frame.
+    pub fn carla_to_map(&self, x: f64, y: f64, z: f64) -> (f64, f64, f64) {
+        let (rx, ry, rz) = carla_to_ros_position(x, y, z);
+        (rx + self.x, ry + self.y, rz + self.z)
+    }
+}
+
 /// Convert ROS euler angles (radians) to CARLA euler angles (degrees).
 /// Roll and yaw are sign-flipped; pitch is not.
 pub fn ros_to_carla_rotation(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64) {
@@ -174,6 +207,31 @@ mod tests {
     use std::f64::consts::FRAC_PI_2;
 
     use super::*;
+
+    #[test]
+    fn map_origin_round_trips_and_is_the_identity_at_zero() {
+        let o = MapOrigin {
+            x: 52600.0,
+            y: 67800.0,
+            z: 0.0,
+        };
+        // The NTU r02 lanelet node 1, (52217.49, 67651.65), lands 382.5 m west and 148.4 m
+        // south of CARLA's origin: +y in CARLA is south.
+        let (cx, cy, cz) = o.map_to_carla(52217.49, 67651.65, 11.88);
+        assert!((cx - -382.51).abs() < 1e-6 && (cy - 148.35).abs() < 1e-6 && cz == 11.88);
+        let (mx, my, mz) = o.carla_to_map(cx, cy, cz);
+        assert!((mx - 52217.49).abs() < 1e-9 && (my - 67651.65).abs() < 1e-9 && mz == 11.88);
+
+        let zero = MapOrigin::default();
+        assert_eq!(
+            zero.map_to_carla(10.0, 5.0, 1.0),
+            ros_to_carla_position(10.0, 5.0, 1.0)
+        );
+        assert_eq!(
+            zero.carla_to_map(10.0, 5.0, 1.0),
+            carla_to_ros_position(10.0, 5.0, 1.0)
+        );
+    }
 
     #[test]
     fn round_trip_position() {

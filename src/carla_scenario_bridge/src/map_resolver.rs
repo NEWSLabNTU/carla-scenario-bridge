@@ -77,12 +77,57 @@ pub fn lanelet_map_file(map_path: &str) -> std::path::PathBuf {
     }
 }
 
+/// Where a map's `map_origin.yaml` lives, relative to its directory.
+pub const MAP_ORIGIN_SUBPATH: &str = "carla/map_origin.yaml";
+
+/// The map-frame position of CARLA's world origin for the map in `map_dir`.
+///
+/// `<map dir>/carla/map_origin.yaml` holds `x`, `y` and optionally `z`, in map-frame metres:
+/// the offset the map's OpenDRIVE was converted with. No file means the map is authored in
+/// CARLA's frame (origin zero), which is every TUM town. A file that does not parse is an
+/// error, not zero: a wrong origin puts every scenario pose hundreds of metres off, on a run
+/// that otherwise looks fine.
+pub fn load_map_origin(map_dir: &Path) -> eyre::Result<crate::coordinate_conversion::MapOrigin> {
+    let path = map_dir.join(MAP_ORIGIN_SUBPATH);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => serde_yaml::from_str(&text)
+            .map_err(|e| eyre::eyre!("cannot parse {}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(e) => Err(eyre::eyre!("cannot read {}: {e}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn no_aliases() -> HashMap<String, String> {
         HashMap::new()
+    }
+
+    #[test]
+    fn map_origin_is_zero_without_a_file_and_read_from_one() {
+        use crate::coordinate_conversion::MapOrigin;
+        let dir = std::env::temp_dir().join(format!("csb-map-origin-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("carla")).unwrap();
+        assert_eq!(load_map_origin(&dir).unwrap(), MapOrigin::default());
+
+        std::fs::write(dir.join(MAP_ORIGIN_SUBPATH), "x: 52600.0\ny: 67800.0\n").unwrap();
+        assert_eq!(
+            load_map_origin(&dir).unwrap(),
+            MapOrigin {
+                x: 52600.0,
+                y: 67800.0,
+                z: 0.0
+            }
+        );
+
+        std::fs::write(dir.join(MAP_ORIGIN_SUBPATH), "x: 1\ny: 2\nyaw: 0.1\n").unwrap();
+        assert!(
+            load_map_origin(&dir).is_err(),
+            "a yaw it cannot apply is refused"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
 use crate::blueprint_boxes::{self, BoxTable, Dimensions, SizeClass};
 use crate::config::{BridgeConfig, SensorReleaseConfig};
-use crate::map_resolver::{lanelet_map_file, town_from_map_path};
+use crate::map_resolver::{lanelet_map_file, load_map_origin, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
 /// Minimum spawn height when the ground cannot be probed.
@@ -424,7 +424,7 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
 
 use crate::collision_monitor::CollisionMonitor;
 use crate::contact_report::ReportGeometry;
-use crate::coordinate_conversion::{self, OriginOffset};
+use crate::coordinate_conversion::{self, MapOrigin, OriginOffset};
 use crate::entity_manager::{EntityManager, EntityType};
 use crate::episode_clock::{
     fmt_ns, old_episode_last_elapsed, reload_as_pause, tick_then_read, EpisodeClock, EpisodeReload,
@@ -863,6 +863,9 @@ pub struct Coordinator {
     clock_path: PathBuf,
     /// Generator mode: write `<map dir>/carla/traffic_lights.yaml` instead of checking it.
     generate_signal_table: bool,
+    /// Map-frame position of CARLA's world origin for the scenario's map, read at every
+    /// Initialize from `<map dir>/carla/map_origin.yaml` (zero without one).
+    map_origin: MapOrigin,
     /// Set after the first failed write, so a broken runtime dir warns once.
     warned_clock_store: bool,
     /// Set when a CARLA call failed by timing out (`SLOW_FAILURE`): the server is gone or
@@ -958,6 +961,7 @@ impl Coordinator {
             clock_path,
             warned_clock_store: false,
             generate_signal_table: false,
+            map_origin: MapOrigin::default(),
             carla_unreachable: false,
             tick_time: Duration::ZERO,
             traffic_manager: None,
@@ -1412,6 +1416,22 @@ impl Coordinator {
             )
         })?;
 
+        // Every scenario pose is a map-frame pose; read where CARLA's origin sits in that
+        // frame before any of them is converted. A broken file fails Initialize.
+        let map_dir = crate::resolved_signals::map_dir_of(std::path::Path::new(lanelet2_map_path));
+        self.map_origin = load_map_origin(&map_dir)?;
+        if self.map_origin != MapOrigin::default() {
+            tracing::info!(
+                "Map origin: CARLA's world origin is at map ({:.3}, {:.3}, {:.3}) ({})",
+                self.map_origin.x,
+                self.map_origin.y,
+                self.map_origin.z,
+                map_dir
+                    .join(crate::map_resolver::MAP_ORIGIN_SUBPATH)
+                    .display()
+            );
+        }
+
         // CARLA reports map names like "Carla/Maps/Town01"; compare on the final component.
         let current = self.world.map().map(|m| m.name()).unwrap_or_default();
         let current_town = current.rsplit('/').next().unwrap_or(&current).to_string();
@@ -1730,7 +1750,11 @@ impl Coordinator {
             }
         };
 
-        let report = crate::traffic_light_mapper::match_signals(&lanelet_lights, &carla_signals);
+        let report = crate::traffic_light_mapper::match_signals(
+            &lanelet_lights,
+            &carla_signals,
+            self.map_origin,
+        );
         let added = self.signal_map.merge_matched(report.matched);
 
         tracing::info!(
@@ -2669,7 +2693,7 @@ impl Coordinator {
         // Convert pose from ROS to CARLA frame, moving it from the SSv2 entity origin to
         // the CARLA actor origin (see OriginOffset).
         let mut carla_transform = match pose {
-            Some(pose) => ros_pose_to_carla_transform(pose, origin_offset),
+            Some(pose) => ros_pose_to_carla_transform(pose, origin_offset, self.map_origin),
             None => Transform {
                 location: Location {
                     x: 0.0,
@@ -3332,7 +3356,8 @@ impl Coordinator {
             } else {
                 // NPC or ego overwrite: set transform from SSv2 pose
                 if let Some(pose) = entity_status.pose.as_ref() {
-                    let mut transform = ros_pose_to_carla_transform(pose, origin_offset);
+                    let mut transform =
+                        ros_pose_to_carla_transform(pose, origin_offset, self.map_origin);
                     if let Some(z) = self.walker_teleport_z(actor_id, &transform.location) {
                         transform.location.z = z;
                     }
@@ -3835,7 +3860,9 @@ impl Coordinator {
             let waypoints: Vec<Location> = req
                 .waypoints
                 .iter()
-                .map(|pose| ros_pose_to_carla_transform(pose, origin_offset).location)
+                .map(|pose| {
+                    ros_pose_to_carla_transform(pose, origin_offset, self.map_origin).location
+                })
                 .collect();
             let from = ap.vehicle.location().wrap_err("read location")?;
             let (progress, path) = self.plan_autopilot_route(&from, &waypoints)?;
@@ -4327,6 +4354,14 @@ impl Coordinator {
             t.rotation.pitch,
             entity_yaw,
         );
+        // Into the map frame SSv2 works in.
+        if let Some(position) = pose.position.as_mut() {
+            (position.x, position.y, position.z) = self.map_origin.carla_to_map(
+                t.location.x as f64,
+                t.location.y as f64,
+                t.location.z as f64,
+            );
+        }
 
         // CARLA reports the actor origin (body centre); SSv2 expects the entity origin its
         // scenario declared (the rear axle for vehicles). Undo the spawn-time shift.
@@ -4518,14 +4553,22 @@ fn origin_offset_of(bounding_box: Option<&BoundingBox>) -> OriginOffset {
 }
 
 /// Convert an SSv2 pose to the CARLA transform of its actor: shifted by `origin_offset`
-/// from the entity origin to the actor origin in the ROS frame, then Y-flipped, and turned
-/// by its `yaw` (a turned prop, roadmap 022).
-fn ros_pose_to_carla_transform(pose: &Pose, origin_offset: OriginOffset) -> Transform {
+/// from the entity origin to the actor origin in the ROS frame, moved from the map frame to
+/// CARLA's world origin by `map_origin`, then Y-flipped, and turned by its `yaw` (a turned
+/// prop, roadmap 022).
+fn ros_pose_to_carla_transform(
+    pose: &Pose,
+    origin_offset: OriginOffset,
+    map_origin: MapOrigin,
+) -> Transform {
     let mut shifted = *pose;
     if let (Some(p), Some(q)) = (shifted.position.as_mut(), pose.orientation.as_ref()) {
         let (_, _, yaw) = coordinate_conversion::quaternion_to_euler(q.x, q.y, q.z, q.w);
         (p.x, p.y) =
             coordinate_conversion::entity_origin_to_actor_origin(p.x, p.y, yaw, origin_offset);
+        p.x -= map_origin.x;
+        p.y -= map_origin.y;
+        p.z -= map_origin.z;
     }
     let (cx, cy, cz, cr, cp, cyaw) = coordinate_conversion::ros_pose_to_carla(&shifted);
     Transform {
@@ -5104,12 +5147,14 @@ mod tests {
             }),
             dimensions: None,
         };
-        let t = ros_pose_to_carla_transform(&pose, origin_offset_of(Some(&bbox)));
+        let t =
+            ros_pose_to_carla_transform(&pose, origin_offset_of(Some(&bbox)), MapOrigin::default());
         assert!((t.location.x - 318.5).abs() < 1e-3, "{:?}", t.location);
         assert!((t.location.y - 129.8).abs() < 1e-3, "{:?}", t.location);
         assert_eq!(t.location.z, 0.0);
 
-        let untouched = ros_pose_to_carla_transform(&pose, origin_offset_of(None));
+        let untouched =
+            ros_pose_to_carla_transform(&pose, origin_offset_of(None), MapOrigin::default());
         assert!((untouched.location.x - 320.0).abs() < 1e-3);
     }
 
@@ -5151,8 +5196,9 @@ mod tests {
             yaw: std::f64::consts::FRAC_PI_2,
             ..OriginOffset::default()
         };
-        let plain = ros_pose_to_carla_transform(&pose, OriginOffset::default());
-        let t = ros_pose_to_carla_transform(&pose, turned);
+        let plain =
+            ros_pose_to_carla_transform(&pose, OriginOffset::default(), MapOrigin::default());
+        let t = ros_pose_to_carla_transform(&pose, turned, MapOrigin::default());
         assert_eq!(
             (t.location.x, t.location.y),
             (plain.location.x, plain.location.y)

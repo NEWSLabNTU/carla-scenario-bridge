@@ -95,6 +95,7 @@ One directory per CARLA town, in Autoware's map layout plus one CARLA file:
 <map dir>/  lanelet2_map.osm  pointcloud_map.pcd  pointcloud_map_metadata.yaml
             map_config.yaml   map_projector_info.yaml
             carla/traffic_lights.yaml
+            carla/map_origin.yaml       (only for a map not in CARLA's frame)
 ```
 
 `carla/traffic_lights.yaml` (which Lanelet2 signal is which CARLA light) is generated once
@@ -106,6 +107,24 @@ ros2 run carla_scenario_bridge carla_scenario_bridge --generate-signal-table <ma
 
 The bridge checks it at every scenario start and refuses to run with a table that no longer
 matches CARLA. The map directory is read-only at run time.
+
+**A map not drawn in CARLA's frame** needs one more file. The TUM towns' Lanelet2 maps use
+CARLA's world coordinates, so map and CARLA share an origin. A surveyed map does not: its
+Lanelet2 coordinates are grid metres tens of kilometres from zero, and its OpenDRIVE is
+converted with an offset taken off so CARLA's world stays near its origin. Record that offset,
+the map-frame position of CARLA's world origin, in `carla/map_origin.yaml`:
+
+```yaml
+# <map dir>/carla/map_origin.yaml -- metres, map frame; no rotation
+x: 52600.0
+y: 67800.0
+z: 0.0       # optional
+```
+
+Both bridges read it (carla_scenario_bridge at every scenario start, acb_bridge through
+`map_origin_path`, which `carla_simulator.launch.xml` points at `<map_path>/carla/`). No file
+means an origin of zero; a file that does not parse stops the run rather than putting every
+pose hundreds of metres off.
 
 **Where the maps come from.** This project runs on the CARLA towns converted for Autoware by
 TUM's [carla-autoware-bridge](https://github.com/TUMFTM/Carla-Autoware-Bridge) (map pack
