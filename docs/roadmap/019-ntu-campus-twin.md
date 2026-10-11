@@ -221,7 +221,7 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
     stays within 0.6 m and 10 degrees of a lanelet (`scripts/ntu_twin/town10_0100_check.py`).
   - **Ego blueprint.** SSv2 sends the ego with an empty asset key. csb's built-in fallback is
     `vehicle.tesla.model3`, so the 0.10 bridge config maps `""` to `vehicle.lincoln.mkz`.
-  - **carla-rust fixes (`1a765e9`, master).** The 0.10 FFI layer compiled its C++ against the
+  - **carla-rust fixes (`1a765e9`, master; released as carla 0.15.0).** The 0.10 FFI layer compiled its C++ against the
     0.9.x-layout shims that only autocxx should parse. So `physics_control()` returned
     defaults (mass 1000 kg, no wheels; the real mkz is 1696 kg, four wheels of 35.5 cm),
     `apply_physics_control()` failed with "container size overflow", and every `rpc::Command`
@@ -240,7 +240,8 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
     (20, 0.9), ...), which would double the steering command at 10 km/h. The quadratic law was
     measured with a flat curve, so 0.10 keeps that.
   - **After the fixes:** runs 16, 18, 19 and 20 pass, with no transport errors. Run 20 used
-    play_launch 0.15.1 with `--composable-respawn`. Run 17 failed its localization check:
+    play_launch 0.15.1 with `--composable-respawn`. Run 21 (2026-10-12) passes on the tidied
+    worktree, with carla 0.15.0 from crates.io in place of the git pin. Run 17 failed its localization check:
     the estimate was 1.8 m behind the start pose after 10 s. That run had `ros2 topic echo`
     probes attached during init. Each teardown still logs about three `failed to destroy
     actor N : std::exception`: 0.10 destroys attached sensors with their parent, and 0.9.16
