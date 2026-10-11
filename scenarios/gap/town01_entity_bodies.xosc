@@ -1,0 +1,267 @@
+<?xml version="1.0"?>
+<!--
+	Town01: one parked entity per subtype: car, motorcycle, bicycle, misc object (barrel),
+	truck, bus, parked in the ego's lane behind it (road 4 is straight from x 180 to 320), for
+	roadmap 022 step 5. Each declared box is picked to match one blueprint in
+	blueprint_boxes_0.9.16.yaml that is not its class default (the expected body is in a comment
+	above each entity), so the bridge's spawn log names the size-matched blueprint and the
+	residual. None has a model3d, so nothing but the size decides. The ego drives off west as in
+	town01_ego_drive.xosc; nothing moves toward it. Success = 10 s of simulation time.
+-->
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-10-11T00:00:00+00:00" description="Town01 one parked entity per subtype, for the entity geometry check" revMajor="1" revMinor="2" />
+	<ParameterDeclarations />
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
+	</RoadNetwork>
+	<Entities>
+		<ScenarioObject name="ego">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="Autoware">
+					<Properties>
+						<Property name="maxJerk" value="1.5" />
+						<Property name="minJerk" value="-1.5" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<!-- expected body: vehicle.audi.a2 -->
+		<ScenarioObject name="car_small">
+			<Vehicle name="car_small" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.3" y="0.0" z="0.775" />
+					<Dimensions width="1.8" height="1.55" length="3.7" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="3.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.50" positionX="2.60" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.50" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<!-- expected body: vehicle.kawasaki.ninja -->
+		<ScenarioObject name="motorcycle">
+			<Vehicle name="motorcycle" vehicleCategory="motorbike">
+				<BoundingBox>
+					<Center x="0.6" y="0.0" z="0.750" />
+					<Dimensions width="0.8" height="1.5" length="2.0" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="3.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="0.50" positionX="1.20" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="0.50" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<!-- expected body: vehicle.diamondback.century -->
+		<ScenarioObject name="bicycle">
+			<Vehicle name="bicycle" vehicleCategory="bicycle">
+				<BoundingBox>
+					<Center x="0.5" y="0.0" z="0.800" />
+					<Dimensions width="0.6" height="1.6" length="1.7" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="3.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="0.30" positionX="1.00" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="0.30" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<!-- expected body: vehicle.carlamotors.european_hgv -->
+		<ScenarioObject name="truck">
+			<Vehicle name="truck" vehicleCategory="truck">
+				<BoundingBox>
+					<Center x="2.5" y="0.0" z="1.750" />
+					<Dimensions width="2.9" height="3.5" length="8.0" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="3.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="2.60" positionX="5.00" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="2.60" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<!-- expected body: vehicle.mitsubishi.fusorosa -->
+		<ScenarioObject name="bus">
+			<Vehicle name="bus" vehicleCategory="bus">
+				<BoundingBox>
+					<Center x="3.5" y="0.0" z="2.100" />
+					<Dimensions width="3.9" height="4.2" length="10.0" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="3.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="3.60" positionX="7.00" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="3.60" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<!-- expected body: static.prop.barrel -->
+		<ScenarioObject name="barrel">
+			<MiscObject name="barrel" miscObjectCategory="obstacle" mass="50.0">
+				<BoundingBox>
+					<Center x="0.0" y="0.0" z="0.405" />
+					<Dimensions width="0.47" height="0.81" length="0.46" />
+				</BoundingBox>
+				<Properties />
+			</MiscObject>
+		</ScenarioObject>
+	</Entities>
+	<Storyboard>
+		<Init>
+			<Actions>
+				<Private entityRef="ego">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="190.8" y="-130.1" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="120.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="car_small">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="205.0" y="-129.5" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="motorcycle">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="215.0" y="-129.5" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="bicycle">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="224.0" y="-129.5" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="truck">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="248.0" y="-129.5" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="bus">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="268.0" y="-129.5" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="barrel">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="233.0" y="-129.5" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+			</Actions>
+		</Init>
+		<Story name="town01_entity_bodies">
+			<Act name="bodies_act">
+				<ManeuverGroup maximumExecutionCount="1" name="end_group">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="ego" />
+					</Actors>
+					<Maneuver name="end_conditions">
+						<Event name="done" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="ten_seconds" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="10" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>
