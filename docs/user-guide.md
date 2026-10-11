@@ -316,6 +316,13 @@ ros2 run csb_launch physical_verdict <output>/scenario_test_runner/result.junit.
 SSv2's own testcases are never changed. A run SSv2 passed with a contact therefore shows up
 as one pass and one failure in the same result.
 
+The bridge gives each NPC and prop the CARLA body closest in size to its declared box, within
+its `vehicleCategory` (a truck gets a truck), and keeps the Model 3 for any car box it fits.
+Where CARLA has nothing close (a 12 m truck: its longest is 8.5 m), the testcase's
+`system-out` lists the body with its difference from the declared box; that never fails it.
+To force a body, set the entity's `model3d` to a CARLA blueprint name, or map it in
+`blueprint_map` (`bridge_config.yaml`).
+
 ### Your own Autoware
 
 `carla_simulator.launch.xml` is a CARLA profile around a stock `autoware.launch.xml` (yours,

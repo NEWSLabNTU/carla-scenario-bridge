@@ -94,8 +94,8 @@ Per-phase state:
 **Priority order:**
 
 1. ~~021 Physical verdict~~ -- done 2026-10-11.
-2. **022 Entity geometry parity** -- in progress: box table and chooser done (steps 1-3);
-   next the SSv2 fork's subtype field and the bridge wiring.
+2. **022 Entity geometry parity** -- in progress: box table, chooser, SSv2 fork subtype field and
+   bridge wiring done (steps 1-4); next the live run per subtype.
 3. **023 NPC motion parity** -- spike first; may close as a measured no.
 4. **024 Gap trace and oracle**, then **025**, **026**.
 5. 019 and 009's classification, interleaved where a gap phase waits on a long run.

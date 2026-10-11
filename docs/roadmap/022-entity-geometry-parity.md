@@ -41,8 +41,9 @@ table, generated once per CARLA version and shipped in the package:
   `src/carla_scenario_bridge/config/blueprint_boxes_0.9.16.yaml` (installed to the
   package's share with the rest of `config/`). It never ticks, so it does not fight the
   bridge for the synchronous world; sensors none, so nothing is left behind.
-- The bridge loads the table for its build's `carla::CARLA_VERSION`. Missing table: the
-  bridge logs once and keeps today's behaviour.
+- The bridge loads `blueprint_boxes_<carla::CARLA_VERSION>.yaml` at start, beside its config
+  file first (like `traffic_lights_<town>.yaml`), then from each installed share. Missing
+  or unreadable table: the bridge logs once and keeps today's behaviour.
 - **Every spawn checks the table against the actor CARLA returned** (one `bounding_box()`
   read, at spawn only). A difference above 5 cm is a stale table, logged at WARN naming
   the script to rerun.
@@ -102,7 +103,7 @@ chosen body is positioned the same way.
 3. [x] **Choice, test-driven.** A pure `choose_by_size(class, declared, table)` with tests:
    12 m truck → the longest truck; 4.5 m car → Model 3 (the default fits); motorcycle; unknown
    subtype; empty table; misc-object prop by size; ego and pedestrian never size-matched.
-4. [ ] **Bridge wiring.** The subtype field in the SSv2 fork and `proto/` (rebuild SSv2);
+4. [x] **Bridge wiring.** The subtype field in the SSv2 fork and `proto/` (rebuild SSv2);
    table loading by CARLA version; the chain above in `spawn_entity`;
    the spawn-time comparison and stale-table warning; `geometry` in the contact report and
    `physical_verdict`'s `system-out`.
@@ -138,6 +139,17 @@ the coordinator: the starter car box keeps its Model 3; a 3.6 m city car gets a
 motorcycle the `yamaha.yzf`; a bicycle the `gazelle.omafiets`; an unknown-subtype
 bicycle-sized box a four-wheeler; a cone-sized prop `trafficcone02`; invalid or empty
 input, nothing.
+
+**Step 4.** SSv2 fork: `subtype = 6` on `VehicleParameters`, `toProto`/`toMsg`, and the
+conversion test checks it round-trips (TRUCK). Bridge: `EntityShape` (origin offset,
+declared box, subtype) replaces the bare origin offset in `spawn_entity`; the fallback
+under `blueprint_map` and the scenario's blueprint is now the size-matched body, else the
+default; after the spawn, `compare_geometry` reads the actor's box once, warns once per
+blueprint on a stale table, logs the residual (WARN outside tolerance) and records it for
+the episode's contact reports (`geometry`, optional within schema 1, so 021's reports and
+readers are unaffected). `physical_verdict` and `run_suite --physical-verdict` put the
+out-of-tolerance bodies in the `carla_contact` testcase's `system-out`; the verdict does
+not change.
 
 ## Acceptance
 
