@@ -168,8 +168,8 @@ class DiscoveryTest(unittest.TestCase):
         self.assertIn("scenario:=/s/a.xosc", cmd)
         self.assertIn("output_directory:=/r/a", cmd)
         self.assertEqual(cmd[-1], "port:=5555")
-        if cmd[0] == "play_launch":
-            self.assertEqual(cmd[cmd.index("--enforce-rules") + 1], "off")
+        # play_launch >= 0.15.1 intercepts nothing without a contract: no --enforce-rules.
+        self.assertNotIn("--enforce-rules", cmd)
 
 
 EGO_XOSC = """<OpenSCENARIO><Entities>
