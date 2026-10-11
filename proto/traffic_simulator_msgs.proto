@@ -124,6 +124,12 @@ message VehicleParameters {
   BoundingBox bounding_box = 3; // Bounding box of the vehicle entity.
   Axles axles = 4;              // Axles of the vehicle entity.
   Property property = 5;        // Other parameters of the vehicle entity.
+  /**
+   * The vehicle's category (OpenSCENARIO vehicleCategory). Lets a simulator choose a body
+   * of the right kind at spawn; the per-frame EntityStatus carries it only after the spawn.
+   * Absent (an older sender) reads as UNKNOWN.
+   */
+  EntitySubtype subtype = 6;
 }
 
 /**
