@@ -24,6 +24,10 @@ SSv2's Autoware controller) passes without a report.
 Several reports in the window (a YAML scenario's variants) still make one testcase; its
 message numbers each as "run i/N".
 
+Entities whose CARLA body is outside tolerance of their declared box (roadmap 022: 0.3 m in
+length or width, 0.5 m in height) are listed in the testcase's system-out. Information,
+not a verdict: a contact that matters already fails the testcase.
+
 Exit status: 0 if the added testcase passed, 1 if not, 2 on a usage error.
 """
 
@@ -198,14 +202,37 @@ def judge(reports: List[dict], expected: Set[str] = frozenset(), min_impulse: fl
     return "pass", "", f"{len(reports)} run(s), no unexpected contact"
 
 
+def _dims(values) -> str:
+    return " x ".join(f"{v:.2f}" for v in values) + " m"
+
+
+def geometry_notes(reports: List[dict]) -> List[str]:
+    """One line per entity whose body was outside tolerance, first report that has it."""
+    notes, seen = [], set()
+    for r in reports:
+        for g in r.get("geometry", []):
+            name = g.get("name")
+            if g.get("fits", True) or name in seen:
+                continue
+            seen.add(name)
+            declared, actual = g.get("declared", [0, 0, 0]), g.get("actual", [0, 0, 0])
+            diff = " / ".join(f"{a - d:+.2f}" for d, a in zip(declared, actual))
+            notes.append(f"body outside tolerance: '{name}' declared {_dims(declared)}, "
+                         f"spawned as '{g.get('blueprint')}' {_dims(actual)} "
+                         f"(difference {diff} m)")
+    return notes
+
+
 def classname_of(junit_root: ET.Element) -> str:
     suite = junit_root.find("testsuite") if junit_root.tag == "testsuites" else junit_root
     return suite.get("name", "") if suite is not None else ""
 
 
-def apply_to_junit(junit: Path, kind: str, type_: str, message: str) -> None:
+def apply_to_junit(junit: Path, kind: str, type_: str, message: str,
+                   notes: List[str] = ()) -> None:
     """Add (or replace) the carla_contact testcase in the file's first testsuite and keep
-    the counts on testsuite and testsuites right. SSv2's testcases are left alone."""
+    the counts on testsuite and testsuites right. SSv2's testcases are left alone. `notes`
+    go to system-out, after the message on a pass."""
     tree = ET.parse(junit)
     root = tree.getroot()
     suite = root.find("testsuite") if root.tag == "testsuites" else root
@@ -215,12 +242,13 @@ def apply_to_junit(junit: Path, kind: str, type_: str, message: str) -> None:
         if old.get("name") == TESTCASE:
             suite.remove(old)
     tc = ET.SubElement(suite, "testcase", name=TESTCASE)
-    if kind == "pass":
-        out = ET.SubElement(tc, "system-out")
-        out.text = message
-    else:
+    if kind != "pass":
         el = ET.SubElement(tc, kind, type=type_, message=message.splitlines()[0])
         el.text = message
+    out_lines = ([message] if kind == "pass" else []) + list(notes)
+    if out_lines:
+        out = ET.SubElement(tc, "system-out")
+        out.text = "\n".join(out_lines)
     for node in [suite] + ([root] if root is not suite else []):
         cases = list(suite.iter("testcase"))
         node.set("tests", str(len(cases)))
@@ -233,9 +261,10 @@ def apply_to_junit(junit: Path, kind: str, type_: str, message: str) -> None:
 
 def verdict_for_run(scenario: Optional[Path], contacts_dir: Path, since: Optional[float],
                     until: Optional[float], min_impulse: float = 0.0,
-                    wait: float = 3.0) -> Tuple[str, str, str]:
-    """Read the scenario and the reports and judge. Waits up to `wait` s for a report the
-    bridge's writer thread may still be finishing when the scenario has just ended."""
+                    wait: float = 3.0) -> Tuple[str, str, str, List[str]]:
+    """Read the scenario and the reports and judge: (kind, type, message, geometry notes).
+    Waits up to `wait` s for a report the bridge's writer thread may still be finishing when
+    the scenario has just ended."""
     expected: Set[str] = set()
     has_ego = True
     if scenario is not None:
@@ -250,7 +279,7 @@ def verdict_for_run(scenario: Optional[Path], contacts_dir: Path, since: Optiona
     while has_ego and not reports and time.monotonic() < deadline:
         time.sleep(0.2)
         reports = load_reports(contacts_dir, since, until)
-    return judge(reports, expected, min_impulse, has_ego)
+    return (*judge(reports, expected, min_impulse, has_ego), geometry_notes(reports))
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -272,10 +301,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not args.junit.is_file():
         print(f"[physical_verdict] no such file: {args.junit}", file=sys.stderr)
         return 2
-    kind, type_, message = verdict_for_run(args.scenario, args.contacts, args.since,
-                                           args.until, args.min_impulse)
-    apply_to_junit(args.junit, kind, type_, message)
+    kind, type_, message, notes = verdict_for_run(args.scenario, args.contacts, args.since,
+                                                  args.until, args.min_impulse)
+    apply_to_junit(args.junit, kind, type_, message, notes)
     print(f"[physical_verdict] {TESTCASE}: {kind.upper()} -- {message}")
+    for note in notes:
+        print(f"[physical_verdict] {note}")
     return 0 if kind == "pass" else 1
 
 

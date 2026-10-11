@@ -73,9 +73,17 @@ def contact(name="npc_rear", impulse=1843.2, static=False, frame=412):
             "max_impulse": impulse}
 
 
-def report(start, contacts=(), complete=True, episode=1):
-    return {"schema": 1, "episode": episode, "ego": "ego", "start_unix": start,
-            "end_unix": start + 60, "complete": complete, "contacts": list(contacts)}
+def report(start, contacts=(), complete=True, episode=1, geometry=None):
+    r = {"schema": 1, "episode": episode, "ego": "ego", "start_unix": start,
+         "end_unix": start + 60, "complete": complete, "contacts": list(contacts)}
+    if geometry is not None:
+        r["geometry"] = geometry
+    return r
+
+
+def body(name="truck", fits=False):
+    return {"name": name, "blueprint": "vehicle.carlamotors.firetruck",
+            "declared": [12.0, 2.5, 3.5], "actual": [8.468, 2.891, 3.827], "fits": fits}
 
 
 class Scratch(unittest.TestCase):
@@ -170,6 +178,24 @@ class Judge(unittest.TestCase):
         self.assertIn("run 2/2", msg)
 
 
+class Geometry(unittest.TestCase):
+    def test_only_bodies_outside_tolerance_are_noted_once_each(self):
+        reports = [report(1.0, geometry=[body(), body("car", fits=True)]),
+                   report(2.0, geometry=[body()])]
+        notes = pv.geometry_notes(reports)
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("'truck'", notes[0])
+        self.assertIn("12.00 x 2.50 x 3.50", notes[0])
+        self.assertIn("vehicle.carlamotors.firetruck", notes[0])
+        self.assertIn("-3.53", notes[0])
+
+    def test_a_021_report_has_no_geometry(self):
+        self.assertEqual(pv.geometry_notes([report(1.0)]), [])
+
+    def test_geometry_never_changes_the_verdict(self):
+        self.assertEqual(pv.judge([report(1.0, geometry=[body()])])[0], "pass")
+
+
 class ScenarioFiles(Scratch):
     def test_xosc_expected_contacts_and_ego(self):
         param = ('<ParameterDeclaration name="csbExpectedContacts" parameterType="string" '
@@ -208,6 +234,17 @@ class ApplyToJunit(Scratch):
         for node in (root, root.find("testsuite")):
             self.assertEqual((node.get("tests"), node.get("failures"), node.get("errors")),
                              ("2", "1", "0"))
+
+    def test_geometry_notes_go_to_system_out_on_pass_and_failure(self):
+        junit = self.write("result.junit.xml", JUNIT)
+        pv.apply_to_junit(junit, "pass", "", "1 run(s), no unexpected contact", ["body note"])
+        out = self.cases(junit)[1][1].find("system-out").text
+        self.assertIn("no unexpected contact", out)
+        self.assertIn("body note", out)
+        pv.apply_to_junit(junit, "failure", "CarlaContact", "hit", ["body note"])
+        tc = self.cases(junit)[1][1]
+        self.assertEqual(tc.find("failure").text, "hit")
+        self.assertEqual(tc.find("system-out").text, "body note")
 
     def test_applying_twice_replaces(self):
         junit = self.write("result.junit.xml", JUNIT)
@@ -258,6 +295,16 @@ class RunSuiteJoin(Scratch):
         self.assertFalse(r.passed)
         suite = rs.build_suite_xml([r]).getroot()
         self.assertEqual((suite.get("tests"), suite.get("failures")), ("2", "1"))
+
+    def test_geometry_notes_reach_the_suite_xml(self):
+        self.write_report(report(150.0, geometry=[body()]))
+        r = self.result(100.0, 200.0)
+        rs.add_physical_verdict(r, self.contacts, pv=pv)
+        self.assertEqual(r.cases[1].kind, "pass")
+        self.assertIn("'truck'", r.cases[1].out)
+        suite = rs.build_suite_xml([r]).getroot()
+        out = suite.find("testsuite").findall("testcase")[1].find("system-out")
+        self.assertIn("firetruck", out.text)
 
     def test_a_scenario_preflight_refused_gets_no_testcase(self):
         r = self.result(None, None)

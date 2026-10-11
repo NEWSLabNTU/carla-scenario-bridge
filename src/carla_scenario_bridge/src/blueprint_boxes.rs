@@ -12,11 +12,8 @@
 //! tolerance of both, and swapping every NPC's body for that would change behaviour where
 //! no gap is being closed.
 
-// Wired into spawn_entity in 022 step 4; until then only the tests use it.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use eyre::{Result, WrapErr};
 use serde::Deserialize;
@@ -30,6 +27,14 @@ pub const PLANE_TOLERANCE: f64 = 0.3;
 /// Largest height difference at which a body still fits, m. Looser: no verdict is
 /// computed from height, only what a sensor sees.
 pub const HEIGHT_TOLERANCE: f64 = 0.5;
+
+/// Largest difference, per axis, between the table and the actor CARLA spawned before the
+/// table counts as stale, m. The table is CARLA's own numbers rounded to 1 mm, so anything
+/// visible at 5 cm is a different asset.
+pub const STALE_TOLERANCE: f64 = 0.05;
+
+/// The script that regenerates the table, named in the stale-table warning.
+pub const MEASURE_SCRIPT: &str = "scripts/measure_blueprint_boxes.py";
 
 /// Weight of the length error in the size score: longitudinal scenarios (following
 /// distance, time to collision) measure along it.
@@ -66,6 +71,14 @@ impl Dimensions {
         r.length.abs() <= PLANE_TOLERANCE
             && r.width.abs() <= PLANE_TOLERANCE
             && r.height.abs() <= HEIGHT_TOLERANCE
+    }
+
+    /// Whether `actual` and this box differ by more than [`STALE_TOLERANCE`] on any axis.
+    pub fn differs_from(&self, actual: &Dimensions) -> bool {
+        let r = self.residual(actual);
+        [r.length, r.width, r.height]
+            .iter()
+            .any(|d| d.abs() > STALE_TOLERANCE)
     }
 
     /// Summed relative error of `actual` against this declared box, length weighted.
@@ -126,6 +139,64 @@ impl BoxTable {
     pub fn get(&self, blueprint: &str) -> Option<&BlueprintBox> {
         self.blueprints.get(blueprint)
     }
+
+    /// The table for `version`, looked up beside the config file first (like the per-map
+    /// traffic-light files), then in each installed share. `None` with a log line when there
+    /// is none or it does not parse: the bridge then spawns as before 022.
+    pub fn load_for(config_dir: &Path, version: &str) -> Option<Self> {
+        let Some(path) = table_path(config_dir, version, installed_shares()) else {
+            tracing::info!(
+                "No blueprint box table for CARLA {version} ({}); entities get the default \
+                 blueprint for their kind, and no spawn-time size check",
+                table_file(version)
+            );
+            return None;
+        };
+        match Self::load(&path) {
+            Ok(table) => {
+                if table.carla_version != version {
+                    tracing::warn!(
+                        "{} says CARLA {}, this bridge is built for {version}; using it anyway",
+                        path.display(),
+                        table.carla_version
+                    );
+                }
+                tracing::info!(
+                    "Blueprint box table: {} blueprints from {}",
+                    table.blueprints.len(),
+                    path.display()
+                );
+                Some(table)
+            }
+            Err(e) => {
+                tracing::warn!("Ignoring the blueprint box table: {e:#}");
+                None
+            }
+        }
+    }
+}
+
+/// `blueprint_boxes_<version>.yaml`.
+pub fn table_file(version: &str) -> String {
+    format!("blueprint_boxes_{version}.yaml")
+}
+
+/// `<prefix>/share/carla_scenario_bridge/config` for each prefix in `AMENT_PREFIX_PATH`.
+fn installed_shares() -> Vec<PathBuf> {
+    std::env::var("AMENT_PREFIX_PATH")
+        .unwrap_or_default()
+        .split(':')
+        .filter(|p| !p.is_empty())
+        .map(|p| Path::new(p).join("share/carla_scenario_bridge/config"))
+        .collect()
+}
+
+fn table_path(config_dir: &Path, version: &str, shares: Vec<PathBuf>) -> Option<PathBuf> {
+    let file = table_file(version);
+    std::iter::once(config_dir.to_path_buf())
+        .chain(shares)
+        .map(|dir| dir.join(&file))
+        .find(|p| p.is_file())
 }
 
 /// The blueprints an entity may be size-matched among.
@@ -374,6 +445,36 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn the_table_is_found_beside_the_config_then_in_a_share() {
+        let root = std::env::temp_dir().join(format!("csb-boxes-{}", std::process::id()));
+        let (config, share) = (root.join("config"), root.join("share"));
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&share).unwrap();
+        let file = table_file("0.9.16");
+        assert_eq!(table_path(&config, "0.9.16", vec![share.clone()]), None);
+        std::fs::write(share.join(&file), "").unwrap();
+        assert_eq!(
+            table_path(&config, "0.9.16", vec![share.clone()]),
+            Some(share.join(&file))
+        );
+        std::fs::write(config.join(&file), "").unwrap();
+        assert_eq!(
+            table_path(&config, "0.9.16", vec![share.clone()]),
+            Some(config.join(&file))
+        );
+        assert_eq!(table_path(&config, "0.10.0", vec![share]), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_table_off_by_more_than_5cm_is_stale() {
+        let m3 = shipped().get(MODEL3).unwrap().dimensions();
+        assert!(!m3.differs_from(&dims(4.792, 2.163, 1.488)));
+        assert!(!m3.differs_from(&dims(4.84, 2.163, 1.488)));
+        assert!(m3.differs_from(&dims(4.85, 2.163, 1.488)));
     }
 
     #[test]

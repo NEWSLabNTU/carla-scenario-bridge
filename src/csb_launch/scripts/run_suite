@@ -57,6 +57,7 @@ class Case:
     type: str = ""
     message: str = ""
     time: Optional[str] = None
+    out: str = ""  # system-out
 
 
 @dataclass
@@ -180,6 +181,8 @@ def build_suite_xml(results: List[ScenarioResult], name: str = "csb_suite") -> E
         if c.kind != "pass":
             el = ET.SubElement(tc, c.kind, type=c.type, message=c.message)
             el.text = c.message
+        if c.out:
+            ET.SubElement(tc, "system-out").text = c.out
     if hasattr(ET, "indent"):
         ET.indent(root, "  ")
     return ET.ElementTree(root)
@@ -438,10 +441,11 @@ def add_physical_verdict(result: ScenarioResult, contacts_dir: Path,
     if result.started_unix is None:
         return
     pv = pv or _physical_verdict()
-    kind, type_, message = pv.verdict_for_run(result.path, contacts_dir, result.started_unix,
-                                              result.ended_unix, min_impulse)
+    kind, type_, message, notes = pv.verdict_for_run(
+        result.path, contacts_dir, result.started_unix, result.ended_unix, min_impulse)
     result.cases.append(Case(name=pv.TESTCASE, classname=result.stem, kind=kind, type=type_,
-                             message="" if kind == "pass" else message))
+                             message="" if kind == "pass" else message,
+                             out="\n".join(notes)))
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:

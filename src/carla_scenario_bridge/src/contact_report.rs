@@ -43,6 +43,21 @@ pub struct ReportContact {
     pub max_impulse: f64,
 }
 
+/// One entity's body against the box its scenario declared (roadmap 022).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportGeometry {
+    /// SSv2 entity name.
+    pub name: String,
+    /// CARLA blueprint the entity was spawned as.
+    pub blueprint: String,
+    /// Declared length, width, height, m.
+    pub declared: [f64; 3],
+    /// The spawned actor's bounding box, same order, m.
+    pub actual: [f64; 3],
+    /// Within tolerance on every axis (0.3 m in length and width, 0.5 m in height).
+    pub fits: bool,
+}
+
 /// One ego run, from the ego's spawn to its despawn (or teardown, or CARLA restart).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContactReport {
@@ -60,6 +75,10 @@ pub struct ContactReport {
     pub complete: bool,
     /// In order of first contact.
     pub contacts: Vec<ReportContact>,
+    /// Every entity spawned in the episode, in spawn order. Added with 022 under the same
+    /// schema: a reader that does not know it ignores it.
+    #[serde(default)]
+    pub geometry: Vec<ReportGeometry>,
 }
 
 /// Where reports go, from the config/parameter value: unset is the default directory,
@@ -189,6 +208,7 @@ mod tests {
             end_unix: start + 60.0,
             complete: true,
             contacts,
+            geometry: vec![],
         }
     }
 
@@ -254,6 +274,26 @@ mod tests {
         assert!(json["contacts"][1]["other_id"].is_null());
         let back: ContactReport = serde_json::from_value(json).unwrap();
         assert_eq!(back, r);
+    }
+
+    #[test]
+    fn geometry_is_optional_in_schema_1() {
+        // A 021 report, written before the field existed, still reads.
+        let old = r#"{"schema":1,"episode":1,"ego":"ego","start_unix":1.0,"end_unix":2.0,
+                      "complete":true,"contacts":[]}"#;
+        let back: ContactReport = serde_json::from_str(old).unwrap();
+        assert!(back.geometry.is_empty());
+        let mut r = report(1.0, 1, vec![]);
+        r.geometry.push(ReportGeometry {
+            name: "truck".into(),
+            blueprint: "vehicle.carlamotors.firetruck".into(),
+            declared: [12.0, 2.5, 3.5],
+            actual: [8.468, 2.891, 3.827],
+            fits: false,
+        });
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["geometry"][0]["fits"], false);
+        assert_eq!(json["geometry"][0]["declared"][0], 12.0);
     }
 
     #[test]

@@ -42,7 +42,7 @@ use carla::sensor::data::CollisionEvent;
 use carla::sensor::SensorDataBase;
 use eyre::{eyre, Result};
 
-use crate::contact_report::{self, ContactReport, ReportContact};
+use crate::contact_report::{self, ContactReport, ReportContact, ReportGeometry};
 
 /// At most one WARN per other actor per this much simulation time. A sustained contact --
 /// an NPC teleported into the ego and held there -- reports every physics tick, and the log
@@ -248,6 +248,8 @@ pub struct CollisionMonitor {
     episode: u64,
     /// Wall time the sensor was attached: the run's start in the report.
     run_start_unix: f64,
+    /// Each entity's body against its declared box, this episode (roadmap 022).
+    geometry: Vec<ReportGeometry>,
 }
 
 impl CollisionMonitor {
@@ -272,6 +274,7 @@ impl CollisionMonitor {
             report_dir: if enabled { report_dir } else { None },
             episode: 0,
             run_start_unix: 0.0,
+            geometry: Vec::new(),
         }
     }
 
@@ -285,6 +288,14 @@ impl CollisionMonitor {
     pub fn begin_episode(&mut self) {
         self.frame.store(0, Ordering::Relaxed);
         self.episode += 1;
+        self.geometry.clear();
+    }
+
+    /// Note a spawned entity's body for the episode's reports. A respawn under the same
+    /// name replaces the earlier record.
+    pub fn record_geometry(&mut self, record: ReportGeometry) {
+        self.geometry.retain(|g| g.name != record.name);
+        self.geometry.push(record);
     }
 
     /// Attach a collision sensor to the ego and start listening.
@@ -451,6 +462,7 @@ impl CollisionMonitor {
             end_unix: contact_report::now_unix(),
             complete,
             contacts: self.log.report_contacts(),
+            geometry: self.geometry.clone(),
         };
         contact_report::write_in_background(dir, report);
     }
@@ -600,6 +612,33 @@ mod tests {
         m.begin_episode();
         assert_eq!(m.next_frame(), 1);
         assert_eq!(m.episode, 1);
+    }
+
+    /// Geometry is per episode, one record per entity name.
+    #[test]
+    fn geometry_records_replace_by_name_and_reset_per_episode() {
+        let mut m = CollisionMonitor::new(false, None);
+        let rec = |name: &str, bp: &str| ReportGeometry {
+            name: name.into(),
+            blueprint: bp.into(),
+            declared: [4.5, 2.1, 1.8],
+            actual: [4.792, 2.163, 1.488],
+            fits: true,
+        };
+        m.record_geometry(rec("npc", "vehicle.tesla.model3"));
+        m.record_geometry(rec("ego", "vehicle.tesla.model3"));
+        m.record_geometry(rec("npc", "vehicle.audi.a2"));
+        let names: Vec<_> = m
+            .geometry
+            .iter()
+            .map(|g| (g.name.as_str(), g.blueprint.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            [("ego", "vehicle.tesla.model3"), ("npc", "vehicle.audi.a2")]
+        );
+        m.begin_episode();
+        assert!(m.geometry.is_empty());
     }
 
     /// Draining routes queued events through the log with names from the caller.

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
-use crate::blueprint_boxes::SizeClass;
+use crate::blueprint_boxes::{self, BoxTable, Dimensions, SizeClass};
 use crate::config::{BridgeConfig, SensorReleaseConfig};
 use crate::map_resolver::{lanelet_map_file, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
@@ -122,7 +122,6 @@ impl SpawnKind {
     /// parameters, so the ego stack's configuration picks it; CARLA's walkers are all
     /// within centimetres of each other, so a pedestrian keeps its default and the
     /// spawn-time comparison reports the difference.
-    #[allow(dead_code)] // wired into spawn_entity in 022 step 4
     fn size_class(self, subtype: EntitySubtype) -> Option<SizeClass> {
         match self {
             SpawnKind::Ego | SpawnKind::AgentVehicle | SpawnKind::Pedestrian => None,
@@ -424,6 +423,7 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
 }
 
 use crate::collision_monitor::CollisionMonitor;
+use crate::contact_report::ReportGeometry;
 use crate::coordinate_conversion::{self, OriginOffset};
 use crate::entity_manager::{EntityManager, EntityType};
 use crate::episode_clock::{
@@ -894,6 +894,12 @@ pub struct Coordinator {
     /// `/carla/set_weather` -- with a label for logs. Re-applied after every map load and
     /// reconnect, because CARLA resets it with the world. `None`: leave CARLA's.
     requested_weather: Option<(String, Weather)>,
+    /// Measured blueprint boxes for this CARLA version (roadmap 022); `None` spawns as
+    /// before: the kind's default, no size check.
+    blueprint_boxes: Option<BoxTable>,
+    /// Blueprints already warned about as differing from the table, so a stale table
+    /// warns once per blueprint rather than once per spawn.
+    warned_stale_boxes: HashSet<String>,
 }
 
 impl Coordinator {
@@ -917,6 +923,7 @@ impl Coordinator {
         // Validated by BridgeConfig::validate, so an unknown name cannot get this far.
         let requested_weather =
             crate::weather::preset(config.weather.trim()).map(|(name, w)| (name.to_string(), w));
+        let blueprint_boxes = BoxTable::load_for(&config_dir, crate::carla_version::BUILT_FOR);
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -961,6 +968,8 @@ impl Coordinator {
             agent_vehicles: HashSet::new(),
             agent_ledger,
             requested_weather,
+            blueprint_boxes,
+            warned_stale_boxes: HashSet::new(),
         }
     }
 
@@ -2615,10 +2624,11 @@ impl Coordinator {
         name: &str,
         asset_key: &str,
         pose: Option<&Pose>,
-        origin_offset: OriginOffset,
+        shape: EntityShape,
         kind: SpawnKind,
         role_name: Option<&str>,
     ) -> ProtoResult {
+        let origin_offset = shape.origin_offset;
         tracing::info!(
             "Spawn {}: name={name}, asset_key={asset_key}, origin offset \
              (bounding_box.center)=({:.3}, {:.3}) m",
@@ -2653,16 +2663,21 @@ impl Coordinator {
         // Resolve the blueprint once up front so the retry loop does not re-probe CARLA.
         // The configured blueprint_map takes first refusal: SSv2 asset keys are not CARLA
         // blueprint names in general, and this is where an operator states the translation.
+        // Below both explicit words, the body closest to the declared box (roadmap 022),
+        // else the kind's default.
         let mapped = self.config.blueprint_for(asset_key).map(str::to_owned);
+        let fallback = self
+            .size_matched_blueprint(name, kind, &shape)
+            .unwrap_or_else(|| kind.default_blueprint().to_string());
         let requested_key = match (mapped.as_deref(), asset_key.is_empty()) {
             (Some(mapped), _) => {
                 tracing::debug!("Asset key '{asset_key}' mapped to blueprint '{mapped}'");
                 mapped
             }
-            (None, true) => kind.default_blueprint(),
+            (None, true) => fallback.as_str(),
             (None, false) => asset_key,
         };
-        let blueprint_key = match self.resolve_blueprint_key(requested_key, kind) {
+        let blueprint_key = match self.resolve_blueprint_key(requested_key, &fallback, kind) {
             Ok(k) => k,
             Err(e) => return proto_err(format!("Cannot spawn '{name}': {e}")),
         };
@@ -2766,6 +2781,14 @@ impl Coordinator {
         // Record for teardown before anything else can fail. This is the only durable
         // record of what to clean up; EntityManager is emptied on despawn and re-init.
         self.record_spawned(actor_id);
+
+        let bb = actor.bounding_box();
+        let actual = Dimensions {
+            length: 2.0 * f64::from(bb.extent.x),
+            width: 2.0 * f64::from(bb.extent.y),
+            height: 2.0 * f64::from(bb.extent.z),
+        };
+        self.compare_geometry(name, &blueprint_key, &shape, &actual);
 
         if kind == SpawnKind::Pedestrian {
             // SSv2 sends a pedestrian's pose at its feet every frame; CARLA's walker origin
@@ -2903,10 +2926,16 @@ impl Coordinator {
                 };
             }
         }
-        let origin_offset = origin_offset_of(
+        let subtype = req
+            .parameters
+            .as_ref()
+            .and_then(|p| p.subtype.as_ref())
+            .map_or(EntitySubtype::Unknown, |s| s.value());
+        let shape = EntityShape::of(
             req.parameters
                 .as_ref()
                 .and_then(|p| p.bounding_box.as_ref()),
+            subtype,
         );
         // The Traffic Manager first: a simulator-driven vehicle nothing can drive must not
         // be spawned and left parked.
@@ -2924,7 +2953,7 @@ impl Coordinator {
             &name,
             &req.asset_key,
             req.pose.as_ref(),
-            origin_offset,
+            shape,
             kind,
             role_name.as_deref(),
         );
@@ -3037,16 +3066,17 @@ impl Coordinator {
         // pose every frame, so a controller would be a second authority over the same
         // actor (invariant 5). The walker is spawned kinematic and teleported, exactly
         // like an NPC vehicle.
-        let origin_offset = origin_offset_of(
+        let shape = EntityShape::of(
             req.parameters
                 .as_ref()
                 .and_then(|p| p.bounding_box.as_ref()),
+            EntitySubtype::Pedestrian,
         );
         let result = self.spawn_entity(
             &name,
             &req.asset_key,
             req.pose.as_ref(),
-            origin_offset,
+            shape,
             SpawnKind::Pedestrian,
             None,
         );
@@ -3065,16 +3095,17 @@ impl Coordinator {
             .map(|p| p.name.clone())
             .unwrap_or_default();
 
-        let origin_offset = origin_offset_of(
+        let shape = EntityShape::of(
             req.parameters
                 .as_ref()
                 .and_then(|p| p.bounding_box.as_ref()),
+            EntitySubtype::Unknown,
         );
         let result = self.spawn_entity(
             &name,
             &req.asset_key,
             req.pose.as_ref(),
-            origin_offset,
+            shape,
             SpawnKind::MiscObject,
             None,
         );
@@ -4081,14 +4112,97 @@ impl Coordinator {
         }
     }
 
+    /// The blueprint closest to the entity's declared box among its class (roadmap 022), or
+    /// `None` when the kind is not size-matched, nothing was declared, or there is no table.
+    fn size_matched_blueprint(
+        &self,
+        name: &str,
+        kind: SpawnKind,
+        shape: &EntityShape,
+    ) -> Option<String> {
+        let class = kind.size_class(shape.subtype)?;
+        let declared = shape.declared?;
+        let table = self.blueprint_boxes.as_ref()?;
+        let default = kind.default_blueprint();
+        let chosen = blueprint_boxes::choose_by_size(class, &declared, table, default)?;
+        if chosen != default {
+            tracing::info!(
+                "'{name}' ({:?}, declared {}) gets '{chosen}' by size; '{default}' does not fit",
+                shape.subtype,
+                format_dims(&declared)
+            );
+        }
+        Some(chosen)
+    }
+
+    /// The spawned body against the table and against the declared box: a stale table is
+    /// warned about once per blueprint; the residual is logged (WARN outside tolerance)
+    /// and goes into the episode's contact reports.
+    fn compare_geometry(
+        &mut self,
+        name: &str,
+        blueprint: &str,
+        shape: &EntityShape,
+        actual: &Dimensions,
+    ) {
+        if let Some(entry) = self.blueprint_boxes.as_ref().and_then(|t| t.get(blueprint)) {
+            let table = entry.dimensions();
+            if table.differs_from(actual) && self.warned_stale_boxes.insert(blueprint.to_string()) {
+                tracing::warn!(
+                    "Stale blueprint box table: '{blueprint}' is {} in CARLA, {} in the table; \
+                     rerun {}",
+                    format_dims(actual),
+                    format_dims(&table),
+                    blueprint_boxes::MEASURE_SCRIPT
+                );
+            }
+        }
+        let Some(declared) = shape.declared else {
+            tracing::debug!(
+                "'{name}' declares no box; its '{blueprint}' is {}",
+                format_dims(actual)
+            );
+            return;
+        };
+        let r = declared.residual(actual);
+        let fits = declared.fits(actual);
+        let line = format!(
+            "'{name}': declared {}, '{blueprint}' is {} (difference {:+.2} / {:+.2} / {:+.2} m)",
+            format_dims(&declared),
+            format_dims(actual),
+            r.length,
+            r.width,
+            r.height
+        );
+        if fits {
+            tracing::info!("Body {line}");
+        } else {
+            tracing::warn!(
+                "Body outside tolerance ({} m in length and width, {} m in height): {line}",
+                blueprint_boxes::PLANE_TOLERANCE,
+                blueprint_boxes::HEIGHT_TOLERANCE
+            );
+        }
+        self.collision_monitor.record_geometry(ReportGeometry {
+            name: name.to_string(),
+            blueprint: blueprint.to_string(),
+            declared: [declared.length, declared.width, declared.height],
+            actual: [actual.length, actual.width, actual.height],
+            fits,
+        });
+    }
+
     /// Pick a blueprint that CARLA will actually accept, falling back when the requested
     /// one is unknown. Resolved once per spawn, before any retry.
     ///
     /// The decision itself is [`choose_blueprint`]; this only performs the probes, because
     /// `actor_builder` needs a live server and the policy is worth testing without one.
-    fn resolve_blueprint_key(&mut self, requested: &str, kind: SpawnKind) -> Result<String> {
-        let fallback = kind.default_blueprint();
-
+    fn resolve_blueprint_key(
+        &mut self,
+        requested: &str,
+        fallback: &str,
+        kind: SpawnKind,
+    ) -> Result<String> {
         // The probe builder is dropped at the end of this statement, releasing the borrow
         // on `world` before the next one is taken.
         let requested_exists = self.world.actor_builder(requested).is_ok();
@@ -4109,9 +4223,9 @@ impl Coordinator {
             BlueprintChoice::Fallback => {
                 // SSv2 asset keys are not CARLA blueprint names in general. Where they
                 // happen to coincide the branch above passes them straight through; where
-                // they do not, falling back to the kind's default keeps the scenario
-                // running with a warning naming both. A real asset-key mapping table is
-                // config-driven and lands with phase 010.
+                // they do not, the fallback (the size-matched body, else the kind's
+                // default) keeps the scenario running with a warning naming both. The
+                // operator's translation is `blueprint_map`.
                 tracing::warn!(
                     "Blueprint '{requested}' is not a CARLA blueprint; falling back to \
                      '{fallback}' for this {}",
@@ -4305,6 +4419,39 @@ impl Coordinator {
         actor.set_transform(transform).wrap_err("set_transform")?;
         Ok(())
     }
+}
+
+/// What a spawn request says about the entity's body: where its origin sits in its box,
+/// how big the box is, and what kind of vehicle it is.
+#[derive(Debug, Clone, Copy)]
+struct EntityShape {
+    origin_offset: OriginOffset,
+    /// The declared box; `None` when absent or degenerate.
+    declared: Option<Dimensions>,
+    subtype: EntitySubtype,
+}
+
+impl EntityShape {
+    fn of(bounding_box: Option<&BoundingBox>, subtype: EntitySubtype) -> Self {
+        let declared = bounding_box
+            .and_then(|b| b.dimensions.as_ref())
+            .map(|d| Dimensions {
+                length: d.x,
+                width: d.y,
+                height: d.z,
+            })
+            .filter(Dimensions::is_valid);
+        EntityShape {
+            origin_offset: origin_offset_of(bounding_box),
+            declared,
+            subtype,
+        }
+    }
+}
+
+/// `4.50 x 2.10 x 1.80 m`.
+fn format_dims(d: &Dimensions) -> String {
+    format!("{:.2} x {:.2} x {:.2} m", d.length, d.width, d.height)
 }
 
 /// The origin offset an SSv2 entity declares: its `bounding_box.center` x and y. Absent or
