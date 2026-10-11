@@ -1,0 +1,243 @@
+<?xml version="1.0"?>
+<!--
+	Roadmap 022 step 6: the regression reproducer for a body longer than its declared box.
+	The ego drives west as in town01_rear_contact.xosc (a parked ego is not possible: the
+	interpreter holds the storyboard until the managed ego is engaged, which needs a route).
+	A blind motorbike starts 25 m behind it at 8 m/s and, once SSv2's freespace gap to the ego
+	is under 0.9 m, holds the ego's speed (relative target 0, continuous). SSv2 fails on a
+	collision between them; otherwise it passes 5 s after the motorbike closed up.
+
+	Before 022 every NPC got the Model 3 (4.79 m), which reaches 1.4 m past a 2.0 m
+	motorbike's declared front: CARLA's ego was touched while SSv2 saw clearance (SSv2 PASS,
+	carla_contact FAIL). With 022 the motorbike gets vehicle.kawasaki.ninja (2.04 m) and both
+	pass. To reproduce the old body, set MotorbikeBody to vehicle.tesla.model3.
+-->
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-10-12T00:00:00+00:00" description="Town01 motorbike holding 0.9 m behind the driving ego, for the entity geometry reproducer" revMajor="1" revMinor="2" />
+	<ParameterDeclarations>
+		<!-- Empty: the bridge picks the body by size. vehicle.tesla.model3: the pre-022 body. -->
+		<ParameterDeclaration name="MotorbikeBody" parameterType="string" value="" />
+	</ParameterDeclarations>
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
+	</RoadNetwork>
+	<Entities>
+		<ScenarioObject name="ego">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="Autoware">
+					<Properties>
+						<Property name="maxJerk" value="1.5" />
+						<Property name="minJerk" value="-1.5" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<ScenarioObject name="motorbike">
+			<Vehicle name="motorbike" vehicleCategory="motorbike" model3d="$MotorbikeBody">
+				<BoundingBox>
+					<Center x="0.6" y="0.0" z="0.75" />
+					<Dimensions width="0.8" height="1.5" length="2.0" />
+				</BoundingBox>
+				<Performance maxSpeed="10" maxAcceleration="3.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="0.1" positionX="1.2" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="0.1" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties>
+						<!-- Blind: it does not slow for the ego; the stop below is all that halts it. -->
+						<Property name="isBlind" value="true" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+	</Entities>
+	<Storyboard>
+		<Init>
+			<Actions>
+				<Private entityRef="ego">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="190.8" y="-130.1" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="120.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="motorbike">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="215.8" y="-130.1" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+			</Actions>
+		</Init>
+		<Story name="town01_motorbike_body">
+			<Act name="approach_act">
+				<ManeuverGroup maximumExecutionCount="1" name="motorbike_group">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="motorbike" />
+					</Actors>
+					<Maneuver name="motorbike_maneuver">
+						<Event name="go" priority="parallel">
+							<Action name="go_speed">
+								<PrivateAction>
+									<LongitudinalAction>
+										<SpeedAction>
+											<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+											<SpeedActionTarget>
+												<AbsoluteTargetSpeed value="8.0" />
+											</SpeedActionTarget>
+										</SpeedAction>
+									</LongitudinalAction>
+								</PrivateAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="go_time" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="2" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="hold" priority="parallel">
+							<Action name="hold_speed">
+								<PrivateAction>
+									<LongitudinalAction>
+										<SpeedAction>
+											<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+											<SpeedActionTarget>
+												<RelativeTargetSpeed entityRef="ego" value="0" speedTargetValueType="delta" continuous="true" />
+											</SpeedActionTarget>
+										</SpeedAction>
+									</LongitudinalAction>
+								</PrivateAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="closed_up" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="motorbike" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="true" rule="lessThan" value="0.9" />
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<ManeuverGroup maximumExecutionCount="1" name="end_group">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="ego" />
+					</Actors>
+					<Maneuver name="end_conditions">
+						<Event name="clear" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="held_five_seconds" delay="5" conditionEdge="none">
+										<ByEntityCondition>
+												<TriggeringEntities triggeringEntitiesRule="any">
+													<EntityRef entityRef="motorbike" />
+												</TriggeringEntities>
+												<EntityCondition>
+													<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="true" rule="lessThan" value="0.9" />
+												</EntityCondition>
+											</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="timeout" priority="parallel">
+							<Action name="exit_timeout">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="timeout_condition" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="120" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="ssv2_collision" priority="parallel">
+							<Action name="exit_failure">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="collision" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="motorbike" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<CollisionCondition>
+													<EntityRef entityRef="ego" />
+												</CollisionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>
