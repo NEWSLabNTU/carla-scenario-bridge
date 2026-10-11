@@ -128,9 +128,25 @@ chosen body is positioned the same way.
    picked to match one blueprint that is not its class default (car 3.70 m -> Audi A2, so
    the Model 3 default visibly loses); the ego drives off and the run exits at 10 s. The nine starter scenarios: same blueprints as before for every entity whose box
    fits a Model 3 (no behaviour change where none is due), all pass.
-6. [ ] **Disagreement closed.** A truck scenario that, before this phase, gives SSv2 PASS
-   with a CARLA contact (or the reverse) under `--physical-verdict`; after it, both agree.
+6. [x] **Disagreement closed.** A scenario that, before this phase, gives SSv2 PASS with a
+   CARLA contact (or the reverse) under `--physical-verdict`; after it, both agree.
    The before-run is kept as the regression reproducer in `scenarios/gap/`.
+   *Revised (2026-10-12): a motorbike, not a truck.* A truck's old body (the Model 3) is
+   shorter than its box, so CARLA misses a contact SSv2 sees; 021 passes a missing expected
+   contact by design (`csbExpectedContacts` permits, it does not require), so the only
+   visible disagreement would be SSv2 FAIL / CARLA PASS, and the "after" state would be a
+   scenario that fails in both worlds -- not something a suite can keep green. A motorbike's
+   old body is 2.8 m *longer* than its box: CARLA touches what SSv2 clears. So
+   `scenarios/gap/town01_motorbike_body.xosc`: the ego drives west as in
+   `town01_rear_contact` (a parked ego cannot be had: the interpreter holds the storyboard
+   until the managed ego is engaged, and an ego with no route never leaves
+   `WAITING_FOR_ROUTE`). A blind motorbike (2.0 x 0.8 x 1.5 m, centre 0.6 m ahead of its
+   origin) catches up at 8 m/s and, once SSv2's freespace gap to the ego is under 0.9 m,
+   holds the ego's speed (relative target speed 0, continuous) for 5 s; SSv2 fails on a
+   collision, else passes. CARLA's gap is SSv2's less ~0.17 m (the ego's Model 3 overhangs
+   its declared rear by 0.15, a Ninja its declared front by 0.02). Before (`MotorbikeBody`
+   = `vehicle.tesla.model3`, the pre-022 body, 1.4 m past the declared front): ~0.7 m into
+   the ego, SSv2 PASS + CARLA contact. After (`kawasaki.ninja`): ~0.6 m clear, both PASS.
 
 ### Results
 
@@ -195,6 +211,22 @@ not change.
   barriers `streetbarrier` turned 90°, -0.03 / +0.01 / +0.07 m, no stale warning, no
   `system-out` notes; `town01_entity_bodies` PASS unchanged. The other seven starters
   spawn no prop, so the turn cannot reach them; their 9/9 run above stands.
+
+**Step 6 (2026-10-12).** Both workspaces rebuilt on `carla` 0.15.0 (acb `5ae5334`), stacks
+restarted. The first draft parked the ego with no route and failed in both variants with
+`AutowareError ... WAITING_FOR_ROUTE` (the design note above); the driving version, run
+twice with each body under `run_suite --physical-verdict`:
+
+| Motorbike body | SSv2 | `carla_contact` |
+|---|---|---|
+| `vehicle.tesla.model3` (pre-022, `MotorbikeBody` forced) | PASS, PASS | FAIL, FAIL: "ego hit 'motorbike' (vehicle.tesla.model3)", 2 contacts, max impulse 432.5 N*s; `system-out` lists the body +2.79 / +1.36 / -0.01 m |
+| `vehicle.kawasaki.ninja` (size match) | PASS, PASS | PASS, PASS |
+
+The disagreement is reproduced and closed; `scenarios/gap/town01_motorbike_body.xosc`
+stays as its regression reproducer (set `MotorbikeBody` to `vehicle.tesla.model3` to see
+the old failure).
+
+**022 complete (2026-10-12).** All three acceptance items hold: steps 5 and 6.
 
 ## Acceptance
 
