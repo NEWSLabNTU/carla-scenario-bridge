@@ -13,6 +13,9 @@ mod episode_clock;
 mod frame_stats;
 mod lanelet_map;
 mod map_resolver;
+// Wired into the coordinator in roadmap 023 step 4.
+#[allow(dead_code)]
+mod npc_tracking;
 mod proto;
 mod resolved_signals;
 mod ros_args;

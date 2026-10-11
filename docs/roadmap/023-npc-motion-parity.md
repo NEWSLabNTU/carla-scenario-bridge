@@ -69,7 +69,7 @@ fallback.
    `get_velocity()` against `v*`, frame-time cost. **If the budget is missed with
    reasonable gains, stop here**: record the numbers in this doc and 014 gap 5, keep NPCs
    kinematic, close the phase.
-3. [ ] **Control law, test-driven.** Pure function `(p*, v*, p, yaw*, yaw) → command | snap`
+3. [x] **Control law, test-driven.** Pure function `(p*, v*, p, yaw*, yaw) → command | snap`
    with tests: on track, lagging, overshoot, snap thresholds, stopped target.
 4. [ ] **Bridge wiring.** Physics on at spawn under `tracked`; the per-frame command from the
    snapshot; snap via the existing teleport path (its failure handling unchanged); walker
@@ -81,6 +81,14 @@ fallback.
 6. [ ] **Default flip** to `tracked`; user guide and bridge config comment.
 
 ### Results
+
+**Step 3 (2026-10-12).** `npc_tracking.rs`: `command(target, current, dt, gains, steering)
+-> Track | Snap`, in CARLA's world frame, with the start-of-step reference, steer
+feed-forward, the 0.5 m / 5° snap (no yaw snap for walkers), and the spike's gains as
+`VEHICLE_GAINS` (5, 2) and `WALKER_GAINS` (6). Ten tests: on track, aiming at `p*` would
+be a frame ahead, lagging, overshoot, yaw error across the ±180° wrap, both snap thresholds
+and their snap pose, walker never yaw-snaps, stopped target (no division by zero), steer
+sign/magnitude/saturation, wrap range. Not wired yet (step 4).
 
 **Step 2, spike (2026-10-12): the gate passes.** Scratch client (`scratchpad/spike023/
 track.py`, not kept) on the shared CARLA 0.9.16, Town01, synchronous at the bridge's 0.05 s,
