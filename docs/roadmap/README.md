@@ -35,6 +35,20 @@ what unblocks what.
 - [018: Install and World Config](018-install-and-world-config.md) — `rosdep install` + `colcon build` for users (CARLA version as a carla-rust feature, color_names submodule), `ros2 run acb_launch setup_autoware_data`, weather as bridge services — **complete 2026-10-10**
 - [020: Starter Scenarios and Suites](020-starter-scenarios-and-suites.md) — **complete** (first-user proof run clean, 2026-10-11) — installed starter scenarios (`csb_examples`, incl. AWF ODD use cases), `output_directory:=`, `ros2 run csb_launch run_suite`, and a first-user proof run of the guide
 
+## Gap campaign (021-)
+
+Closing the gap between SSv2's verdict and CARLA's physical outcome
+([design/gap-campaign.md](../design/gap-campaign.md)): fix the known gaps first, each with a
+reproducer; then measure the residual; then fuzz for unknown ones with an adaptive generator
+borrowed from greybox fuzzing.
+
+- [021: Physical Verdict](021-physical-verdict.md) — **done 2026-10-11** — the bridge writes CARLA's ego contacts per episode; `physical_verdict` / `run_suite --physical-verdict` add a `carla_contact` testcase next to SSv2's, with scenario-declared expected contacts
+- [022: Entity Geometry Parity](022-entity-geometry-parity.md) — blueprint chosen by subtype and declared size from a measured box table (ego and pedestrians excluded); residual reported at spawn and in the JUnit
+- [023: NPC Motion Parity](023-npc-motion-parity.md) — NPCs as tracked physics bodies with real velocity and walk cycles, within a 0.2 m pose budget; spike-gated, kinematic stays as fallback
+- [024: Gap Trace and Oracle](024-gap-trace-and-oracle.md) — the bridge records SSv2's and CARLA's view of every entity per frame; an offline oracle judges each frame in both geometries and classifies the run against its verdict; baselined on the starter scenarios and the 021-023 reproducers
+- 025: Adaptive Generator and Exploit Pipeline — scenario genomes, seed/operator bandits, MAP-Elites archive, annealed energy; confirm, boundary bisection, metamorphic root-cause probes, shrink (phase doc after 024)
+- 026: Parallel Isolated Pipelines — N complete CARLA+bridge+ego pipelines on one host (phase doc after 025)
+
 ## Real-site twin and realistic rendering (019-)
 
 - [019: NTU Campus Digital Twin](019-ntu-campus-twin.md) — twin of the NTU campus from the vendor MLS scan and our Autoware maps; full re-tiling (the vendor's tiles are truncated at 2^32-1 points), road/building meshes, vegetation proxies, Lanelet2 regulatory elements + xodr, CARLA 0.10 import, lidar and camera realism measured against the real cloud ([design/survey-isaac-sim-and-digital-twin.md](../design/survey-isaac-sim-and-digital-twin.md))
@@ -60,76 +74,27 @@ stack exists to verify against.
 out on the NEWSLabNTU fork, the pilot is the only thing that routes and engages the ego.
 Ship 012 first — it stands alone and shrinks 013's fork patch to the minimum.
 
-## Status (checkpoint 2026-08-12 — read this first)
+## Status (2026-10-11 — read this first)
 
-**The E2E is green, and now repeatable**: `town01_ego_drive.xosc` passes on a fresh
-stack and passes again on the same stack immediately afterwards (007's acceptance,
-2026-08-12) — no restarts of anything between runs. The full causal
-anatomy of getting there — five stacked availability bugs, the double-`/clock`
-killer, PhysX acceleration jolts — is in [012](012-ssv2-unmanaged-autoware.md).
-Operational recipe: [docs/user-guide.md](../user-guide.md); traps: `CLAUDE.md`.
+**The bridge is user-ready.** A first user, following only `docs/user-guide.md`, installs,
+builds and runs every starter scenario and both AWF use-case suites clean (020's proof run,
+2026-10-11; screencasts in `docs/proof/020/screencast/`). Operational traps: `CLAUDE.md`.
 
 Per-phase state:
 
-- **006 done.** 001/002 delivered. 003/004 superseded as noted above.
-- **011 effectively done** — acb_bridge detects ego despawn and re-attaches to the
-  next spawn without a restart (acb `aeb2031`), across map reloads and server
-  replacements. Remaining checkboxes are test-harness work, not functionality.
-- **007 done (2026-08-12)** — the same scenario twice in a row, both clean, nothing
-  restarted between and no CARLA restart. Took two fixes found by chasing run B: the
-  IMU-orphan server crash (csb destroys a vehicle's sensors first; real guard on the
-  carla fork, branch `sensor-owner-guards`) and acb never noticing a despawn, because
-  `Actor::IsAlive()` is client-side (acb `ab5dc67`).
-- **010 COMPLETE** — two-domain run works end to end: the background AV localizes,
-  routes, engages and **arrives**, while the ego passes its own scenario in the same
-  run (2026-08-12, on `scenarios/town01_two_av.xosc` — the short scenario does not give
-  the pilot's ~62 s cold start enough sim time). The last criterion closed 2026-08-15:
-  with both AVs on lanelet 6583 the ego perceives the one ahead and **follows** it —
-  closes to 18 m, slows 3.9 -> 2.5 m/s, holds ~24 m, and still passes. Teardown of the
-  background AV is verified on both paths (next `Initialize`, and bridge shutdown).
-- **012 DONE and verified live** — this is the architecture the passing runs use.
-- **013 designed, largely unimplemented** — the deeper `managed_ego:=false` fork
-  work. Run only after 007/010 close.
-- **008 acceptance closed (2026-08-16)** — a pedestrian and a misc object are both
-  detected by the ego's own perception, and the ego *stops* for a pedestrian crossing its
-  lane and resumes when it clears (`scenarios/town01_pedestrian.xosc`). Everything comes
-  back classified UNKNOWN; classification needs the camera leg 009 has parked. One test
-  checkbox stays open — `resolve_blueprint_key` probes CARLA and cannot be unit-tested.
-- **009 gap 7 wired, and blocked on the map pack (2026-08-16).** Traffic-light
-  recognition now runs end to end — four silent wiring defects fixed, including a map
-  whose lights were untyped (`subtype=""`), a camera namespace with no parameter file
-  that killed the detector at startup, and acb publishing its camera on
-  `/sensing/camera/camera6/camera_link/image_raw` where Autoware listens on
-  `/sensing/camera/camera6/image_raw`. It still reports nothing, because every light in
-  every town of the pack is a 3-14 cm stub at a fixed 135 deg bearing: sub-pixel at range
-  and 45 deg outside `car_traffic_light_max_angle_range` on every approach. Not a GPU
-  problem, as previously assumed.
-- **009 light geometry regenerated from CARLA (2026-08-16).**
-  `scripts/regenerate_light_geometry.py` rebuilds each linestring from
-  `TrafficLight.get_light_boxes()` with facing taken from the referencing lanelet:
-  36 of 36 on Town01, heads 0.451 x 1.221 m, facings spread across the compass. Plus a
-  fifth wiring defect — acb stamped camera topics with the mounting frame rather than
-  the optical one, so every projection landed behind the image plane. **Detection now
-  works**: the signal is projected and found in the image continuously from 195 m out to
-  7 m out. Classification is the last silent hop; the two criteria stay unticked.
+- **Done:** 001, 002, 006, 007, 010, 011, 012, 015, 016, 017, 018, 020. 003, 004 and 013
+  superseded as noted above.
+- **008:** acceptance closed; objects come back UNKNOWN until 009's camera classification.
+- **009:** light detection works end to end; classification is the open hop.
+- **014:** pose offset and collision monitor delivered; NPC velocity (gap 5) moves to 023.
+- **005:** open items are outward-facing (SafetyPool access, AWF outreach); deferred by the
+  user's decision, as is map provisioning.
+- **019:** in progress (re-tile, route alignment, CARLA 0.10 probe done).
 
-**Priority order for the next sessions:**
+**Priority order:**
 
-1. **Rebuild the CARLA server from the fork** so `sensor-owner-guards` (the IMU
-   null-owner guard) is actually in the running binary. csb's sensor-first teardown
-   avoids the crash today, but only for actors csb destroys.
-2. **A second background AV** (domain 3). Two Autoware stacks leave the ego's LiDAR at
-   10 Hz on this host; a third is unmeasured, and running out shows up as a quiet crawl
-   rather than an error — check `ros2 topic hz` on the ego's LiDAR, not load average.
-3. **`just e2e`** — codify the bring-up + preflight gates (Startup complete,
-   `change_to_stop` present, single `/clock`, no duplicate nodes) as one target.
-4. **005 upstreaming batch** — play_launch lost-load rescue and compound-parameter
-   fix (both on its main), SSv2 `carla-compat` arrived_goal patch, carla-fork
-   exception containment and the IMU owner guard.
-5. **009 / 008 / 013** in whatever order the above unblocks.
-6. **014 measurements** — the pose reference-point delta and the collision-sensor
-   comparison are cheap to measure on any live stack and decide whether every distance
-   condition so far has been off by ~1.5 m. Measure before trusting more thresholds.
-
-Gaps 1-3 from the design doc are fixed (deferred sync mode, `/clock` ownership,
-sensor-timestamp epochs). Gaps 4-11 are distributed across 009, 010 and 011.
+1. ~~021 Physical verdict~~ -- done 2026-10-11.
+2. **022 Entity geometry parity.**
+3. **023 NPC motion parity** -- spike first; may close as a measured no.
+4. **024 Gap trace and oracle**, then **025**, **026**.
+5. 019 and 009's classification, interleaved where a gap phase waits on a long run.
