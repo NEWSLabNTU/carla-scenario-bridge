@@ -170,6 +170,8 @@ class DiscoveryTest(unittest.TestCase):
         self.assertEqual(cmd[-1], "port:=5555")
         # play_launch >= 0.15.1 intercepts nothing without a contract: no --enforce-rules.
         self.assertNotIn("--enforce-rules", cmd)
+        if cmd[0] == "play_launch":
+            self.assertEqual(cmd[cmd.index("--web-addr") + 1], "127.0.0.1:8081")
 
 
 EGO_XOSC = """<OpenSCENARIO><Entities>

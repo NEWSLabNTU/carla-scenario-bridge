@@ -32,6 +32,7 @@
 //! where the entity manager can name the other actor, and all logging happens there.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -40,6 +41,8 @@ use carla::geom::Transform;
 use carla::sensor::data::CollisionEvent;
 use carla::sensor::SensorDataBase;
 use eyre::{eyre, Result};
+
+use crate::contact_report::{self, ContactReport, ReportContact};
 
 /// At most one WARN per other actor per this much simulation time. A sustained contact --
 /// an NPC teleported into the ego and held there -- reports every physics tick, and the log
@@ -148,6 +151,27 @@ impl CollisionLog {
         ))
     }
 
+    /// The run's contacts in the shape of the runner's contact report, in order of first
+    /// contact.
+    pub fn report_contacts(&self) -> Vec<ReportContact> {
+        let mut rows: Vec<ReportContact> = self
+            .contacts
+            .iter()
+            .map(|(id, c)| ReportContact {
+                other_id: *id,
+                name: c.name.clone(),
+                other_type: c.other_type.clone(),
+                is_static: id.is_none(),
+                first_ssv2_frame: c.first_ssv2_frame,
+                first_sim_time: c.first_sim_time,
+                count: c.count,
+                max_impulse: c.max_impulse,
+            })
+            .collect();
+        rows.sort_by_key(|r| r.first_ssv2_frame);
+        rows
+    }
+
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.contacts.is_empty()
@@ -218,12 +242,26 @@ pub struct CollisionMonitor {
     log: CollisionLog,
     /// The live sensor and the SSv2 name of the ego it is attached to.
     attached: Option<(Sensor, String)>,
+    /// Where each run's contact report goes (roadmap 021); `None` writes none.
+    report_dir: Option<PathBuf>,
+    /// `Initialize` count, for the report.
+    episode: u64,
+    /// Wall time the sensor was attached: the run's start in the report.
+    run_start_unix: f64,
 }
 
 impl CollisionMonitor {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(enabled: bool, report_dir: Option<PathBuf>) -> Self {
         if !enabled {
-            tracing::info!("Collision monitor disabled by config (collision_monitor: false)");
+            tracing::info!(
+                "Collision monitor disabled by config (collision_monitor: false); no contact \
+                 reports either"
+            );
+        } else {
+            match &report_dir {
+                Some(dir) => tracing::info!("Contact reports: {}", dir.display()),
+                None => tracing::info!("Contact reports off (contact_report_dir: off)"),
+            }
         }
         Self {
             enabled,
@@ -231,6 +269,9 @@ impl CollisionMonitor {
             queue: Arc::new(Mutex::new(Vec::new())),
             log: CollisionLog::default(),
             attached: None,
+            report_dir: if enabled { report_dir } else { None },
+            episode: 0,
+            run_start_unix: 0.0,
         }
     }
 
@@ -240,9 +281,10 @@ impl CollisionMonitor {
         self.frame.fetch_add(1, Ordering::Relaxed) + 1
     }
 
-    /// Restart frame numbering for a new scenario.
-    pub fn reset_frames(&self) {
+    /// A new scenario: restart frame numbering and count the episode.
+    pub fn begin_episode(&mut self) {
         self.frame.store(0, Ordering::Relaxed);
+        self.episode += 1;
     }
 
     /// Attach a collision sensor to the ego and start listening.
@@ -265,6 +307,7 @@ impl CollisionMonitor {
                     ego.id()
                 );
                 self.attached = Some((sensor, ego_name.to_string()));
+                self.run_start_unix = contact_report::now_unix();
             }
             Err(e) => tracing::warn!(
                 "Collision monitor: could not attach to ego '{ego_name}' (actor {}): {e:#}. \
@@ -355,6 +398,7 @@ impl CollisionMonitor {
                 "{} (sensor abandoned: CARLA restarted)",
                 self.log.summary(&ego_name)
             );
+            self.write_report(&ego_name, false);
             self.log = CollisionLog::default();
         }
     }
@@ -390,7 +434,25 @@ impl CollisionMonitor {
         // Anything the callback queued before the stop.
         self.drain(name_of);
         tracing::info!("{}", self.log.summary(&ego_name));
+        self.write_report(&ego_name, true);
         self.log = CollisionLog::default();
+    }
+
+    /// Hand the run's record to the report writer thread, if reports are on.
+    fn write_report(&self, ego_name: &str, complete: bool) {
+        let Some(dir) = self.report_dir.clone() else {
+            return;
+        };
+        let report = ContactReport {
+            schema: contact_report::SCHEMA,
+            episode: self.episode,
+            ego: ego_name.to_string(),
+            start_unix: self.run_start_unix,
+            end_unix: contact_report::now_unix(),
+            complete,
+            contacts: self.log.report_contacts(),
+        };
+        contact_report::write_in_background(dir, report);
     }
 }
 
@@ -407,6 +469,27 @@ mod tests {
             other_type: "vehicle.tesla.model3".into(),
             impulse,
         }
+    }
+
+    #[test]
+    fn the_report_lists_contacts_in_order_of_first_contact() {
+        let mut log = CollisionLog::default();
+        log.record(&hit(50, 5.0, None, 10.0), None);
+        log.record(&hit(42, 4.2, Some(7), 100.0), Some("npc1"));
+        log.record(&hit(43, 4.3, Some(7), 300.0), Some("npc1"));
+        log.record(&hit(60, 6.0, Some(9), 5.0), None);
+        let rows = log.report_contacts();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].name.as_deref(), Some("npc1"));
+        assert_eq!((rows[0].count, rows[0].max_impulse), (2, 300.0));
+        assert!(rows[1].is_static && rows[1].other_id.is_none());
+        assert_eq!((rows[2].other_id, rows[2].name.as_deref()), (Some(9), None));
+        assert!(!rows[2].is_static);
+    }
+
+    #[test]
+    fn an_empty_run_reports_no_contacts() {
+        assert!(CollisionLog::default().report_contacts().is_empty());
     }
 
     #[test]
@@ -509,19 +592,20 @@ mod tests {
 
     /// The counter the callback stamps events with: one per UpdateFrame, reset per run.
     #[test]
-    fn frames_count_update_frames_and_reset() {
-        let m = CollisionMonitor::new(false);
+    fn frames_count_update_frames_and_reset_per_episode() {
+        let mut m = CollisionMonitor::new(false, None);
         assert_eq!(m.next_frame(), 1);
         assert_eq!(m.next_frame(), 2);
         assert_eq!(m.frame.load(Ordering::Relaxed), 2);
-        m.reset_frames();
+        m.begin_episode();
         assert_eq!(m.next_frame(), 1);
+        assert_eq!(m.episode, 1);
     }
 
     /// Draining routes queued events through the log with names from the caller.
     #[test]
     fn drain_names_events_and_empties_the_queue() {
-        let mut m = CollisionMonitor::new(false);
+        let mut m = CollisionMonitor::new(false, None);
         m.queue.lock().unwrap().push(hit(5, 0.5, Some(7), 2.0));
         m.queue.lock().unwrap().push(hit(6, 0.6, Some(7), 4.0));
         m.drain(|id| (id == 7).then(|| "npc1".to_string()));

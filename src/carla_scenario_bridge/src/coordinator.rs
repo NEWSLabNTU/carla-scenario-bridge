@@ -892,6 +892,7 @@ impl Coordinator {
         let substeps =
             crate::config::ticks_per_frame(0.05, config.substeps, config.carla_tick_seconds);
         let collision_monitor_enabled = config.collision_monitor_enabled();
+        let contact_report_dir = config.contact_report_dir();
         let world_id = world.id().ok();
         let clock_path = crate::clock_store::path_for(&carla_host, carla_port);
         let agent_ledger = agent_link::ledger_path(&carla_host, carla_port);
@@ -928,7 +929,7 @@ impl Coordinator {
             settle_frames: HashMap::new(),
             accel_history: HashMap::new(),
             walker_height: HashMap::new(),
-            collision_monitor: CollisionMonitor::new(collision_monitor_enabled),
+            collision_monitor: CollisionMonitor::new(collision_monitor_enabled, contact_report_dir),
             world_id,
             clock_path,
             warned_clock_store: false,
@@ -2249,7 +2250,7 @@ impl Coordinator {
         self.settle_frames.clear();
         self.accel_history.clear();
         self.walker_height.clear();
-        self.collision_monitor.reset_frames();
+        self.collision_monitor.begin_episode();
 
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
         // EntityManager first is what used to orphan them: the map was the only record of

@@ -93,8 +93,13 @@ sensor_release:
 # DIAGNOSTIC ONLY. SSv2's CollisionCondition stays the verdict and nothing here fails a
 # request. SSv2 judges collisions from declared bounding boxes; CARLA from PhysX colliders
 # (NPCs are kinematic but keep theirs), so the two can disagree. SSv2 does not report its
-# verdict to the simulator, so compare the summary against the run's JUnit result by hand.
+# verdict to the simulator; the contact report below lets the runner join the two.
 collision_monitor: true
+
+# Where each ego run's CARLA contacts are written as JSON, for `ros2 run csb_launch
+# physical_verdict` and `run_suite --physical-verdict` (roadmap 021). Unset: $ROS_HOME/csb/contacts
+# (~/.ros/csb/contacts). "off": no reports. Newest 500 kept. Needs collision_monitor.
+# contact_report_dir: off
 
 # CARLA ticks per SSv2 frame. 2 is the default: the SSv2 frame is delivered in two CARLA
 # ticks at half the step, so the scenario's timeline is unchanged while sensors and control

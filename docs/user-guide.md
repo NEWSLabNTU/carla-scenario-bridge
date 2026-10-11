@@ -284,6 +284,38 @@ The exit status is 0 only if every testcase passed. Like a single scenario, a su
 simulation side and the vehicle side(s) already up; scenarios that load another town
 (`town02_episode_change`) make CARLA switch towns, and the next scenario switches back.
 
+### CARLA's contacts in the verdict: `--physical-verdict`
+
+SSv2 decides collisions in its own geometry: declared bounding boxes, in 2D, and no static
+world. When the ego hits a curb, a pole, or an NPC whose CARLA body is bigger than its
+declared box, the run can still pass. The bridge writes what CARLA's collision sensor saw
+for every ego run to `~/.ros/csb/contacts/` (`contact_report_dir:=` on `simulation.launch.xml`
+moves it, `off` disables it). With `--physical-verdict`, `run_suite` adds a `carla_contact`
+testcase to each scenario, next to SSv2's own:
+
+| `carla_contact` | When |
+|---|---|
+| pass | no contact, or only the contacts the scenario declares |
+| failure | CARLA saw the ego touch something else; the message names it, with the SSv2 frame and the impulse |
+| error | no report for the run (wrong bridge, reports off), or CARLA restarted mid-run |
+
+A scenario that is meant to make contact declares it, and SSv2 ignores the parameter:
+
+```xml
+<ParameterDeclaration name="csbExpectedContacts" parameterType="string" value="npc_rear" />
+```
+
+The value is a comma-separated list of entity names. `static` allows contact with the static world.
+`--min-impulse N` ignores contacts below N N·s. For one scenario, run the join after it ends:
+
+```bash
+ros2 run csb_launch physical_verdict <output>/scenario_test_runner/result.junit.xml \
+    --scenario <scenario file>       # judges the newest report; --since/--until for a window
+```
+
+SSv2's own testcases are never changed. A run SSv2 passed with a contact therefore shows up
+as one pass and one failure in the same result.
+
 ### Your own Autoware
 
 `carla_simulator.launch.xml` is a CARLA profile around a stock `autoware.launch.xml` (yours,

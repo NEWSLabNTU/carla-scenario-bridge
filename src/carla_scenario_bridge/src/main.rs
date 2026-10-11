@@ -4,6 +4,7 @@ mod carla_version;
 mod clock_store;
 mod collision_monitor;
 mod config;
+mod contact_report;
 mod coordinate_conversion;
 mod coordinator;
 mod entity_manager;

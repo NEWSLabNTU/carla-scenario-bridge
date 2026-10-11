@@ -8,12 +8,14 @@
 	~4 m/s. Success = SSv2 saw the collision (the exit waits 3 s so the bodies stay in contact
 	long enough for CARLA to tick with them touching; ending on the first frame of overlap
 	ended the run before csb had applied the overlapping pose); failure = 120 s with none.
-	Then compare csb's
-	"CARLA collision summary" line for the run.
+	The contact is the point, so csbExpectedContacts declares it: run_suite
+	physical-verdict accepts the contact with npc_rear, and fails on any other contact.
 -->
 <OpenSCENARIO>
 	<FileHeader author="carla-scenario-bridge" date="2026-10-05T00:00:00+00:00" description="Town01 rear contact by a blind NPC, for the collision-truth comparison" revMajor="1" revMinor="2" />
-	<ParameterDeclarations />
+	<ParameterDeclarations>
+		<ParameterDeclaration name="csbExpectedContacts" parameterType="string" value="npc_rear" />
+	</ParameterDeclarations>
 	<CatalogLocations />
 	<RoadNetwork>
 		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />

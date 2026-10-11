@@ -176,6 +176,10 @@ pub struct BridgeConfig {
     /// it hit (roadmap 014, gap 3). Diagnostic only: never changes SSv2's verdict. Unset
     /// means on -- read it through [`BridgeConfig::collision_monitor_enabled`].
     pub collision_monitor: Option<bool>,
+    /// Where each ego run's CARLA contacts are written for `physical_verdict` (roadmap 021):
+    /// unset = `$ROS_HOME/csb/contacts`, `off` = no reports, else that directory. Read it
+    /// through [`BridgeConfig::contact_report_dir`].
+    pub contact_report_dir: Option<String>,
     /// Traffic Manager for simulator-driven entities.
     pub traffic_manager: TrafficManagerConfig,
     /// The agent relay that entities with controller `agent` are driven through
@@ -272,7 +276,7 @@ impl BridgeConfig {
     }
 
     /// Apply ROS parameters (`carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
-    /// `reconnect_wait_seconds`, `weather`) over the file and the environment: a launch file's explicit
+    /// `reconnect_wait_seconds`, `weather`, `contact_report_dir`) over the file and the environment: a launch file's explicit
     /// value is the most specific statement of intent. A malformed number is an error, not
     /// a silent default.
     pub fn apply_ros_params(&mut self, params: &crate::ros_args::RosParams) -> Result<()> {
@@ -305,6 +309,12 @@ impl BridgeConfig {
             crate::weather::preset_or_err(weather.trim())
                 .map_err(|e| eyre::eyre!("parameter weather:={weather}: {e}"))?;
             self.weather = weather.trim().to_string();
+        }
+        if let Some(dir) = params
+            .get("contact_report_dir")
+            .filter(|v| !v.trim().is_empty())
+        {
+            self.contact_report_dir = Some(dir.trim().to_string());
         }
         if params.get("background_avs").is_some_and(|v| !v.is_empty()) {
             bail!("{}", REMOVED_BACKGROUND_AVS);
@@ -359,6 +369,11 @@ impl BridgeConfig {
     /// only fires on contact, and the disagreement it exposes is otherwise invisible.
     pub fn collision_monitor_enabled(&self) -> bool {
         self.collision_monitor.unwrap_or(true)
+    }
+
+    /// The contact-report directory, `None` when reports are off.
+    pub fn contact_report_dir(&self) -> Option<std::path::PathBuf> {
+        crate::contact_report::resolve_dir(self.contact_report_dir.as_deref())
     }
 
     /// CARLA blueprint for an SSv2 asset key, if the config maps it.
@@ -503,6 +518,27 @@ mod tests {
         assert_eq!(
             config.map_alias.get("kashiwanoha").map(String::as_str),
             Some("Town01")
+        );
+    }
+
+    #[test]
+    fn contact_reports_default_on_and_turn_off_or_move() {
+        let dir = BridgeConfig::default()
+            .contact_report_dir()
+            .expect("default is on");
+        assert!(dir.ends_with("csb/contacts"), "{}", dir.display());
+        let off: BridgeConfig = serde_yaml::from_str("contact_report_dir: \"off\"\n").unwrap();
+        assert_eq!(off.contact_report_dir(), None);
+
+        let mut config = BridgeConfig::default();
+        let params = crate::ros_args::RosParams::from_args(
+            ["--ros-args", "-p", "contact_report_dir:=/tmp/x"].map(String::from),
+        )
+        .unwrap();
+        config.apply_ros_params(&params).unwrap();
+        assert_eq!(
+            config.contact_report_dir(),
+            Some(std::path::PathBuf::from("/tmp/x"))
         );
     }
 

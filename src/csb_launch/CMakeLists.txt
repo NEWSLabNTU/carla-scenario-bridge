@@ -9,14 +9,16 @@ install(
 )
 
 # `ros2 run csb_launch run_suite`: many scenarios, one verdict each, one suite.junit.xml.
+# `ros2 run csb_launch physical_verdict`: CARLA's contacts as a JUnit testcase (021).
 install(
-  PROGRAMS scripts/run_suite
+  PROGRAMS scripts/run_suite scripts/physical_verdict
   DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_run_suite test/test_run_suite.py)
+  ament_add_pytest_test(test_physical_verdict test/test_physical_verdict.py)
 endif()
 
 ament_package()
