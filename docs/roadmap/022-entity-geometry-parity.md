@@ -71,6 +71,20 @@ the field. `proto/` in this repo gets the same line.
    1.49), but the Model 3 fits, and swapping every NPC for a Mini would change behaviour
    where no gap is being closed. A plain "ties go to the default" would never fire: exact
    ties do not happen. A truck never keeps a car default, fit or not.
+   **Props may turn.** A `static.prop.*` has no driving direction, and scenarios declare
+   one across the road as often as along it (`town01_pedestrian`'s barriers: 0.40 x 1.20 m,
+   the 1.22 x 0.37 m street barrier turned). For the misc-object class each candidate is
+   also tried with length and width swapped, the better orientation counts (for "fits" and
+   for the score; the unturned one on a tie), and a turned winner is spawned turned 90°: the
+   turn is part of the entity's stored origin offset (`OriginOffset.yaw`), so every
+   later pose update keeps it and the CARLA footprint lies where SSv2's does. The residual
+   is then reported in the entity's frame (the body's length against the declared width).
+   CARLA quirk: a prop's `bounding_box()` is not in the actor's frame -- the street barrier
+   reads 1.21 x 0.37 at yaw 0, 0.37 x 1.21 at yaw 90 and 0.60 x 1.12 at yaw 45 (a vehicle
+   reads 4.79 x 2.16 at every yaw). So a prop's spawned box is read back into its own frame
+   only at a yaw that is a multiple of 90° (swapped at 90/270); at any other yaw the
+   table's box stands in for it and the stale-table check is skipped.
+   Vehicles never turn: their length is their direction of travel.
 4. The kind's default, as now (no table, no candidates).
 
 The **ego is excluded** from 3: its blueprint decides acb's sensor mounts and vehicle
@@ -107,9 +121,12 @@ chosen body is positioned the same way.
    table loading by CARLA version; the chain above in `spawn_entity`;
    the spawn-time comparison and stale-table warning; `geometry` in the contact report and
    `physical_verdict`'s `system-out`.
-5. [ ] **Live.** A crafted scenario per subtype (car, truck, bus, motorcycle, bicycle, misc
+5. [x] **Live.** A crafted scenario per subtype (car, truck, bus, motorcycle, bicycle, misc
    object) on Town01: each spawns its matched body, and the logged residual matches the
-   table. The nine starter scenarios: same blueprints as before for every entity whose box
+   table. One scenario carries all six, `scenarios/gap/town01_entity_bodies.xosc`: parked
+   in the ego's lane behind it (x 205-280 on road 4, straight to x 320), each declared box
+   picked to match one blueprint that is not its class default (car 3.70 m -> Audi A2, so
+   the Model 3 default visibly loses); the ego drives off and the run exits at 10 s. The nine starter scenarios: same blueprints as before for every entity whose box
    fits a Model 3 (no behaviour change where none is due), all pass.
 6. [ ] **Disagreement closed.** A truck scenario that, before this phase, gives SSv2 PASS
    with a CARLA contact (or the reverse) under `--physical-verdict`; after it, both agree.
@@ -150,6 +167,34 @@ the episode's contact reports (`geometry`, optional within schema 1, so 021's re
 readers are unaffected). `physical_verdict` and `run_suite --physical-verdict` put the
 out-of-tolerance bodies in the `carla_contact` testcase's `system-out`; the verdict does
 not change.
+
+**Step 5 (2026-10-11/12).** Fork `a337a606`, csb `b5e0371` plus the prop turn, CARLA 0.9.16.
+
+- `scenarios/gap/town01_entity_bodies.xosc`: PASS (2/2, 40 s). Every entity got the body its
+  box was picked for, and the logged residual is the table's: car 3.70 m -> `audi.a2`,
+  motorbike -> `kawasaki.ninja`, bicycle -> `diamondback.century` (-0.04 / -0.02 / +0.02),
+  truck -> `european_hgv` (-0.06 / -0.01 / -0.04), bus -> `fusorosa` (+0.27 / +0.04 / +0.05),
+  barrel -> `static.prop.barrel` (0.00). The contact report holds seven `geometry` records
+  (the ego's included), all `fits`, no contacts.
+- Starters, `run_suite --physical-verdict`, `basic/` + `awf/`: 9/9 PASS (ACC 28/28, AEB
+  10/10). Every entity whose box fits a Model 3 kept it (the ego x42, `npc_rear`,
+  `npc_route`); pedestrians kept `walker.pedestrian.0001`.
+- UC-ACC `Npc1` declares 4.00 x 1.80 x **2.50** m: no car fits (2.50 m is a van's height),
+  the closest is `jeep.wrangler_rubicon` (-0.13 / +0.11 / -0.62), noted in `system-out`.
+  A change that is due; ACC still 28/28.
+- **Regression:** `town01_pedestrian`'s `barrier_0`/`barrier_1` declare 0.40 x 1.20 x 1.00 m,
+  the street barrier turned across the road, and now spawn as `static.prop.gnome`
+  (0.37 x 0.38 x 0.88, -0.82 m in width) where they used to get the default
+  `streetbarrier` (1.22 x 0.37 x 1.07). Two causes: the plane match is orientation-bound,
+  so the barrier itself misses by 0.8 m on both axes; and when nothing fits, the closest
+  score wins even if it is further off than the default. Fixed by letting props turn
+  (design, item 3): the barriers keep the street barrier, spawned turned 90°. The first
+  rerun still reported them 0.8 m out and warned the table stale (CARLA 0.37 x 1.21): a
+  probe showed a prop's `bounding_box()` follows its yaw (design, the CARLA quirk), so the
+  readback is now taken back into the prop's frame. Rerun: `town01_pedestrian` PASS, the
+  barriers `streetbarrier` turned 90°, -0.03 / +0.01 / +0.07 m, no stale warning, no
+  `system-out` notes; `town01_entity_bodies` PASS unchanged. The other seven starters
+  spawn no prop, so the turn cannot reach them; their 9/9 run above stands.
 
 ## Acceptance
 

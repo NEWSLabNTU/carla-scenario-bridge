@@ -318,6 +318,8 @@ as one pass and one failure in the same result.
 
 The bridge gives each NPC and prop the CARLA body closest in size to its declared box, within
 its `vehicleCategory` (a truck gets a truck), and keeps the Model 3 for any car box it fits.
+A prop declared across its length (a street barrier set across the road) is spawned turned
+90° to match; vehicles are never turned.
 Where CARLA has nothing close (a 12 m truck: its longest is 8.5 m), the testcase's
 `system-out` lists the body with its difference from the declared box; that never fails it.
 To force a body, set the entity's `model3d` to a CARLA blueprint name, or map it in
