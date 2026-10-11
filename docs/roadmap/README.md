@@ -95,6 +95,7 @@ Per-phase state:
 
 1. ~~021 Physical verdict~~ -- done 2026-10-11.
 2. ~~022 Entity geometry parity~~ -- done 2026-10-12.
-3. **023 NPC motion parity** -- spike first; may close as a measured no.
+3. **023 NPC motion parity** -- in progress: spike passed the gate 2026-10-12 (tracked physics
+   holds the budget, with two law fixes); next the control law, test-driven.
 4. **024 Gap trace and oracle**, then **025**, **026**.
 5. 019 and 009's classification, interleaved where a gap phase waits on a long run.

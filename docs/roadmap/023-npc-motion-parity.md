@@ -37,11 +37,18 @@ Spike first; the design below is what the spike tests.
 **Tracked physics.** NPC vehicles and walkers spawn with physics on. Each frame, from SSv2's
 commanded pose `p*` (after `OriginOffset`) and twist `v*`:
 
-- vehicles: `set_target_velocity(v* + k_p (p* - p))` in the plane, angular velocity likewise
-  toward the commanded yaw; z left to physics;
+- **aim at the start of the step**: the body must be at `p*` *after* the tick, and a
+  velocity set before the tick acts during it, so the law's reference is
+  `s* = p* - v*·dt` (yaw likewise, `yaw* - ω*·dt`). Aiming at `p*` itself, as first written,
+  leaves the body exactly one frame ahead (0.40 m at 8 m/s, measured, step 2);
+- vehicles: `set_target_velocity(v* + k_p (s* - p))` in the plane, angular velocity
+  `ω* + k_yaw (yaw_s* - yaw)`; z left to physics; plus **steer feed-forward**
+  `steer = atan(wheelbase · ω*/|v*|) / max_steer_angle` through `VehicleControl`, or the
+  unsteered front tyres fight the imposed yaw rate in corners;
 - walkers: `WalkerControl` with direction and speed from the same law;
-- **snap rule**: if the in-plane error exceeds 0.5 m or the yaw error 5°, teleport to `p*`
-  and zero the error (spawn, SSv2 teleport actions, a body knocked off course);
+- **snap rule**: if the in-plane error exceeds 0.5 m or the yaw error 5°, teleport to `s*`
+  with velocity `v*` (spawn, SSv2 teleport actions, a body knocked off course);
+- gains from step 2: `k_p` 5 /s, `k_yaw` 2 /s for vehicles; `k_p` 5-8 /s for walkers;
 - the ego's own contacts with a tracked NPC are physical both ways: the NPC can be pushed,
   which the snap rule bounds.
 
@@ -55,8 +62,8 @@ fallback.
 
 ## Steps
 
-1. [ ] **Docs.** This phase doc.
-2. [ ] **Spike (gate).** A scratch Python client on Town01: one vehicle NPC tracking a
+1. [x] **Docs.** This phase doc.
+2. [x] **Spike (gate).** A scratch Python client on Town01: one vehicle NPC tracking a
    recorded SSv2 trajectory (straight, curve, stop-and-go) and one walker crossing, under
    synchronous mode at the bridge's fixed delta. Report error p95/max, snap count,
    `get_velocity()` against `v*`, frame-time cost. **If the budget is missed with
@@ -72,6 +79,43 @@ fallback.
    `town01_pedestrian`: the walker animates in the screencast view. `town01_rear_contact`:
    `max_impulse` now scales with closing speed (run at two NPC speeds).
 6. [ ] **Default flip** to `tracked`; user guide and bridge config comment.
+
+### Results
+
+**Step 2, spike (2026-10-12): the gate passes.** Scratch client (`scratchpad/spike023/
+track.py`, not kept) on the shared CARLA 0.9.16, Town01, synchronous at the bridge's 0.05 s,
+world settings untouched. Trajectories were synthesized from Town01 waypoints with SSv2-like
+speed profiles (not recorded from SSv2): **cruise** to 8 m/s, **turn** at 5 m/s, **stop-and-go**
+(0→10 m/s at 2 m/s², hold, 10→0 at 3 m/s², hold 2 s, twice), and a **walker** crossing the
+lane at 1.4 m/s. All three vehicle routes pass a ~7 m-radius corner at s ≈ 46-60 m (spawn
+point 0 sits just before it). Error is measured after each tick against the pose commanded
+for that frame, from one world snapshot; "settled" leaves out the first second (spawn drop).
+
+| Case (Model 3 unless noted) | Kinematic `get_velocity()` | Tracked, k_p 5, k_yaw 2, steer FF: settled in-plane p95 / max | yaw p95 / max | snaps | speed error p95 |
+|---|---|---|---|---|---|
+| cruise | 0 m/s (100 % off) | 0.022 / 0.037 m | 0.85° / 3.7° | 1 (the corner, 8 m/s) | 0.2 % |
+| turn | 0 | 0.038 / 0.058 m | 1.02° / 4.1° | 2 (the corner, 5 m/s) | 0.9 % |
+| stop-and-go | 0 | 0.011 / 0.035 m | 0.49° / 4.6° | 3 (the corner, ≤10 m/s) | 0.2 % |
+| walker, k_p 5 / 8 | 0 | 0.004 / 0.020, 0.000 / 0.002 m | -- | 0 | 1.7 %, 0.1 % |
+
+- **Budget met** (p95 ≤ 0.2 m, max ≤ 0.5 m, yaw p95 ≤ 2°), CARLA's velocity within 1 % of
+  the command, against 100 % off for kinematic NPCs.
+- **Two corrections to the law** were needed, both now in the design above. The first run
+  aimed at `p*`: steady 0.40 m error, one frame ahead, at every gain (0.80 m against the
+  previous frame's pose). Without steer feed-forward the corner cost 5-6 snaps per pass and
+  yaw p95 up to 2.9°; with it, 1-3 snaps and ≤ 1.0°.
+- **Snaps only in the tight corner at speed**: 7 m radius at 5-10 m/s is 3.6-14 m/s² of
+  lateral acceleration, which SSv2's kinematic NPCs will command and no tyre holds. The snap
+  rule bounds it; step 4 counts snaps per episode so a scenario that relies on them shows.
+- **Walker**: the first second lags 0.17-0.29 m while the walker accelerates from rest
+  (under the snap); settled it is exact. The walk animation was not looked at (headless);
+  step 5's screencast checks it.
+- **Cost**, 20 Model 3s, 100 frames: tick p50 / p95 5.2 / 7.7 ms kinematic, 7.0 / 12.2 ms
+  tracked (physics on); the per-frame commands are fire-and-forget in the client (0.06 ms
+  for 20 `set_transform`, 0.16 ms for 3 x 20 tracked calls), and `apply_batch` brought
+  nothing. Well inside the 50 ms frame; step 5's 20-NPC bench decides.
+- **Not covered**: grades (Town01 is flat; z is left to physics by design), a trajectory
+  recorded from SSv2 itself, the Rust client's call cost (step 4).
 
 ## Acceptance
 
