@@ -81,6 +81,15 @@ impl Dimensions {
             .any(|d| d.abs() > STALE_TOLERANCE)
     }
 
+    /// The same box turned 90° about the vertical: length and width swapped.
+    pub fn turned(&self) -> Dimensions {
+        Dimensions {
+            length: self.width,
+            width: self.length,
+            height: self.height,
+        }
+    }
+
     /// Summed relative error of `actual` against this declared box, length weighted.
     fn score(&self, actual: &Dimensions) -> f64 {
         let r = self.residual(actual);
@@ -229,6 +238,22 @@ impl SizeClass {
         }
     }
 
+    /// Whether a body may be turned 90° to fit: props have no driving direction, a
+    /// vehicle's length is its direction of travel.
+    pub fn may_turn(self) -> bool {
+        self == SizeClass::MiscObject
+    }
+
+    /// `actual` in the orientation that suits `declared` best: turned only when the class
+    /// may turn and turning scores strictly better. `(dimensions, turned)`.
+    fn orient(self, declared: &Dimensions, actual: Dimensions) -> (Dimensions, bool) {
+        if self.may_turn() && declared.score(&actual.turned()) < declared.score(&actual) {
+            (actual.turned(), true)
+        } else {
+            (actual, false)
+        }
+    }
+
     fn admits(self, bp: &BlueprintBox) -> bool {
         let base = bp.base_type.as_deref();
         let four_wheels = bp.wheels.is_some_and(|w| w >= 4);
@@ -247,8 +272,17 @@ impl SizeClass {
     }
 }
 
+/// A size match: the blueprint, and whether it is to be spawned turned 90° about the
+/// vertical (see [`SizeClass::may_turn`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SizeChoice {
+    pub blueprint: String,
+    pub turned: bool,
+}
+
 /// The blueprint of `class` whose box is closest to `declared`, or `None` when nothing
-/// can be chosen (no valid declared box, no candidate in the table).
+/// can be chosen (no valid declared box, no candidate in the table). A class that may turn
+/// tries each candidate both ways and keeps the better orientation.
 ///
 /// `default` -- the blueprint the kind would get without this -- wins whenever it is in
 /// the class and fits the declared box, so a scenario whose box was already served well
@@ -258,23 +292,33 @@ pub fn choose_by_size(
     declared: &Dimensions,
     table: &BoxTable,
     default: &str,
-) -> Option<String> {
+) -> Option<SizeChoice> {
     if !declared.is_valid() {
         return None;
     }
     if let Some(bp) = table.get(default) {
-        if class.admits(bp) && declared.fits(&bp.dimensions()) {
-            return Some(default.to_string());
+        let (oriented, turned) = class.orient(declared, bp.dimensions());
+        if class.admits(bp) && declared.fits(&oriented) {
+            return Some(SizeChoice {
+                blueprint: default.to_string(),
+                turned,
+            });
         }
     }
     table
         .blueprints
         .iter()
         .filter(|(_, bp)| class.admits(bp))
-        .map(|(id, bp)| (id, declared.score(&bp.dimensions())))
+        .map(|(id, bp)| {
+            let (oriented, turned) = class.orient(declared, bp.dimensions());
+            (id, turned, declared.score(&oriented))
+        })
         // BTreeMap order breaks exact ties by name, so the choice is reproducible.
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(id, _)| id.clone())
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(id, turned, _)| SizeChoice {
+            blueprint: id.clone(),
+            turned,
+        })
 }
 
 #[cfg(test)]
@@ -295,6 +339,18 @@ mod tests {
     }
 
     const MODEL3: &str = "vehicle.tesla.model3";
+
+    /// The chosen blueprint alone, for the classes that never turn.
+    fn pick(
+        class: SizeClass,
+        declared: &Dimensions,
+        table: &BoxTable,
+        default: &str,
+    ) -> Option<String> {
+        let choice = choose_by_size(class, declared, table, default)?;
+        assert!(!choice.turned || class.may_turn(), "{class:?} turned");
+        Some(choice.blueprint)
+    }
 
     #[test]
     fn the_shipped_table_parses_and_has_every_class() {
@@ -321,27 +377,27 @@ mod tests {
     #[test]
     fn the_starter_car_box_keeps_its_model3() {
         // 4.5 x 2.1 x 1.8: a Mini Cooper S 2021 scores closer, but the Model 3 fits.
-        let got = choose_by_size(SizeClass::Car, &dims(4.5, 2.1, 1.8), &shipped(), MODEL3);
+        let got = pick(SizeClass::Car, &dims(4.5, 2.1, 1.8), &shipped(), MODEL3);
         assert_eq!(got.as_deref(), Some(MODEL3));
     }
 
     #[test]
     fn a_car_box_the_model3_does_not_fit_gets_the_closest_car() {
         // A city car: 3.6 m long.
-        let got = choose_by_size(SizeClass::Car, &dims(3.6, 1.8, 1.5), &shipped(), MODEL3);
+        let got = pick(SizeClass::Car, &dims(3.6, 1.8, 1.5), &shipped(), MODEL3);
         assert_eq!(got.as_deref(), Some("vehicle.nissan.micra"));
     }
 
     #[test]
     fn a_12m_truck_gets_the_longest_truck() {
-        let got = choose_by_size(SizeClass::Truck, &dims(12.0, 2.5, 3.5), &shipped(), MODEL3);
+        let got = pick(SizeClass::Truck, &dims(12.0, 2.5, 3.5), &shipped(), MODEL3);
         assert_eq!(got.as_deref(), Some("vehicle.carlamotors.firetruck"));
     }
 
     #[test]
     fn a_truck_never_keeps_a_car_default_even_one_that_fits() {
         // A pickup-sized truck: the Model 3 would fit, but it is not a truck.
-        let got = choose_by_size(SizeClass::Truck, &dims(4.8, 2.1, 1.6), &shipped(), MODEL3);
+        let got = pick(SizeClass::Truck, &dims(4.8, 2.1, 1.6), &shipped(), MODEL3);
         let t = shipped();
         assert_eq!(
             t.get(got.as_deref().unwrap()).unwrap().base_type.as_deref(),
@@ -355,20 +411,20 @@ mod tests {
             SizeClass::of_vehicle(EntitySubtype::Trailer),
             Some(SizeClass::Truck)
         );
-        let got = choose_by_size(SizeClass::Bus, &dims(12.0, 2.5, 3.2), &shipped(), MODEL3);
+        let got = pick(SizeClass::Bus, &dims(12.0, 2.5, 3.2), &shipped(), MODEL3);
         assert_eq!(got.as_deref(), Some("vehicle.mitsubishi.fusorosa"));
     }
 
     #[test]
     fn a_motorcycle_gets_a_motorcycle() {
-        let got = choose_by_size(
+        let got = pick(
             SizeClass::Motorcycle,
             &dims(2.2, 0.8, 1.5),
             &shipped(),
             MODEL3,
         );
         assert_eq!(got.as_deref(), Some("vehicle.yamaha.yzf"));
-        let got = choose_by_size(SizeClass::Bicycle, &dims(1.8, 0.6, 1.7), &shipped(), MODEL3);
+        let got = pick(SizeClass::Bicycle, &dims(1.8, 0.6, 1.7), &shipped(), MODEL3);
         assert_eq!(got.as_deref(), Some("vehicle.gazelle.omafiets"));
     }
 
@@ -379,7 +435,7 @@ mod tests {
             Some(SizeClass::FourWheeled)
         );
         // Bicycle-sized, but with no subtype it cannot become a bicycle.
-        let got = choose_by_size(
+        let got = pick(
             SizeClass::FourWheeled,
             &dims(1.8, 0.6, 1.7),
             &shipped(),
@@ -388,7 +444,7 @@ mod tests {
         .unwrap();
         assert!(shipped().get(&got).unwrap().wheels.unwrap() >= 4, "{got}");
         // And the starter box still keeps its Model 3.
-        let got = choose_by_size(
+        let got = pick(
             SizeClass::FourWheeled,
             &dims(4.5, 2.1, 1.8),
             &shipped(),
@@ -410,7 +466,7 @@ mod tests {
     fn a_misc_object_gets_the_closest_prop() {
         let barrier = "static.prop.streetbarrier";
         // Its own size keeps the default...
-        let got = choose_by_size(
+        let got = pick(
             SizeClass::MiscObject,
             &dims(1.2, 0.4, 1.0),
             &shipped(),
@@ -418,7 +474,7 @@ mod tests {
         );
         assert_eq!(got.as_deref(), Some(barrier));
         // ...a cone-sized box gets a cone, and never a vehicle.
-        let got = choose_by_size(
+        let got = pick(
             SizeClass::MiscObject,
             &dims(0.45, 0.4, 1.2),
             &shipped(),
@@ -429,10 +485,36 @@ mod tests {
     }
 
     #[test]
+    fn a_prop_declared_across_keeps_its_body_turned() {
+        // town01_pedestrian's barriers: the 1.22 x 0.37 m street barrier, across the road.
+        // Unturned, the closest prop was a garden gnome.
+        let barrier = "static.prop.streetbarrier";
+        let across = dims(0.4, 1.2, 1.0);
+        let got = choose_by_size(SizeClass::MiscObject, &across, &shipped(), barrier).unwrap();
+        assert_eq!(
+            got,
+            SizeChoice {
+                blueprint: barrier.to_string(),
+                turned: true
+            }
+        );
+        // Along the road it is not turned.
+        let got = choose_by_size(SizeClass::MiscObject, &across.turned(), &shipped(), barrier);
+        assert_eq!(got.map(|c| c.turned), Some(false));
+    }
+
+    #[test]
+    fn a_vehicle_never_turns() {
+        // A car box declared sideways: no car is 1.9 m long and 4.5 m wide, and it stays so.
+        let got = choose_by_size(SizeClass::Car, &dims(1.9, 4.5, 1.5), &shipped(), MODEL3).unwrap();
+        assert!(!got.turned);
+    }
+
+    #[test]
     fn nothing_to_choose_from_is_none() {
         let empty = BoxTable::default();
         assert_eq!(
-            choose_by_size(SizeClass::Car, &dims(4.5, 2.1, 1.8), &empty, MODEL3),
+            pick(SizeClass::Car, &dims(4.5, 2.1, 1.8), &empty, MODEL3),
             None
         );
         for bad in [
@@ -440,10 +522,7 @@ mod tests {
             dims(4.5, f64::NAN, 1.5),
             dims(4.5, 2.0, -1.0),
         ] {
-            assert_eq!(
-                choose_by_size(SizeClass::Car, &bad, &shipped(), MODEL3),
-                None
-            );
+            assert_eq!(pick(SizeClass::Car, &bad, &shipped(), MODEL3), None);
         }
     }
 

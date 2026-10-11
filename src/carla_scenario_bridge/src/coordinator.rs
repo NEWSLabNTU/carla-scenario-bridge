@@ -2624,10 +2624,39 @@ impl Coordinator {
         name: &str,
         asset_key: &str,
         pose: Option<&Pose>,
-        shape: EntityShape,
+        mut shape: EntityShape,
         kind: SpawnKind,
         role_name: Option<&str>,
     ) -> ProtoResult {
+        // Resolve the blueprint once up front so the retry loop does not re-probe CARLA.
+        // The configured blueprint_map takes first refusal: SSv2 asset keys are not CARLA
+        // blueprint names in general, and this is where an operator states the translation.
+        // Below both explicit words, the body closest to the declared box (roadmap 022),
+        // else the kind's default.
+        let mapped = self.config.blueprint_for(asset_key).map(str::to_owned);
+        let size_choice = self.size_matched_blueprint(name, kind, &shape);
+        let fallback = size_choice
+            .as_ref()
+            .map(|c| c.blueprint.clone())
+            .unwrap_or_else(|| kind.default_blueprint().to_string());
+        let requested_key = match (mapped.as_deref(), asset_key.is_empty()) {
+            (Some(mapped), _) => {
+                tracing::debug!("Asset key '{asset_key}' mapped to blueprint '{mapped}'");
+                mapped
+            }
+            (None, true) => fallback.as_str(),
+            (None, false) => asset_key,
+        };
+        let blueprint_key = match self.resolve_blueprint_key(requested_key, &fallback, kind) {
+            Ok(k) => k,
+            Err(e) => return proto_err(format!("Cannot spawn '{name}': {e}")),
+        };
+        // A prop matched turned is spawned turned, here and on every pose update after.
+        if size_choice.is_some_and(|c| c.turned && c.blueprint == blueprint_key) {
+            shape.origin_offset.yaw = std::f64::consts::FRAC_PI_2;
+            tracing::info!("'{name}' spawns '{blueprint_key}' turned 90° to fit its box");
+        }
+
         let origin_offset = shape.origin_offset;
         tracing::info!(
             "Spawn {}: name={name}, asset_key={asset_key}, origin offset \
@@ -2659,28 +2688,6 @@ impl Coordinator {
         // `z < 0.5 => 0.5` clamp assumed a level map: on an elevated road it buried the
         // actor, and in a dip it dropped one in from height.
         carla_transform.location.z = self.resolve_spawn_height(&carla_transform.location);
-
-        // Resolve the blueprint once up front so the retry loop does not re-probe CARLA.
-        // The configured blueprint_map takes first refusal: SSv2 asset keys are not CARLA
-        // blueprint names in general, and this is where an operator states the translation.
-        // Below both explicit words, the body closest to the declared box (roadmap 022),
-        // else the kind's default.
-        let mapped = self.config.blueprint_for(asset_key).map(str::to_owned);
-        let fallback = self
-            .size_matched_blueprint(name, kind, &shape)
-            .unwrap_or_else(|| kind.default_blueprint().to_string());
-        let requested_key = match (mapped.as_deref(), asset_key.is_empty()) {
-            (Some(mapped), _) => {
-                tracing::debug!("Asset key '{asset_key}' mapped to blueprint '{mapped}'");
-                mapped
-            }
-            (None, true) => fallback.as_str(),
-            (None, false) => asset_key,
-        };
-        let blueprint_key = match self.resolve_blueprint_key(requested_key, &fallback, kind) {
-            Ok(k) => k,
-            Err(e) => return proto_err(format!("Cannot spawn '{name}': {e}")),
-        };
 
         // Freeze the world before the ego goes in (roadmap 015, the init-window fix). In
         // async mode a spawn that stalls the server -- the first vehicle of a fresh CARLA,
@@ -2783,12 +2790,17 @@ impl Coordinator {
         self.record_spawned(actor_id);
 
         let bb = actor.bounding_box();
-        let actual = Dimensions {
+        let read = Dimensions {
             length: 2.0 * f64::from(bb.extent.x),
             width: 2.0 * f64::from(bb.extent.y),
             height: 2.0 * f64::from(bb.extent.z),
         };
-        self.compare_geometry(name, &blueprint_key, &shape, &actual);
+        let actual = if kind == SpawnKind::MiscObject {
+            prop_box_in_actor_frame(read, carla_transform.rotation.yaw)
+        } else {
+            Some(read)
+        };
+        self.compare_geometry(name, &blueprint_key, &shape, actual);
 
         if kind == SpawnKind::Pedestrian {
             // SSv2 sends a pedestrian's pose at its feet every frame; CARLA's walker origin
@@ -4119,17 +4131,18 @@ impl Coordinator {
         name: &str,
         kind: SpawnKind,
         shape: &EntityShape,
-    ) -> Option<String> {
+    ) -> Option<blueprint_boxes::SizeChoice> {
         let class = kind.size_class(shape.subtype)?;
         let declared = shape.declared?;
         let table = self.blueprint_boxes.as_ref()?;
         let default = kind.default_blueprint();
         let chosen = blueprint_boxes::choose_by_size(class, &declared, table, default)?;
-        if chosen != default {
+        if chosen.blueprint != default {
             tracing::info!(
-                "'{name}' ({:?}, declared {}) gets '{chosen}' by size; '{default}' does not fit",
+                "'{name}' ({:?}, declared {}) gets '{}' by size; '{default}' does not fit",
                 shape.subtype,
-                format_dims(&declared)
+                format_dims(&declared),
+                chosen.blueprint
             );
         }
         Some(chosen)
@@ -4143,10 +4156,20 @@ impl Coordinator {
         name: &str,
         blueprint: &str,
         shape: &EntityShape,
-        actual: &Dimensions,
+        actual: Option<Dimensions>,
     ) {
-        if let Some(entry) = self.blueprint_boxes.as_ref().and_then(|t| t.get(blueprint)) {
-            let table = entry.dimensions();
+        let table = self
+            .blueprint_boxes
+            .as_ref()
+            .and_then(|t| t.get(blueprint))
+            .map(|entry| entry.dimensions());
+        // A prop at a yaw its box cannot be read back at: the table's box stands in.
+        let Some(actual) = actual.or(table) else {
+            tracing::debug!("'{name}': the box of '{blueprint}' cannot be read at this yaw");
+            return;
+        };
+        let actual = &actual;
+        if let Some(table) = table {
             if table.differs_from(actual) && self.warned_stale_boxes.insert(blueprint.to_string()) {
                 tracing::warn!(
                     "Stale blueprint box table: '{blueprint}' is {} in CARLA, {} in the table; \
@@ -4164,11 +4187,15 @@ impl Coordinator {
             );
             return;
         };
+        // In the entity's frame: a turned prop's length lies along the declared width.
+        let turned = shape.origin_offset.yaw != 0.0;
+        let actual = &if turned { actual.turned() } else { *actual };
         let r = declared.residual(actual);
         let fits = declared.fits(actual);
         let line = format!(
-            "'{name}': declared {}, '{blueprint}' is {} (difference {:+.2} / {:+.2} / {:+.2} m)",
+            "'{name}': declared {}, '{blueprint}'{} is {} (difference {:+.2} / {:+.2} / {:+.2} m)",
             format_dims(&declared),
+            if turned { " turned 90°" } else { "" },
             format_dims(actual),
             r.length,
             r.width,
@@ -4290,13 +4317,15 @@ impl Coordinator {
         let av = actor.angular_velocity().ok()?;
         let acc = actor.acceleration().ok()?;
 
+        // The entity's heading: the actor's, less any spawn-time turn (OriginOffset::yaw).
+        let entity_yaw = t.rotation.yaw + origin_offset.yaw.to_degrees() as f32;
         let mut pose = coordinate_conversion::carla_to_ros_pose(
             t.location.x,
             t.location.y,
             t.location.z,
             t.rotation.roll,
             t.rotation.pitch,
-            t.rotation.yaw,
+            entity_yaw,
         );
 
         // CARLA reports the actor origin (body centre); SSv2 expects the entity origin its
@@ -4306,7 +4335,7 @@ impl Coordinator {
         // speed is the same at every point of a rigid body, but lateral velocity at the rear
         // axle differs by yaw_rate × offset.x; that is deliberately not corrected yet.
         if let Some(position) = pose.position.as_mut() {
-            let ros_yaw = -(t.rotation.yaw as f64).to_radians();
+            let ros_yaw = -(entity_yaw as f64).to_radians();
             let (x, y) = coordinate_conversion::actor_origin_to_entity_origin(
                 position.x,
                 position.y,
@@ -4454,6 +4483,23 @@ fn format_dims(d: &Dimensions) -> String {
     format!("{:.2} x {:.2} x {:.2} m", d.length, d.width, d.height)
 }
 
+/// A prop's box as CARLA reads it back, in the prop's own frame, or `None` when it cannot
+/// be recovered. CARLA 0.9.16 does not report a prop's `bounding_box()` in the actor's
+/// frame: the street barrier reads 1.21 x 0.37 m at yaw 0, 0.37 x 1.21 at 90 and
+/// 0.60 x 1.12 at 45. At a multiple of 90° it is the box, swapped at 90/270; at any other
+/// yaw it is neither the box nor its axis-aligned bound.
+fn prop_box_in_actor_frame(read: Dimensions, yaw_deg: f32) -> Option<Dimensions> {
+    const TOLERANCE_DEG: f32 = 1.0;
+    let quarter = yaw_deg.rem_euclid(180.0);
+    if quarter < TOLERANCE_DEG || quarter > 180.0 - TOLERANCE_DEG {
+        Some(read)
+    } else if (quarter - 90.0).abs() < TOLERANCE_DEG {
+        Some(read.turned())
+    } else {
+        None
+    }
+}
+
 /// The origin offset an SSv2 entity declares: its `bounding_box.center` x and y. Absent or
 /// zero (pedestrians and misc objects usually) means the SSv2 and CARLA origins coincide.
 ///
@@ -4463,12 +4509,17 @@ fn format_dims(d: &Dimensions) -> String {
 fn origin_offset_of(bounding_box: Option<&BoundingBox>) -> OriginOffset {
     bounding_box
         .and_then(|b| b.center.as_ref())
-        .map(|c| OriginOffset { x: c.x, y: c.y })
+        .map(|c| OriginOffset {
+            x: c.x,
+            y: c.y,
+            yaw: 0.0,
+        })
         .unwrap_or_default()
 }
 
 /// Convert an SSv2 pose to the CARLA transform of its actor: shifted by `origin_offset`
-/// from the entity origin to the actor origin in the ROS frame, then Y-flipped.
+/// from the entity origin to the actor origin in the ROS frame, then Y-flipped, and turned
+/// by its `yaw` (a turned prop, roadmap 022).
 fn ros_pose_to_carla_transform(pose: &Pose, origin_offset: OriginOffset) -> Transform {
     let mut shifted = *pose;
     if let (Some(p), Some(q)) = (shifted.position.as_mut(), pose.orientation.as_ref()) {
@@ -4486,7 +4537,8 @@ fn ros_pose_to_carla_transform(pose: &Pose, origin_offset: OriginOffset) -> Tran
         rotation: Rotation {
             roll: cr as f32,
             pitch: cp as f32,
-            yaw: cyaw as f32,
+            // CARLA's yaw is the ROS yaw negated (Y-flip).
+            yaw: (cyaw - origin_offset.yaw.to_degrees()) as f32,
         },
     }
 }
@@ -5059,6 +5111,57 @@ mod tests {
 
         let untouched = ros_pose_to_carla_transform(&pose, origin_offset_of(None));
         assert!((untouched.location.x - 320.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_prop_box_is_read_back_only_at_right_angles() {
+        let barrier = Dimensions {
+            length: 1.21,
+            width: 0.37,
+            height: 1.07,
+        };
+        assert_eq!(prop_box_in_actor_frame(barrier, 0.0), Some(barrier));
+        assert_eq!(prop_box_in_actor_frame(barrier, -180.0), Some(barrier));
+        assert_eq!(prop_box_in_actor_frame(barrier, 179.9), Some(barrier));
+        // At 90 CARLA reads 0.37 x 1.21: turned back, it is the barrier again.
+        let at_90 = barrier.turned();
+        assert_eq!(prop_box_in_actor_frame(at_90, 90.0), Some(barrier));
+        assert_eq!(prop_box_in_actor_frame(at_90, -270.0), Some(barrier));
+        assert_eq!(prop_box_in_actor_frame(barrier, 45.0), None);
+    }
+
+    /// A prop matched turned (roadmap 022) keeps its position and is turned a quarter
+    /// against the entity's heading: ROS yaw +90° is CARLA yaw -90°.
+    #[test]
+    fn a_turned_offset_turns_the_actor_only() {
+        let pose = Pose {
+            position: Some(geometry_msgs::Point {
+                x: 233.0,
+                y: -129.5,
+                z: 0.0,
+            }),
+            orientation: Some(geometry_msgs::Quaternion {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }),
+        };
+        let turned = OriginOffset {
+            yaw: std::f64::consts::FRAC_PI_2,
+            ..OriginOffset::default()
+        };
+        let plain = ros_pose_to_carla_transform(&pose, OriginOffset::default());
+        let t = ros_pose_to_carla_transform(&pose, turned);
+        assert_eq!(
+            (t.location.x, t.location.y),
+            (plain.location.x, plain.location.y)
+        );
+        assert!(
+            (t.rotation.yaw - (plain.rotation.yaw - 90.0)).abs() < 1e-3,
+            "{:?}",
+            t.rotation
+        );
     }
 
     #[test]

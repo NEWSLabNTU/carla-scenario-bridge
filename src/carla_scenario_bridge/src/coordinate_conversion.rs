@@ -78,10 +78,15 @@ pub fn euler_to_quaternion(roll: f64, pitch: f64, yaw: f64) -> (f64, f64, f64, f
 ///
 /// Only x and y are carried. `center.z` is half the height -- CARLA's origin is not at the
 /// box's vertical centre either, and spawn height is resolved against the ground anyway.
+///
+/// `yaw` turns the actor against the entity, about the vertical (radians, ROS sense): a
+/// prop spawned turned 90° to fit a box declared across its length (roadmap 022). Zero for
+/// everything else. Stored with the entity, so every pose update keeps the turn.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct OriginOffset {
     pub x: f64,
     pub y: f64,
+    pub yaw: f64,
 }
 
 /// Move an SSv2 entity-origin position to where the CARLA actor origin must go.
@@ -209,8 +214,16 @@ mod tests {
         );
     }
 
-    const REAR_AXLE: OriginOffset = OriginOffset { x: 1.5, y: 0.0 };
-    const SKEWED: OriginOffset = OriginOffset { x: 1.5, y: 0.3 };
+    const REAR_AXLE: OriginOffset = OriginOffset {
+        x: 1.5,
+        y: 0.0,
+        yaw: 0.0,
+    };
+    const SKEWED: OriginOffset = OriginOffset {
+        x: 1.5,
+        y: 0.3,
+        yaw: 0.0,
+    };
 
     #[test]
     fn the_actor_origin_sits_ahead_of_the_rear_axle_along_the_heading() {
