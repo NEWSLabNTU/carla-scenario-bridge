@@ -493,6 +493,10 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     if [ -n "${CONTROL_TRACE_PATH:-}" ]; then
         optional_args+=(control_trace_path:="$CONTROL_TRACE_PATH")
     fi
+    # RVIZ_CONFIG replaces Autoware's autoware.rviz (window size and docks), with LAUNCH_RVIZ=true.
+    if [ -n "${RVIZ_CONFIG:-}" ]; then
+        optional_args+=(rviz_config:="$RVIZ_CONFIG")
+    fi
     # The pedal maps have the same trap from the other direction: these use ${VAR-default}
     # rather than ${VAR:-default}, so `ACCEL_MAP_PATH= just ego-av` passes an empty value
     # and fails the same way. The bridge spells "off" as `none`, so map empty onto that.
