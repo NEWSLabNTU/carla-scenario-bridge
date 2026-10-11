@@ -200,7 +200,7 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
   - **acb, shareable (branch `carla-0100`).** A build script derives `cfg(carla_0100)` with
     carla-rust's own precedence. Under it, the rear axle comes from `base_link_offset_x` (no
     wheel positions on 0.10), the steering geometry has no Ackermann term, steering is reported
-    from the command (`get_wheel_steer_angle` raises), and the steering law is quadratic.
+    from the command (`get_wheel_steer_angle` raised inside acb; a standalone probe could not reproduce it, and there it returned 0.0 at rest, as the Python client does), and the steering law is quadratic.
     `base_link_offset_x` can now come from `vehicle_config.yaml`. The ray-cast lidar drops
     returns inside the parent's bounding box: 0.10's lidar hits its own vehicle and 0.9.16's
     did not. 552 hood returns per sweep were a "route-obstacle" in the ego's footprint and held
@@ -221,15 +221,37 @@ subtract T = (−0.288, +0.216, +17.26) m (solved on r02; 17 m is a vertical dat
     stays within 0.6 m and 10 degrees of a lanelet (`scripts/ntu_twin/town10_0100_check.py`).
   - **Ego blueprint.** SSv2 sends the ego with an empty asset key. csb's built-in fallback is
     `vehicle.tesla.model3`, so the 0.10 bridge config maps `""` to `vehicle.lincoln.mkz`.
-  - **Open, not fixed:** 0.10's GNSS comes out with Y mirrored (y = -57.43 at a true +57.75).
-    acb's latitude negation suits 0.9.16 and doubles up on 0.10; the baseline initializes from
-    the scenario pose, so it did not matter here. The 0.9.16 Python client segfaults against
-    0.10 (`std::bad_alloc`), so the pre-run health check needs the 0.10 module on `PYTHONPATH`;
-    it still segfaulted once at random. acb's `wait_for_tick` throws `std::exception` in
-    bursts (10 per run, mostly at attach and after despawn) and reconnects.
-  - **Main tree, not 0.10-specific:** the justfile's `--composable-respawn` needs a play_launch
-    newer than the installed 0.10.0 (play_launch `873b0744`). `just ego-av` fails at startup
-    on this host until play_launch is rebuilt and reinstalled.
+  - **carla-rust fixes (`1a765e9`, master).** The 0.10 FFI layer compiled its C++ against the
+    0.9.x-layout shims that only autocxx should parse. So `physics_control()` returned
+    defaults (mass 1000 kg, no wheels; the real mkz is 1696 kg, four wheels of 35.5 cm),
+    `apply_physics_control()` failed with "container size overflow", and every `rpc::Command`
+    crossed into `apply_batch` at 184 bytes against libcarla's 264. Now the shims are parse-only
+    and the compile uses CARLA's real headers. CARLA 0.10 also rethrows every LibCarla exception
+    sliced to a bare `std::exception` (message "std::exception"), so `wait_for_tick` timeouts
+    surfaced as errors: those were acb's "transport error" bursts and reconnects, about ten a
+    run. carla-sys now maps them to `Ok(None)`. Regression tests (`carla/tests/ffi_layout_0100.rs`)
+    pass on 0.9.16 and 0.10.0.
+  - **GNSS fixed (acb `f3b07d1` on `carla-0100`).** CARLA's frame is left-handed (+y south).
+    0.10 lowers the latitude with +y; LibCarla 0.9.x raises it (CARLA's own Python clients
+    agree on both). acb's latitude negation now applies on 0.9.x only. On 0.10 the published
+    GNSS pose reads y = +57.36 at the start pose (+57.79); before, -57.43.
+  - **Steering curve on 0.10 ignored (acb `52b4cfd`).** With real physics data, 0.10 reports
+    the default curve's points with the blueprint's appended ((0, 1), (10, 0.5), (0, 1),
+    (20, 0.9), ...), which would double the steering command at 10 km/h. The quadratic law was
+    measured with a flat curve, so 0.10 keeps that.
+  - **After the fixes:** runs 16, 18, 19 and 20 pass, with no transport errors. Run 20 used
+    play_launch 0.15.1 with `--composable-respawn`. Run 17 failed its localization check:
+    the estimate was 1.8 m behind the start pose after 10 s. That run had `ros2 topic echo`
+    probes attached during init. Each teardown still logs about three `failed to destroy
+    actor N : std::exception`: 0.10 destroys attached sensors with their parent, and 0.9.16
+    did not. acb's later destroy of its sensors finds them gone, which is harmless.
+  - **Still open.** The 0.9.16 Python client segfaults against 0.10 (`std::bad_alloc`). The
+    CARLA 0.10 wheel is now installed in `/mnt/disk1/ntu-campus-twin/.venv-carla010`.
+    Localization settles 0.6 m to the side where the TUM lanelets differ from 0.10's lanes.
+    Reverse does not actuate. 0.10's wheel `offset` and `location` read zero, so the rear
+    axle comes from `base_link_offset_x`.
+  - **play_launch 0.15.1** is installed (pip, user site). The main tree's
+    `--composable-respawn` works again, and the worktree no longer drops it.
 - [ ] Import route r02 first (smaller): fbx tiles + xodr into a CARLA 0.10 source build,
       Nanite on the meshes
 - [ ] Same scene into 0.9.16 for comparison, if the import path allows
