@@ -1,5 +1,6 @@
 mod agent_link;
 mod autopilot;
+mod blueprint_boxes;
 mod carla_version;
 mod clock_store;
 mod collision_monitor;

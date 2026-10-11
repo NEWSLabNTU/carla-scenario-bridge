@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
+use crate::blueprint_boxes::SizeClass;
 use crate::config::{BridgeConfig, SensorReleaseConfig};
 use crate::map_resolver::{lanelet_map_file, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
@@ -112,6 +113,21 @@ impl SpawnKind {
             }
             SpawnKind::Pedestrian => "walker.pedestrian.0001",
             SpawnKind::MiscObject => "static.prop.streetbarrier",
+        }
+    }
+
+    /// The blueprints this kind may be size-matched among when the scenario names no
+    /// blueprint (roadmap 022), or `None` when its body is not the scenario's to choose:
+    /// the ego's and an agent vehicle's blueprint decide acb's sensor mounts and vehicle
+    /// parameters, so the ego stack's configuration picks it; CARLA's walkers are all
+    /// within centimetres of each other, so a pedestrian keeps its default and the
+    /// spawn-time comparison reports the difference.
+    #[allow(dead_code)] // wired into spawn_entity in 022 step 4
+    fn size_class(self, subtype: EntitySubtype) -> Option<SizeClass> {
+        match self {
+            SpawnKind::Ego | SpawnKind::AgentVehicle | SpawnKind::Pedestrian => None,
+            SpawnKind::Npc | SpawnKind::AutopilotNpc => SizeClass::of_vehicle(subtype),
+            SpawnKind::MiscObject => Some(SizeClass::MiscObject),
         }
     }
 
@@ -415,6 +431,7 @@ use crate::episode_clock::{
 };
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
+use crate::proto::traffic_simulator_msgs::entity_subtype::Enum as EntitySubtype;
 use crate::proto::traffic_simulator_msgs::{self, BoundingBox};
 use crate::sensor_release::SensorReleaseNotifier;
 use crate::weather::{Weather, WeatherRequest};
@@ -4676,6 +4693,37 @@ mod tests {
         assert!(SpawnKind::MiscObject
             .default_blueprint()
             .starts_with("static."));
+    }
+
+    /// The ego's body is the ego stack's to choose and a walker's is never size-matched;
+    /// an NPC follows its subtype, a prop is matched among props.
+    #[test]
+    fn only_npcs_and_props_are_size_matched() {
+        for kind in [
+            SpawnKind::Ego,
+            SpawnKind::AgentVehicle,
+            SpawnKind::Pedestrian,
+        ] {
+            for subtype in [
+                EntitySubtype::Car,
+                EntitySubtype::Truck,
+                EntitySubtype::Unknown,
+            ] {
+                assert_eq!(kind.size_class(subtype), None, "{kind:?} {subtype:?}");
+            }
+        }
+        assert_eq!(
+            SpawnKind::Npc.size_class(EntitySubtype::Bus),
+            Some(SizeClass::Bus)
+        );
+        assert_eq!(
+            SpawnKind::AutopilotNpc.size_class(EntitySubtype::Unknown),
+            Some(SizeClass::FourWheeled)
+        );
+        assert_eq!(
+            SpawnKind::MiscObject.size_class(EntitySubtype::Unknown),
+            Some(SizeClass::MiscObject)
+        );
     }
 
     /// Jerk needs a signed scalar, so acceleration is projected onto the heading. The
