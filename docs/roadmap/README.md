@@ -52,6 +52,7 @@ borrowed from greybox fuzzing.
 ## User documentation (027-)
 
 - [027: User Documentation](027-user-documentation.md) — **done 2026-10-12** — user-facing README with a showreel, `ros2 launch` as the primary command (play_launch as drop-in), CARLA versions build-verified, tutorials from scenario preparation to demo run, checked by a fresh user
+- [028: Run Tooling](028-run-tooling.md) — scenario-writing skill, the agent interface for users with a reference agent, infrastructure retry in `run_suite`, scenario lint, map check, recorded runs rendered to video on failure, location sweeps from one template; smallest first
 
 ## Real-site twin and realistic rendering (019-)
 
@@ -105,3 +106,5 @@ Per-phase state:
 5. 019 and 009's classification, interleaved where a gap phase waits on a long run.
 6. ~~027 User documentation~~ -- done 2026-10-12; three bridge follow-ups in its doc (shutdown
    respawn and relay traceback, a misleading "CARLA was restarted", a fallback-path log line).
+7. **028 Run tooling** -- phase doc 2026-10-13; steps in order, smallest first (skill, agent
+   interface, retry, lint, map check, recorded runs, location sweeps).
