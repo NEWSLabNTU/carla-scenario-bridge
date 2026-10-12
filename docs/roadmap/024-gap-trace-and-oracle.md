@@ -100,6 +100,17 @@ feedback -- and one summary line per run for aggregate tables. Tolerances are fl
 7. [ ] **Baseline.** All nine starter scenarios (`basic/` 7, one UC-ACC and one UC-AEB
    variant) plus the reproducers of 021-023, with the trace on; every finding triaged here
    as real gap, oracle bug, or tolerance to tune. That table is the hand-off to 025.
+8. [ ] **Spike: SSv2's `random_test_runner` on CARLA** (added 2026-10-13, user). SSv2 ships
+   a random tester (`test_runner/random_test_runner`: random ego goals, NPC count / distance
+   / speed; stuck, timeout and collision reported to JUnit). It drives `traffic_simulator`
+   directly, not OpenSCENARIO, over the same simulation interface the bridge serves, so
+   CARLA can in principle be its backend -- a fuzzer for this campaign at no authoring cost,
+   with the gap trace on and the oracle judging every run. Find out: (a) how it brings up
+   Autoware (it launches it through the concealer; ours is reached through the relay), (b)
+   which requests it sends that the bridge does not handle, (c) whether a short random
+   session on Town01 runs end to end. Output: a go / no-go and the list of changes, as a
+   finding in the baseline table; building it out belongs to 025 or 030 (once the agent API
+   decouples the autopilot). Its known limits: no traffic lights, NPCs do not yield.
 
 ## Acceptance
 
