@@ -17,10 +17,19 @@ install(
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Library modules the gap oracle (024) imports from its own directory: oriented-box
+# geometry and the gap trace reader. Not executables.
+install(
+  FILES scripts/gap_geometry.py scripts/gap_trace.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_run_suite test/test_run_suite.py)
   ament_add_pytest_test(test_physical_verdict test/test_physical_verdict.py)
+  ament_add_pytest_test(test_gap_geometry test/test_gap_geometry.py)
+  ament_add_pytest_test(test_gap_trace test/test_gap_trace.py)
 endif()
 
 ament_package()

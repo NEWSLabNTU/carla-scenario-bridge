@@ -41,7 +41,8 @@ Recorded in the coordinator, which already has both halves:
   both in the ROS map frame (CARLA through the existing Y-flip conversion), raw -- the
   oracle applies offsets, so a wrong offset is visible in the trace instead of baked in.
 - **Per contact**: every `collision_monitor` event, including static-world hits (other
-  actor id 0 / `static.*`), with SSv2 frame, other actor, and impulse.
+  actor id null, kind `static`, as in the contact report), with SSv2 frame, other actor, and
+  impulse.
 
 Cost rules: CARLA state comes from **one world snapshot per tick**, never a per-actor RPC
 (7-10 ms each, [ssv2-feature-completeness.md](../design/ssv2-feature-completeness.md) §4);
@@ -78,14 +79,39 @@ verdict). Output: `findings.json` per run -- including the run's **gap signature
 broken × entity class × geometry) and the min margin difference, which part 2 consumes as
 feedback -- and one summary line per run for aggregate tables. Tolerances are flags with these defaults; the baseline tunes them.
 
+### What 021-023 changed (2026-10-13)
+
+Written before the known gaps were fixed; four corrections from what those phases found:
+
+- **NPCs are physics bodies by default** (023, `npc_motion: tracked`). C3's 0.2 m / 2°
+  budget is the tracking budget 023 measured against (p95 ≤ 0.007 m on UC-ACC's lead car),
+  so G3 now catches tracking faults as well as spawn and walker-lift ones. Two windows are
+  expected divergence, not findings, and are reported as *info*: the spawn frame (one snap
+  by design), and frames within 20 of an ego contact, where a tracked NPC is held back
+  unsnapped by design (`CONTACT_HOLD_FRAMES`; `npc_rear` reached 1.6 m error there). The
+  trace marks both, so the oracle needs no copy of the bridge's rules. Under `kinematic`
+  G3 is unchanged.
+- **One snapshot per frame already exists** under `tracked`: `track_npc` reads one world
+  snapshot and one `actors_by_ids` list per frame (023 step 4). The recorder reuses that
+  view and takes its own only under `kinematic` or with no tracked NPC.
+- **A prop's CARLA box follows its yaw** (022: a barrier read 0.37 x 1.21 m at 90°, 0.60 x
+  1.12 m at 45°); vehicle and walker boxes do not. The header records the box in the
+  actor's own frame through the same conversion 022's report uses
+  (`prop_box_in_actor_frame`), so CARLA's geometry in the oracle is right for turned props.
+- **The contact report already carries per-entity geometry and tracking rows** (021 schema
+  1, extended in 022 and 023). The trace does not replace it: the report stays the
+  per-episode summary `run_suite` joins into the verdict; the trace is the per-frame record
+  the oracle needs. The header's box values come from the same code as the report's
+  `geometry` rows, so the two cannot disagree.
+
 ## Steps
 
-1. [ ] **Docs.** This phase doc, [design/gap-campaign.md](../design/gap-campaign.md),
+1. [x] **Docs.** This phase doc, [design/gap-campaign.md](../design/gap-campaign.md),
    README entry.
-2. [ ] **Oracle geometry first, test-driven.** Oriented-box overlap and signed distance;
+2. [x] **Oracle geometry first, test-driven.** Oriented-box overlap and signed distance;
    synthetic traces for touching, separated, rotated, declared-vs-blueprint-size, offset
    applied twice / not at all. No CARLA.
-3. [ ] **Trace format.** A JSON schema in `docs/design/gap-campaign.md` (appendix) and a
+3. [x] **Trace format.** A JSON schema in `docs/design/gap-campaign.md` (appendix) and a
    reader the oracle and tests share.
 4. [ ] **Bridge recorder.** Header at spawn, per-frame line from one snapshot, contacts from
    `collision_monitor`'s queue; writer thread; `gap_trace_dir` param and launch argument.
@@ -118,3 +144,31 @@ feedback -- and one summary line per run for aggregate tables. Tolerances are fl
 - With `gap_trace_dir` unset the bridge behaves exactly as before; with it set, frame-time
   p95 is unchanged within noise and no frame is dropped on the starter scenarios.
 - The baseline table exists, with every starter-scenario finding classified.
+
+### Results
+
+**2026-10-13, steps 2-3.** Geometry and reader, test-first (tests seen failing on the
+missing modules, then green), stdlib only: `src/csb_launch/scripts/gap_geometry.py` and
+`gap_trace.py`, library modules installed beside the scripts (`install(FILES)`, not
+executables) so `gap_oracle` imports them from its own directory, as `run_suite` and
+`physical_verdict` already share code by sibling path; tests put `scripts/` on `sys.path`.
+`signed_distance`: separating axes over the four edge normals; disjoint gives the exact
+polygon distance (vertex-to-edge, so a corner-to-corner approach reads 1.41 m, not SAT's
+1.0), overlap the minimum separating translation (containment counted right). Touching
+counts as overlap, matching SSv2's `checkCollision2D` (boost `intersects`); its height gate
+is `z_separated`. `actor_pose_from_entity` is the bridge's `entity_origin_to_actor_origin`
+plus the spawn turn. `test_gap_geometry` 28 tests: separated, touching, penetration,
+containment, corner-to-corner, 45/90° rotations, rigid-motion invariance, the declared 12 m
+truck as a Model 3 (`d_ssv2 = -0.95`, `d_carla = +2.70`: C1 broken), `OriginOffset` applied
+once (0 error), twice and not at all (1.5 m each, past G3's 0.2 m; not applied flips an NPC
+1.0 m clear into a 0.5 m overlap), a turned prop. Trace schema 1 is the appendix of
+[gap-campaign.md](../design/gap-campaign.md#appendix-gap-trace-format): five record types
+(`episode`, `entity`, `frame`, `contact`, `end`), everything in the ROS map frame, raw;
+contact fields named as the 021 contact report's (`other_id` null for the static world,
+`other_kind` adds `static` and `unknown`); `spawn` / `contact_hold` are per-entity flags on
+the frame line. The reader rejects unknown types, kinds, flags and schemas, non-finite
+numbers, undeclared entity names, non-increasing frames, records after `end` and a missing
+`end` (opt-out for cut-short traces), each as `TraceError` naming file, line and dotted
+field. `test_gap_trace` 33 tests (7 valid incl. round trip through `to_json`/`dumps`, 26
+malformed). All csb_launch tests: 108 passed. Not yet installed: `just build` picks up the
+`CMakeLists.txt` change.

@@ -147,3 +147,90 @@ and is useful on its own.
   the search starts; a gap the search finds later is fixed in its own phase, which the
   campaign's report prioritises.
 - **Town01, CARLA 0.9.16, the proof-run stacks**, unless a phase doc says otherwise.
+
+## Appendix: gap trace format
+
+The per-episode record the bridge writes and the oracle reads
+([024](../roadmap/024-gap-trace-and-oracle.md)): JSON Lines, one file per `Initialize`,
+`<gap_trace_dir>/<UTC time>_<episode>.jsonl`, one JSON object per line, each with a `type`.
+The reader is `src/csb_launch/scripts/gap_trace.py` (typed records, validation); the box
+geometry the oracle judges with is `gap_geometry.py` next to it. Both are stdlib Python and
+installed beside the `csb_launch` scripts.
+
+**Conventions.** Everything is in the **ROS map frame** (x east, y north, right-handed, the
+frame SSv2 works in): metres, radians, m/s. CARLA values go through the bridge's existing
+conversion (Y-flip, map origin) and nothing else -- they are **raw**: no `OriginOffset`
+applied or removed, so an offset the bridge got wrong is visible in the trace instead of
+baked into it. A pose is `[x, y, z, roll, pitch, yaw]`. Box offsets and extents are in the
+entity's or actor's own frame, x forward, y left.
+
+**Order.** `episode` first and once; `entity` before any `frame` that names it; `frame`
+numbers strictly increasing; `contact` lines anywhere after the episode line (they arrive
+from `collision_monitor`'s queue, so may trail their frame); `end` last and once. Blank
+lines are ignored. A trace without `end` was cut short (bridge killed, CARLA restart); the
+reader rejects it unless asked not to.
+
+**Versioning.** `schema` on the episode line, now `1`. A new optional field may be added
+under the same schema; a reader rejects a schema it does not know, and every unknown
+`type`, `kind` or flag, so a typo does not read as absent data.
+
+| `type` | Field | Type | Meaning |
+|---|---|---|---|
+| `episode` | `schema` | int | trace schema, `1` |
+| | `episode` | int | `Initialize` count of this bridge process (as the contact report's) |
+| | `start_unix` | float | wall time the episode started, Unix s |
+| | `npc_motion` | `tracked` \| `kinematic` | the bridge's NPC motion mode (023) |
+| `entity` | `frame` | int | SSv2 frame of the spawn |
+| (one per spawn) | `name` | string | SSv2 entity name; a later `entity` line with the same name is a respawn and replaces it |
+| | `kind` | `ego` \| `vehicle` \| `pedestrian` \| `misc_object` | |
+| | `declared.center` | [x, y, z] | declared `bounding_box.center`, entity frame |
+| | `declared.dimensions` | [length, width, height] | declared box size, ≥ 0 |
+| | `origin_offset` | [x, y, yaw] | the bridge's `OriginOffset`: actor origin = entity origin + R(yaw_entity)·(x, y); actor yaw = entity yaw + `yaw` (a turned prop, 022) |
+| | `actor_id` | int | CARLA actor id |
+| | `blueprint` | string | CARLA blueprint id |
+| | `blueprint_box` | object \| null | `actor.bounding_box()` in the actor's own frame, through `prop_box_in_actor_frame` for props (022); null when that cannot be recovered (a prop at a yaw off a multiple of 90°) |
+| | `blueprint_box.location` | [x, y, z] | box centre offset from the actor origin |
+| | `blueprint_box.extent` | [x, y, z] | half sizes, ≥ 0 |
+| `frame` | `frame` | int | SSv2 frame (`UpdateFrame`) |
+| (one per SSv2 frame) | `sim_time` | float | SSv2 simulation time, s |
+| | `entities` | object | entity name → state, for every live entity |
+| | `.ssv2` | pose | SSv2's pose of the entity origin: an NPC's intended pose; for the ego, the pose the bridge reported back |
+| | `.carla` | pose \| null | the actor's transform from this frame's world snapshot; null when the actor is missing from it |
+| | `.velocity` | [vx, vy, vz] \| null | the actor's velocity, map frame; null exactly when `.carla` is |
+| | `.flags` | list, optional | `spawn`: the entity's spawn frame (one snap by design); `contact_hold`: a tracked NPC held unsnapped within `CONTACT_HOLD_FRAMES` of an ego contact (023). Both make G3 divergence *info*, not a finding |
+| `contact` | `frame` | int | SSv2 frame the event was seen in |
+| (one per `collision_monitor` event) | `carla_frame` | int | CARLA frame of the event |
+| | `sim_time` | float | s |
+| | `ego_id` | int | the ego's CARLA actor id |
+| | `other_id` | int \| null | the other actor; null exactly for the static world |
+| | `name` | string \| null | SSv2 name of the other actor, when it is an entity |
+| | `other_type` | string | the other actor's CARLA type id (`static.*` for the world), or empty |
+| | `other_kind` | `ego` \| `vehicle` \| `pedestrian` \| `misc_object` \| `static` \| `unknown` | `unknown`: a CARLA actor that is no SSv2 entity |
+| | `impulse` | float | normal impulse of the event, N·s, ≥ 0 |
+| `end` | `frame` | int | last SSv2 frame of the episode |
+| (last line) | `sim_time` | float | s |
+| | `frames` | int | `frame` lines written |
+| | `dropped_frames` | int | frames dropped on a full writer channel |
+| | `complete` | bool | false when CARLA restarted mid-episode (contacts after it were not seen) |
+
+Example (one line each; wrapped here):
+
+```json
+{"type": "episode", "schema": 1, "episode": 3, "start_unix": 1760000000.25, "npc_motion": "tracked"}
+{"type": "entity", "frame": 0, "name": "truck", "kind": "vehicle",
+ "declared": {"center": [4.0, 0.0, 1.5], "dimensions": [12.0, 2.5, 3.0]},
+ "origin_offset": [4.0, 0.0, 0.0], "actor_id": 212, "blueprint": "vehicle.tesla.model3",
+ "blueprint_box": {"location": [0.0, 0.0, 0.72], "extent": [2.35, 1.05, 0.72]}}
+{"type": "frame", "frame": 1, "sim_time": 0.05, "entities": {"truck":
+ {"ssv2": [20.2, 0.0, 0.0, 0.0, 0.0, 0.0], "carla": [24.2, 0.0, 0.03, 0.0, 0.0, 0.0],
+  "velocity": [4.0, 0.0, 0.0], "flags": ["contact_hold"]}}}
+{"type": "contact", "frame": 1, "carla_frame": 5021, "sim_time": 0.05, "ego_id": 211,
+ "other_id": null, "name": null, "other_type": "static.pole", "other_kind": "static", "impulse": 30.0}
+{"type": "end", "frame": 1, "sim_time": 0.05, "frames": 2, "dropped_frames": 0, "complete": true}
+```
+
+The oracle's two boxes per entity and frame (`gap_geometry`): SSv2's is `declared` placed at
+`.ssv2` (`ssv2_box`), CARLA's is `blueprint_box` placed at `.carla` (`carla_box`); G3
+compares `.carla` with `.ssv2` moved by `origin_offset` (`actor_pose_from_entity`). Touching
+boxes overlap, as in SSv2's `checkCollision2D` (boost `intersects`), which also skips pairs
+whose boxes do not meet in height (`z_separated`).
