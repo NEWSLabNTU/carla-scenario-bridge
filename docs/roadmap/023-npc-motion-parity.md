@@ -135,6 +135,57 @@ fallback.
 
 ### Results
 
+**Step 5, the rest (2026-10-13).** One `npc_motion:=tracked` session, `ros2 launch`,
+`run_suite --physical-verdict`; then the same bench under `kinematic`.
+
+- *Starters*: `basic/` 6/7, `awf/` UC-AEB 10/10 (9 variants + contact), UC-ACC 27/28. The
+  two failures were not tracking: `town02_episode_change`'s Initialize failed with `load
+  world 'Town02': ... time-out of 120000ms` (the slow-map-load case of 027's follow-ups),
+  and the next Initialize -- UC-ACC's first variant, loading Town01 back -- got no answer
+  within SSv2's 300 s while CARLA was still busy with Town02. Rerun of both, same session
+  setup: `town02_episode_change` **PASS** 2/2 (load in time; the timeout was the host), and
+  UC-ACC 27/28 again with a different cause: variant 15 errored with `Requested the service
+  "/api/autoware/set/velocity_limit" 5 times, but was not successful` because **the agent
+  relay had crashed** mid-episode. Its `_command` logged OK and non-OK replies from one
+  source line, `(logger.info if ok else logger.warning)(text)`; rclpy keys a log call by its
+  line and raises `ValueError: Logger severity cannot be changed between calls` when that
+  line changes severity, so the relay's first non-OK command (a `set_speed_limit` while the
+  agent was re-localizing) killed it; `respawn` brought it back for the next variant. Not
+  tracking: fixed in the relay (one call per severity, a regression test that fails on the
+  old line). Npc1 over the 26 rerun variants: error p95 at most 0.007 m, max 0.572 m, 0 or
+  1 snap (spawn) each -- the same as the first pass.
+- *Tracking across the session* (every frame counted, spawn included):
+
+  | Entity | Runs | Error p95 (worst run) / max | Yaw p95 / max | Snaps |
+  |---|---|---|---|---|
+  | UC-ACC `Npc1` (decelerating lead car) | 26 | 0.007 / 0.572 m | 0.00 / 0.00 deg | 9 in total, each the spawn frame |
+  | UC-AEB `Pedestrian0` | 9 | 0.004 / 0.047 m | -- | 0 |
+  | `pedestrian_0` | 2 | 0.000 / 0.092 m | -- | 0 |
+  | `npc_route` | 1 | 0.195 / 0.655 m | 1.64 / 2.12 deg | 1 (spawn) |
+  | `npc_rear` (8 and 5 m/s) | 2 | 1.066 / 1.669 m | 0.99 / 1.80 deg | 1 |
+
+  Within the budget (p95 0.2 m, yaw 2 deg) everywhere except `npc_rear`, whose error is the
+  contact itself: held back by the ego, unsnapped by design.
+- *Frame time, 20-NPC bench* (`scenarios/bench/town01_npc_20.xosc`, 1201 frames, ms p50 / p95):
+
+  | | csb processing | UpdateEntityStatus | CARLA tick |
+  |---|---|---|---|
+  | kinematic | 1.20 / 1.60 | 1.11 / 1.50 | 2.43 / 2.94 |
+  | tracked | **0.41 / 0.61** | 0.30 / 0.50 | **6.06 / 9.93** |
+
+  csb is faster tracked: one snapshot and one `actors_by_ids` list a frame, where the
+  teleport path fetches the whole actor list per NPC. CARLA's tick costs ~7 ms more at p95
+  -- the physics of 20 cars -- not "within noise" as the step was written, but ~10 ms of a
+  50 ms frame.
+- *Impulse scales with closing speed*: `town01_rear_contact`'s NPC at 8 m/s (ego ~4) gave
+  `max_impulse` 6 841 / 7 233 / 8 555 N*s in three tracked runs, at 5 m/s 5 081 N*s (the
+  same scenario with the NPC's speed edited, scratch copy). Kinematic at 8 m/s: 7 747 /
+  7 016.
+- *The walker animates*: a read-only probe sampled `get_bones()` during `town01_pedestrian`.
+  Standing (CARLA 0.00 m/s) the leg bones hold (`-11/-7`, `+16/+171`, drifting a degree);
+  walking (0.69 m/s) they cycle every sample (roll `-22, +3, -24, -3, ...` and
+  `155, -180, 179, 158, ...`). Under `kinematic` CARLA reads every walker at 0 m/s.
+
 **Step 5, the two step-4 findings (2026-10-13).** Both fixed; `town01_rear_contact` and
 `town01_simulator_autopilot`, `npc_motion:=tracked`, twice each with `--physical-verdict`:
 4/4 PASS, SSv2 and `carla_contact` both.
@@ -162,7 +213,7 @@ What it took, in the order found (design notes above):
    reported yaw rate 0 while the heading turned ~2 deg a frame. Snaps 29 -> 1; yaw p95 within
    the 2 deg budget.
 
-Still open for step 5: `npc_route`'s error p95 sits at 0.201 m, on the 0.2 m budget (this
+Still open for step 5 at this point (all measured in "the rest" above): `npc_route`'s error p95 sits at 0.201 m, on the 0.2 m budget (this
 counts every frame, the spike's figures left out the first second); the remaining starter
 scenarios under `tracked`; frame time on the 20-NPC bench; the walker's animation; the
 impulse at two NPC speeds.
