@@ -140,6 +140,24 @@ path reports as nothing.
   own epoch from the last `/clock` it published plus one step, which keeps Autoware's clock
   monotonic, and logs that csb's epoch (if a csb is running) will not match until the ego
   stack is restarted.
+- **A bridge that joins mid-session reads the epoch from the world (2026-10-13).** The rule
+  only works for a reader that watched every episode change. A vehicle side restarted after
+  a reload started at epoch 0: on 2026-10-13, with three vehicle sides, two had watched a
+  0.15 s episode before Town05 and carried `0.150000002`; the restarted ego's bridge
+  published a `/clock` 150 ms behind its peers and csb/SSv2 for the whole session. Whoever
+  applies the rule on a reload (csb) therefore also records the result in the new world: one
+  `util.actor.empty` actor -- no mesh, no collision, no physics; it carries a settable
+  `role_name` in 0.9.16 -- named `epoch_ns:<epoch>`. `load_world` destroys it with the old
+  world, so every episode carries its own. A bridge that has not watched its episode begin
+  withholds `/clock` until it has read the marker and adopts it (no marker: epoch 0, as
+  without csb); a bridge that watched the change keeps its own value and logs a marker that
+  disagrees. The constraints above hold: acb still needs only CARLA, there is no file and
+  no channel between the bridges, and the value is the same integer csb computed.
+  Rejected: a persisted file or a channel to csb (acb must work with no csb, and both are
+  ruled out above); CARLA's own state (no free per-world field --
+  weather, settings and map layers all mean something); a prop or `static.trigger.friction`
+  (both carry `role_name`, but a prop is a visible mesh and a trigger changes tyre
+  friction of whatever overlaps it).
 - **Order of work**: measure first (what the three clocks disagree by today), then acb's
   clock and stamps (self-contained, testable against the current fork), then the protocol
   field and csb, then the fork's `clock_source: simulator`, then the signal publisher and
@@ -547,6 +565,49 @@ one > 120 s with the default `reset_settings=true`, which reverts the new world 
       0 arbiter warnings (was 68), no camera-branch process, and the ego stack starts in 60 s
       instead of 320-400 s. `traffic_light_fusion_only:=false` restores vision (009 gap 7)
 
+### Joining mid-session (step 8, 2026-10-13)
+
+Observed: a vehicle side restarted after a 0.15 s episode → Town05 reload published `/clock`
+`0.150000002` s behind the two vehicle sides that had watched the reload, and behind
+csb/SSv2, for the whole session. The epoch marker (Decisions) fixes it from CARLA alone.
+
+- [x] csb `epoch_marker.rs`: blueprint `util.actor.empty`, `role_name = epoch_ns:<epoch>`,
+      below the map at z = -100; `plan()` leaves exactly one marker for csb's epoch (stale
+      ones destroyed with a warning, duplicates collapsed to the newest), writes none for
+      epoch 0 and erases nothing then (a nonzero marker under a csb at 0 is warned about:
+      csb lost its clock record). Written after every map load and CARLA restart, and at
+      start-up, as soon as csb can see the world's actors -- the client's actor list is only
+      as new as its last frame, so a csb that has not ticked yet defers it to its first tick.
+      Not in `spawned_actors`: it belongs to the episode, and teardown leaves it
+- [x] acb `clock.rs`: on the first frame of an episode it did not watch begin (start-up, or
+      a connection on which no frame had arrived), `/clock` is withheld until the clock thread
+      has read the marker (`actors().filter("util.actor.empty")`, newest valid `role_name`
+      wins); then the epoch is the marker's, or 0 with none, and the withheld frame is
+      published. A failed read is retried after a new frame, at least 1 s apart, 3 times,
+      then epoch 0. After a watched change (reload or reconnect) the marker is only
+      compared: agreement is logged at debug, a disagreement as a warning, ours kept. A
+      marker not there yet (csb writes it just after the load) is looked for again, 3 times
+- [x] Unit tests: the observed case (late bridge adopts `150000002` and then publishes the
+      same `/clock` as a watching bridge, frame for frame and across the next reload); no
+      marker → 0; failed reads retried then 0; a read follows the episode (a stale result is
+      dropped); a watched change keeps its epoch and reports a disagreeing marker; a
+      reconnect with no history is a join; the shared `role_name` case table in both repos
+- [x] Checked against nothing else listing the marker: acb's ground truth takes `vehicle.*`
+      and `walker.*`, its signal publisher `vehicle.*`; csb's reaper takes `csb_entity:`
+      roles and owned `vehicle.*` roles, its sensor sweep `sensor.*`, its signal code
+      `traffic.traffic_light*`; SSv2 sees only csb's entities. Read-only check of the
+      running CARLA 0.9.16: `util.actor.empty` exists and its `role_name` is modifiable
+- [ ] Live: with csb and two vehicle sides up, reload (town change), restart one vehicle
+      side, and compare `/clock` of all three and csb's reported time: identical. Spawning
+      `util.actor.empty` was not tried on the shared server (no world changes allowed
+      during the change); the first map load with this csb does it and logs
+      `Epoch marker (map load): epoch ... recorded in the world (actor N)`
+
+**Known window.** A bridge that joins between a `load_world` returning and csb spawning the
+marker (one RPC) finds none and starts at 0. The marker is written right after the load, in
+the same paused (synchronous) world, so in practice only a bridge started in that same
+instant meets it.
+
 ## Acceptance
 
 - One time base: for any frame, `sensor stamp == odometry stamp == /clock == SSv2 signal
@@ -560,6 +621,8 @@ one > 120 s with the default `reset_settings=true`, which reverts the new world 
 - A map reload between scenarios is a pause: `/clock` never decreases, csb's and acb's
   epochs agree, and the next scenario passes without restarting the ego stack.
 - acb publishes the same `/clock` with csb stopped (CARLA driven by hand) as with it.
+- A vehicle side started after a map reload publishes the same `/clock` as the ones that
+  watched the reload, and as csb reports to SSv2 (step 8).
 
 ## Not in scope
 

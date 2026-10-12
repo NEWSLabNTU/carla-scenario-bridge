@@ -118,6 +118,19 @@ csb (roadmap 016) from the last frame it ticked plus one tick. Both saw the fram
 ticked, so the epochs agree unless acb missed that frame. See
 [failure-and-frame-budget](failure-and-frame-budget.md).
 
+**A bridge that starts mid-session** has watched none of the earlier episode changes, and the
+rule alone would start it at epoch 0: a vehicle side restarted after a reload published a
+`/clock` 150 ms behind its peers for a whole session (2026-10-13). So the epoch is also kept
+in the world it belongs to. After every episode change (map load, CARLA restart) and at
+start-up, csb leaves one **epoch marker** in the world -- a `util.actor.empty` (no mesh,
+collision or physics) with `role_name = epoch_ns:<epoch>` -- once it can see the world's
+actors (it has ticked). `load_world` destroys it with the old world, so each episode carries
+its own. acb, on its first frame of an episode it did not watch begin, withholds `/clock`
+until it has read that episode's marker and adopts it; no marker means epoch 0, the
+behaviour without csb. A bridge that watched the change keeps its own epoch and only warns
+if the marker disagrees. Still CARLA and nothing else: no file, no channel between bridges.
+csb writes no marker for epoch 0. See roadmap 015, "Joining mid-session (step 8)".
+
 **Known limitation (accepted, roadmap 016 gap 12).** A restarted CARLA free-runs before
 csb's first `Initialize`. If that server dies again before csb has read a frame from it,
 acb has seen its frames and applies the episode rule to the last one, while csb has seen
