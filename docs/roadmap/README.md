@@ -49,6 +49,10 @@ borrowed from greybox fuzzing.
 - 025: Adaptive Generator and Exploit Pipeline — scenario genomes, seed/operator bandits, MAP-Elites archive, annealed energy; confirm, boundary bisection, metamorphic root-cause probes, shrink (phase doc after 024)
 - 026: Parallel Isolated Pipelines — N complete CARLA+bridge+ego pipelines on one host (phase doc after 025)
 
+## User documentation (027-)
+
+- [027: User Documentation](027-user-documentation.md) — user-facing README with a showreel, `ros2 launch` as the primary command (play_launch as drop-in), CARLA versions build-verified, tutorials from scenario preparation to demo run, checked by a fresh user
+
 ## Real-site twin and realistic rendering (019-)
 
 - [019: NTU Campus Digital Twin](019-ntu-campus-twin.md) — twin of the NTU campus from the vendor MLS scan and our Autoware maps; full re-tiling (the vendor's tiles are truncated at 2^32-1 points), road/building meshes, vegetation proxies, Lanelet2 regulatory elements + xodr, CARLA 0.10 import, lidar and camera realism measured against the real cloud ([design/survey-isaac-sim-and-digital-twin.md](../design/survey-isaac-sim-and-digital-twin.md))
@@ -78,7 +82,7 @@ Ship 012 first — it stands alone and shrinks 013's fork patch to the minimum.
 
 **The bridge is user-ready.** A first user, following only `docs/user-guide.md`, installs,
 builds and runs every starter scenario and both AWF use-case suites clean (020's proof run,
-2026-10-11; screencasts in `docs/proof/020/screencast/`). Operational traps: `CLAUDE.md`.
+2026-10-11; screencasts on the lab NAS, `autoveh/logs/2026 SSv2 on CARLA/2026-10-12 Starter scenario screencasts/`). Operational traps: `CLAUDE.md`.
 
 Per-phase state:
 
@@ -99,3 +103,4 @@ Per-phase state:
    holds the budget, with two law fixes); next the control law, test-driven.
 4. **024 Gap trace and oracle**, then **025**, **026**.
 5. 019 and 009's classification, interleaved where a gap phase waits on a long run.
+6. **027 User documentation** -- started 2026-10-12, interleaved with 023.

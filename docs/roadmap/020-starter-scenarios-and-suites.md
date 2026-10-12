@@ -115,7 +115,8 @@ ros2 run csb_launch run_suite <scenario file or dir>... --output <results dir> \
    Screenshots: `docs/proof/020/first-user/`. Screencasts of every `basic/` scenario, one
    variant of each AWF use case and the two-AV scenario (CARLA chase camera, scenario
    terminal, RViz; two pedestrian/ACC re-recorded after 022 on 2026-10-12) are kept out of
-   git, in a local `docs/proof/020/screencast/` with its own README. Between the runs
+   git, on the lab NAS, `autoveh/logs/2026 SSv2 on CARLA/2026-10-12 Starter scenario screencasts/`,
+   with their own README. Between the runs
    play_launch itself was fixed to
    behave as `ros2 launch` (0.15.0/0.15.1: interception only with a contract, ament_index
    package lookup, one process per container, `on_exit=Shutdown` under the Rust parser), so
