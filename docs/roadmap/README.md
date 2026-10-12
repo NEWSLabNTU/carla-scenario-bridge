@@ -51,7 +51,7 @@ borrowed from greybox fuzzing.
 
 ## User documentation (027-)
 
-- [027: User Documentation](027-user-documentation.md) — user-facing README with a showreel, `ros2 launch` as the primary command (play_launch as drop-in), CARLA versions build-verified, tutorials from scenario preparation to demo run, checked by a fresh user
+- [027: User Documentation](027-user-documentation.md) — **done 2026-10-12** — user-facing README with a showreel, `ros2 launch` as the primary command (play_launch as drop-in), CARLA versions build-verified, tutorials from scenario preparation to demo run, checked by a fresh user
 
 ## Real-site twin and realistic rendering (019-)
 
@@ -103,4 +103,5 @@ Per-phase state:
    holds the budget, with two law fixes); next the control law, test-driven.
 4. **024 Gap trace and oracle**, then **025**, **026**.
 5. 019 and 009's classification, interleaved where a gap phase waits on a long run.
-6. **027 User documentation** -- started 2026-10-12, interleaved with 023.
+6. ~~027 User documentation~~ -- done 2026-10-12; three bridge follow-ups in its doc (shutdown
+   respawn and relay traceback, a misleading "CARLA was restarted", a fallback-path log line).

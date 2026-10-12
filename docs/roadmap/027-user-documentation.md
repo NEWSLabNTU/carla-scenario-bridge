@@ -170,6 +170,11 @@ was checked on this tree.
   fallback path) on Initializes that do find the map directory's table on another path;
   to a new user it reads as an error.
 
+**027 complete (2026-10-12).** The README shows the showreel and its setup and quick start
+work as written with `ros2 launch`; the tutorials took a fresh user from a map directory to a
+passing scenario of their own and a recorded demo; the versions table lists 0.9.16 as tested
+and only versions that were built. The follow-ups above are bridge work, not documentation.
+
 ## Acceptance
 
 - The README shows the two GIFs, and its prerequisites, setup and quick start work as
