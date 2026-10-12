@@ -211,7 +211,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
 # Terminal 2 -- simulation side, long-lived: the bridge (restarted if it crashes) and the
 # agent relay (TCP 5560), in the ROS domain scenarios will run in
 ROS_DOMAIN_ID=9 ros2 launch csb_launch simulation.launch.xml \
-    [config_file:=<scenario dir>/bridge.yaml] [weather:=ClearNoon]
+    [config_file:=<scenario dir>/bridge.yaml] [weather:=ClearNoon] [npc_motion:=kinematic]
 
 # Terminal 3 -- vehicle side, any ROS domain, any host, any time
 ROS_DOMAIN_ID=1 ros2 launch acb_launch carla_simulator.launch.xml \
@@ -342,6 +342,22 @@ Where CARLA has nothing close (a 12 m truck: its longest is 8.5 m), the testcase
 `system-out` lists the body with its difference from the declared box; that never fails it.
 To force a body, set the entity's `model3d` to a CARLA blueprint name, or map it in
 `blueprint_map` (`bridge_config.yaml`).
+
+### How NPCs move: `npc_motion`
+
+SSv2 computes every NPC's pose; the bridge decides how CARLA's body follows it.
+`npc_motion:=` on `simulation.launch.xml` (or `npc_motion:` in `bridge.yaml`) selects:
+
+| `npc_motion` | What CARLA has | Choose it for |
+|---|---|---|
+| `tracked` (default) | NPC vehicles and pedestrians are physics bodies driven toward SSv2's pose each frame: within 0.2 m p95 of it, snapped back past 0.5 m or 5°. CARLA reports their real velocity (radar, anything that reads it), walkers animate, a hit NPC moves, and an NPC that rams the ego pushes with finite force -- its declared acceleration plus a margin -- not as a wall. | realistic contacts and sensors; the normal case |
+| `kinematic` | physics off, teleported to SSv2's pose each frame: exact, but CARLA reads 0 m/s, walkers glide, a hit NPC never moves and two NPCs pass through each other | exact poses, or the cheapest CARLA tick (20 tracked NPCs cost ~7 ms more per tick at p95, of a 50 ms frame) |
+
+Props (`MiscObject`) and vehicles driven by `simulator_autopilot` or an `agent` are not
+affected. Under `tracked`, the bridge logs each NPC's tracking error and snaps at the end of
+the ego's run (`Tracked '<name>': ...`) and adds them to the contact report as `tracking`.
+An NPC that drives into the ego keeps pushing for as long as SSv2 commands it on: make it
+brake once the collision is seen, as `basic/town01_rear_contact.xosc` does.
 
 ### Your own Autoware
 

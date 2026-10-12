@@ -57,11 +57,11 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
 
 | Feature | SSv2 | Reaches backend? | Bridge | CARLA 0.9.16 via carla-rust |
 |---|---|---|---|---|
-| Entity motion (all actions) | yes/partial | pose per frame | teleport | `set_transform`, `set_target_velocity` |
+| Entity motion (all actions) | yes/partial | pose per frame | tracked physics toward the pose (default, 023); teleport under `npc_motion: kinematic` | `set_target_velocity`, `set_target_angular_velocity`, `apply_control`; `set_transform` |
 | TeleportAction, AcquirePosition, LaneChange, FollowTrajectory | yes/partial | pose per frame | teleport | – |
 | Vehicle spawn `model3d` | yes | `asset_key` | `blueprint_map` has only `sample_vehicle`; else `vehicle.tesla.model3` (C:98, C:1559-1568) | blueprint library, `Vehicle::bounding_box` |
 | EntitySubtype (TRUCK, BUS, BICYCLE…) | yes | only in EntityStatus | ignored | could select blueprint |
-| Pedestrian | partial | pose per frame | `walker.pedestrian.0001`, kinematic, no controller (C:1764-1788) | `WalkerControl`, `set_bones`, AI controller |
+| Pedestrian | partial | pose per frame | `walker.pedestrian.0001`, physics on, `WalkerControl` toward SSv2's pose (default, 023; walk cycle animates); kinematic under `npc_motion: kinematic` | `WalkerControl`, `set_bones`, AI controller |
 | MiscObject | partial | `asset_key`, bbox | `static.prop.streetbarrier` default (C:102) | `static.prop.*` |
 | TrafficSignalStateAction / Controller | 1.3 | UpdateTrafficLights | partial (§1) | `TrafficLight::set_state`, freeze |
 | Environment / Weather / Fog / Sun / TimeOfDay / RoadCondition | listed "1.3", **parse-only no-op** (`environment_action.cpp` `start()`/`run()` are `LINE()`) | **no slot** | – | `World::set_weather`, `tire_friction` |
@@ -75,8 +75,9 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
 **Two computations run twice, unreconciled:**
 
 - **Collision.** SSv2 judges collisions from its declared bboxes and canonical poses. CARLA
-  resolves the PhysX ego against kinematic NPC colliders (`set_simulate_physics(false)` keeps
-  colliders active). The ego can be shoved by a teleported NPC that SSv2 never registers as a
+  resolves the PhysX ego against the NPCs' bodies (tracked physics by default since 023;
+  kinematic colliders under `npc_motion: kinematic`, where `set_simulate_physics(false)` keeps
+  colliders active). The ego can be shoved by an NPC that SSv2 never registers as a
   collision, or SSv2 can report one that CARLA never rendered. Nothing compares the two.
 - **Pose reference point.** Scenario vehicles declare `BoundingBox/Center x="1.5"` (e.g.
   `src/csb_examples/scenarios/multi_av/town01_two_av.xosc:13`): the SSv2 entity origin is the rear axle. A CARLA vehicle's

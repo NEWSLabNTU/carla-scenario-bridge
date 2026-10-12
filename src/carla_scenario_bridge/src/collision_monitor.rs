@@ -4,9 +4,10 @@
 //!
 //! Collision is computed twice and nothing compares the two. SSv2 judges it from its
 //! declared bounding boxes and canonical poses; CARLA resolves the PhysX ego against the
-//! kinematic NPC colliders (`set_simulate_physics(false)` keeps colliders active). A
-//! teleported NPC can shove the ego without SSv2 ever registering a collision, and SSv2 can
-//! report one CARLA never rendered. See `docs/design/ssv2-feature-completeness.md` §2.
+//! NPCs' bodies (tracked physics bodies by default, roadmap 023; kinematic colliders under
+//! `npc_motion: kinematic`, where `set_simulate_physics(false)` keeps colliders active). An
+//! NPC can shove the ego without SSv2 ever registering a collision, and SSv2 can report one
+//! CARLA never rendered. See `docs/design/ssv2-feature-completeness.md` §2.
 //!
 //! # Policy: diagnostic only
 //!

@@ -24,8 +24,8 @@ sources of disagreement (catalogue: [ssv2-feature-completeness.md](ssv2-feature-
 | Declared box vs blueprint box | the box the scenario declares (a 12 m truck) | the blueprint's box: `model3d` passes through when it names a blueprint, else `blueprint_map`, else `vehicle.tesla.model3` (4.7 m) whatever the declared size | [022](../roadmap/022-entity-geometry-parity.md): size-matched blueprint, residual reported |
 | Pose reference | the entity origin, shifted by the declared `bounding_box.center` ([`OriginOffset`](../../src/carla_scenario_bridge/src/entity_manager.rs)) | the actor transform, snapped to ground; walkers lifted | [023](../roadmap/023-npc-motion-parity.md): z left to physics |
 | Static world | nothing: no curbs, poles, walls | PhysX colliders for all of it | [021](../roadmap/021-physical-verdict.md): contact joined into the verdict |
-| NPC motion | the NPC's speed | a kinematic actor teleported each frame, velocity 0 | [023](../roadmap/023-npc-motion-parity.md): tracked physics, spike-gated |
-| Contact | `CollisionCondition`: a 2D box overlap in its own geometry (`api.cpp:345`) | contact events between the physical ego and kinematic colliders | [021](../roadmap/021-physical-verdict.md) |
+| NPC motion | the NPC's speed | by default a physics body tracking SSv2's pose (p95 ≤ 0.2 m) at its real velocity; under `npc_motion: kinematic` a teleported actor at velocity 0 | [023](../roadmap/023-npc-motion-parity.md): tracked physics, default since 2026-10-13 |
+| Contact | `CollisionCondition`: a 2D box overlap in its own geometry (`api.cpp:345`) | contact events between the physical ego and the NPCs' bodies (tracked by default, kinematic colliders under `npc_motion: kinematic`) | [021](../roadmap/021-physical-verdict.md) |
 
 A disagreement is the **same frame judged differently in the two geometries**, or a contact
 one of them cannot see at all.

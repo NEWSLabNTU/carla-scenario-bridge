@@ -61,12 +61,15 @@ agent_relay: "tcp://localhost:5560"
 weather: ""
 
 # How SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023):
-#   kinematic  physics off, teleported to SSv2's pose each frame (exact; CARLA reads them at
-#              0 m/s, they cannot be pushed, walkers glide)
-#   tracked    physics on, driven toward SSv2's pose with its velocity, snapped back past
-#              0.5 m / 5 deg (real velocity, walk cycles, physical contacts)
-# Misc objects, simulator-autopilot and agent vehicles and the ego are not affected.
-npc_motion: kinematic
+#   tracked    (default) physics on, driven toward SSv2's pose with its velocity (p95 within
+#              0.2 m), snapped back past 0.5 m / 5 deg: real velocity, walk cycles, physical
+#              contacts; an NPC ramming the ego pushes with its declared acceleration
+#   kinematic  fallback: physics off, teleported to SSv2's pose each frame (exact poses and
+#              the cheapest CARLA tick; CARLA reads them at 0 m/s, they cannot be pushed,
+#              walkers glide)
+# Misc objects, simulator-autopilot and agent vehicles and the ego are not affected. The
+# ROS parameter / launch arg `npc_motion` overrides it.
+npc_motion: tracked
 
 # Telling the sensor bridges before we despawn something.
 #
@@ -100,8 +103,9 @@ sensor_release:
 #
 # DIAGNOSTIC ONLY. SSv2's CollisionCondition stays the verdict and nothing here fails a
 # request. SSv2 judges collisions from declared bounding boxes; CARLA from PhysX colliders
-# (NPCs are kinematic but keep theirs), so the two can disagree. SSv2 does not report its
-# verdict to the simulator; the contact report below lets the runner join the two.
+# (tracked NPCs are physics bodies, kinematic ones keep theirs), so the two can disagree.
+# SSv2 does not report its verdict to the simulator; the contact report below lets the
+# runner join the two.
 collision_monitor: true
 
 # Where each ego run's CARLA contacts are written as JSON, for `ros2 run csb_launch

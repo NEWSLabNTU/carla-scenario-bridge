@@ -22,7 +22,7 @@
   <arg name="entity" default="ego" description="the scenario entity the relay serves"/>
   <arg name="agent_port" default="5560" description="TCP port vehicle agents connect to"/>
   <arg name="npc_motion" default=""
-       description="kinematic | tracked: how SSv2-driven NPCs move in CARLA (roadmap 023); empty keeps the config file's"/>
+       description="kinematic | tracked: how SSv2-driven NPCs move in CARLA (roadmap 023); empty keeps the config file's (default tracked)"/>
   <arg name="weather" default=""
        description="CARLA weather preset (ClearNoon, CloudySunset, ...) kept across map loads; empty keeps the config file's (default: leave CARLA's)"/>
   <arg name="contact_report_dir" default=""

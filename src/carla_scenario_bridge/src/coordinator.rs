@@ -145,18 +145,20 @@ impl SpawnKind {
         }
     }
 
-    /// Whether CARLA physics drives this actor.
-    ///
-    /// False means SSv2 owns the pose, so CARLA physics is switched off at spawn. Leaving it
-    /// on gives the actor two authorities: `set_transform` places it, then PhysX pulls it
-    /// down and shoves it out of collisions before the next frame. The AWSIM pattern this
-    /// design follows makes puppeteered actors kinematic for exactly this reason.
-    /// Moved by physics toward SSv2's pose under `npc_motion: tracked` (roadmap 023):
-    /// SSv2-driven vehicles and pedestrians. Misc objects stay put by teleport.
+    /// Moved by physics toward SSv2's pose under `npc_motion: tracked` (the default, roadmap
+    /// 023): SSv2-driven vehicles and pedestrians. Misc objects stay put by teleport.
     fn trackable(self) -> bool {
         matches!(self, SpawnKind::Npc | SpawnKind::Pedestrian)
     }
 
+    /// Whether CARLA physics drives this actor on its own.
+    ///
+    /// False means SSv2 owns the pose. Such an actor is either tracked (physics on, but
+    /// driven toward SSv2's pose by a closed loop, `trackable`) or kinematic (physics off at
+    /// spawn: misc objects, and every SSv2-driven actor under `npc_motion: kinematic`).
+    /// Physics on with plain per-frame `set_transform` would give the actor two authorities:
+    /// `set_transform` places it, then PhysX pulls it down and shoves it out of collisions
+    /// before the next frame.
     fn physics_driven(self) -> bool {
         // Driven through CARLA physics -- by an Autoware, or by Traffic Manager -- so none of
         // them may be teleported.
@@ -3173,8 +3175,9 @@ impl Coordinator {
 
         // No AI walker controller. SSv2's behaviour plugins compute the walk and send a
         // pose every frame, so a controller would be a second authority over the same
-        // actor (invariant 5). The walker is spawned kinematic and teleported, exactly
-        // like an NPC vehicle.
+        // actor (invariant 5). The walker is handled exactly like an NPC vehicle: tracked
+        // with `WalkerControl` under `npc_motion: tracked` (the default), else spawned
+        // kinematic and teleported.
         let shape = EntityShape::of(
             req.parameters
                 .as_ref()

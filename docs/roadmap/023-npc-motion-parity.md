@@ -127,13 +127,33 @@ fallback.
 4. [x] **Bridge wiring.** Physics on at spawn under `tracked`; the per-frame command from the
    snapshot; snap via the existing teleport path (its failure handling unchanged); walker
    control. Error statistics per episode in the log and in 021's report.
-5. [ ] **Live.** The nine starter scenarios under `tracked`: all pass, error within budget,
-   `frame_stats` p95 within noise of `kinematic` (20-NPC bench, 016).
+5. [x] **Live.** The nine starter scenarios under `tracked`: all pass, error within budget,
+   CARLA's tick within the frame budget on the 20-NPC bench (016): ~+7 ms p95 over
+   `kinematic`, ~10 ms of the 50 ms frame, accepted by the user 2026-10-13 (first written
+   as "`frame_stats` p95 within noise of `kinematic`", which the physics of 20 cars cannot
+   meet).
    `town01_pedestrian`: the walker animates in the screencast view. `town01_rear_contact`:
    `max_impulse` now scales with closing speed (run at two NPC speeds).
-6. [ ] **Default flip** to `tracked`; user guide and bridge config comment.
+6. [x] **Default flip** to `tracked`; user guide and bridge config comment.
 
 ### Results
+
+**Step 6 (2026-10-13).** `NpcMotion`'s default is `Tracked` (`config.rs`, test
+`npc_motion_defaults_to_tracked_and_takes_file_or_parameter`), `bridge_config.yaml` says
+`npc_motion: tracked`, and both launch files' `npc_motion` describe empty as "the config
+file's (default tracked)"; `kinematic` stays as the opt-in fallback. Design docs and the user
+guide (new section "How NPCs move: `npc_motion`") describe tracked as the behaviour. The
+frame-time criterion is now a budget, not parity: CARLA's tick ~+7 ms p95 on the 20-NPC
+bench, ~10 ms of the 50 ms frame, accepted by the user 2026-10-13. 249 unit tests, clippy and
+fmt clean. Live: `just build`, `just run` with no `npc_motion` argument, `just ego-av`, then
+`run_suite --physical-verdict` on `basic/town01_rear_contact`: **PASS 2/2** (SSv2 and
+`carla_contact`), the bridge logging `'npc_rear' is tracked (physics on)` at spawn and
+`Tracked 'npc_rear': 538 frames, error p95 0.542 / max 1.574 m, yaw p95 0.79 / max 1.76 deg,
+0 snap(s)` at the end -- the error again the contact, held back by the ego unsnapped;
+`max_impulse` 8 081 N*s, in step 5's 6 841-8 555 range; tick p95 3.5-4.3 ms with two
+entities. `run_suite` from a bare shell needs `CARLA_MAPS` (the starters name their map as
+`$(env CARLA_MAPS)/Town01`): without it the preprocessor rejects the scenario silently and
+the run ends in 5 s with `NoVerdict`, no `result.junit.xml`.
 
 **Step 5, the rest (2026-10-13).** One `npc_motion:=tracked` session, `ros2 launch`,
 `run_suite --physical-verdict`; then the same bench under `kinematic`.
@@ -306,5 +326,6 @@ for that frame, from one world snapshot; "settled" leaves out the first second (
 - Either: the spike's numbers miss the budget and are recorded, NPCs stay kinematic, phase
   closed with that finding.
 - Or: under `tracked`, CARLA reports NPC velocities within 10 % of SSv2's commanded speed,
-  tracking error within budget on all starter scenarios, walkers animate, no frame-time
-  regression, and `tracked` is the default.
+  tracking error within budget on all starter scenarios, walkers animate, CARLA's tick
+  within the 50 ms frame budget on the 20-NPC bench (user decision 2026-10-13: tracked's
+  ~+7 ms p95 accepted), and `tracked` is the default.

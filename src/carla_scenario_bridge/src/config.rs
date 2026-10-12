@@ -198,11 +198,11 @@ pub struct BridgeConfig {
 #[serde(rename_all = "lowercase")]
 pub enum NpcMotion {
     /// Physics off, teleported to SSv2's pose every frame: exact, but CARLA reports them at
-    /// 0 m/s, they cannot be pushed, and walkers do not animate.
-    #[default]
+    /// 0 m/s, they cannot be pushed, and walkers do not animate. The opt-in fallback.
     Kinematic,
     /// Physics on, driven toward SSv2's pose with a velocity each frame and snapped back
-    /// past 0.5 m / 5 deg (`npc_tracking`).
+    /// past 0.5 m / 5 deg (`npc_tracking`). The default since roadmap 023 step 6.
+    #[default]
     Tracked,
 }
 
@@ -529,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn npc_motion_defaults_to_kinematic_and_takes_file_or_parameter() {
+    fn npc_motion_defaults_to_tracked_and_takes_file_or_parameter() {
         let params = |v: &str| {
             crate::ros_args::RosParams::from_args([
                 "--ros-args".to_string(),
@@ -539,11 +539,15 @@ mod tests {
             .expect("parses")
         };
         let config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
-        assert_eq!(config.npc_motion, NpcMotion::Kinematic);
-        let mut config: BridgeConfig =
-            serde_yaml::from_str("npc_motion: tracked\n").expect("parses");
         assert_eq!(config.npc_motion, NpcMotion::Tracked);
+        let mut config: BridgeConfig =
+            serde_yaml::from_str("npc_motion: kinematic\n").expect("parses");
+        assert_eq!(config.npc_motion, NpcMotion::Kinematic);
         config.apply_ros_params(&params("")).expect("applies");
+        assert_eq!(config.npc_motion, NpcMotion::Kinematic);
+        config
+            .apply_ros_params(&params("tracked"))
+            .expect("applies");
         assert_eq!(config.npc_motion, NpcMotion::Tracked);
         config
             .apply_ros_params(&params("kinematic"))

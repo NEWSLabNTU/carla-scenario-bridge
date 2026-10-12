@@ -14,7 +14,7 @@ single Autoware instance and a single ROS domain. Where the two disagree, this d
 > (`simulator_autopilot`) or by a registered agent (`agent`); `bridge_config.yaml`'s
 > `background_avs`, the per-domain `auto_drive` pilot and the managed/unmanaged split are
 > gone. Still authoritative here: the authority model, actor classes and why puppeteered
-> actors are kinematic, sensor ownership per domain, and the verified-run invariants. The
+> actors are kinematic (now the `npc_motion: kinematic` fallback; see that section), sensor ownership per domain, and the verified-run invariants. The
 > sections marked *(historical)* below record the 2026-08 design.
 
 **Status**: implemented and verified end to end on 2026-08-27 with two Autoware instances
@@ -88,6 +88,16 @@ collision and position conditions see it -- the extension point this section ant
 taken through the simulator-driven entity path rather than a misc object.
 
 ### Consequence: puppeteered actors are kinematic
+
+> **Superseded as the default (2026-10-13, [roadmap 023](../roadmap/023-npc-motion-parity.md)).**
+> SSv2-driven NPC vehicles and pedestrians are now **tracked** by default: physics on, driven
+> by velocity (and steer, or `WalkerControl`) toward SSv2's pose every frame, with SSv2's pose
+> kept the authority by a closed loop -- error p95 ≤ 0.2 m, a snap back by teleport past
+> 0.5 m or 5° -- which answers the drift argument below. CARLA reports their real velocity,
+> walkers animate, and a hit NPC moves; a tracked NPC pushing the ego is capped at its
+> declared acceleration. Misc objects stay kinematic. What follows describes
+> `npc_motion: kinematic`, the opt-in fallback (exact poses, cheapest CARLA tick), and its
+> measurements still hold for it.
 
 Everything SSv2 teleports -- NPC vehicles, pedestrians, misc objects -- is spawned with CARLA
 physics **disabled**, and that is the only consistent combination. A physics-driven vehicle

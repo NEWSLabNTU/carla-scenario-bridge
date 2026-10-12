@@ -203,7 +203,12 @@ a cross-check. That cross-check only sees contacts that last more than one frame
 SSv2's NPC pose one frame after SSv2 computes it, so a scenario that exits on the first frame
 of overlap ends before CARLA ticks with the bodies touching, and the bridge logs "no
 collisions" for a run SSv2 scored as a collision. Delay the exit (e.g. `delay="3"` on the
-`CollisionCondition`'s `Condition`) when the CARLA side matters. Also remember that NPCs are
-kinematic: one never moves when hit, and two NPCs pass through each other in CARLA (see
+`CollisionCondition`'s `Condition`) when the CARLA side matters. NPCs are physics bodies
+tracking SSv2's pose by default (`npc_motion: tracked`, roadmap 023): one hit by the ego is
+pushed, and one driven into the ego keeps pushing at its declared acceleration for as long as
+SSv2 commands it on -- have the NPC brake once the collision is seen, as
+`town01_rear_contact` does, or it shoves the ego down the road. Under the
+`npc_motion:=kinematic` fallback an NPC never moves when hit and two NPCs pass through each
+other in CARLA (see
 [multi-instance-architecture.md](multi-instance-architecture.md#consequence-puppeteered-actors-are-kinematic)).
 Example: `src/csb_examples/scenarios/basic/town01_rear_contact.xosc`.
