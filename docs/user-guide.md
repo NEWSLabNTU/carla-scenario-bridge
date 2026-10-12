@@ -114,12 +114,15 @@ download link (`scripts/download_maps.sh`) is dead at the time of writing, so th
 public download yet; providing the maps is a separate effort. With a copy of the pack,
 `CSB_MAP_SOURCE=<pack dir> scripts/download_maps.sh` installs it under
 `data/carla-autoware-bridge/<Town>/` with the projector fix SSv2 needs; then generate each
-town's `carla/traffic_lights.yaml` as above. The script also repairs two defects of the
-pack, idempotently (`scripts/repair_lanelet_traffic_lights.py`, `scripts/repair_lanelet_subtypes.py`;
-run them on a copy you installed another way): traffic lights whose type tags are empty
-(invisible to Autoware and SSv2), and lanelets with no `subtype` tag -- the kerb strips beside
-every road -- which make Autoware's `map_based_prediction` abort as soon as a pedestrian is
-near one (`lanelet::NoSuchAttributeError: Could not find 1`). Keep the towns side by side in one directory --
+town's `carla/traffic_lights.yaml` as above. The script also repairs three defects of the
+pack, idempotently (`scripts/repair_lanelet_traffic_lights.py`, `scripts/repair_lanelet_subtypes.py`,
+`scripts/repair_lanelet_right_of_way.py`; run them on a copy you installed another way): traffic
+lights whose type tags are empty (invisible to Autoware and SSv2), lanelets with no `subtype`
+tag -- the kerb strips beside every road -- which make Autoware's `map_based_prediction` abort as
+soon as a pedestrian is near one (`lanelet::NoSuchAttributeError: Could not find 1`), and, in
+Town05 and Town10, a `right_of_way` element that names no lanelet with right of way, which
+lanelet2 rejects so that SSv2 fails every scenario on that town at `Initialize` with
+`Failed to load lanelet map`. Keep the towns side by side in one directory --
 the scenarios below find them as `$(env CARLA_MAPS)/<Town>`:
 
 ```bash

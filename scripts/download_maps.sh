@@ -100,6 +100,9 @@ YAML
     # Some lanelets ship with no subtype at all (kerb strips, mostly), which makes
     # Autoware's map_based_prediction abort as soon as a pedestrian is near one.
     python3 "$(dirname "$0")/repair_lanelet_subtypes.py" "$OUT"
+    # Town05 and Town10 each carry one right_of_way element with no lanelet in the
+    # right_of_way role; lanelet2 rejects it and SSv2 then refuses the whole map.
+    python3 "$(dirname "$0")/repair_lanelet_right_of_way.py" "$OUT"
 
     if [ "$found" -eq 0 ]; then
         echo "ERROR: no town directories with lanelet2_map.osm under $MAP_SOURCE" >&2
