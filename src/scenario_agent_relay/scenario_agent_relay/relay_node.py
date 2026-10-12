@@ -254,7 +254,13 @@ class RelayNode(Node):
     def _command(self, name, timeout, **args):
         status, message = self.server.command(self.entity, name, timeout, **args)
         text = f"{name} -> {status or 'no reply'}" + (f": {message}" if message else "")
-        (self.get_logger().info if status == P.OK else self.get_logger().warning)(text)
+        # One call site per severity: rclpy keys a log call by its source line and raises
+        # "Logger severity cannot be changed between calls" if that line logs at another
+        # severity later -- which killed the relay on its first non-OK command.
+        if status == P.OK:
+            self.get_logger().info(text)
+        else:
+            self.get_logger().warning(text)
         return status, message
 
     @staticmethod
