@@ -15,11 +15,13 @@ Two sides run independently and meet only in CARLA and the map directory:
 
 They need not share a ROS domain, a host, or a start order.
 
-Use `play_launch launch <pkg> <file>` wherever you would type `ros2 launch`; it runs the same
-launch files with a web UI and per-node logs (`play_log/<time>/node/<name>/{out,err}`), and
-restarts the nodes a launch file declares `respawn="true"` (the bridge, here). Other nodes
-that crash stay down, except composable nodes on the vehicle side, which
-`--composable-respawn on-crash` reloads. Every command below carries the flags it needs:
+Every command here is a plain `ros2 launch` or `ros2 run`. **Recommended:**
+[play_launch](https://pypi.org/project/play-launch/), a drop-in for `ros2 launch` --
+`play_launch launch <pkg> <file> <args...>`, same arguments -- which adds a web UI and
+per-node logs (`play_log/<time>/node/<name>/{out,err}`), and restarts the nodes a launch file
+declares `respawn="true"` (the bridge, here). Other nodes that crash stay down, except
+composable nodes on the vehicle side, which `--composable-respawn on-crash` reloads. The
+flags worth giving it:
 
 | Flag | Where | Why |
 |---|---|---|
@@ -29,7 +31,7 @@ that crash stay down, except composable nodes on the vehicle side, which
 Everything else is play_launch's default, which since 0.15.1 matches `ros2 launch`: no
 interception layer unless a contract asks for one, packages found the way `ament_index` finds
 them, one process per container. Any `ros2 launch` command here works as well, without the
-web UI and without the vehicle side's crash recovery.
+web UI and without the vehicle side's crash recovery -- which is what this guide shows.
 
 ## 1. Install
 
@@ -42,7 +44,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 pip install colcon-cargo-ros2
 ```
 
-- play_launch, the launcher every command below uses (PyPI; 0.15.1 or newer -- 0.15.1 is the first to end a scenario stack when its runner exits under the default parser):
+- Optional, recommended: play_launch, the drop-in for `ros2 launch` (PyPI; 0.15.1 or newer -- 0.15.1 is the first to end a scenario stack when its runner exits under the default parser):
 
 ```bash
 sudo apt install libz3-dev ros-humble-rclcpp-components ros-humble-class-loader
@@ -208,30 +210,25 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
 
 # Terminal 2 -- simulation side, long-lived: the bridge (restarted if it crashes) and the
 # agent relay (TCP 5560), in the ROS domain scenarios will run in
-ROS_DOMAIN_ID=9 play_launch launch --web-addr 127.0.0.1:8084 \
-    csb_launch simulation.launch.xml \
+ROS_DOMAIN_ID=9 ros2 launch csb_launch simulation.launch.xml \
     [config_file:=<scenario dir>/bridge.yaml] [weather:=ClearNoon]
 
 # Terminal 3 -- vehicle side, any ROS domain, any host, any time
-ROS_DOMAIN_ID=1 play_launch launch \
-    --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
-    acb_launch carla_simulator.launch.xml \
+ROS_DOMAIN_ID=1 ros2 launch acb_launch carla_simulator.launch.xml \
     map_path:=$CARLA_MAPS/Town01 vehicle_name:=hero relay:=tcp://<simulation host>:5560 \
     [rviz:=false] [autoware_launch:=<your autoware.launch.xml>]
 
 # Terminal 3b -- one more vehicle side per entity whose controller is `agent`, e.g. bg_av_1
-ROS_DOMAIN_ID=2 play_launch launch \
-    --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8083 \
-    acb_launch carla_simulator.launch.xml \
-    map_path:=$CARLA_MAPS/Town01 vehicle_name:=bg_av_1 entity:=bg_av_1 \
-    relay:=tcp://<simulation host>:5560 rviz:=false
+ROS_DOMAIN_ID=2 ros2 launch csb_launch background_av.launch.xml \
+    entity:=bg_av_1 map_path:=$CARLA_MAPS/Town01 relay:=tcp://<simulation host>:5560
 
 # Terminal 4 -- one scenario, in the simulation side's domain; exits when it ends
-ROS_DOMAIN_ID=9 play_launch launch \
-    --web-addr 127.0.0.1:8081 \
-    csb_launch scenario.launch.xml \
+ROS_DOMAIN_ID=9 ros2 launch csb_launch scenario.launch.xml \
     scenario:=<scenario dir>/my_scenario.xosc [output_directory:=<dir>]
 ```
+
+With play_launch instead, put `play_launch launch` and the flags from the table at the top
+in place of `ros2 launch`.
 
 **When each part is ready.** Start them in this order and wait for each:
 
@@ -242,11 +239,11 @@ ROS_DOMAIN_ID=9 play_launch launch \
   `play_log/latest/node/carla_scenario_bridge/out` and
   `play_log/latest/node/scenario_agent_relay/err`. It waits for CARLA by itself if started
   first.
-- The vehicle side logs `Startup complete: all nodes ready (nodes 63/63, containers 18/18,
-  composable 127/127)` from play_launch (the counts depend on your Autoware; check that each
-  is whole) -- and the relay then logs
-  `entity 'ego': agent acb_agent registered`. About a minute on a warm host; the first
-  start builds TensorRT engines and takes several.
+- The vehicle side is ready when the relay (Terminal 2) logs
+  `entity 'ego': agent acb_agent registered` and then `ego: agent up`. Under play_launch the
+  vehicle side also logs `Startup complete: all nodes ready (nodes 63/63, containers 18/18,
+  composable 127/127)` (the counts depend on your Autoware; check that each is whole). About
+  a minute on a warm host; the first start builds TensorRT engines and takes several.
 
 **RViz.** The vehicle side opens Autoware's RViz on `$DISPLAY` by default. Pass `rviz:=false`
 on a headless host or for a second vehicle side. It shows the ego, its route and the objects

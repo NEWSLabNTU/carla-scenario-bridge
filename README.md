@@ -1,140 +1,177 @@
 # carla-scenario-bridge
 
-Run [OpenSCENARIO](https://www.asam.net/standards/detail/openscenario-v200/) scenarios in CARLA with Autoware processing **real sensor data** through its full perception pipeline.
+Run [OpenSCENARIO](https://www.asam.net/standards/detail/openscenario/) scenarios in
+[CARLA](https://carla.org/) with [Autoware](https://autowarefoundation.github.io/autoware-documentation/main/)
+driving on **real sensor data**: CARLA's cameras and lidar feed Autoware's full perception,
+localization, planning and control, while
+[scenario_simulator_v2](https://github.com/tier4/scenario_simulator_v2) (SSv2) runs the
+scenario and gives the verdict.
 
-## What is this?
+<p align="center">
+  <img src="docs/media/showreel_pedestrian.gif" alt="Autoware in CARLA stops for a crossing pedestrian, then drives on" width="800"><br>
+  <em>A starter scenario: the ego stops for a pedestrian crossing ahead and drives on (8x).</em>
+</p>
 
-[Autoware](https://autowarefoundation.github.io/autoware-documentation/main/) is an open-source autonomous driving stack. It is typically tested with [scenario_simulator_v2](https://github.com/tier4/scenario_simulator_v2) (SSv2), a framework that runs OpenSCENARIO files against a simulator backend. The default backend is a lightweight "simple sensor simulator" that feeds Autoware **ground-truth data** — perfect detections, exact positions — skipping the perception pipeline entirely.
+<p align="center">
+  <img src="docs/media/showreel_two_av.gif" alt="Two Autoware stacks driving in one CARLA scenario" width="800"><br>
+  <em>Two complete Autoware stacks in one scenario, each driving its own vehicle (6x).</em>
+</p>
 
-[CARLA](https://carla.org/) is a photorealistic driving simulator with GPU-rendered cameras, ray-cast lidar, and PhysX vehicle dynamics. It produces realistic, noisy sensor streams that exercise Autoware's full stack: perception, localization (GNSS → NDT scan matching), planning, and control.
+## What it does
 
-**carla-scenario-bridge** connects the two. It implements SSv2's ZMQ+Protobuf `simulation_interface` protocol, translating each request into CARLA API calls via [carla-rust](https://github.com/jerry73204/carla-rust). This makes CARLA a drop-in replacement for SSv2's built-in simulator or [AWSIM](https://github.com/tier4/AWSIM), letting you run the same `.xosc` scenario files against a high-fidelity environment where Autoware must actually *see* and *react* to the world.
-
-### How it works
+SSv2 normally tests Autoware against a lightweight simulator that hands it ground truth --
+perfect detections, exact positions -- so perception is never exercised. This project makes
+CARLA an SSv2 backend instead: the same `.xosc` scenario files, but Autoware has to *see*
+the pedestrian, the car ahead and the traffic light.
 
 <p align="center">
   <img src="docs/architecture.svg" alt="System architecture" width="820">
 </p>
 
-Two sides, which meet only in CARLA and the map directory -- no shared ROS domain, host or
-start order:
-
-- **Simulation side** -- **SSv2** runs the OpenSCENARIO file, NPC behavior and the verdict;
-  **carla-scenario-bridge** (this project) is CARLA's adapter for SSv2's protocol (spawns,
-  moves, signals, time); the **agent relay** passes the scenario's goals for the ego to
-  whatever drives it.
-- **Vehicle side** -- your **Autoware** with this project's sensor kit and vehicle interface:
-  **[autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge)** publishes
-  CARLA's sensors, `/clock` and signals and applies Autoware's control; its **vehicle agent**
-  takes goals from the relay and drives Autoware's API locally.
+- **Simulation side** -- SSv2 runs the scenario; **carla-scenario-bridge** (this project)
+  translates SSv2's requests into CARLA (spawns, motion, traffic lights, time); an **agent
+  relay** passes the scenario's goals to whatever drives the ego.
+- **Vehicle side** -- your Autoware with
+  [autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge): CARLA's
+  sensors and clock in, Autoware's control out, and a **vehicle agent** that takes goals
+  from the relay. It can run on another host and in another ROS domain.
 - **CARLA** owns physics, sensors and simulation time.
 
-## Getting Started
+## Supported versions
 
-### Prerequisites
+| Component | Version |
+|---|---|
+| ROS 2 | Humble (Ubuntu 22.04) |
+| Autoware | 1.5.0 (binary packages), or your own build of the same release |
+| scenario_simulator_v2 | bundled (a fork, as a submodule) |
+| CARLA | **0.9.16 -- tested.** 0.9.14 and 0.9.15 build, untested ([Other CARLA versions](#other-carla-versions)) |
 
-- **CARLA 0.9.16** — [installation guide](https://carla.readthedocs.io/en/0.9.16/start_quickstart/)
-- **ROS 2 Humble** — [installation guide](https://docs.ros.org/en/humble/Installation.html)
-- **Autoware** — pre-built packages or source install ([docs](https://autowarefoundation.github.io/autoware-documentation/main/installation/))
-- **Converted CARLA maps** — one Autoware map directory per town (Lanelet2 + point cloud). The
-  TUM pack this project uses has no working public download at the moment; see
-  [User Guide, section 2](docs/user-guide.md#2-prepare-a-map-directory). Without maps nothing
-  can run.
+## Prerequisites
 
-Install and build with ROS tools ([User Guide, section 1](docs/user-guide.md#1-install)
-has the details); Rust (rustup) and `pip install colcon-cargo-ros2` first:
+- **Ubuntu 22.04, ROS 2 Humble** ([install](https://docs.ros.org/en/humble/Installation.html)).
+- **Autoware 1.5.0** ([install](https://autowarefoundation.github.io/autoware-documentation/main/installation/)),
+  e.g. the binary packages under `/opt/autoware/1.5.0`.
+- **CARLA 0.9.16** ([quick start](https://carla.readthedocs.io/en/0.9.16/start_quickstart/)),
+  the packaged release, and an NVIDIA GPU that runs it beside Autoware.
+- **Converted maps**: one Autoware map directory (Lanelet2 + point cloud) per CARLA town.
+  The TUM pack this project uses has no working public download at the moment -- see
+  [User Guide §2](docs/user-guide.md#2-prepare-a-map-directory). Nothing runs without them.
+- **Rust** and colcon's Rust plugin, which rosdep cannot install:
+
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  pip install colcon-cargo-ros2
+  ```
+
+## Setup
 
 ```bash
 git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-bridge.git
 cd carla-scenario-bridge
-source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash   # e.g. /opt/autoware/1.5.0
+source /opt/ros/humble/setup.bash
+source /opt/autoware/1.5.0/setup.bash        # your Autoware
 rosdep install --from-paths src --ignore-src -y
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --cargo-args --release
+source install/setup.bash                    # in every terminal below, after Autoware's
 ```
 
-### Run
+Once per machine, give Autoware a writable data directory (TensorRT writes its engines
+there): `ros2 run acb_launch setup_autoware_data`.
 
-See the **[User Guide](docs/user-guide.md)**: prepare a map directory and a scenario
-directory, then
+## Quick start
+
+Four terminals, each with Autoware's and this workspace's `setup.bash` sourced, and
+`CARLA_MAPS` pointing at the directory that holds `Town01/`, `Town02/`, ...
 
 ```bash
-<CARLA_0.9.16>/CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000  # CARLA
-ROS_DOMAIN_ID=9 play_launch launch --web-addr 127.0.0.1:8084 \
-    csb_launch simulation.launch.xml                                       # bridge + relay
-ROS_DOMAIN_ID=1 play_launch launch \
-    --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8082 \
-    acb_launch carla_simulator.launch.xml \
-    map_path:=$CARLA_MAPS/Town01 vehicle_name:=hero relay:=tcp://localhost:5560  # your Autoware
-ROS_DOMAIN_ID=9 play_launch launch \
-    --web-addr 127.0.0.1:8081 csb_launch scenario.launch.xml scenario:=<file>.xosc
-export CARLA_MAPS=<maps dir>       # holds Town01/, Town02/, ... (every terminal above too)
+# 1. CARLA (headless)
+<CARLA_0.9.16>/CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000
+
+# 2. Simulation side: the bridge and the agent relay (long-lived)
+ROS_DOMAIN_ID=9 ros2 launch csb_launch simulation.launch.xml
+
+# 3. Vehicle side: Autoware on CARLA, registered with the relay
+ROS_DOMAIN_ID=1 ros2 launch acb_launch carla_simulator.launch.xml \
+    map_path:=$CARLA_MAPS/Town01 vehicle_name:=hero relay:=tcp://localhost:5560
+
+# 4. A scenario -- the launch ends with the scenario; the verdict is a JUnit file
+ROS_DOMAIN_ID=9 ros2 launch csb_launch scenario.launch.xml \
+    scenario:=$(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic/town01_ego_drive.xosc \
+    output_directory:=/tmp/csb_run
+cat /tmp/csb_run/scenario_test_runner/result.junit.xml
+```
+
+A whole directory of scenarios, with CARLA's own collision check next to SSv2's verdict:
+
+```bash
 ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
-    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic --output <results dir>  # a set
+    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic \
+    --output ~/csb_results/basic --physical-verdict
 ```
 
-Starter scenarios (package `csb_examples`) need only `CARLA_MAPS`, the directory holding the
-converted towns.
+Wait for each part before starting the next: CARLA serves port 2000; the bridge logs
+`ZMQ server ready`; the relay logs `ego: agent up`. The [first-run
+tutorial](docs/tutorials/01-first-run.md) shows what each looks like.
 
-`play_launch launch` (`pip install play_launch`) runs `ros2 launch` files with per-node logs
-and a web UI; the user guide explains each flag. Developers have the same launches as
-`just run`, `just ego-av` and `just scenario <file>`.
+**Recommended: [play_launch](https://pypi.org/project/play-launch/) as a drop-in for
+`ros2 launch`.** Same packages, files and arguments -- `play_launch launch csb_launch
+simulation.launch.xml` -- plus a log directory per node and a web UI (`--web-addr
+127.0.0.1:8084`) for the ~90 processes of an Autoware stack. `pip install
+'play_launch>=0.15.1'`; `run_suite` uses it when it is installed.
 
-## Project Structure
+## Learn more
 
-```
-.
-├── src/
-│   ├── carla_scenario_bridge/      # Rust crate — ZMQ server + CARLA adapter
-│   │   ├── src/
-│   │   │   ├── main.rs             # Entry point, CARLA retry loop
-│   │   │   ├── zmq_server.rs       # ZMQ REP socket, protobuf dispatch
-│   │   │   ├── coordinator.rs      # 14 SSv2 handlers → CARLA API calls
-│   │   │   ├── entity_manager.rs   # SSv2 name ↔ CARLA actor ID mapping
-│   │   │   ├── coordinate_conversion.rs
-│   │   │   └── traffic_light_mapper.rs
-│   │   └── build.rs                # prost-build proto compilation
-│   ├── csb_launch/                 # simulation, scenario, ego and demo launch files; run_suite
-│   ├── csb_examples/               # starter scenarios: basic/, multi_av/, awf/ (installed)
-│   ├── scenario_agent_relay/       # the scenario's side of the vehicle agent protocol
-│   ├── autoware_carla_bridge/      # Submodule — sensor/vehicle interface
-│   └── scenario_simulator_v2/      # Submodule — scenario framework
-├── proto/                          # SSv2 protobuf definitions (8 .proto files)
-├── scenarios/                      # benchmark scenarios (bench/) and goal-pose files
-├── docs/
-│   ├── design/                     # Architecture, protocol, launch config
-│   ├── roadmap/                    # phased roadmap
-│   └── user-guide.md
-├── justfile                        # Build and run commands
-└── Cargo.toml                      # Workspace root
-```
+**Tutorials** -- from a map directory to a demo of your own scenario:
 
-## Documentation
+1. [First run](docs/tutorials/01-first-run.md) -- bring up both sides, run a starter
+   scenario, read the verdict.
+2. [Prepare a scenario](docs/tutorials/02-prepare-a-scenario.md) -- pick poses on the map,
+   write the `.xosc`, run it.
+3. [Run and judge](docs/tutorials/03-run-and-judge.md) -- suites, CARLA's contacts in the
+   verdict, the result files.
+4. [Demo run](docs/tutorials/04-demo-run.md) -- two Autoware vehicles in one scenario, and
+   recording a screencast.
 
-- [Architecture](docs/design/architecture.md) — design principles, protocol details, responsibility split
-- [SSv2 Protocol Reference](docs/design/ssv2-protocol.md) — the 14 ZMQ message types
-- [User Guide](docs/user-guide.md) — install, map and scenario directories, running
-- [User workflow and the vehicle agent](docs/design/user-workflow.md) — the two sides, the interfaces, swapping CARLA or Autoware
-- [Writing scenarios](docs/design/scenario-authoring.md) — maps, the ego, other vehicles, signals, collisions
-- [Roadmap](docs/roadmap/README.md) — phased implementation plan
+**Reference** -- the [User Guide](docs/user-guide.md) (install, maps, scenario directories,
+running, configuring the CARLA world, troubleshooting) and
+[Writing scenarios](docs/design/scenario-authoring.md). All documentation:
+[docs/](docs/README.md).
 
-## Development
+## Other CARLA versions
 
-### Available commands
+The CARLA version is chosen at build time: [carla-rust](https://github.com/jerry73204/carla-rust)
+has a different API per CARLA release, and the bridges refuse to talk to a server of another
+version (both versions are named in the error). Build for another release by setting
+`CARLA_VERSION` for the whole build:
 
 ```bash
-just              # List all recipes
-just setup        # One-time: rustup, colcon-cargo-ros2, submodules, rosdep install, dev tools
-just build        # The user's colcon build + --symlink-install, dev-release profile
-just clean        # Remove build artifacts
-just check        # Format check (nightly) + clippy
-just test         # Run tests with cargo-nextest, and run_suite's unit tests
-just ci           # Build + check + test
-just format       # Auto-format with cargo +nightly fmt
+CARLA_VERSION=0.9.15 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --cargo-args --release
 ```
 
-## Related Projects
+| CARLA | Status |
+|---|---|
+| 0.9.16 | tested: every starter scenario passes |
+| 0.9.15 | builds; untested |
+| 0.9.14 | builds; untested |
+| 0.10.0 | not yet: the vehicle side does not build against 0.10's API on this branch (a port is in progress, [roadmap 019](docs/roadmap/019-ntu-campus-twin.md)) |
 
-- [autoware_carla_bridge](https://github.com/NEWSLabNTU/ros_zenoh_bridge) — sensor/vehicle interface between CARLA and Autoware
-- [scenario_simulator_v2](https://github.com/tier4/scenario_simulator_v2) — Autoware scenario testing framework
-- [AWSIM](https://github.com/tier4/AWSIM) — Unity-based simulator with SSv2 support (alternative backend)
-- [carla-rust](https://github.com/jerry73204/carla-rust) — Rust bindings for the CARLA C++ API
+Each CARLA release needs its own server package and map directories.
+
+## For developers
+
+Building with `just`, running the tests, the repository layout, how a request flows from SSv2
+through the bridge to CARLA, and the design documents (architecture, the SSv2 protocol,
+time and ticking, launch configuration): the [Developer Guide](docs/development.md).
+The [roadmap](docs/roadmap/README.md) records what was built and why.
+
+## Related projects
+
+- [autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge) -- the
+  vehicle side: sensors, vehicle interface and vehicle agent for Autoware on CARLA.
+- [scenario_simulator_v2](https://github.com/tier4/scenario_simulator_v2) -- Autoware's
+  scenario testing framework.
+- [carla-rust](https://github.com/jerry73204/carla-rust) -- Rust bindings for CARLA's C++ API.
+- [AWSIM](https://github.com/tier4/AWSIM) -- a Unity-based SSv2 backend, the alternative to
+  CARLA.
+- [play_launch](https://pypi.org/project/play-launch/) -- a `ros2 launch` drop-in with
+  per-node logs and a web UI.

@@ -1,29 +1,24 @@
 # Documentation
 
-## Design
-- [Architecture](design/architecture.md) - System overview, component responsibilities, AWSIM comparison
-- [Multi-Instance Architecture](design/multi-instance-architecture.md) - Authority model, background AVs, clock ownership, gap list ⭐
-- [SSv2 Protocol](design/ssv2-protocol.md) - ZMQ+Protobuf message reference
-- [User Guide](user-guide.md) - install, map and scenario directories, running
-- [User workflow and the vehicle agent](design/user-workflow.md) - two sides, interfaces, swapping CARLA or Autoware
-- [Survey: Isaac Sim and digital twins](design/survey-isaac-sim-and-digital-twin.md) - off-road WG Isaac sim, NuRec, GLIM, Lanelet2 tooling, proposed spikes
-- [SSv2 Launch Configuration](design/ssv2-launch-configuration.md) - SSv2 parameter background (run workflow superseded by the user guide)
+## Using carla-scenario-bridge
+
+- [README](../README.md) -- what it is, prerequisites, setup, quick start
+- Tutorials, in order:
+  1. [First run](tutorials/01-first-run.md) -- both sides up, a starter scenario, its verdict
+  2. [Prepare a scenario](tutorials/02-prepare-a-scenario.md) -- poses on the map, a `.xosc` of your own
+  3. [Run and judge](tutorials/03-run-and-judge.md) -- suites, CARLA's contacts in the verdict, results
+  4. [Demo run](tutorials/04-demo-run.md) -- two Autoware vehicles, recording a screencast
+- [User Guide](user-guide.md) -- the reference: install, maps, scenario directories, running,
+  the CARLA world, troubleshooting
+- [Writing scenarios](design/scenario-authoring.md) -- what a scenario may use on CARLA, and how
+- [User workflow and the vehicle agent](design/user-workflow.md) -- the two sides, swapping
+  CARLA or Autoware
+
+## Developing carla-scenario-bridge
+
+- [Developer Guide](development.md) -- build, test, layout, how a scenario runs, conventions,
+  and the index of design documents ([design/](design/))
 
 ## Roadmap
-- [Overview](roadmap/README.md) - Phase index and ordering rationale
 
-Original plan, pre-dating the authority model:
-- [001: Core ZMQ Adapter](roadmap/001-core-zmq-adapter.md) - ZMQ server, CARLA connection, entity lifecycle, coordinate conversion
-- [002: Autoware Integration](roadmap/002-autoware-integration.md) - Sensor pipeline, ego physics readback, end-to-end driving
-- [003: NPC + Pedestrian Support](roadmap/003-npc-pedestrian-support.md) - superseded by 008
-- [004: Traffic Lights + Environment](roadmap/004-traffic-lights-environment.md) - superseded by 009
-- [005: Hardening + AWF Contribution](roadmap/005-hardening-awf-contribution.md) - SafetyPool scenarios, AWF upstream
-
-Audit-driven, from the 2026-07-28 workflow audit:
-- [006: Honest Failures](roadmap/006-honest-failures.md) - stop returning success for work not done ⭐
-- [007: Repeatable Runs](roadmap/007-repeatable-runs.md) - actor teardown, spawn retry, reconnection
-- [008: Entity Fidelity](roadmap/008-entity-fidelity.md) - pedestrians, misc objects, NPC physics
-- [009: Map and Traffic Lights](roadmap/009-map-and-traffic-lights.md) - map loading, signal mapping, recognition
-- [010: Multi-Instance](roadmap/010-multi-instance.md) - config loading, role names, background AVs
-- [011: Robustness](roadmap/011-robustness.md) - tick timeouts, ego respawn, duplicate publishers
-- [019: NTU Campus Digital Twin](roadmap/019-ntu-campus-twin.md) - real-site twin, CARLA 0.10 import, sensor realism measured
+- [Roadmap](roadmap/README.md) -- one document per phase: problem, design, steps, measured results
