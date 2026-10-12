@@ -80,7 +80,10 @@ writes palette GIFs at 800 px wide, 8 fps. `docs/media/showreel_pedestrian.gif` 
 5.8 MB: the ego stops for the crossing pedestrian, `obstacle_stop` in RViz, and resumes) and
 `docs/media/showreel_two_av.gif` (6x, 23 s, 5.6 MB: CARLA's view of the ego beside both
 Autoware stacks). First cut at 960 px / 10 fps / 128 colours was 14 and 9.9 MB -- lidar
-points dither badly; the 1280x720 sources were sharp enough, no re-record needed.
+points dither badly; the 1280x720 sources were sharp enough, no re-record needed. **Then cut smaller** (user, 2026-10-12: on GitHub each took ~20 s to load before
+playing): 640 px, 6 fps, trimmed to the action -- pedestrian 0:24-1:48 (drive, stop for the
+crossing, restart) 10 s / 1.9 MB; two-AV 0:35-2:05, 15 s / 2.5 MB -- and the two-AV GIF sits
+in a collapsed `<details>` block, so the README loads ~2 MB of animation up front, not ~12.
 
 **Step 3 (2026-10-12).** On this host, each in its own terminal environment (Autoware's
 `setup.bash`, then the workspace's; plus this host's loopback `CYCLONEDDS_URI`, which a

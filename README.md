@@ -8,14 +8,17 @@ localization, planning and control, while
 scenario and gives the verdict.
 
 <p align="center">
-  <img src="docs/media/showreel_pedestrian.gif" alt="Autoware in CARLA stops for a crossing pedestrian, then drives on" width="800"><br>
+  <img src="docs/media/showreel_pedestrian.gif" alt="Autoware in CARLA stops for a crossing pedestrian, then drives on" width="640"><br>
   <em>A starter scenario: the ego stops for a pedestrian crossing ahead and drives on (8x).</em>
 </p>
 
+<details>
+<summary><b>▶ Two Autoware vehicles in one scenario</b> (2.5 MB animation)</summary>
 <p align="center">
-  <img src="docs/media/showreel_two_av.gif" alt="Two Autoware stacks driving in one CARLA scenario" width="800"><br>
+  <img src="docs/media/showreel_two_av.gif" alt="Two Autoware stacks driving in one CARLA scenario" width="640"><br>
   <em>Two complete Autoware stacks in one scenario, each driving its own vehicle (6x).</em>
 </p>
+</details>
 
 ## What it does
 
