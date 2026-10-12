@@ -112,7 +112,11 @@ ros2 run csb_launch run_suite <scenario file or dir>... --output <results dir> \
 
    **Proof run 2 (2026-10-11): clean.** A fresh agent, guide only, on play_launch's defaults:
    `basic/` 7/7 (532 s), `awf/` UC-ACC 27/27 (2200 s), UC-AEB 9/9 (720 s); build 9 min 21 s.
-   Screenshots: `docs/proof/020/first-user/`. Between the runs play_launch itself was fixed to
+   Screenshots: `docs/proof/020/first-user/`. Screencasts of every `basic/` scenario, one
+   variant of each AWF use case and the two-AV scenario (CARLA chase camera, scenario
+   terminal, RViz; two pedestrian/ACC re-recorded after 022 on 2026-10-12) are kept out of
+   git, in a local `docs/proof/020/screencast/` with its own README. Between the runs
+   play_launch itself was fixed to
    behave as `ros2 launch` (0.15.0/0.15.1: interception only with a contract, ament_index
    package lookup, one process per container, `on_exit=Shutdown` under the Rust parser), so
    the guide's commands carry no `--enforce-rules`/`--parser` flags. Its remaining findings
