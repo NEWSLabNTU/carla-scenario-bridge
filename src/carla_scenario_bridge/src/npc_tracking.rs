@@ -133,6 +133,102 @@ pub fn command(
     }
 }
 
+/// SSv2's twist for an entity, as the velocity and yaw rate of its CARLA body.
+///
+/// SSv2 gives the twist in the entity's own frame (ROS: x forward, y left), at the entity's
+/// origin -- the rear axle for vehicles. The CARLA body's origin sits `offset` from it, so in
+/// a turn the body moves at `v + ω × r`: 1 m/s more at 0.7 rad/s and a 1.5 m offset. The
+/// result is in CARLA's world frame: y flipped, and a yaw rate in degrees per second,
+/// positive clockwise from above.
+///
+/// `entity_yaw` is the entity's ROS yaw in radians; `offset` is in the entity's frame, m.
+pub fn world_twist(
+    entity_yaw: f64,
+    vx_body: f64,
+    vy_body: f64,
+    yaw_rate: f64,
+    offset_x: f64,
+    offset_y: f64,
+) -> (f64, f64, f64) {
+    let (sin, cos) = entity_yaw.sin_cos();
+    let vx = vx_body * cos - vy_body * sin;
+    let vy = vx_body * sin + vy_body * cos;
+    let rx = offset_x * cos - offset_y * sin;
+    let ry = offset_x * sin + offset_y * cos;
+    let (bx, by) = (vx - yaw_rate * ry, vy + yaw_rate * rx);
+    (bx, -by, -yaw_rate.to_degrees())
+}
+
+/// The steering geometry from SSv2's declared axles (`positionX`, m from the entity origin)
+/// and CARLA's front-wheel lock: `None` without a usable wheelbase or lock.
+pub fn steering(front_axle_x: f64, rear_axle_x: f64, max_steer_deg: f64) -> Option<Steering> {
+    let wheelbase = front_axle_x - rear_axle_x;
+    (wheelbase.is_finite() && wheelbase > 0.1 && max_steer_deg > 0.0).then_some(Steering {
+        wheelbase,
+        max_steer_deg,
+    })
+}
+
+/// One tracked entity's errors over an episode, measured before each step against the
+/// start-of-step pose.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackingStats {
+    errors: Vec<f32>,
+    yaw_errors: Vec<f32>,
+    snaps: u32,
+}
+
+/// A summary of [`TrackingStats`], for the log and the contact report.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackingSummary {
+    pub frames: usize,
+    pub error_p95: f64,
+    pub error_max: f64,
+    /// `None` for walkers, whose yaw CARLA turns itself.
+    pub yaw_p95: Option<f64>,
+    pub yaw_max: Option<f64>,
+    pub snaps: u32,
+}
+
+impl TrackingStats {
+    /// One frame: the in-plane error (m), the yaw error (degrees; `None` for a walker) and
+    /// whether the frame snapped.
+    pub fn record(&mut self, error: f64, yaw_error: Option<f64>, snapped: bool) {
+        self.errors.push(error as f32);
+        if let Some(y) = yaw_error {
+            self.yaw_errors.push(y.abs() as f32);
+        }
+        self.snaps += u32::from(snapped);
+    }
+
+    pub fn summary(&self) -> TrackingSummary {
+        let yaw = (!self.yaw_errors.is_empty()).then_some(&self.yaw_errors);
+        TrackingSummary {
+            frames: self.errors.len(),
+            error_p95: p95(&self.errors),
+            error_max: max(&self.errors),
+            yaw_p95: yaw.map(|y| p95(y)),
+            yaw_max: yaw.map(|y| max(y)),
+            snaps: self.snaps,
+        }
+    }
+}
+
+/// Nearest-rank 95th percentile; 0 for no samples.
+fn p95(values: &[f32]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut v = values.to_vec();
+    v.sort_by(f32::total_cmp);
+    let rank = ((0.95 * v.len() as f64).ceil() as usize).clamp(1, v.len());
+    f64::from(v[rank - 1])
+}
+
+fn max(values: &[f32]) -> f64 {
+    values.iter().copied().fold(0.0_f32, f32::max).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,5 +439,60 @@ mod tests {
         assert!(close(wrap_deg(180.0), 180.0));
         assert!(close(wrap_deg(-180.0), 180.0));
         assert!(close(wrap_deg(540.0), 180.0));
+    }
+
+    #[test]
+    fn a_straight_twist_turns_with_the_heading_and_flips_y() {
+        // Heading +90 deg in ROS (north, +y), 5 m/s forward: ROS (0, 5) -> CARLA (0, -5).
+        let (vx, vy, w) = world_twist(std::f64::consts::FRAC_PI_2, 5.0, 0.0, 0.0, 1.5, 0.0);
+        assert!(
+            vx.abs() < 1e-9 && close(vy, -5.0) && close(w, 0.0),
+            "{vx} {vy} {w}"
+        );
+    }
+
+    #[test]
+    fn in_a_turn_the_body_moves_faster_than_the_rear_axle() {
+        // Heading 0, 5 m/s, turning left at 0.7 rad/s, body centre 1.5 m ahead: the centre
+        // moves 0.7 * 1.5 = 1.05 m/s sideways (ROS +y, CARLA -y); CARLA's yaw rate is -0.7
+        // rad/s in degrees.
+        let (vx, vy, w) = world_twist(0.0, 5.0, 0.0, 0.7, 1.5, 0.0);
+        assert!(close(vx, 5.0) && close(vy, -1.05), "{vx} {vy}");
+        assert!(close(w, -0.7_f64.to_degrees()), "{w}");
+    }
+
+    #[test]
+    fn steering_needs_a_wheelbase_and_a_lock() {
+        assert_eq!(
+            steering(3.1, 0.0, 70.0),
+            Some(Steering {
+                wheelbase: 3.1,
+                max_steer_deg: 70.0
+            })
+        );
+        assert_eq!(steering(0.0, 0.0, 70.0), None);
+        assert_eq!(steering(3.1, 0.0, 0.0), None);
+        assert_eq!(steering(f64::NAN, 0.0, 70.0), None);
+    }
+
+    #[test]
+    fn tracking_stats_summarise_error_yaw_and_snaps() {
+        let mut s = TrackingStats::default();
+        for i in 1..=100 {
+            s.record(f64::from(i) / 100.0, Some(-f64::from(i) / 10.0), i == 100);
+        }
+        let sum = s.summary();
+        // Stored as f32: compare at f32 precision.
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-5;
+        assert_eq!((sum.frames, sum.snaps), (100, 1));
+        assert!(
+            near(sum.error_p95, 0.95) && near(sum.error_max, 1.0),
+            "{sum:?}"
+        );
+        assert!(near(sum.yaw_p95.unwrap(), 9.5) && near(sum.yaw_max.unwrap(), 10.0));
+        let mut walker = TrackingStats::default();
+        walker.record(0.1, None, false);
+        assert_eq!(walker.summary().yaw_p95, None);
+        assert_eq!(TrackingStats::default().summary().error_p95, 0.0);
     }
 }

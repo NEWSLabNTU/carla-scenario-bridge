@@ -42,7 +42,8 @@ use carla::sensor::data::CollisionEvent;
 use carla::sensor::SensorDataBase;
 use eyre::{eyre, Result};
 
-use crate::contact_report::{self, ContactReport, ReportContact, ReportGeometry};
+use crate::contact_report::{self, ContactReport, ReportContact, ReportGeometry, ReportTracking};
+use crate::npc_tracking::TrackingStats;
 
 /// At most one WARN per other actor per this much simulation time. A sustained contact --
 /// an NPC teleported into the ego and held there -- reports every physics tick, and the log
@@ -250,6 +251,8 @@ pub struct CollisionMonitor {
     run_start_unix: f64,
     /// Each entity's body against its declared box, this episode (roadmap 022).
     geometry: Vec<ReportGeometry>,
+    /// Each tracked NPC's tracking error, this episode (roadmap 023).
+    tracking: std::collections::BTreeMap<String, TrackingStats>,
 }
 
 impl CollisionMonitor {
@@ -275,6 +278,7 @@ impl CollisionMonitor {
             episode: 0,
             run_start_unix: 0.0,
             geometry: Vec::new(),
+            tracking: Default::default(),
         }
     }
 
@@ -289,6 +293,58 @@ impl CollisionMonitor {
         self.frame.store(0, Ordering::Relaxed);
         self.episode += 1;
         self.geometry.clear();
+        self.tracking.clear();
+    }
+
+    /// One frame of a tracked NPC: its in-plane error (m), yaw error (degrees; `None` for a
+    /// walker), and whether it was snapped back.
+    pub fn record_tracking(
+        &mut self,
+        name: &str,
+        error: f64,
+        yaw_error: Option<f64>,
+        snapped: bool,
+    ) {
+        self.tracking
+            .entry(name.to_string())
+            .or_default()
+            .record(error, yaw_error, snapped);
+    }
+
+    fn tracking_rows(&self) -> Vec<ReportTracking> {
+        self.tracking
+            .iter()
+            .map(|(name, stats)| {
+                let s = stats.summary();
+                ReportTracking {
+                    name: name.clone(),
+                    frames: s.frames,
+                    error_p95: s.error_p95,
+                    error_max: s.error_max,
+                    yaw_p95: s.yaw_p95,
+                    yaw_max: s.yaw_max,
+                    snaps: s.snaps,
+                }
+            })
+            .collect()
+    }
+
+    /// One log line per tracked NPC; nothing under `kinematic`.
+    fn log_tracking(&self) {
+        for row in self.tracking_rows() {
+            let yaw = match (row.yaw_p95, row.yaw_max) {
+                (Some(p), Some(m)) => format!(", yaw p95 {p:.2} / max {m:.2} deg"),
+                _ => String::new(),
+            };
+            tracing::info!(
+                "Tracked '{}': {} frames, error p95 {:.3} / max {:.3} m{yaw}, {} snap(s)",
+                row.name,
+                row.frames,
+                row.error_p95,
+                row.error_max,
+                row.snaps
+            );
+        }
     }
 
     /// Note a spawned entity's body for the episode's reports. A respawn under the same
@@ -445,6 +501,7 @@ impl CollisionMonitor {
         // Anything the callback queued before the stop.
         self.drain(name_of);
         tracing::info!("{}", self.log.summary(&ego_name));
+        self.log_tracking();
         self.write_report(&ego_name, true);
         self.log = CollisionLog::default();
     }
@@ -463,6 +520,7 @@ impl CollisionMonitor {
             complete,
             contacts: self.log.report_contacts(),
             geometry: self.geometry.clone(),
+            tracking: self.tracking_rows(),
         };
         contact_report::write_in_background(dir, report);
     }
@@ -639,6 +697,23 @@ mod tests {
         );
         m.begin_episode();
         assert!(m.geometry.is_empty());
+    }
+
+    #[test]
+    fn tracking_accumulates_per_name_and_resets_per_episode() {
+        let mut m = CollisionMonitor::new(true, None);
+        m.record_tracking("npc", 0.1, Some(1.0), false);
+        m.record_tracking("npc", 0.6, Some(6.0), true);
+        m.record_tracking("walker", 0.05, None, false);
+        let rows = m.tracking_rows();
+        assert_eq!(rows.len(), 2);
+        let npc = rows.iter().find(|r| r.name == "npc").unwrap();
+        assert_eq!((npc.frames, npc.snaps), (2, 1));
+        assert!((npc.error_max - 0.6).abs() < 1e-6);
+        let walker = rows.iter().find(|r| r.name == "walker").unwrap();
+        assert_eq!(walker.yaw_p95, None);
+        m.begin_episode();
+        assert!(m.tracking_rows().is_empty());
     }
 
     /// Draining routes queued events through the log with names from the caller.

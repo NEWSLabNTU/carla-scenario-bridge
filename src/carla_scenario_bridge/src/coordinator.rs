@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
 use crate::blueprint_boxes::{self, BoxTable, Dimensions, SizeClass};
-use crate::config::{BridgeConfig, SensorReleaseConfig};
+use crate::config::{BridgeConfig, NpcMotion, SensorReleaseConfig};
 use crate::map_resolver::{lanelet_map_file, load_map_origin, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
@@ -151,6 +151,12 @@ impl SpawnKind {
     /// on gives the actor two authorities: `set_transform` places it, then PhysX pulls it
     /// down and shoves it out of collisions before the next frame. The AWSIM pattern this
     /// design follows makes puppeteered actors kinematic for exactly this reason.
+    /// Moved by physics toward SSv2's pose under `npc_motion: tracked` (roadmap 023):
+    /// SSv2-driven vehicles and pedestrians. Misc objects stay put by teleport.
+    fn trackable(self) -> bool {
+        matches!(self, SpawnKind::Npc | SpawnKind::Pedestrian)
+    }
+
     fn physics_driven(self) -> bool {
         // Driven through CARLA physics -- by an Autoware, or by Traffic Manager -- so none of
         // them may be teleported.
@@ -429,6 +435,7 @@ use crate::entity_manager::{EntityManager, EntityType};
 use crate::episode_clock::{
     fmt_ns, old_episode_last_elapsed, reload_as_pause, tick_then_read, EpisodeClock, EpisodeReload,
 };
+use crate::npc_tracking::{self, Steering};
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs::entity_subtype::Enum as EntitySubtype;
@@ -701,6 +708,22 @@ fn walker_lift(bbox_center_z: f32, bbox_extent_z: f32) -> f32 {
 /// many for a height that changes by centimetres over a few metres of road.
 const WALKER_GROUND_REFRESH_M: f32 = 2.0;
 
+/// The world as tracked NPCs are commanded in one `UpdateEntityStatus`: one snapshot to
+/// read every body from, one actor list to command them through (roadmap 023).
+struct TrackedView {
+    snapshot: carla::client::WorldSnapshot,
+    actors: carla::client::ActorList,
+}
+
+/// An NPC under `npc_motion: tracked` (roadmap 023): physics on, driven toward SSv2's pose
+/// every frame by `npc_tracking::command`.
+#[derive(Debug, Clone, Copy)]
+struct TrackedNpc {
+    walker: bool,
+    /// Steer feed-forward geometry; `None` for walkers and vehicles without declared axles.
+    steering: Option<Steering>,
+}
+
 /// A walker's height bookkeeping: its fixed origin-above-feet lift, and the last ground
 /// lookup (`x`, `y`, and the road z there -- `None` when CARLA had no lane nearby).
 #[derive(Debug, Clone, Copy, Default)]
@@ -837,6 +860,8 @@ pub struct Coordinator {
     /// pedestrian at its feet; a CARLA walker's origin is its capsule centre, see
     /// [`walker_lift`]), and the cached ground height under it (see [`WalkerHeight`]).
     walker_height: HashMap<u32, WalkerHeight>,
+    /// NPCs moved by physics rather than teleported (roadmap 023), by actor.
+    tracked_npcs: HashMap<u32, TrackedNpc>,
     /// Directory holding per-map config, e.g. the traffic light signal mapping.
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
@@ -956,6 +981,7 @@ impl Coordinator {
             settle_frames: HashMap::new(),
             accel_history: HashMap::new(),
             walker_height: HashMap::new(),
+            tracked_npcs: HashMap::new(),
             collision_monitor: CollisionMonitor::new(collision_monitor_enabled, contact_report_dir),
             world_id,
             clock_path,
@@ -1074,6 +1100,7 @@ impl Coordinator {
         self.settle_frames.remove(&actor_id);
         self.accel_history.remove(&actor_id);
         self.walker_height.remove(&actor_id);
+        self.tracked_npcs.remove(&actor_id);
     }
 
     /// Bind the release channel, or explain why we are not using one.
@@ -1469,6 +1496,7 @@ impl Coordinator {
             self.settle_frames.clear();
             self.accel_history.clear();
             self.walker_height.clear();
+            self.tracked_npcs.clear();
             self.sync_mode_enabled = false;
             // The reloaded world's lights are CARLA's own again, so we owe no unfreeze.
             self.froze_traffic_lights.mark_restored();
@@ -2224,6 +2252,7 @@ impl Coordinator {
         self.settle_frames.clear();
         self.accel_history.clear();
         self.walker_height.clear();
+        self.tracked_npcs.clear();
 
         match self.episode_clock.last_frame() {
             Some((e_last, d_last)) => {
@@ -2300,6 +2329,7 @@ impl Coordinator {
         self.settle_frames.clear();
         self.accel_history.clear();
         self.walker_height.clear();
+        self.tracked_npcs.clear();
         self.collision_monitor.begin_episode();
 
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
@@ -2845,7 +2875,27 @@ impl Coordinator {
         // gravity pulls the actor down and collision response shoves it out of position
         // between ticks, while the pose reported back to SSv2 is the commanded one -- so
         // the divergence is invisible to the scenario.
-        if !kind.physics_driven() {
+        let tracked = kind.trackable() && self.config.npc_motion == NpcMotion::Tracked;
+        if tracked {
+            // Physics stays on: npc_tracking drives it toward SSv2's pose every frame
+            // (roadmap 023). No settle masking -- SSv2 reports its NPCs' state itself -- and
+            // no hand brake, which would fight the commanded velocity.
+            let steering = self.npc_steering(&actor, &shape);
+            self.tracked_npcs.insert(
+                actor_id,
+                TrackedNpc {
+                    walker: kind == SpawnKind::Pedestrian,
+                    steering,
+                },
+            );
+            tracing::info!(
+                "'{name}' is tracked (physics on){}",
+                match (kind, steering) {
+                    (SpawnKind::Npc, None) => ", no steer feed-forward (no axles declared)",
+                    _ => "",
+                }
+            );
+        } else if !kind.physics_driven() {
             if let Err(e) = actor.set_simulate_physics(false) {
                 // Not fatal, but the actor will not track its commanded pose properly.
                 tracing::warn!(
@@ -2967,12 +3017,22 @@ impl Coordinator {
             .as_ref()
             .and_then(|p| p.subtype.as_ref())
             .map_or(EntitySubtype::Unknown, |s| s.value());
-        let shape = EntityShape::of(
+        let mut shape = EntityShape::of(
             req.parameters
                 .as_ref()
                 .and_then(|p| p.bounding_box.as_ref()),
             subtype,
         );
+        shape.axles = req
+            .parameters
+            .as_ref()
+            .and_then(|p| p.axles.as_ref())
+            .and_then(|a| {
+                Some((
+                    a.front_axle.as_ref()?.position_x,
+                    a.rear_axle.as_ref()?.position_x,
+                ))
+            });
         // The Traffic Manager first: a simulator-driven vehicle nothing can drive must not
         // be spawned and left parked.
         if kind == SpawnKind::AutopilotNpc {
@@ -3299,6 +3359,9 @@ impl Coordinator {
         if let Some(link) = self.agent_link.as_ref() {
             link.set_npc_logic_started(req.npc_logic_started);
         }
+        // Tracked NPCs (roadmap 023) are read from one world snapshot and commanded through
+        // one actor list per frame, fetched on the first tracked entity.
+        let mut tracked_view: Option<TrackedView> = None;
 
         for entity_status in &req.status {
             let name = &entity_status.name;
@@ -3353,6 +3416,35 @@ impl Coordinator {
                         });
                     }
                 }
+            } else if let Some(npc) = self.tracked_npcs.get(&actor_id).copied() {
+                // A tracked NPC (roadmap 023): moved toward SSv2's pose with a velocity,
+                // snapped back past the thresholds. SSv2 is told what it sent, as for a
+                // teleported NPC: it owns its NPCs' state, CARLA's residual is reported.
+                if let Some(pose) = entity_status.pose.as_ref() {
+                    if carla_unreachable {
+                        teleport_failures.push(format!("{name}: skipped, CARLA unreachable"));
+                    } else {
+                        let started = std::time::Instant::now();
+                        if let Err(e) = self.track_npc(
+                            name,
+                            actor_id,
+                            npc,
+                            pose,
+                            entity_status.action_status.as_ref(),
+                            origin_offset,
+                            &mut tracked_view,
+                        ) {
+                            carla_unreachable = started.elapsed() > SLOW_FAILURE;
+                            tracing::warn!("Tracking '{name}': {e:#}");
+                            teleport_failures.push(format!("{name}: {e:#}"));
+                        }
+                    }
+                }
+                updated.push(api::UpdatedEntityStatus {
+                    name: name.clone(),
+                    action_status: entity_status.action_status.clone(),
+                    pose: entity_status.pose,
+                });
             } else {
                 // NPC or ego overwrite: set transform from SSv2 pose
                 if let Some(pose) = entity_status.pose.as_ref() {
@@ -4151,6 +4243,23 @@ impl Coordinator {
         }
     }
 
+    /// A tracked vehicle's steering geometry: the wheelbase from its declared axles and the
+    /// lock of CARLA's front wheel (`max_steer_angle`, the same field on every CARLA
+    /// version, unlike the wheel's position). `None` for walkers or when either is missing.
+    fn npc_steering(&self, actor: &carla::client::Actor, shape: &EntityShape) -> Option<Steering> {
+        let (front, rear) = shape.axles?;
+        let carla::client::ActorKind::Vehicle(vehicle) = actor.clone().into_kinds() else {
+            return None;
+        };
+        let lock = vehicle
+            .physics_control()
+            .ok()?
+            .wheels
+            .first()
+            .map(|w| f64::from(w.max_steer_angle))?;
+        npc_tracking::steering(front, rear, lock)
+    }
+
     /// The blueprint closest to the entity's declared box among its class (roadmap 022), or
     /// `None` when the kind is not size-matched, nothing was declared, or there is no table.
     fn size_matched_blueprint(
@@ -4474,6 +4583,162 @@ impl Coordinator {
         Some((pose, action_status))
     }
 
+    /// One frame of a tracked NPC (roadmap 023): measure it against SSv2's pose, record the
+    /// error, and command its velocity (or snap it back).
+    #[allow(clippy::too_many_arguments)]
+    fn track_npc(
+        &mut self,
+        name: &str,
+        actor_id: u32,
+        npc: TrackedNpc,
+        pose: &Pose,
+        status: Option<&traffic_simulator_msgs::ActionStatus>,
+        origin_offset: OriginOffset,
+        view: &mut Option<TrackedView>,
+    ) -> Result<()> {
+        if view.is_none() {
+            let ids: Vec<u32> = self.tracked_npcs.keys().copied().collect();
+            *view = Some(TrackedView {
+                snapshot: self.world.snapshot().wrap_err("world snapshot")?,
+                actors: self.world.actors_by_ids(&ids).wrap_err("tracked actors")?,
+            });
+        }
+        let view = view.as_ref().expect("filled above");
+        let body = view
+            .snapshot
+            .find(actor_id)
+            .ok_or_else(|| eyre::eyre!("actor {actor_id} is not in the world snapshot"))?;
+        let now = body.transform();
+
+        // SSv2's pose and twist as the CARLA body's target (npc_tracking::world_twist).
+        let target_tf = ros_pose_to_carla_transform(pose, origin_offset, self.map_origin);
+        let ros_yaw = pose.orientation.as_ref().map_or(0.0, |q| {
+            coordinate_conversion::quaternion_to_euler(q.x, q.y, q.z, q.w).2
+        });
+        let twist = status.and_then(|a| a.twist.as_ref());
+        let linear = twist.and_then(|t| t.linear.as_ref());
+        let yaw_rate = twist.and_then(|t| t.angular.as_ref()).map_or(0.0, |a| a.z);
+        let (vx, vy, yaw_rate_deg) = npc_tracking::world_twist(
+            ros_yaw,
+            linear.map_or(0.0, |l| l.x),
+            linear.map_or(0.0, |l| l.y),
+            yaw_rate,
+            origin_offset.x,
+            origin_offset.y,
+        );
+        let target = npc_tracking::Target {
+            x: f64::from(target_tf.location.x),
+            y: f64::from(target_tf.location.y),
+            yaw_deg: f64::from(target_tf.rotation.yaw),
+            vx,
+            vy,
+            yaw_rate_deg,
+        };
+        let current = npc_tracking::Current {
+            x: f64::from(now.location.x),
+            y: f64::from(now.location.y),
+            yaw_deg: f64::from(now.rotation.yaw),
+        };
+        let dt = self.step_time;
+        let gains = if npc.walker {
+            npc_tracking::WALKER_GAINS
+        } else {
+            npc_tracking::VEHICLE_GAINS
+        };
+        let command = npc_tracking::command(&target, &current, dt, gains, npc.steering);
+
+        // The error the law acts on: against the start-of-step pose, before this step.
+        let error = (target.x - vx * dt - current.x).hypot(target.y - vy * dt - current.y);
+        let yaw_error = (!npc.walker)
+            .then(|| npc_tracking::wrap_deg(target.yaw_deg - yaw_rate_deg * dt - current.yaw_deg));
+        let snapped = matches!(command, npc_tracking::Command::Snap { .. });
+        self.collision_monitor
+            .record_tracking(name, error, yaw_error, snapped);
+
+        let actor = view
+            .actors
+            .find(actor_id)
+            .wrap_err("find tracked actor")?
+            .ok_or_else(|| eyre::eyre!("actor {actor_id} not found"))?;
+        let (vx, vy, yaw_rate_deg, steer) = match command {
+            npc_tracking::Command::Track {
+                vx,
+                vy,
+                yaw_rate_deg,
+                steer,
+            } => (vx, vy, yaw_rate_deg, steer),
+            npc_tracking::Command::Snap {
+                x,
+                y,
+                yaw_deg,
+                vx,
+                vy,
+                yaw_rate_deg,
+            } => {
+                let mut snap_to = now.clone();
+                snap_to.location.x = x as f32;
+                snap_to.location.y = y as f32;
+                snap_to.rotation.yaw = yaw_deg as f32;
+                if let Some(z) = self.walker_teleport_z(actor_id, &snap_to.location) {
+                    snap_to.location.z = z;
+                }
+                actor
+                    .set_transform(&snap_to)
+                    .wrap_err("set_transform (snap)")?;
+                (vx, vy, yaw_rate_deg, None)
+            }
+        };
+        if npc.walker {
+            let walker = carla::client::Walker::try_from(actor.clone())
+                .map_err(|_| eyre::eyre!("actor {actor_id} is not a walker"))?;
+            let speed = vx.hypot(vy);
+            let (dx, dy) = if speed > 1e-6 {
+                (vx / speed, vy / speed)
+            } else {
+                (0.0, 0.0)
+            };
+            let mut control = walker.control().wrap_err("read walker control")?;
+            // The control's direction is CARLA's own C++ Vector3D (a POD), not carla::geom's.
+            control.direction.x = dx as f32;
+            control.direction.y = dy as f32;
+            control.direction.z = 0.0;
+            control.speed = speed as f32;
+            control.jump = false;
+            walker.apply_control(&control).wrap_err("walker control")?;
+        } else {
+            // Gravity and the suspension keep z; only the plane is commanded.
+            actor
+                .set_target_velocity(&carla::geom::Vector3D {
+                    x: vx as f32,
+                    y: vy as f32,
+                    z: body.velocity().z,
+                })
+                .wrap_err("set_target_velocity")?;
+            actor
+                .set_target_angular_velocity(&carla::geom::Vector3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: yaw_rate_deg as f32,
+                })
+                .wrap_err("set_target_angular_velocity")?;
+            if let (Some(steer), carla::client::ActorKind::Vehicle(vehicle)) =
+                (steer, actor.clone().into_kinds())
+            {
+                let control = carla::rpc::VehicleControl {
+                    throttle: 0.0,
+                    steer: steer as f32,
+                    brake: 0.0,
+                    hand_brake: false,
+                    reverse: false,
+                    manual_gear_shift: false,
+                    gear: 0,
+                };
+                vehicle.apply_control(&control).wrap_err("steer")?;
+            }
+        }
+        Ok(())
+    }
+
     fn set_actor_transform(&self, actor_id: u32, transform: &Transform) -> Result<()> {
         let actors = self.world.actors().wrap_err("get actors")?;
         let actor = actors
@@ -4493,6 +4758,8 @@ struct EntityShape {
     /// The declared box; `None` when absent or degenerate.
     declared: Option<Dimensions>,
     subtype: EntitySubtype,
+    /// Declared front and rear axle `positionX`, m from the entity origin (vehicles).
+    axles: Option<(f64, f64)>,
 }
 
 impl EntityShape {
@@ -4509,6 +4776,7 @@ impl EntityShape {
             origin_offset: origin_offset_of(bounding_box),
             declared,
             subtype,
+            axles: None,
         }
     }
 }
@@ -4755,6 +5023,22 @@ mod tests {
 
     /// Regression guard for C1, the whole point of the phase. Anything SSv2 teleports must
     /// have CARLA physics off, or PhysX and `set_transform` both drive the same actor.
+    #[test]
+    fn only_ssv2_driven_vehicles_and_pedestrians_are_trackable() {
+        // npc_motion: tracked (roadmap 023) moves these with physics; props stay put, and
+        // everything already physics-driven keeps its own driver.
+        assert!(SpawnKind::Npc.trackable());
+        assert!(SpawnKind::Pedestrian.trackable());
+        for kind in [
+            SpawnKind::MiscObject,
+            SpawnKind::Ego,
+            SpawnKind::AgentVehicle,
+            SpawnKind::AutopilotNpc,
+        ] {
+            assert!(!kind.trackable(), "{kind:?}");
+        }
+    }
+
     #[test]
     fn only_the_ego_is_physics_driven() {
         assert!(SpawnKind::Ego.physics_driven());

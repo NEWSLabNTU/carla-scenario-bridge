@@ -60,6 +60,14 @@ agent_relay: "tcp://localhost:5560"
 # `/carla/set_weather` replaces it at run time (also kept across map loads).
 weather: ""
 
+# How SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023):
+#   kinematic  physics off, teleported to SSv2's pose each frame (exact; CARLA reads them at
+#              0 m/s, they cannot be pushed, walkers glide)
+#   tracked    physics on, driven toward SSv2's pose with its velocity, snapped back past
+#              0.5 m / 5 deg (real velocity, walk cycles, physical contacts)
+# Misc objects, simulator-autopilot and agent vehicles and the ego are not affected.
+npc_motion: kinematic
+
 # Telling the sensor bridges before we despawn something.
 #
 # acb attaches sensors to the vehicles this bridge spawns and listens to their streams, so

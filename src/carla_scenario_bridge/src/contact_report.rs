@@ -58,6 +58,25 @@ pub struct ReportGeometry {
     pub fits: bool,
 }
 
+/// How closely one tracked NPC followed SSv2's poses over the episode (roadmap 023).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportTracking {
+    /// SSv2 entity name.
+    pub name: String,
+    /// Frames measured.
+    pub frames: usize,
+    /// In-plane error before each step against the start-of-step pose, m.
+    pub error_p95: f64,
+    pub error_max: f64,
+    /// Yaw error, degrees; absent for walkers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yaw_p95: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yaw_max: Option<f64>,
+    /// Frames on which the body was teleported back (past 0.5 m / 5 deg).
+    pub snaps: u32,
+}
+
 /// One ego run, from the ego's spawn to its despawn (or teardown, or CARLA restart).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContactReport {
@@ -79,6 +98,10 @@ pub struct ContactReport {
     /// schema: a reader that does not know it ignores it.
     #[serde(default)]
     pub geometry: Vec<ReportGeometry>,
+    /// Every tracked NPC of the episode (`npc_motion: tracked`, roadmap 023), by name. Added
+    /// under the same schema; empty under `kinematic`.
+    #[serde(default)]
+    pub tracking: Vec<ReportTracking>,
 }
 
 /// Where reports go, from the config/parameter value: unset is the default directory,
@@ -209,6 +232,7 @@ mod tests {
             complete: true,
             contacts,
             geometry: vec![],
+            tracking: vec![],
         }
     }
 
@@ -294,6 +318,26 @@ mod tests {
         let json = serde_json::to_value(&r).unwrap();
         assert_eq!(json["geometry"][0]["fits"], false);
         assert_eq!(json["geometry"][0]["declared"][0], 12.0);
+        assert!(back.tracking.is_empty());
+    }
+
+    #[test]
+    fn tracking_rows_omit_yaw_for_walkers() {
+        let mut r = report(1.0, 1, vec![]);
+        r.tracking.push(ReportTracking {
+            name: "pedestrian".into(),
+            frames: 100,
+            error_p95: 0.01,
+            error_max: 0.2,
+            yaw_p95: None,
+            yaw_max: None,
+            snaps: 0,
+        });
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["tracking"][0]["snaps"], 0);
+        assert!(json["tracking"][0].get("yaw_p95").is_none());
+        let back: ContactReport = serde_json::from_value(json).unwrap();
+        assert_eq!(back.tracking[0].yaw_max, None);
     }
 
     #[test]

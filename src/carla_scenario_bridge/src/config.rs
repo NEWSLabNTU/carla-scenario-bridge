@@ -189,6 +189,21 @@ pub struct BridgeConfig {
     /// CARLA weather preset (`ClearNoon`, ...) applied on connect and after every map load;
     /// empty leaves CARLA's (roadmap 018). `/carla/set_weather` replaces it at run time.
     pub weather: String,
+    /// How SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023).
+    pub npc_motion: NpcMotion,
+}
+
+/// How SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NpcMotion {
+    /// Physics off, teleported to SSv2's pose every frame: exact, but CARLA reports them at
+    /// 0 m/s, they cannot be pushed, and walkers do not animate.
+    #[default]
+    Kinematic,
+    /// Physics on, driven toward SSv2's pose with a velocity each frame and snapped back
+    /// past 0.5 m / 5 deg (`npc_tracking`).
+    Tracked,
 }
 
 const DEFAULT_AGENT_RELAY: &str = "tcp://localhost:5560";
@@ -309,6 +324,15 @@ impl BridgeConfig {
             crate::weather::preset_or_err(weather.trim())
                 .map_err(|e| eyre::eyre!("parameter weather:={weather}: {e}"))?;
             self.weather = weather.trim().to_string();
+        }
+        if let Some(motion) = params.get("npc_motion").filter(|v| !v.trim().is_empty()) {
+            self.npc_motion = match motion.trim() {
+                "kinematic" => NpcMotion::Kinematic,
+                "tracked" => NpcMotion::Tracked,
+                other => {
+                    eyre::bail!("parameter npc_motion:={other}: expected `kinematic` or `tracked`")
+                }
+            };
         }
         if let Some(dir) = params
             .get("contact_report_dir")
@@ -502,6 +526,31 @@ mod tests {
         );
         let config: BridgeConfig = serde_yaml::from_str("weather: Sunny\n").expect("parses");
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn npc_motion_defaults_to_kinematic_and_takes_file_or_parameter() {
+        let params = |v: &str| {
+            crate::ros_args::RosParams::from_args([
+                "--ros-args".to_string(),
+                "-p".to_string(),
+                format!("npc_motion:={v}"),
+            ])
+            .expect("parses")
+        };
+        let config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        assert_eq!(config.npc_motion, NpcMotion::Kinematic);
+        let mut config: BridgeConfig =
+            serde_yaml::from_str("npc_motion: tracked\n").expect("parses");
+        assert_eq!(config.npc_motion, NpcMotion::Tracked);
+        config.apply_ros_params(&params("")).expect("applies");
+        assert_eq!(config.npc_motion, NpcMotion::Tracked);
+        config
+            .apply_ros_params(&params("kinematic"))
+            .expect("applies");
+        assert_eq!(config.npc_motion, NpcMotion::Kinematic);
+        assert!(config.apply_ros_params(&params("physics")).is_err());
+        assert!(serde_yaml::from_str::<BridgeConfig>("npc_motion: fast\n").is_err());
     }
 
     #[test]

@@ -21,6 +21,8 @@
   <arg name="ssv2_port" default=""/>
   <arg name="entity" default="ego" description="the scenario entity the relay serves"/>
   <arg name="agent_port" default="5560" description="TCP port vehicle agents connect to"/>
+  <arg name="npc_motion" default=""
+       description="kinematic | tracked: how SSv2-driven NPCs move in CARLA (roadmap 023); empty keeps the config file's"/>
   <arg name="weather" default=""
        description="CARLA weather preset (ClearNoon, CloudySunset, ...) kept across map loads; empty keeps the config file's (default: leave CARLA's)"/>
   <arg name="contact_report_dir" default=""
@@ -32,6 +34,7 @@
     <arg name="carla_port" value="$(var carla_port)"/>
     <arg name="ssv2_port" value="$(var ssv2_port)"/>
     <arg name="weather" value="$(var weather)"/>
+    <arg name="npc_motion" value="$(var npc_motion)"/>
     <arg name="contact_report_dir" value="$(var contact_report_dir)"/>
     <!-- Entities with controller `agent` are driven through this same relay. -->
     <arg name="agent_relay" value="tcp://localhost:$(var agent_port)"/>
