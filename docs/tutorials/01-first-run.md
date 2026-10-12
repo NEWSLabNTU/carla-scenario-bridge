@@ -13,8 +13,10 @@ Each terminal below starts with the same three lines. Put them in a file and `so
 
 ```bash
 source /opt/autoware/1.5.0/setup.bash                  # your Autoware
-source ~/carla-scenario-bridge/install/setup.bash       # this workspace, after Autoware
+source <your clone>/install/setup.bash                 # the workspace built in the README's Setup
 export CARLA_MAPS=~/maps/carla                         # holds Town01/, Town02/, ...
+# only if DDS discovery fails on this host (see "When it does not work"):
+# export CYCLONEDDS_URI=file://<your clone>/config/cyclonedds-localhost.xml
 ```
 
 Check the map directory has what the scenario and Autoware read:
@@ -135,7 +137,15 @@ checks, is in [csb_examples' README](../../src/csb_examples/README.md).
 |---|---|
 | Terminal 4 waits and fails with `... waited for the Autoware state ...` | the vehicle side never registered or never localized: Terminal 2 must show `ego: agent up`; Terminal 3's `map_path` must be the scenario's town |
 | The bridge prints `CARLA version mismatch` and retries | CARLA and the build disagree on the version (README, *Other CARLA versions*) |
-| Nothing ever connects | the two sides in the same domain by mistake, or DDS cannot discover on this host; see [User Guide §6](../user-guide.md#6-when-things-go-wrong) |
+| Nothing ever connects | DDS discovery fails on this host (multicast off on loopback): uncomment the `CYCLONEDDS_URI` line of step 0 in every terminal; [User Guide §6](../user-guide.md#6-when-things-go-wrong) |
+
+## Stopping
+
+Ctrl-C in each terminal: the vehicle side(s) first, then the simulation side; CARLA last,
+if at all (it serves every run, and restarting it takes minutes). An Autoware vehicle side can take up to a minute to wind down
+its ~90 processes; if a launch is still running after that, press Ctrl-C again. The
+simulation side's bridge is declared `respawn="true"` and may come back once while the launch
+shuts down; a second Ctrl-C ends it.
 
 ## Use play_launch instead
 

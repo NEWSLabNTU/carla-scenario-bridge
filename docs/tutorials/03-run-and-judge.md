@@ -87,6 +87,7 @@ body yourself.
   suite.junit.xml                       every scenario, merged: open it in any JUnit viewer
   follow_to_goal/
     launch.log                          the scenario launch's console
+    play_log/                           per-node logs (only when play_launch ran it)
     scenario_test_runner/
       result.junit.xml                  SSv2's verdict for this scenario
       execution_timer.json              how long SSv2's frames took

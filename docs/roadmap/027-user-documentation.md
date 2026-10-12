@@ -68,7 +68,7 @@ user docs, design docs and the roadmap.
    0.9.14, 0.9.15, 0.10.0; record which build; README table from the result.
 5. [ ] **README rewrite** and the contributor/developer guide `docs/development.md`.
 6. [ ] **Tutorials 1-4**, the pose helper, `docs/README.md`.
-7. [ ] **Fresh-user check.** One agent with only the README and tutorials, on this host:
+7. [x] **Fresh-user check.** One agent with only the README and tutorials, on this host:
    build, first run, a scenario of its own, a suite, a demo recording. Fix what it trips on;
    its clean pass closes the phase.
 
@@ -119,6 +119,56 @@ target directory of its own (the installed binaries and running stacks untouched
 0.10.0 is therefore listed as "not yet": acb reads wheel `position` to find the rear axle,
 which 0.10 replaced; the port is acb's unmerged `carla-0100` branch (roadmap 019). The README
 lists 0.9.14 and 0.9.15 as builds-untested, 0.9.16 as tested.
+
+**Step 7 (2026-10-12).** One agent, Opus, given only the README and the tutorials, on a copy
+of the working tree without build outputs; CARLA 0.9.16 shared and already running, maps and
+the host's loopback DDS profile given as facts about its machine. Everything with
+`ros2 launch` as written. 59 min.
+
+| Step | Result |
+|---|---|
+| README setup: `colcon build` | 51 packages, 20 min 47 s, first try (`rosdep install` failed for lack of sudo; its one missing package, `python3-pygame`, was present via pip) |
+| Tutorial 1: both sides, `town01_ego_drive` | PASS; readiness lines as the doc shows; vehicle side up in 39 s |
+| Tutorial 2: `carla_poses`, own `follow_to_goal.xosc` | output identical to the doc; own scenario PASS first run (45 s) |
+| Tutorial 3: `run_suite basic/ + own --physical-verdict` | 7/8, then 8/8: `town02_episode_change` failed once (`load world 'Town02': time-out of 120000ms` at load average 50), passed alone in 16 s |
+| Tutorial 4: second vehicle side, two-AV, RViz layouts, chase view, recording | PASS, once the layouts were found (finding 1) |
+
+Findings and what was done:
+
+1. *Blocker*: tutorial 4's RViz layouts were not installed -- they had been put under
+   `csb_launch/data`, a symlink to the untracked maps directory. Moved to
+   `src/csb_launch/rviz`, installed to `share/csb_launch/rviz` (fixed before the report).
+2. DDS discovery: the doc pointed to User Guide §6, which did not mention it. §6 now has
+   "Nothing ever connects" with the loopback `CYCLONEDDS_URI` profile; tutorial 1's
+   environment has it as a commented line.
+3. Tutorial 1 sourced `~/carla-scenario-bridge/install`; now `<your clone>/install`.
+4. `rosdep install` needs sudo: said in the README, with what to do without it.
+5. `pip install carla==0.9.16` moved to the README's prerequisites.
+6. Tutorial 2 did not say a scenario needs OpenSCENARIO's frame (FileHeader, Storyboard
+   nesting, the Act's StartTrigger, StopTrigger): it now says to start from the shipped
+   file's copy and write the four parts.
+7. `carla_poses ... | head` printed a BrokenPipeError from `ros2 run` itself: the doc no
+   longer pipes it.
+8. Tutorial 3's results tree now shows `play_log/` (play_launch only).
+9. Tutorial 4's ffmpeg recorded 1920x1080 while `make_showreel.sh` crops a 1280x720
+   recording: the command now scales to 1280x720.
+10. Stopping was undocumented: tutorial 1 has a "Stopping" section (Ctrl-C; again after a
+    minute).
+
+Not re-run after the fixes; each fix is to the text that misled, and finding 1's install path
+was checked on this tree.
+
+**Follow-ups (code, not docs)**, from the same run:
+
+- On shutdown by Ctrl-C to the whole process group, the vehicle side did not end within
+  60 s, the simulation side's bridge exited cleanly and was then *respawned* by
+  `respawn="true"`, and the relay raised `RCLError: Failed to publish: publisher's context
+  is invalid` (`_publish_all_locked` -> `pub_scan.publish`) and was respawned too.
+- After a `load_world` timeout under load the bridge logged `CARLA was restarted (new
+  episode ...)` although CARLA's pid was unchanged: the message misreads a slow map load.
+- The bridge logs `No traffic light mapping at .../config/traffic_lights_Town01.yaml` (the
+  fallback path) on Initializes that do find the map directory's table on another path;
+  to a new user it reads as an error.
 
 ## Acceptance
 

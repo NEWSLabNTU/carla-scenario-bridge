@@ -59,11 +59,12 @@ the pedestrian, the car ahead and the traffic light.
 - **Converted maps**: one Autoware map directory (Lanelet2 + point cloud) per CARLA town.
   The TUM pack this project uses has no working public download at the moment -- see
   [User Guide §2](docs/user-guide.md#2-prepare-a-map-directory). Nothing runs without them.
-- **Rust** and colcon's Rust plugin, which rosdep cannot install:
+- **Rust** and colcon's Rust plugin, which rosdep cannot install, and CARLA's Python API
+  (for `carla_poses` and `chase_view`; match your CARLA version):
 
   ```bash
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-  pip install colcon-cargo-ros2
+  pip install colcon-cargo-ros2 carla==0.9.16
   ```
 
 ## Setup
@@ -73,10 +74,14 @@ git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-brid
 cd carla-scenario-bridge
 source /opt/ros/humble/setup.bash
 source /opt/autoware/1.5.0/setup.bash        # your Autoware
-rosdep install --from-paths src --ignore-src -y
+rosdep install --from-paths src --ignore-src -y   # installs apt packages: needs sudo
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --cargo-args --release
 source install/setup.bash                    # in every terminal below, after Autoware's
 ```
+
+Without sudo, rosdep's install fails; the packages it lists are the ones to ask an
+administrator for (ROS and Autoware's own are normally present already; this workspace adds
+`python3-pygame`, which `pip install pygame` also provides).
 
 Once per machine, give Autoware a writable data directory (TensorRT writes its engines
 there): `ros2 run acb_launch setup_autoware_data`.

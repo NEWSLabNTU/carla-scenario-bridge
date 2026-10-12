@@ -54,10 +54,6 @@ not an SSv2 puppet. More vehicles: one `agent` entity and one vehicle side (its 
 The README's showreel shows three windows: CARLA from behind the ego, and each vehicle's
 RViz. All three come with the workspace.
 
-```bash
-pip install carla==0.9.16      # once, for the chase camera (CARLA's Python API)
-```
-
 **A chase camera** on the ego (the CARLA vehicle named `hero`), in a window of its own:
 
 ```bash
@@ -90,7 +86,7 @@ scenario has ended:
 
 ```bash
 ffmpeg -f x11grab -framerate 15 -video_size 1920x1080 -i $DISPLAY \
-    -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p demo.mp4
+    -vf scale=1280:720 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p demo.mp4
 ```
 
 Start the recording, then the scenario (Terminal 4) in a terminal at the bottom left. Two
@@ -99,8 +95,8 @@ measurement of Autoware's performance.
 
 **A GIF** for a README or a slide: `scripts/make_showreel.sh` in the repository cuts the
 showreel this way -- crops each window out of the 1280x720 recording, stacks them, speeds the
-whole up 6-8x and writes a palette GIF. Its crop rectangles match the layout above; adjust
-them for your own.
+whole up 6-8x and writes a palette GIF. Its crop rectangles are for the layout above recorded as
+above (1920x1080 screen, scaled to 1280x720); adjust them for your own.
 
 ## Where next
 

@@ -23,8 +23,7 @@ CARLA's world with y flipped and headings negated, which is easy to get wrong by
 scenario) and prints positions already converted, as OpenSCENARIO elements:
 
 ```bash
-pip install carla==0.9.16          # the CARLA Python API, once (match your CARLA)
-ros2 run csb_launch carla_poses spawn-points | head -5
+ros2 run csb_launch carla_poses spawn-points
 ```
 
 ```
@@ -32,7 +31,10 @@ ros2 run csb_launch carla_poses spawn-points | head -5
    0  <WorldPosition x="335.49" y="-273.74" z="0.30" h="-1.57080" p="0" r="0" />  <!-- road 19 lane -1 -->
    1  <WorldPosition x="299.40" y="-133.24" z="0.30" h="0.00000" p="0" r="0" />  <!-- road 4 lane -1 -->
    2  <WorldPosition x="299.40" y="-129.75" z="0.30" h="-3.14159" p="0" r="0" />  <!-- road 4 lane 1 -->
+   ...
 ```
+
+(It needs CARLA's Python API, `pip install carla==0.9.16`; see the README's prerequisites.)
 
 CARLA has to have the town loaded: run any Town01 scenario first (Tutorial 1), or check the
 first line. Spawn point 2 starts on a long straight road heading west. Walk along its lane
@@ -57,7 +59,11 @@ use it for the ego.
 
 ## 3. Write the scenario
 
-Create `~/my_scenarios/follow_to_goal.xosc`. It has four parts.
+Create `~/my_scenarios/follow_to_goal.xosc`. **Start from a copy of the shipped file** and
+keep its frame -- `FileHeader`, `ParameterDeclarations`, `CatalogLocations`, and the
+`Storyboard`'s `Story` / `Act` / `ManeuverGroup` / `Maneuver` nesting with the Act's own
+`StartTrigger` (`SimulationTimeCondition` > 0) and the empty `StopTrigger` -- which
+OpenSCENARIO requires and every scenario repeats. What you write yourself are four parts:
 
 **The map**, by path. `$(env CARLA_MAPS)` lets the same file work on any machine:
 

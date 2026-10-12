@@ -415,6 +415,13 @@ so it holds across scenarios on different towns. Empty (the default) leaves CARL
 
 ## 6. When things go wrong
 
+- **Nothing ever connects** -- the relay never sees the vehicle's agent, `ros2 topic list`
+  is empty, a scenario waits for a simulator that is running: DDS discovery is failing. On
+  hosts where multicast is disabled on the loopback interface (common on shared servers),
+  use the unicast-on-loopback profile that ships with the workspace, in **every** terminal on
+  both sides:
+  `export CYCLONEDDS_URI=file://<workspace>/config/cyclonedds-localhost.xml`.
+  It keeps all participants on one host; across hosts, use your network's DDS setup.
 - **CARLA dies**: the running scenario fails within ~30 s; restart CARLA; the next scenario
   waits for it (up to `carla.reconnect_wait_seconds`, 120 s) and runs.
 - **CARLA just started**: it opens its RPC port before its first map is loaded; the bridge
