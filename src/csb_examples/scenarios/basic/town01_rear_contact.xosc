@@ -5,7 +5,7 @@
 	truth"). Town01 has one lane per direction, so a lateral cut-in is not possible; a rear
 	contact exercises the same comparison. The ego starts as in town01_ego_drive.xosc
 	(westbound, y = -130); the NPC starts 25 m behind it and runs at 8 m/s against the ego's
-	~4 m/s. Success = SSv2 saw the collision (the exit waits 3 s so the bodies stay in contact
+	~4 m/s, and brakes at 8 m/s2 once it has hit the ego. Success = SSv2 saw the collision (the exit waits 3 s so the bodies stay in contact
 	long enough for CARLA to tick with them touching; ending on the first frame of overlap
 	ended the run before csb had applied the overlapping pose); failure = 120 s with none.
 	The contact is the point, so csbExpectedContacts declares it: run_suite
@@ -124,6 +124,40 @@
 										<ByValueCondition>
 											<SimulationTimeCondition value="2" rule="greaterThan" />
 										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<!-- Once it has hit the ego the NPC brakes, as a driver would. Without this a
+						     blind NPC keeps driving at 8 m/s through the ego's pose for the 3 s the
+						     run lasts after the contact, and in CARLA, where bodies push, that
+						     shoves the ego down the road (into a pole, twice in 2026-10-12 runs). -->
+						<Event name="npc_brake" priority="parallel">
+							<Action name="npc_stop">
+								<PrivateAction>
+									<LongitudinalAction>
+										<SpeedAction>
+											<SpeedActionDynamics dynamicsShape="linear" value="8.0" dynamicsDimension="rate" />
+											<SpeedActionTarget>
+												<AbsoluteTargetSpeed value="0.0" />
+											</SpeedActionTarget>
+										</SpeedAction>
+									</LongitudinalAction>
+								</PrivateAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="npc_hit_ego" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="npc_rear" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<CollisionCondition>
+													<EntityRef entityRef="ego" />
+												</CollisionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
 									</Condition>
 								</ConditionGroup>
 							</StartTrigger>
