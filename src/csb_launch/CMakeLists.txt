@@ -4,14 +4,16 @@ project(csb_launch)
 find_package(ament_cmake REQUIRED)
 
 install(
-  DIRECTORY launch data
+  DIRECTORY launch data rviz
   DESTINATION share/${PROJECT_NAME}
 )
 
 # `ros2 run csb_launch run_suite`: many scenarios, one verdict each, one suite.junit.xml.
 # `ros2 run csb_launch physical_verdict`: CARLA's contacts as a JUnit testcase (021).
+# `ros2 run csb_launch carla_poses`: poses on CARLA's map as OpenSCENARIO WorldPositions.
+# `ros2 run csb_launch chase_view`: a chase camera window on the ego, for demos (027).
 install(
-  PROGRAMS scripts/run_suite scripts/physical_verdict
+  PROGRAMS scripts/run_suite scripts/physical_verdict scripts/carla_poses scripts/chase_view
   DESTINATION lib/${PROJECT_NAME}
 )
 

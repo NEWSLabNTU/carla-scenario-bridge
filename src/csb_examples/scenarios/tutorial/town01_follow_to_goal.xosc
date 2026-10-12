@@ -1,0 +1,189 @@
+<?xml version="1.0"?>
+<!--
+	Tutorial 2 (docs/tutorials/02-prepare-a-scenario.md): the ego drives 80 m to a goal on
+	Town01 behind a slower car. Every position comes from `ros2 run csb_launch carla_poses`,
+	subcommand `ahead 2` (spawn point 2, road 4, westbound) with distance 0 (start), 20 (the
+	lead car) and 80 (the goal).
+	Success: the ego reaches the goal. Failure: the ego touches the lead car, or 120 s pass.
+-->
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-10-12T00:00:00+00:00" description="Tutorial: follow a slower car to a goal on Town01" revMajor="1" revMinor="2" />
+	<ParameterDeclarations>
+		<ParameterDeclaration name="leadSpeed" parameterType="double" value="4.0" />
+	</ParameterDeclarations>
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
+	</RoadNetwork>
+	<Entities>
+		<ScenarioObject name="ego">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="Autoware">
+					<Properties>
+						<Property name="maxJerk" value="1.5" />
+						<Property name="minJerk" value="-1.5" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<ScenarioObject name="lead">
+			<Vehicle name="lead" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="3.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties />
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+	</Entities>
+	<Storyboard>
+		<Init>
+			<Actions>
+				<Private entityRef="ego">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="299.40" y="-129.50" z="0.30" h="3.14115" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="219.40" y="-129.47" z="0.00" h="3.14115" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="lead">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="279.40" y="-129.49" z="0.30" h="3.14115" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<LongitudinalAction>
+							<SpeedAction>
+								<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+								<SpeedActionTarget>
+									<AbsoluteTargetSpeed value="$leadSpeed" />
+								</SpeedActionTarget>
+							</SpeedAction>
+						</LongitudinalAction>
+					</PrivateAction>
+				</Private>
+			</Actions>
+		</Init>
+		<Story name="follow_to_goal">
+			<Act name="follow_act">
+				<ManeuverGroup maximumExecutionCount="1" name="end_group">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="ego" />
+					</Actors>
+					<Maneuver name="end_conditions">
+						<Event name="reached_goal" priority="parallel">
+							<Action name="exit_success">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitSuccess" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="at_goal" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="ego" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<ReachPositionCondition tolerance="3.0">
+													<Position>
+														<WorldPosition x="219.40" y="-129.47" z="0.00" h="3.14115" p="0" r="0" />
+													</Position>
+												</ReachPositionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="touched_lead" priority="parallel">
+							<Action name="exit_collision">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="collision" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="ego" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<CollisionCondition>
+													<EntityRef entityRef="lead" />
+												</CollisionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="timeout" priority="parallel">
+							<Action name="exit_timeout">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="too_long" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="120" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>

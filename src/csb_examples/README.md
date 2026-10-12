@@ -39,6 +39,12 @@ SSv2 start-up and the ego's engage, which is most of a short scenario.
 | --- | --- | --- |
 | `town01_two_av.xosc` | Town01 | The ego and `bg_av_1`, a second Autoware-driven vehicle (controller `agent`) 90 m ahead in the same lane; both reach their goals without colliding. Needs a vehicle side registered as `bg_av_1` with the agent relay (in this repo: `just bg-av`, or `just two-av` for the whole thing). |
 
+## tutorial/ -- the worked example of the tutorials
+
+| Scenario | Town | What it checks |
+| --- | --- | --- |
+| `town01_follow_to_goal.xosc` | Town01 | The ego drives 80 m to a goal behind a slower SSv2-driven car (`leadSpeed`, 4 m/s) and must not touch it. Every pose comes from `ros2 run csb_launch carla_poses`; written step by step in [Tutorial 2](../../docs/tutorials/02-prepare-a-scenario.md). |
+
 ## awf/ -- AWF ODD use cases
 
 From [autowarefoundation/odd-usecase-scenario](https://github.com/autowarefoundation/odd-usecase-scenario),
