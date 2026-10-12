@@ -722,6 +722,12 @@ struct TrackedNpc {
     walker: bool,
     /// Steer feed-forward geometry; `None` for walkers and vehicles without declared axles.
     steering: Option<Steering>,
+    /// Declared `(maxAcceleration, maxDeceleration)`, m/s2: the force bound
+    /// (`npc_tracking::max_change`). `None` when undeclared.
+    performance: Option<(f64, f64)>,
+    /// SSv2's heading for it last frame, CARLA degrees: the yaw rate comes from the poses
+    /// (`npc_tracking::pose_yaw_rate`).
+    last_yaw_deg: Option<f64>,
 }
 
 /// A walker's height bookkeeping: its fixed origin-above-feet lift, and the last ground
@@ -2886,6 +2892,8 @@ impl Coordinator {
                 TrackedNpc {
                     walker: kind == SpawnKind::Pedestrian,
                     steering,
+                    performance: shape.performance,
+                    last_yaw_deg: None,
                 },
             );
             tracing::info!(
@@ -2965,7 +2973,7 @@ impl Coordinator {
             "Spawned {} '{name}' (actor_id={actor_id}, blueprint='{blueprint_key}', \
              physics={}) at CARLA({:.1}, {:.1}, {:.1})",
             kind.label(),
-            kind.physics_driven(),
+            kind.physics_driven() || self.tracked_npcs.contains_key(&actor_id),
             spawn_loc.x,
             spawn_loc.y,
             spawn_loc.z
@@ -3033,6 +3041,11 @@ impl Coordinator {
                     a.rear_axle.as_ref()?.position_x,
                 ))
             });
+        shape.performance = req
+            .parameters
+            .as_ref()
+            .and_then(|p| p.performance.as_ref())
+            .map(|p| (p.max_acceleration, p.max_deceleration));
         // The Traffic Manager first: a simulator-driven vehicle nothing can drive must not
         // be spawned and left parked.
         if kind == SpawnKind::AutopilotNpc {
@@ -3430,7 +3443,12 @@ impl Coordinator {
                             actor_id,
                             npc,
                             pose,
-                            entity_status.action_status.as_ref(),
+                            // SSv2 holds its NPCs still until their logic starts, while the
+                            // twist already carries their Init speed: no motion until then.
+                            entity_status
+                                .action_status
+                                .as_ref()
+                                .filter(|_| req.npc_logic_started),
                             origin_offset,
                             &mut tracked_view,
                         ) {
@@ -4584,7 +4602,8 @@ impl Coordinator {
     }
 
     /// One frame of a tracked NPC (roadmap 023): measure it against SSv2's pose, record the
-    /// error, and command its velocity (or snap it back).
+    /// error, and command its velocity (or snap it back). `status` is `None` while SSv2
+    /// holds the NPC still: zero velocity and yaw rate.
     #[allow(clippy::too_many_arguments)]
     fn track_npc(
         &mut self,
@@ -4617,19 +4636,36 @@ impl Coordinator {
         });
         let twist = status.and_then(|a| a.twist.as_ref());
         let linear = twist.and_then(|t| t.linear.as_ref());
-        let yaw_rate = twist.and_then(|t| t.angular.as_ref()).map_or(0.0, |a| a.z);
+        let reported_yaw_rate = twist.and_then(|t| t.angular.as_ref()).map_or(0.0, |a| a.z);
+        // SSv2's NPC twist carries no angular velocity (0 through a corner): the yaw rate
+        // comes from its poses, in CARLA's sense (degrees, clockwise), and from there back
+        // to ROS's for the body's ω × r.
+        let target_yaw = f64::from(target_tf.rotation.yaw);
+        let yaw_rate_deg = if status.is_some() {
+            npc_tracking::pose_yaw_rate(
+                npc.last_yaw_deg,
+                target_yaw,
+                self.step_time,
+                -reported_yaw_rate.to_degrees(),
+            )
+        } else {
+            0.0
+        };
+        if let Some(entry) = self.tracked_npcs.get_mut(&actor_id) {
+            entry.last_yaw_deg = Some(target_yaw);
+        }
         let (vx, vy, yaw_rate_deg) = npc_tracking::world_twist(
             ros_yaw,
             linear.map_or(0.0, |l| l.x),
             linear.map_or(0.0, |l| l.y),
-            yaw_rate,
+            -yaw_rate_deg.to_radians(),
             origin_offset.x,
             origin_offset.y,
         );
         let target = npc_tracking::Target {
             x: f64::from(target_tf.location.x),
             y: f64::from(target_tf.location.y),
-            yaw_deg: f64::from(target_tf.rotation.yaw),
+            yaw_deg: target_yaw,
             vx,
             vy,
             yaw_rate_deg,
@@ -4645,7 +4681,12 @@ impl Coordinator {
         } else {
             npc_tracking::VEHICLE_GAINS
         };
-        let command = npc_tracking::command(&target, &current, dt, gains, npc.steering);
+        // SSv2's pose for a blind NPC may run through the ego: no snapping while touching it.
+        let in_contact = self
+            .collision_monitor
+            .touched_within(actor_id, npc_tracking::CONTACT_HOLD_FRAMES);
+        let command =
+            npc_tracking::command(&target, &current, dt, gains, npc.steering, !in_contact);
 
         // The error the law acts on: against the start-of-step pose, before this step.
         let error = (target.x - vx * dt - current.x).hypot(target.y - vy * dt - current.y);
@@ -4666,7 +4707,23 @@ impl Coordinator {
                 vy,
                 yaw_rate_deg,
                 steer,
-            } => (vx, vy, yaw_rate_deg, steer),
+            } if npc.walker => (vx, vy, yaw_rate_deg, steer),
+            npc_tracking::Command::Track {
+                vx,
+                vy,
+                yaw_rate_deg,
+                steer,
+            } => {
+                // A finite force: the change from the body's velocity is capped
+                // (npc_tracking::limit_change), so a contact holds it back like a car.
+                let body_v = body.velocity();
+                let (vx, vy) = npc_tracking::limit_change(
+                    (vx, vy),
+                    (f64::from(body_v.x), f64::from(body_v.y)),
+                    npc_tracking::max_change(npc.performance, dt),
+                );
+                (vx, vy, yaw_rate_deg, steer)
+            }
             npc_tracking::Command::Snap {
                 x,
                 y,
@@ -4682,6 +4739,11 @@ impl Coordinator {
                 if let Some(z) = self.walker_teleport_z(actor_id, &snap_to.location) {
                     snap_to.location.z = z;
                 }
+                tracing::debug!(
+                    "Snap '{name}': error {error:.2} m, yaw error {yaw_error:?} deg, target \
+                     {:.2} m/s turning {yaw_rate_deg:.1} deg/s",
+                    vx.hypot(vy)
+                );
                 actor
                     .set_transform(&snap_to)
                     .wrap_err("set_transform (snap)")?;
@@ -4760,6 +4822,8 @@ struct EntityShape {
     subtype: EntitySubtype,
     /// Declared front and rear axle `positionX`, m from the entity origin (vehicles).
     axles: Option<(f64, f64)>,
+    /// Declared `(maxAcceleration, maxDeceleration)`, m/s2 (vehicles).
+    performance: Option<(f64, f64)>,
 }
 
 impl EntityShape {
@@ -4777,6 +4841,7 @@ impl EntityShape {
             declared,
             subtype,
             axles: None,
+            performance: None,
         }
     }
 }

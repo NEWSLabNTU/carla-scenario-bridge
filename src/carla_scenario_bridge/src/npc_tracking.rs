@@ -16,6 +16,13 @@ pub const SNAP_DISTANCE: f64 = 0.5;
 pub const SNAP_YAW_DEG: f64 = 5.0;
 /// Below this commanded speed no steer is fed forward (the curvature is undefined at rest).
 const STEER_MIN_SPEED: f64 = 0.1;
+/// Added to a vehicle's declared acceleration bound for the position correction, m/s2.
+pub const FORCE_MARGIN: f64 = 2.0;
+/// Acceleration bound for a vehicle that declares no `Performance`, m/s2.
+pub const DEFAULT_MAX_ACCEL: f64 = 10.0;
+/// Frames after the ego's last contact with a tracked NPC during which it is not snapped
+/// (one second at 20 Hz): SSv2's pose for it may run through the ego.
+pub const CONTACT_HOLD_FRAMES: u64 = 20;
 
 /// Feedback gains, 1/s.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -92,12 +99,14 @@ pub fn wrap_deg(deg: f64) -> f64 {
 }
 
 /// The command for one frame. `steering` is `None` for walkers, which also never snap on yaw.
+/// With `snap_allowed` false (the body is in contact) the command is always `Track`.
 pub fn command(
     target: &Target,
     current: &Current,
     dt: f64,
     gains: Gains,
     steering: Option<Steering>,
+    snap_allowed: bool,
 ) -> Command {
     let start_x = target.x - target.vx * dt;
     let start_y = target.y - target.vy * dt;
@@ -106,7 +115,7 @@ pub fn command(
     let ey = start_y - current.y;
     let eyaw = wrap_deg(start_yaw - current.yaw_deg);
     let checks_yaw = steering.is_some();
-    if ex.hypot(ey) > SNAP_DISTANCE || (checks_yaw && eyaw.abs() > SNAP_YAW_DEG) {
+    if snap_allowed && (ex.hypot(ey) > SNAP_DISTANCE || (checks_yaw && eyaw.abs() > SNAP_YAW_DEG)) {
         return Command::Snap {
             x: start_x,
             y: start_y,
@@ -130,6 +139,52 @@ pub fn command(
         vy: target.vy + gains.position * ey,
         yaw_rate_deg: target.yaw_rate_deg + gains.yaw * eyaw,
         steer,
+    }
+}
+
+/// `command` bounded to a finite force: its change from the body's current velocity is at
+/// most `max_change` (m/s), in any direction. `set_target_velocity` otherwise resets the
+/// velocity outright -- an unbounded force, which a body held back by a contact turns into
+/// an unbounded shove. Free-running, the body already moves at last frame's command and the
+/// change is small.
+pub fn limit_change(command: (f64, f64), body: (f64, f64), max_change: f64) -> (f64, f64) {
+    let (dx, dy) = (command.0 - body.0, command.1 - body.1);
+    let change = dx.hypot(dy);
+    if change <= max_change || change == 0.0 {
+        return command;
+    }
+    let k = max_change.max(0.0) / change;
+    (body.0 + dx * k, body.1 + dy * k)
+}
+
+/// The velocity change allowed per frame for a vehicle declaring `max_acceleration` and
+/// `max_deceleration` (m/s2; `None` when it declares no `Performance`).
+pub fn max_change(declared: Option<(f64, f64)>, dt: f64) -> f64 {
+    let bound = declared
+        .map(|(a, d)| a.abs().max(d.abs()))
+        .filter(|b| b.is_finite() && *b > 0.0)
+        .unwrap_or(DEFAULT_MAX_ACCEL - FORCE_MARGIN);
+    (bound + FORCE_MARGIN) * dt
+}
+
+/// Above this a heading change between frames is a teleport, not a turn, deg/s.
+pub const MAX_POSE_YAW_RATE_DEG: f64 = 180.0;
+
+/// The yaw rate SSv2's poses imply, deg/s: the heading change since the previous frame over
+/// `dt`. SSv2's NPC twist reports none (0 through a corner), so its own poses are the source.
+/// No previous heading, or a change faster than [`MAX_POSE_YAW_RATE_DEG`] (a teleport):
+/// `reported`.
+pub fn pose_yaw_rate(previous_deg: Option<f64>, now_deg: f64, dt: f64, reported: f64) -> f64 {
+    match previous_deg {
+        Some(prev) if dt > 0.0 => {
+            let rate = wrap_deg(now_deg - prev) / dt;
+            if rate.abs() <= MAX_POSE_YAW_RATE_DEG {
+                rate
+            } else {
+                reported
+            }
+        }
+        _ => reported,
     }
 }
 
@@ -279,7 +334,14 @@ mod tests {
     #[test]
     fn on_track_commands_the_target_velocity_unchanged() {
         let t = cruising();
-        let (vx, vy, w, steer) = track(command(&t, &on_track(&t), DT, VEHICLE_GAINS, Some(MODEL3)));
+        let (vx, vy, w, steer) = track(command(
+            &t,
+            &on_track(&t),
+            DT,
+            VEHICLE_GAINS,
+            Some(MODEL3),
+            true,
+        ));
         assert!(
             close(vx, -8.0) && close(vy, 0.0) && close(w, 0.0),
             "{vx} {vy} {w}"
@@ -297,7 +359,14 @@ mod tests {
             y: t.y,
             yaw_deg: t.yaw_deg,
         };
-        let (vx, _, _, _) = track(command(&t, &at_target, DT, VEHICLE_GAINS, Some(MODEL3)));
+        let (vx, _, _, _) = track(command(
+            &t,
+            &at_target,
+            DT,
+            VEHICLE_GAINS,
+            Some(MODEL3),
+            true,
+        ));
         assert!(close(vx, -8.0 + VEHICLE_GAINS.position * 0.4), "{vx}");
     }
 
@@ -306,7 +375,7 @@ mod tests {
         let t = cruising();
         let mut c = on_track(&t);
         c.x += 0.2; // 0.2 m behind (westbound: behind is +x)
-        let (vx, vy, _, _) = track(command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3)));
+        let (vx, vy, _, _) = track(command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true));
         assert!(close(vx, -8.0 - VEHICLE_GAINS.position * 0.2), "{vx}");
         assert!(close(vy, 0.0));
     }
@@ -316,7 +385,7 @@ mod tests {
         let t = cruising();
         let mut c = on_track(&t);
         c.x -= 0.2;
-        let (vx, _, _, _) = track(command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3)));
+        let (vx, _, _, _) = track(command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true));
         assert!(
             vx > -8.0 && close(vx, -8.0 + VEHICLE_GAINS.position * 0.2),
             "{vx}"
@@ -329,7 +398,7 @@ mod tests {
         let t = cruising();
         let mut c = on_track(&t);
         c.yaw_deg = -178.0;
-        let (_, _, w, _) = track(command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3)));
+        let (_, _, w, _) = track(command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true));
         assert!(close(w, -2.0 * VEHICLE_GAINS.yaw), "{w}");
     }
 
@@ -339,11 +408,11 @@ mod tests {
         let mut c = on_track(&t);
         c.y += 0.49;
         assert!(matches!(
-            command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3)),
+            command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true),
             Command::Track { .. }
         ));
         c.y += 0.02;
-        match command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3)) {
+        match command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true) {
             Command::Snap {
                 x,
                 y,
@@ -365,7 +434,7 @@ mod tests {
         let mut c = on_track(&t);
         c.yaw_deg = 174.9;
         assert!(matches!(
-            command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3)),
+            command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true),
             Command::Snap { .. }
         ));
         let walker = Target {
@@ -374,7 +443,7 @@ mod tests {
         };
         let mut c = on_track(&walker);
         c.yaw_deg = 90.0;
-        let (_, _, _, steer) = track(command(&walker, &c, DT, WALKER_GAINS, None));
+        let (_, _, _, steer) = track(command(&walker, &c, DT, WALKER_GAINS, None, true));
         assert_eq!(steer, None);
     }
 
@@ -386,7 +455,14 @@ mod tests {
             yaw_rate_deg: 0.0,
             ..cruising()
         };
-        let (vx, vy, w, steer) = track(command(&t, &on_track(&t), DT, VEHICLE_GAINS, Some(MODEL3)));
+        let (vx, vy, w, steer) = track(command(
+            &t,
+            &on_track(&t),
+            DT,
+            VEHICLE_GAINS,
+            Some(MODEL3),
+            true,
+        ));
         assert!(close(vx, 0.0) && close(vy, 0.0) && close(w, 0.0));
         assert_eq!(steer, Some(0.0));
     }
@@ -400,7 +476,14 @@ mod tests {
             yaw_rate_deg: rate,
             ..cruising()
         };
-        let (_, _, _, steer) = track(command(&t, &on_track(&t), DT, VEHICLE_GAINS, Some(MODEL3)));
+        let (_, _, _, steer) = track(command(
+            &t,
+            &on_track(&t),
+            DT,
+            VEHICLE_GAINS,
+            Some(MODEL3),
+            true,
+        ));
         let expected = (2.9_f64 / 10.0).atan().to_degrees() / 70.0;
         assert!(close(steer.unwrap(), expected), "{steer:?}");
         // A left turn steers left.
@@ -414,6 +497,7 @@ mod tests {
             DT,
             VEHICLE_GAINS,
             Some(MODEL3),
+            true,
         ));
         assert!(close(steer.unwrap(), -expected));
         // Turning on the spot at walking pace: clamped to full lock.
@@ -428,8 +512,47 @@ mod tests {
             DT,
             VEHICLE_GAINS,
             Some(MODEL3),
+            true,
         ));
         assert_eq!(steer, Some(1.0));
+    }
+
+    #[test]
+    fn no_snap_while_in_contact() {
+        // Held 0.8 m back by the ego: a snap would teleport the body into it.
+        let t = cruising();
+        let mut c = on_track(&t);
+        c.x += 0.8;
+        assert!(matches!(
+            command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true),
+            Command::Snap { .. }
+        ));
+        let (vx, _, _, _) = track(command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), false));
+        assert!(close(vx, -8.0 - VEHICLE_GAINS.position * 0.8), "{vx}");
+    }
+
+    #[test]
+    fn the_velocity_change_is_capped_by_the_declared_bounds() {
+        // Declared 5 / 8 m/s2: 10 m/s2 with the margin, 0.5 m/s in a 0.05 s frame.
+        let cap = max_change(Some((5.0, 8.0)), DT);
+        assert!(close(cap, 0.5), "{cap}");
+        assert!(close(max_change(None, DT), DEFAULT_MAX_ACCEL * DT));
+        // Held to 4 m/s by a contact, commanded 8 m/s: it may push to 4.5, no more.
+        let v = limit_change((-8.0, 0.0), (-4.0, 0.0), cap);
+        assert!(close(v.0, -4.5) && close(v.1, 0.0), "{v:?}");
+        // Free-running at last frame's command: unchanged.
+        assert_eq!(limit_change((-8.1, 0.2), (-8.0, 0.0), cap), (-8.1, 0.2));
+    }
+
+    #[test]
+    fn the_yaw_rate_comes_from_the_poses_unless_they_jump() {
+        // 2 deg a frame at 20 Hz: 40 deg/s, whatever the twist said.
+        assert!(close(pose_yaw_rate(Some(10.0), 12.0, DT, 0.0), 40.0));
+        // Across the wrap.
+        assert!(close(pose_yaw_rate(Some(179.0), -179.0, DT, 0.0), 40.0));
+        // First frame, or a teleport (90 deg in one frame): the reported rate.
+        assert!(close(pose_yaw_rate(None, 12.0, DT, 5.0), 5.0));
+        assert!(close(pose_yaw_rate(Some(0.0), 90.0, DT, 5.0), 5.0));
     }
 
     #[test]

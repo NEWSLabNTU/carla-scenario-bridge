@@ -253,6 +253,8 @@ pub struct CollisionMonitor {
     geometry: Vec<ReportGeometry>,
     /// Each tracked NPC's tracking error, this episode (roadmap 023).
     tracking: std::collections::BTreeMap<String, TrackingStats>,
+    /// The SSv2 frame of each actor's latest contact with the ego, this episode.
+    last_contact: std::collections::HashMap<u32, u64>,
 }
 
 impl CollisionMonitor {
@@ -279,6 +281,7 @@ impl CollisionMonitor {
             run_start_unix: 0.0,
             geometry: Vec::new(),
             tracking: Default::default(),
+            last_contact: Default::default(),
         }
     }
 
@@ -294,6 +297,16 @@ impl CollisionMonitor {
         self.episode += 1;
         self.geometry.clear();
         self.tracking.clear();
+        self.last_contact.clear();
+    }
+
+    /// Whether the ego touched `actor_id` within the last `frames` SSv2 frames (as drained:
+    /// call after `drain`).
+    pub fn touched_within(&self, actor_id: u32, frames: u64) -> bool {
+        let now = self.frame.load(Ordering::Relaxed);
+        self.last_contact
+            .get(&actor_id)
+            .is_some_and(|&f| now.saturating_sub(f) <= frames)
     }
 
     /// One frame of a tracked NPC: its in-plane error (m), yaw error (degrees; `None` for a
@@ -444,6 +457,10 @@ impl CollisionMonitor {
             Err(_) => return,
         };
         for event in &events {
+            if let Some(id) = event.other_id {
+                let last = self.last_contact.entry(id).or_insert(event.ssv2_frame);
+                *last = (*last).max(event.ssv2_frame);
+            }
             let name = event.other_id.and_then(&mut name_of);
             if let Some(line) = self.log.record(event, name.as_deref()) {
                 tracing::warn!("{line}");
@@ -727,5 +744,21 @@ mod tests {
         let s = m.log.summary("ego");
         assert!(s.contains("'npc1'"), "{s}");
         assert!(s.contains("4.0 N·s"), "{s}");
+    }
+
+    #[test]
+    fn a_contact_is_remembered_for_a_window_of_frames() {
+        let mut m = CollisionMonitor::new(false, None);
+        m.frame.store(10, Ordering::Relaxed);
+        m.queue.lock().unwrap().push(hit(10, 0.5, Some(7), 2.0));
+        m.drain(|_| None);
+        assert!(m.touched_within(7, 20));
+        assert!(!m.touched_within(8, 20));
+        m.frame.store(30, Ordering::Relaxed);
+        assert!(m.touched_within(7, 20));
+        m.frame.store(31, Ordering::Relaxed);
+        assert!(!m.touched_within(7, 20));
+        m.begin_episode();
+        assert!(!m.touched_within(7, 1_000));
     }
 }
