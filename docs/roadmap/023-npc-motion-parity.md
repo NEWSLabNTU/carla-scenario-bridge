@@ -60,6 +60,35 @@ oracle's silence. Measured per frame from one world snapshot, never per-actor RP
 the live step passes; then the default flips and `kinematic` remains for comparison and
 fallback.
 
+**Wiring (step 4).**
+
+- *Who is tracked*: SSv2-driven NPC vehicles and pedestrians under `npc_motion: tracked`.
+  Misc objects (static props), simulator-autopilot and agent vehicles and the ego are
+  unchanged. A tracked actor spawns with physics on, is not parked (no hand brake), and
+  does not get the physics actors' settle-frame acceleration masking -- SSv2 reports its
+  own NPC state, nothing is read back from CARLA.
+- *Target*: SSv2's pose through the same `ros_pose_to_carla_transform` (origin offset, map
+  origin) as the teleport, and SSv2's twist (`action_status.twist`, body frame, at the
+  entity origin) turned into CARLA's world frame: rotate by the entity yaw, flip y, and
+  negate the yaw rate. The body's origin is not the entity's, so its velocity gets
+  `ω × r` added, `r` the origin offset in the world frame: 1 m/s at 0.7 rad/s and the
+  1.5 m rear-axle offset, not negligible in a turn.
+- *Steering geometry*: the wheelbase from SSv2's declared axles (front `positionX` - rear
+  `positionX`) -- version-free, unlike CARLA's wheel `position`/`offset`, and the geometry
+  SSv2's own model turns with -- and `max_steer_angle` of CARLA's front wheel. No axles
+  declared: no steer feed-forward.
+- *Per frame*: one world snapshot and one actor list for all tracked NPCs; `command()`
+  from `npc_tracking`; `Track` -> `set_target_velocity` (vehicle: keep CARLA's own z
+  velocity), `set_target_angular_velocity`, `apply_control(steer)`; walkers ->
+  `WalkerControl(direction, speed)`; `Snap` -> the existing teleport path (its failure
+  handling unchanged; walkers keep their ground height) plus the velocity.
+- *What SSv2 is told*: the pose and twist it sent, as for a kinematic NPC (SSv2 owns NPC
+  state); the tracking error is CARLA's business, measured and reported.
+- *Statistics*: per tracked entity and episode -- frames, in-plane error p95/max, yaw error
+  p95/max (vehicles), snaps -- measured before each step against the start-of-step pose;
+  logged at the end of the ego's run and written to 021's contact report as `tracking`
+  (optional, schema 1, like 022's `geometry`).
+
 ## Steps
 
 1. [x] **Docs.** This phase doc.
@@ -71,7 +100,7 @@ fallback.
    kinematic, close the phase.
 3. [x] **Control law, test-driven.** Pure function `(p*, v*, p, yaw*, yaw) → command | snap`
    with tests: on track, lagging, overshoot, snap thresholds, stopped target.
-4. [ ] **Bridge wiring.** Physics on at spawn under `tracked`; the per-frame command from the
+4. [x] **Bridge wiring.** Physics on at spawn under `tracked`; the per-frame command from the
    snapshot; snap via the existing teleport path (its failure handling unchanged); walker
    control. Error statistics per episode in the log and in 021's report.
 5. [ ] **Live.** The nine starter scenarios under `tracked`: all pass, error within budget,
@@ -81,6 +110,40 @@ fallback.
 6. [ ] **Default flip** to `tracked`; user guide and bridge config comment.
 
 ### Results
+
+**Step 4 (2026-10-12).** `npc_motion: kinematic | tracked` in `bridge_config.yaml`, and as
+the `npc_motion:=` argument of `simulation.launch.xml` / `bridge.launch.xml` (default
+`kinematic`). Under `tracked`, SSv2-driven NPC vehicles and pedestrians spawn with physics on
+and `UpdateEntityStatus` drives each through `track_npc`: one world snapshot and one
+`actors_by_ids` list per frame, SSv2's twist through `world_twist` (with `ω × r`), the
+wheelbase from the declared axles and `max_steer_angle` from CARLA, `set_target_velocity` /
+`set_target_angular_velocity` / steer for vehicles, `WalkerControl` for walkers, snaps
+through `set_transform` (walkers keep their ground height). Per-episode statistics are logged
+at the end of the ego's run (`Tracked '<name>': N frames, error p95 / max, yaw p95 / max,
+snaps`) and written to the contact report as `tracking`. 245 unit tests (new: twist
+conversion and `ω × r`, steering geometry, statistics, the report rows, the monitor's
+per-episode reset, the config key and its parameter, which kinds are trackable); clippy
+clean.
+
+Smoke run, `npc_motion:=tracked`, `ros2 launch`, three starter scenarios with
+`--physical-verdict`:
+
+| Scenario | Tracked entity | Frames | Error p95 / max | Yaw p95 / max | Snaps | Verdict |
+|---|---|---|---|---|---|---|
+| `town01_pedestrian` | `pedestrian_0` (walker) | 3374 | 0.000 / 0.092 m | -- | 0 | PASS 2/2 |
+| `town01_rear_contact` | `npc_rear` | 287 | 0.022 / 0.156 m | 0.00 / 0.36 deg | 0 | **FAIL**: SSv2 `Entity: ego - current acceleration (which is 34.5074) is out of range (which is [-15, 15])` |
+| `town01_simulator_autopilot` | `npc_route` | 828 | 0.525 / 0.525 m | 3.61 / 7.27 deg | **133** | PASS 2/2 |
+
+The wiring holds; two findings for step 5:
+
+- **A tracked NPC that rams the ego shoves it far harder.** `npc_rear` tracks its pose
+  closely right up to the contact, but it is a full-mass body still commanded at 8 m/s into
+  the ego: 34.5 m/s2 on the ego, past SSv2's sanity bound, so the scenario fails where the
+  kinematic NPC passed (once at 15.6, the same bound, in an earlier kinematic run). The
+  velocity command does not stop at a contact; the snap rule only bounds position.
+- **`npc_route` snaps often**: 133 of 828 frames, yaw error to 7.3 deg, the in-plane error
+  pinned at the snap distance -- the spike's corner finding (a turn SSv2 commands faster
+  than the tyres hold), now on the starter route. Its p95 is over the 0.2 m budget.
 
 **Step 3 (2026-10-12).** `npc_tracking.rs`: `command(target, current, dt, gains, steering)
 -> Track | Snap`, in CARLA's world frame, with the start-of-step reference, steer
