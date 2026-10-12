@@ -40,30 +40,17 @@ the `.xosc` skeleton of tutorial 2, poses from `ros2 run csb_launch carla_poses`
 from `blueprint_boxes_0.9.16.yaml` (so a declared box matches a CARLA blueprint within 022's
 tolerance), `csbExpectedContacts`, the `agent` / `simulator_autopilot` controllers, and the
 TIER IV `ScenarioModifiers` form for parameter sweeps. A review mode checks a given file
-against the same rules. Once the lint (C) exists the skill runs it on what it wrote.
+against the same rules. Once the lint (D) exists the skill runs it on what it wrote.
 
 Acceptance: from a one-paragraph use-case description (e.g. "a vehicle cuts in from the
 left lane at 30 km/h, 10 m ahead"), the skill produces a Town01 scenario that passes the
 lint and runs to a verdict under `run_suite`.
 
-### B. The agent interface for users
+### B. The agent interface for users -- moved to 030
 
-The agent protocol is complete (newline JSON over TCP, `protocol.py`, spec in
-[user-workflow.md](../design/user-workflow.md#the-agent-protocol-i3)). Make it a feature:
-
-- **`docs/agent-interface.md`**: a user-facing page -- what an agent is, register, the five
-  required commands, state reports, heartbeats, what the scenario sees -- with the design
-  doc remaining the normative spec.
-- **A reference agent**, `ros2 run scenario_agent_relay example_agent` (no ROS inside it;
-  `protocol.py` and the CARLA Python API only): finds the vehicle by role name, answers
-  `set_goal` with CARLA's `BasicAgent` route to the goal, `set_speed_limit` with its target
-  speed, `stop` with a brake, `teleported` by resetting its plan; applies control on every
-  world tick (the bridge owns ticking); reports phases `IDLE / DRIVING / ARRIVED`.
-- **A starter scenario run against it** (`basic/town01_ego_drive` with the reference agent
-  as the ego's driver), so the interface is exercised by a test, not only documented.
-
-Acceptance: `town01_ego_drive` passes with the reference agent driving and no Autoware
-running; the page's example session matches what the relay logs.
+Moved to [030: Agent API](030-agent-api.md) (user direction 2026-10-13): the user page and
+the reference agent are part of a Python agent SDK there, with reset and restart between
+scenarios.
 
 ### C. Infrastructure retry in `run_suite`
 
@@ -170,8 +157,7 @@ place-dependent bridge fault it finds is logged as a gap (024's format).
 
 1. [x] **Docs.** This phase doc.
 2. [ ] **A. Scenario-writing skill.** Skill, its review mode, the acceptance run.
-3. [ ] **B. Agent interface.** User page, reference agent, `town01_ego_drive` without
-   Autoware.
+3. [-] **B. Agent interface.** Moved to [030](030-agent-api.md).
 4. [ ] **C. Infrastructure retry.** Classification with tests, `retried` in the suite XML,
    the paused-CARLA live check.
 5. [ ] **D. Scenario lint.** Offline checks with tests, `--carla`, the `run_suite`
@@ -187,7 +173,7 @@ The skill (A) is revisited after D to run the lint on what it writes.
 ## Acceptance
 
 Each tool's acceptance above, and the user guide and tutorials updated where a user meets
-the tool (lint and video in tutorial 3, the agent interface in the guide, the map check in
+the tool (lint and video in tutorial 3, the map check in
 map preparation, sweeps in a section of their own).
 
 ### Results

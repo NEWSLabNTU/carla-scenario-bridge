@@ -218,6 +218,25 @@ watch Autoware's own pipeline, not just ADAPI states:
   saying it did not converge -- the concealer's own pose check then fails the scenario
   with both poses named). So `WAITING_FOR_ROUTE` is only reported once the pose agrees.
 
+### Protocol v2 (planned, roadmap 030)
+
+Additive: `VERSION` 2, and a v1 agent on a v2 relay (or the reverse) behaves as above.
+Specified here so 030's SDK, relay and adapters are built against one text; not
+implemented yet.
+
+| Message | Direction | Fields | Meaning |
+|---|---|---|---|
+| `reset` | relay → agent (command, capability `reset`) | `episode`, `scenario`, `map`, `pose`, `parameters` | a scenario boundary, sent on the entity's `initialize`: drop goal, plan and controller state, re-localize at `pose`, reply `OK` only when ready for a goal (phase `IDLE`). Bounded by `reset_timeout`. An agent with the capability gets `reset` instead of `stop` + `clear_goal` + `teleported`; one without gets those three as in v1. |
+| `episode_end` | relay → agent (event) | `episode`, `result` (`passed`, `failures[]`, `contacts`) | the scenario's verdict; `run_suite` sends it through the commander role (`command_for`), since only it knows the verdict |
+| `restart` | relay → agent (command, capability `restart`) | -- | restart the autopilot in place; the agent closes and re-registers when ready |
+
+A **supervisor** (`csb-agent supervise`) registers in the commander role for an entity and
+answers a restart request for an agent without the capability: it stops the process group
+it started (autopilot and agent), starts it again, and is done when the agent's
+registration arrives. `run_suite --restart=never|on-reset-failure|on-failure|every:N`
+decides when a restart is asked for; a reset that fails or times out is the default
+trigger.
+
 ## Vehicle side
 
 - **Self-contained autopilot.** The agent, at start: waits for its vehicle (bridge), lets
@@ -259,7 +278,7 @@ entity and changeable mid-run (`AssignControllerAction`):
 
 | Controller | Backend | Use |
 |---|---|---|
-| *(default)* | **SSv2 behavior tree**; the adapter places the actor kinematically each frame | scripted traffic, exact choreography; every SSv2 action; ~0.065 ms per NPC |
+| *(default)* | **SSv2 behavior tree**; the adapter drives the actor's physics body toward SSv2's pose each frame (`npc_motion: tracked`, within 0.2 m p95), or teleports it kinematically under `npc_motion: kinematic` | scripted traffic, exact choreography; every SSv2 action; ~0.02 ms per NPC in csb tracked (~0.065 kinematic), plus CARLA's physics (~+7 ms p95 tick for 20 NPCs) |
 | `simulator_autopilot` | **the simulator's own driver**: for CARLA, Traffic Manager with physics on. Goal-driven (`AcquirePositionAction` → a route csb plans on lanelet2, converted to a TM path) or roaming; speed via `set_desired_speed`. The adapter returns the simulator's pose and SSv2 adopts it (`api.cpp:113`: non-ego status is applied as returned); the entity's SSv2 behavior is `do_nothing` | ambient traffic with real dynamics |
 | `agent` | **an agent registered under the entity's name** (I3) -- e.g. a full Autoware on its own vehicle side. The adapter spawns the vehicle physics-on with the entity name as the simulator's vehicle name, forwards goals to the agent through the relay (as a commander), and returns the simulator's pose; SSv2's behavior is `do_nothing`, as for `simulator_autopilot` | AV-vs-AV studies, at a full stack's cost |
 

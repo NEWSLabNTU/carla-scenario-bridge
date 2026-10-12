@@ -44,7 +44,7 @@ borrowed from greybox fuzzing.
 
 - [021: Physical Verdict](021-physical-verdict.md) — **done 2026-10-11** — the bridge writes CARLA's ego contacts per episode; `physical_verdict` / `run_suite --physical-verdict` add a `carla_contact` testcase next to SSv2's, with scenario-declared expected contacts
 - [022: Entity Geometry Parity](022-entity-geometry-parity.md) — **done 2026-10-12** — blueprint chosen by subtype and declared size from a measured box table (ego and pedestrians excluded); residual reported at spawn and in the JUnit
-- [023: NPC Motion Parity](023-npc-motion-parity.md) — NPCs as tracked physics bodies with real velocity and walk cycles, within a 0.2 m pose budget; spike-gated, kinematic stays as fallback
+- [023: NPC Motion Parity](023-npc-motion-parity.md) — NPCs as tracked physics bodies with real velocity and walk cycles, within a 0.2 m pose budget; spike-gated, kinematic stays as fallback — **done 2026-10-13**, `tracked` is the default
 - [024: Gap Trace and Oracle](024-gap-trace-and-oracle.md) — the bridge records SSv2's and CARLA's view of every entity per frame; an offline oracle judges each frame in both geometries and classifies the run against its verdict; baselined on the starter scenarios and the 021-023 reproducers
 - 025: Adaptive Generator and Exploit Pipeline — scenario genomes, seed/operator bandits, MAP-Elites archive, annealed energy; confirm, boundary bisection, metamorphic root-cause probes, shrink (phase doc after 024)
 - 026: Parallel Isolated Pipelines — N complete CARLA+bridge+ego pipelines on one host (phase doc after 025)
@@ -52,7 +52,9 @@ borrowed from greybox fuzzing.
 ## User documentation (027-)
 
 - [027: User Documentation](027-user-documentation.md) — **done 2026-10-12** — user-facing README with a showreel, `ros2 launch` as the primary command (play_launch as drop-in), CARLA versions build-verified, tutorials from scenario preparation to demo run, checked by a fresh user
-- [028: Run Tooling](028-run-tooling.md) — scenario-writing skill, the agent interface for users with a reference agent, infrastructure retry in `run_suite`, scenario lint, map check, recorded runs rendered to video on failure, location sweeps from one template; smallest first
+- [028: Run Tooling](028-run-tooling.md) — scenario-writing skill, infrastructure retry in `run_suite`, scenario lint, map check, recorded runs rendered to video on failure, location sweeps from one template; smallest first
+- [029: Prebuilt Releases](029-prebuilt-releases.md) — release tarballs of the built workspace, split by side: the simulation side per ROS distro (Autoware-free, its 13 Autoware message/library packages vendored), the vehicle side per Autoware release, the agent SDK as one wheel; every CARLA version's bridge binary in the same tarball behind a launcher; support tiers; CI build and smoke test
+- [030: Agent API](030-agent-api.md) — one Python `Agent` interface for any autopilot (own class, YAML-configured ROS adapter, or a subclass of ours), protocol v2 `reset` / `episode_end`, `csb-agent check` / `new` / `supervise`, reset between scenarios with restart as an option
 
 ## Real-site twin and realistic rendering (019-)
 
@@ -100,11 +102,13 @@ Per-phase state:
 
 1. ~~021 Physical verdict~~ -- done 2026-10-11.
 2. ~~022 Entity geometry parity~~ -- done 2026-10-12.
-3. **023 NPC motion parity** -- in progress: spike passed the gate 2026-10-12 (tracked physics
-   holds the budget, with two law fixes); next the control law, test-driven.
+3. ~~023 NPC motion parity~~ -- done 2026-10-13: `npc_motion: tracked` is the default
+   (CARLA tick ~+7 ms p95 on the 20-NPC bench, accepted); `kinematic` stays as the fallback.
 4. **024 Gap trace and oracle**, then **025**, **026**.
 5. 019 and 009's classification, interleaved where a gap phase waits on a long run.
 6. ~~027 User documentation~~ -- done 2026-10-12; three bridge follow-ups in its doc (shutdown
    respawn and relay traceback, a misleading "CARLA was restarted", a fallback-path log line).
-7. **028 Run tooling** -- phase doc 2026-10-13; steps in order, smallest first (skill, agent
-   interface, retry, lint, map check, recorded runs, location sweeps).
+7. **028 Run tooling** -- phase doc 2026-10-13; steps in order, smallest first (skill, retry,
+   lint, map check, recorded runs, location sweeps).
+8. **029 Prebuilt releases**, **030 Agent API** -- phase docs 2026-10-13; 030 takes 028's
+   agent-interface step.
