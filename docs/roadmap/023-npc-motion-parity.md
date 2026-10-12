@@ -84,6 +84,30 @@ fallback.
   handling unchanged; walkers keep their ground height) plus the velocity.
 - *What SSv2 is told*: the pose and twist it sent, as for a kinematic NPC (SSv2 owns NPC
   state); the tracking error is CARLA's business, measured and reported.
+- *Finite force (step 5)*: `set_target_velocity` resets the body's velocity every frame,
+  which is an unbounded force: a tracked NPC driven into the ego keeps shoving it at the
+  commanded speed (34.5 m/s2 on the ego in `town01_rear_contact`). The commanded change of
+  a vehicle's velocity per frame is capped at its declared
+  `max(maxAcceleration, maxDeceleration)` plus a 2 m/s2 margin for the position correction
+  (no `Performance`: 10 m/s2). Free-running, the body already moves at last frame's command,
+  so the cap does not bite; held back by a contact, the NPC pushes like a car with that much
+  drive, not like a wall.
+- *No snap in contact (step 5)*: SSv2's pose for a blind NPC runs straight through the ego;
+  a snap would teleport the body into it. While the ego's collision sensor has reported a
+  contact with the NPC in the last second (20 frames), the NPC is tracked without snapping
+  (the error grows, and is counted); tracking snaps again after it.
+- *Held until NPC logic starts (step 5)*: before SSv2 starts its NPC logic (the ego
+  engaged), it holds every NPC at its pose, but the twist it reports already carries the
+  Init `SpeedAction` (`npc_route`: pose still, twist 6 m/s). Trusted, that twist pushed the
+  body 0.3 m a frame past a pose that did not move, and it snapped back every 6-7 frames --
+  122 snaps in 808 frames, all on a straight road. Until `npc_logic_started`, a tracked
+  NPC's commanded velocity and yaw rate are zero.
+- *Yaw rate from SSv2's poses (step 5)*: SSv2's NPC twist carries no angular velocity --
+  `npc_route` reported 0 deg/s through both its corners while its pose turned ~2 deg a
+  frame -- so the law had no turn feed-forward and no steer, and snapped every third frame
+  at 5 deg. The yaw rate is now the change of SSv2's own heading since the previous frame,
+  over `dt`; a change faster than 180 deg/s is a teleport, not a turn, and falls back to the
+  reported value.
 - *Statistics*: per tracked entity and episode -- frames, in-plane error p95/max, yaw error
   p95/max (vehicles), snaps -- measured before each step against the start-of-step pose;
   logged at the end of the ego's run and written to 021's contact report as `tracking`
@@ -110,6 +134,44 @@ fallback.
 6. [ ] **Default flip** to `tracked`; user guide and bridge config comment.
 
 ### Results
+
+**Step 5, the two step-4 findings (2026-10-13).** Both fixed; `town01_rear_contact` and
+`town01_simulator_autopilot`, `npc_motion:=tracked`, twice each with `--physical-verdict`:
+4/4 PASS, SSv2 and `carla_contact` both.
+
+| Tracked NPC | Step 4 smoke run | Now (two runs, identical) |
+|---|---|---|
+| `npc_route` | 122-133 snaps; yaw p95 3.6-4.0 / max 7.3 deg; error p95 0.53-0.57 m | **1 snap** (the first frame); yaw p95 1.65 / max 2.12 deg; error p95 0.201 / max 0.655 m |
+| `npc_rear` | SSv2 FAIL (ego 34.5 m/s2), then a CARLA pole contact | **PASS**, 0 snaps; error p95 0.64-0.89 m, all of it the contact frames where it is held back by the ego |
+
+What it took, in the order found (design notes above):
+
+1. *Finite force* and *no snap in contact*: SSv2 stopped failing `town01_rear_contact` on the
+   ego's acceleration, and `npc_rear` held back through the contact without a snap (error
+   to 3.7 m) -- but the run then failed `carla_contact`: the blind NPC, commanded on at
+   8 m/s through the ego's pose for the 3 s the run lasts after the hit, pushed the ego
+   down the road into a pole (frames 369 hit, 415 pole). A kinematic run had hit the same
+   pole once earlier that day. This is the scenario, not the bridge: **the starter now has
+   the NPC brake at 8 m/s2 (its declared deceleration) once SSv2 sees the collision**, as a
+   driver would. Under the default `kinematic` the changed starter passes too:
+   `town01_rear_contact` 2/2 twice, `town01_pedestrian` 2/2, all with `carla_contact`.
+2. *Held until NPC logic starts*: a read-only probe showed `npc_route` standing still at its
+   spawn for the whole pre-start phase while CARLA read 5.5-6 m/s -- SSv2 held the pose but
+   reported the Init speed. Snaps 122 -> 29.
+3. *Yaw rate from SSv2's poses*: the 29 left were all yaw snaps in the two corners, with the
+   reported yaw rate 0 while the heading turned ~2 deg a frame. Snaps 29 -> 1; yaw p95 within
+   the 2 deg budget.
+
+Still open for step 5: `npc_route`'s error p95 sits at 0.201 m, on the 0.2 m budget (this
+counts every frame, the spike's figures left out the first second); the remaining starter
+scenarios under `tracked`; frame time on the 20-NPC bench; the walker's animation; the
+impulse at two NPC speeds.
+
+The disk filled twice during this work (`/home` at 0 bytes, from other users' load as well
+as ours): the first time clippy, the second the install step, which left
+`install/local_setup.bash` empty. This repo's own `play_log` runs before 2026-10-11 (most of
+its 130 GB) and the debug build caches were deleted (user's decision); `/home` then had
+165 GB free.
 
 **Step 4 (2026-10-12).** `npc_motion: kinematic | tracked` in `bridge_config.yaml`, and as
 the `npc_motion:=` argument of `simulation.launch.xml` / `bridge.launch.xml` (default
