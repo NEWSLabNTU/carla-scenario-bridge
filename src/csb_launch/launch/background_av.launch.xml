@@ -47,6 +47,8 @@
   <arg name="vehicle_model" default="acb_vehicle" />
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
+  <arg name="rviz_config" default="$(find-pkg-share autoware_launch)/rviz/autoware.rviz"
+       description="RViz config when launch_rviz (a screencast passes its own window layout)" />
   <!-- Same CPU-only choices as ego_av.launch.xml: this host shares its GPU, and a second
        TensorRT centerpoint does not fit beside CARLA and the ego's stack. -->
   <arg name="lidar_detection_model" default="clustering" />
@@ -61,6 +63,7 @@
     <arg name="vehicle_model" value="$(var vehicle_model)" />
     <arg name="sensor_model" value="$(var sensor_model)" />
     <arg name="rviz" value="$(var launch_rviz)" />
+    <arg name="rviz_config" value="$(var rviz_config)" />
     <arg name="lidar_detection_model" value="$(var lidar_detection_model)" />
     <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)" />
     <!-- The vehicle agent, started by the profile: registers with the relay as `entity`. -->

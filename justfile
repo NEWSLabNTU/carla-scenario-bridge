@@ -168,7 +168,9 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
     #
     # Usage: just two-av [scenario_file]
     #        KEEP_STACKS=1 just two-av        # leave the stacks this run started up afterwards
-    #        RECORD=1 just two-av             # screencast to play_log/two-av/two-av.mp4
+    #        RECORD=1 just two-av             # screencast to play_log/two-av/two-av.mp4,
+    #            both stacks' RViz on $RECORD_DISPLAY (default $DISPLAY); EGO_RVIZ_CONFIG and
+    #            BG_RVIZ_CONFIG choose their configs (window layouts)
     #
     # Stacks already running are reused and left running: the simulation side (`just run`),
     # the ego stack (`just ego-av`, web 8082) and the background AV stack (`just bg-av`, web
@@ -176,7 +178,7 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
     ego_dom={{ego_domain}}
     logs="{{project}}/play_log/two-av"
     mkdir -p "$logs"
-    rec_display="${RECORD_DISPLAY:-:1}"
+    rec_display="${RECORD_DISPLAY:-${DISPLAY:-:1}}"
     launch_rviz=$([ "${RECORD:-0}" = "1" ] && echo true || echo false)
     echo "[two-av] scenario domain {{scenario_domain}}, ego domain $ego_dom, background AV domain 2"
 
@@ -221,7 +223,10 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
     wait_for_stack() {
         local name="$1" pg="$2" deadline=$((SECONDS + 1200))
         until grep -q "Startup complete" "$logs/$name.log" 2>/dev/null; do
-            if ! kill -0 -"$pg" 2>/dev/null; then
+            # The pid, not the group: right after `setsid ... &` the child may not have
+            # called setsid() yet, and `kill -0 -$pg` then fails on a healthy stack. The pid
+            # is `just` (setsid and env exec into it), alive exactly as long as the stack.
+            if ! kill -0 "$pg" 2>/dev/null; then
                 echo "[two-av] $name stack exited before starting up; see $logs/$name.log"
                 tail -3 "$logs/$name.log"
                 return 1
@@ -241,6 +246,7 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
     else
         echo "[two-av] starting the ego stack (several minutes)"
         setsid env LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
+            ${EGO_RVIZ_CONFIG:+RVIZ_CONFIG="$EGO_RVIZ_CONFIG"} \
             just ego-av > "$logs/ego.log" 2>&1 &
         ego_pg=$!
         wait_for_stack ego "$ego_pg" || exit 1
@@ -250,7 +256,11 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
         echo "[two-av] reusing the running background AV stack (web 8083)"
     else
         echo "[two-av] starting the background AV stack"
-        setsid just bg-av > "$logs/bg.log" 2>&1 &
+        # With RECORD=1 the background AV gets an RViz too, on the same display: two
+        # Autoware windows, one per vehicle (BG_RVIZ_CONFIG / EGO_RVIZ_CONFIG place them).
+        setsid env LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
+            ${BG_RVIZ_CONFIG:+RVIZ_CONFIG="$BG_RVIZ_CONFIG"} \
+            just bg-av > "$logs/bg.log" 2>&1 &
         bg_pg=$!
         wait_for_stack bg "$bg_pg" || exit 1
     fi
@@ -260,7 +270,7 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
     just _require-ego-stack || exit 1
     just _require-agent bg_av_1 || exit 1
 
-    # RECORD=1 grabs the display the ego stack's RViz is drawing on (LAUNCH_RVIZ above; a
+    # RECORD=1 grabs the display both stacks' RViz are drawing on (LAUNCH_RVIZ above; a
     # standalone rviz2 cannot load autoware.rviz without the stack's vehicle parameters).
     # RECORDING CHANGES THE RESULT ON THIS MACHINE (RViz on llvmpipe costs ~4 cores): do
     # not record a run you intend to judge.
@@ -570,6 +580,7 @@ bg-av entity="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-a
     # play_launch rejects an empty `name:=`, so optional arguments go in only when set.
     optional_args=()
     [ -n "${BG_GOAL_POSES_FILE:-}" ] && optional_args+=(goal_poses_file:="$BG_GOAL_POSES_FILE")
+    [ -n "${RVIZ_CONFIG:-}" ] && optional_args+=(rviz_config:="$RVIZ_CONFIG")
     exec play_launch launch --web-addr 0.0.0.0:{{web_port}} \
         --container-mode isolated --composable-respawn on-crash \
         --load-node-timeout 120 \
@@ -580,6 +591,7 @@ bg-av entity="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-a
         relay:="${BG_RELAY-tcp://localhost:{{agent_port}}}" \
         map_path:="{{map_path}}" \
         carla_port:={{carla_port}} \
+        launch_rviz:="${LAUNCH_RVIZ:-false}" \
         "${optional_args[@]}"
 
 # Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already
