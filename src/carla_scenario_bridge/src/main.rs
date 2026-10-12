@@ -12,6 +12,7 @@ mod entity_manager;
 mod episode_clock;
 mod epoch_marker;
 mod frame_stats;
+mod gap_trace;
 mod lanelet_map;
 mod map_resolver;
 mod npc_tracking;

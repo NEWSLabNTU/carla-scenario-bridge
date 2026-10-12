@@ -71,6 +71,14 @@ weather: ""
 # ROS parameter / launch arg `npc_motion` overrides it.
 npc_motion: tracked
 
+# Gap trace (roadmap 024): one JSON Lines file per Initialize,
+# <gap_trace_dir>/<UTC time>_<episode>.jsonl -- per entity its declared and CARLA boxes, per
+# SSv2 frame both worlds' poses, every CARLA contact -- for the offline oracle (gap_oracle).
+# Format: docs/design/gap-campaign.md, appendix. Diagnostic only: no reply to SSv2 changes,
+# and a slow disk drops frames (counted in the file's end line) rather than slowing a frame.
+# Empty = no trace (the default). The ROS parameter / launch arg `gap_trace_dir` overrides it.
+gap_trace_dir: ""
+
 # Telling the sensor bridges before we despawn something.
 #
 # acb attaches sensors to the vehicles this bridge spawns and listens to their streams, so

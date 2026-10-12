@@ -126,12 +126,18 @@ fn default_dir() -> Option<PathBuf> {
 /// `20261011T015319.572Z_e12.json`: sorts by time, and the episode keeps two runs that
 /// start in the same millisecond apart.
 pub fn file_name(start_unix: f64, episode: u64) -> String {
-    let ms_total = (start_unix * 1000.0).round().max(0.0) as i64;
+    format!("{}_e{episode}.json", utc_stamp(start_unix))
+}
+
+/// `20261011T015319.572Z`: UTC to the millisecond, sorting by time. Shared with the gap
+/// trace's file names (roadmap 024).
+pub fn utc_stamp(unix: f64) -> String {
+    let ms_total = (unix * 1000.0).round().max(0.0) as i64;
     let (secs, ms) = (ms_total.div_euclid(1000), ms_total.rem_euclid(1000));
     let (days, sod) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     let (y, m, d) = civil_from_days(days);
     format!(
-        "{y:04}{m:02}{d:02}T{:02}{:02}{:02}.{ms:03}Z_e{episode}.json",
+        "{y:04}{m:02}{d:02}T{:02}{:02}{:02}.{ms:03}Z",
         sod / 3600,
         sod / 60 % 60,
         sod % 60

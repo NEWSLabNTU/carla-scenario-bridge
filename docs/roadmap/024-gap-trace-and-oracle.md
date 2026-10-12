@@ -113,7 +113,7 @@ Written before the known gaps were fixed; four corrections from what those phase
    applied twice / not at all. No CARLA.
 3. [x] **Trace format.** A JSON schema in `docs/design/gap-campaign.md` (appendix) and a
    reader the oracle and tests share.
-4. [ ] **Bridge recorder.** Header at spawn, per-frame line from one snapshot, contacts from
+4. [x] **Bridge recorder.** Header at spawn, per-frame line from one snapshot, contacts from
    `collision_monitor`'s queue; writer thread; `gap_trace_dir` param and launch argument.
    Unit test: recorder output parses with the oracle's reader.
 5. [ ] **No change when off; no cost when on.** Starter scenarios unchanged with the param
@@ -146,6 +146,41 @@ Written before the known gaps were fixed; four corrections from what those phase
 - The baseline table exists, with every starter-scenario finding classified.
 
 ### Results
+
+**2026-10-13, step 4.** Recorder `src/carla_scenario_bridge/src/gap_trace.rs`, wired into the
+coordinator; param `gap_trace_dir` (config key, ROS param, `bridge.launch.xml` and
+`simulation.launch.xml` args, `GAP_TRACE_DIR=... just run`), empty = off: no thread, no
+snapshot, no line. **Pairing**: frame `k`'s SSv2 half is what `UpdateEntityStatus` `k`
+carried (NPC) and returned (ego); its CARLA half is the world after tick `k`, i.e. the
+snapshot the *next* `UpdateEntityStatus` reads -- under `tracked` the one `track_npc` already
+takes (`TrackedView`), else one `world.snapshot()` of our own (client-side state, no RPC).
+So a frame line is written one request late from a staged frame; the last frame is written
+from a snapshot taken at the despawn (or Initialize / shutdown). The ego's SSv2 pose
+therefore trails CARLA's by one tick by protocol (read back before the tick): 0.43 m p95 at
+~8.5 m/s, 0.000 standing -- G3 must not judge the ego. Header from the same `actual` box as
+022's `geometry` row (`prop_box_in_actor_frame`, offset turned back by
+`prop_offset_in_actor_frame`), y flipped. `spawn` = first frame line naming the entity
+(not inherited if that frame is dropped); `contact_hold` = tracked NPC with
+`touched_within(CONTACT_HOLD_FRAMES)` when staged. Contacts: `collision_monitor` keeps
+drained events (`keep_for_trace`/`take_traced`), so contacts the ego's `finish_run` drains
+are kept too; kind from the headers, `static` for null id, else `unknown`. Episode ends
+when the last entity despawns (SSv2 sends nothing until the next Initialize, which a suite's
+last scenario never gets), else at Initialize / shutdown; CARLA restart marks it
+incomplete. Writer: one thread, `sync_channel(512)`; full = frame dropped and counted,
+other lines wait in order in a local backlog; flushed when the channel runs dry. Tests: 8
+recorder tests (each record type, pairing/flags/contact kinds, full channel, off) plus one
+that writes a trace through the real writer thread and parses it with `gap_trace.load_trace`
+via `python3 -c` (one cross-language test instead of a golden file: a rename on either side
+fails it; skips with a message without python3); config and prop-offset tests. `just test`
+259 Rust passed / 1 skipped (pre-existing), 108 pytest; `just check` clean. **Live** (Town01,
+`npc_motion: tracked`, ego via relay, `run_suite --physical-verdict`): `town01_rear_contact`
+PASS 2/2, `town01_pedestrian` PASS 2/2; both traces parse. rear_contact: 479 frames,
+0 dropped, 2 entities, 24 contacts (`npc_rear`, `vehicle`, frames 420-446, max 7786 N·s),
+`contact_hold` on `npc_rear` frames 422-467 (46), `spawn` on each entity's first line,
+`npc_rear` offset-applied error p50 0.000 / p95 0.015 m outside hold. pedestrian: 2292
+frames, 0 dropped, 4 entities (2 turned barriers: origin_offset yaw π/2, CARLA box
+1.21 x 0.37 m in actor frame against declared 0.4 x 1.2), 0 contacts, barrier error 0.000,
+walker max 0.093 m. 0.3 MB and 2.1 MB. Step 5 (cost on/off) not measured yet.
 
 **2026-10-13, steps 2-3.** Geometry and reader, test-first (tests seen failing on the
 missing modules, then green), stdlib only: `src/csb_launch/scripts/gap_geometry.py` and

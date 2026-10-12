@@ -256,6 +256,9 @@ pub struct CollisionMonitor {
     tracking: std::collections::BTreeMap<String, TrackingStats>,
     /// The SSv2 frame of each actor's latest contact with the ego, this episode.
     last_contact: std::collections::HashMap<u32, u64>,
+    /// Every drained event with the other actor's SSv2 name, kept for the gap trace
+    /// (roadmap 024) until [`CollisionMonitor::take_traced`]; `None` keeps nothing.
+    traced: Option<Vec<(RawCollision, Option<String>)>>,
 }
 
 impl CollisionMonitor {
@@ -283,7 +286,28 @@ impl CollisionMonitor {
             geometry: Vec::new(),
             tracking: Default::default(),
             last_contact: Default::default(),
+            traced: None,
         }
+    }
+
+    /// Keep drained events for [`CollisionMonitor::take_traced`] (the gap trace is on).
+    pub fn keep_for_trace(&mut self) {
+        self.traced.get_or_insert_with(Vec::new);
+    }
+
+    /// The events drained since the last call, with the other actor's SSv2 name.
+    pub fn take_traced(&mut self) -> Vec<(RawCollision, Option<String>)> {
+        self.traced.as_mut().map(std::mem::take).unwrap_or_default()
+    }
+
+    /// The current SSv2 frame: `UpdateFrame`s since `Initialize`.
+    pub fn frame(&self) -> u64 {
+        self.frame.load(Ordering::Relaxed)
+    }
+
+    /// `Initialize` count of this bridge process (the contact report's `episode`).
+    pub fn episode(&self) -> u64 {
+        self.episode
     }
 
     /// Advance the SSv2 frame counter. Call once per `UpdateFrame`, before ticking, so
@@ -299,6 +323,9 @@ impl CollisionMonitor {
         self.geometry.clear();
         self.tracking.clear();
         self.last_contact.clear();
+        if let Some(traced) = self.traced.as_mut() {
+            traced.clear();
+        }
     }
 
     /// Whether the ego touched `actor_id` within the last `frames` SSv2 frames (as drained:
@@ -465,6 +492,9 @@ impl CollisionMonitor {
             let name = event.other_id.and_then(&mut name_of);
             if let Some(line) = self.log.record(event, name.as_deref()) {
                 tracing::warn!("{line}");
+            }
+            if let Some(traced) = self.traced.as_mut() {
+                traced.push((event.clone(), name));
             }
         }
     }

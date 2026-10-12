@@ -191,6 +191,9 @@ pub struct BridgeConfig {
     pub weather: String,
     /// How SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023).
     pub npc_motion: NpcMotion,
+    /// Where each episode's gap trace is written for the oracle (roadmap 024); empty = no
+    /// trace (the default). Read it through [`BridgeConfig::gap_trace_dir`].
+    pub gap_trace_dir: String,
 }
 
 /// How SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023).
@@ -291,7 +294,7 @@ impl BridgeConfig {
     }
 
     /// Apply ROS parameters (`carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
-    /// `reconnect_wait_seconds`, `weather`, `contact_report_dir`) over the file and the environment: a launch file's explicit
+    /// `reconnect_wait_seconds`, `weather`, `npc_motion`, `gap_trace_dir`, `contact_report_dir`) over the file and the environment: a launch file's explicit
     /// value is the most specific statement of intent. A malformed number is an error, not
     /// a silent default.
     pub fn apply_ros_params(&mut self, params: &crate::ros_args::RosParams) -> Result<()> {
@@ -333,6 +336,9 @@ impl BridgeConfig {
                     eyre::bail!("parameter npc_motion:={other}: expected `kinematic` or `tracked`")
                 }
             };
+        }
+        if let Some(dir) = params.get("gap_trace_dir").filter(|v| !v.trim().is_empty()) {
+            self.gap_trace_dir = dir.trim().to_string();
         }
         if let Some(dir) = params
             .get("contact_report_dir")
@@ -398,6 +404,13 @@ impl BridgeConfig {
     /// The contact-report directory, `None` when reports are off.
     pub fn contact_report_dir(&self) -> Option<std::path::PathBuf> {
         crate::contact_report::resolve_dir(self.contact_report_dir.as_deref())
+    }
+
+    /// The gap-trace directory, `None` when the trace is off (roadmap 024).
+    pub fn gap_trace_dir(&self) -> Option<std::path::PathBuf> {
+        Some(self.gap_trace_dir.trim())
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from)
     }
 
     /// CARLA blueprint for an SSv2 asset key, if the config maps it.
@@ -526,6 +539,43 @@ mod tests {
         );
         let config: BridgeConfig = serde_yaml::from_str("weather: Sunny\n").expect("parses");
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn gap_trace_dir_defaults_to_off_and_takes_file_or_parameter() {
+        let params = |v: &str| {
+            crate::ros_args::RosParams::from_args([
+                "--ros-args".to_string(),
+                "-p".to_string(),
+                format!("gap_trace_dir:={v}"),
+            ])
+            .expect("parses")
+        };
+        let mut config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        assert_eq!(config.gap_trace_dir(), None);
+        config.apply_ros_params(&params("")).expect("applies");
+        assert_eq!(config.gap_trace_dir(), None);
+        config
+            .apply_ros_params(&params(" /tmp/traces "))
+            .expect("applies");
+        assert_eq!(
+            config.gap_trace_dir(),
+            Some(std::path::PathBuf::from("/tmp/traces"))
+        );
+        let mut config: BridgeConfig =
+            serde_yaml::from_str("gap_trace_dir: /a/b\n").expect("parses");
+        assert_eq!(
+            config.gap_trace_dir(),
+            Some(std::path::PathBuf::from("/a/b"))
+        );
+        // An empty parameter keeps the file's, as every other parameter does.
+        config.apply_ros_params(&params("")).expect("applies");
+        assert_eq!(
+            config.gap_trace_dir(),
+            Some(std::path::PathBuf::from("/a/b"))
+        );
+        config.apply_ros_params(&params("/c")).expect("applies");
+        assert_eq!(config.gap_trace_dir(), Some(std::path::PathBuf::from("/c")));
     }
 
     #[test]

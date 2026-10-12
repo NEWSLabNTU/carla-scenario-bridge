@@ -164,6 +164,11 @@ applied or removed, so an offset the bridge got wrong is visible in the trace in
 baked into it. A pose is `[x, y, z, roll, pitch, yaw]`. Box offsets and extents are in the
 entity's or actor's own frame, x forward, y left.
 
+**Pairing.** Frame `k` is SSv2's `UpdateEntityStatus` `k` and the tick of its `UpdateFrame`
+`k`. `.ssv2` is what that request carried (NPCs) or what the bridge returned (the ego, read
+from CARLA *before* the tick); `.carla` and `.velocity` are the world *after* the tick. The
+ego's two poses therefore differ by one tick of motion by protocol, not by a gap.
+
 **Order.** `episode` first and once; `entity` before any `frame` that names it; `frame`
 numbers strictly increasing; `contact` lines anywhere after the episode line (they arrive
 from `collision_monitor`'s queue, so may trail their frame); `end` last and once. Blank

@@ -4,7 +4,7 @@
   on ZMQ). Long-lived: start it once, run any number of scenarios against it.
 
     play_launch launch carla_scenario_bridge bridge.launch.xml [config_file:=...] [carla_host:=...]
-        [weather:=ClearNoon]
+        [weather:=ClearNoon] [gap_trace_dir:=DIR]
 
   Serves /carla/set_weather and /carla/get_weather (csb_interfaces) in its ROS domain.
 
@@ -24,6 +24,8 @@
        description="kinematic | tracked: how SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023); empty keeps the config file's (default tracked)"/>
   <arg name="weather" default=""
        description="CARLA weather preset (ClearNoon, CloudySunset, HardRainNight, ...) applied on connect and after every map load; empty keeps the config file's (default: leave CARLA's). Change at run time with /carla/set_weather"/>
+  <arg name="gap_trace_dir" default=""
+       description="where each episode's gap trace (roadmap 024) is written for gap_oracle; empty keeps the config file's (default: no trace)"/>
   <arg name="contact_report_dir" default=""
        description="where each ego run's CARLA contacts are written for physical_verdict (roadmap 021); 'off' disables; empty keeps the config file's (default ~/.ros/csb/contacts)"/>
 
@@ -39,5 +41,6 @@
     <param name="weather" value="$(var weather)"/>
     <param name="npc_motion" value="$(var npc_motion)"/>
     <param name="contact_report_dir" value="$(var contact_report_dir)"/>
+    <param name="gap_trace_dir" value="$(var gap_trace_dir)"/>
   </node>
 </launch>

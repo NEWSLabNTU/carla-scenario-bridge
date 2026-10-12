@@ -9,6 +9,7 @@ use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
 use crate::blueprint_boxes::{self, BoxTable, Dimensions, SizeClass};
 use crate::config::{BridgeConfig, NpcMotion, SensorReleaseConfig};
+use crate::gap_trace::{self, GapTrace};
 use crate::map_resolver::{lanelet_map_file, load_map_origin, town_from_map_path};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
@@ -940,6 +941,9 @@ pub struct Coordinator {
     /// Blueprints already warned about as differing from the table, so a stale table
     /// warns once per blueprint rather than once per spawn.
     warned_stale_boxes: HashSet<String>,
+    /// The per-frame record of both worlds for the oracle (roadmap 024); records nothing
+    /// unless `gap_trace_dir` is set. See `gap_trace`.
+    gap_trace: GapTrace,
 }
 
 impl Coordinator {
@@ -964,6 +968,12 @@ impl Coordinator {
         let requested_weather =
             crate::weather::preset(config.weather.trim()).map(|(name, w)| (name.to_string(), w));
         let blueprint_boxes = BoxTable::load_for(&config_dir, crate::carla_version::BUILT_FOR);
+        let gap_trace = GapTrace::new(config.gap_trace_dir());
+        let mut collision_monitor =
+            CollisionMonitor::new(collision_monitor_enabled, contact_report_dir);
+        if gap_trace.is_on() {
+            collision_monitor.keep_for_trace();
+        }
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -995,7 +1005,7 @@ impl Coordinator {
             accel_history: HashMap::new(),
             walker_height: HashMap::new(),
             tracked_npcs: HashMap::new(),
-            collision_monitor: CollisionMonitor::new(collision_monitor_enabled, contact_report_dir),
+            collision_monitor,
             world_id,
             clock_path,
             warned_clock_store: false,
@@ -1013,6 +1023,7 @@ impl Coordinator {
             requested_weather,
             blueprint_boxes,
             warned_stale_boxes: HashSet::new(),
+            gap_trace,
         }
     }
 
@@ -1335,6 +1346,83 @@ impl Coordinator {
         let entities = &self.entities;
         self.collision_monitor
             .finish_run(|id| entities.name_of_actor(id).map(str::to_owned));
+        self.trace_contacts();
+    }
+
+    /// The collision sensor's server is gone (CARLA restarted): drop it, and mark the gap
+    /// trace's episode incomplete.
+    fn abandon_collision_monitor(&mut self) {
+        self.collision_monitor.abandon();
+        self.trace_contacts();
+        self.gap_trace.mark_incomplete();
+    }
+
+    // --- Gap trace (roadmap 024) -----------------------------------------------------
+
+    /// Hand the contacts drained since the last call to the gap trace.
+    fn trace_contacts(&mut self) {
+        let events = self.collision_monitor.take_traced();
+        self.gap_trace.contacts(events);
+    }
+
+    /// Write the staged trace frame (if it has been ticked) from `snapshot`, or from one
+    /// taken here when the caller has none -- never a per-actor RPC.
+    fn trace_emit_staged(&mut self, snapshot: Option<&carla::client::WorldSnapshot>) {
+        let now = self.collision_monitor.frame();
+        if !self.gap_trace.staged_due(now) {
+            return;
+        }
+        let own;
+        let snapshot = match snapshot {
+            Some(s) => s,
+            None => match self.world.snapshot() {
+                Ok(s) => {
+                    own = s;
+                    &own
+                }
+                Err(e) => {
+                    tracing::debug!("Gap trace: no world snapshot ({e}); CARLA's half is null");
+                    self.gap_trace.emit_staged(now, |_| None);
+                    return;
+                }
+            },
+        };
+        let map_origin = self.map_origin;
+        self.gap_trace.emit_staged(now, |id| {
+            snapshot
+                .find(id)
+                .map(|actor| carla_trace_state(&actor, map_origin))
+        });
+    }
+
+    /// One `UpdateEntityStatus` for the gap trace: write the previous frame from this
+    /// request's snapshot (the world after that frame's tick), then stage this frame's SSv2
+    /// poses -- what SSv2 sent for an NPC, what the bridge returned for the ego.
+    fn trace_entity_status(
+        &mut self,
+        updated: &[api::UpdatedEntityStatus],
+        snapshot: Option<&carla::client::WorldSnapshot>,
+    ) {
+        self.trace_emit_staged(snapshot);
+        let staged = updated
+            .iter()
+            .filter_map(|u| {
+                let entity = self.entities.get(&u.name)?;
+                let pose = u.pose.as_ref()?;
+                let actor_id = entity.carla_actor_id;
+                Some(gap_trace::StagedEntity {
+                    name: u.name.clone(),
+                    actor_id,
+                    ssv2: ssv2_trace_pose(pose),
+                    contact_hold: self.tracked_npcs.contains_key(&actor_id)
+                        && self
+                            .collision_monitor
+                            .touched_within(actor_id, npc_tracking::CONTACT_HOLD_FRAMES),
+                })
+            })
+            .collect();
+        self.gap_trace
+            .stage_frame(self.collision_monitor.frame() + 1, staged);
     }
 
     /// Destroy every actor this bridge created that is still alive.
@@ -1353,7 +1441,7 @@ impl Coordinator {
         if self.carla_unreachable {
             // One timeout per actor and sensor otherwise (gap 10). The ledger is kept for
             // the next teardown after a reconnect.
-            self.collision_monitor.abandon();
+            self.abandon_collision_monitor();
             tracing::warn!(
                 "Teardown skipped: CARLA unreachable; {} actor(s) stay in the ledger for the \
                  next teardown, or the reaper",
@@ -1419,7 +1507,11 @@ impl Coordinator {
     ///
     /// Safe to call more than once, and safe when CARLA has already gone away.
     pub fn shutdown(&mut self) {
+        if self.gap_trace.recording() {
+            self.trace_emit_staged(None);
+        }
         self.destroy_all_spawned();
+        self.gap_trace.shutdown(Duration::from_secs(5));
         if let Some(mut link) = self.agent_link.take() {
             link.shutdown();
         }
@@ -2263,7 +2355,7 @@ impl Coordinator {
             link.despawn_all();
         }
         self.agent_vehicles.clear();
-        self.collision_monitor.abandon();
+        self.abandon_collision_monitor();
         self.previous_longitudinal_accel.clear();
         self.settle_frames.clear();
         self.accel_history.clear();
@@ -2457,13 +2549,28 @@ impl Coordinator {
         self.accel_history.clear();
         self.walker_height.clear();
         self.tracked_npcs.clear();
+        if self.gap_trace.recording() {
+            // The last frame of the previous episode, while its actors still exist.
+            self.trace_emit_staged(None);
+            self.trace_contacts();
+        }
         self.collision_monitor.begin_episode();
+        self.gap_trace.begin_episode(
+            self.collision_monitor.episode(),
+            match self.config.npc_motion {
+                NpcMotion::Tracked => "tracked",
+                NpcMotion::Kinematic => "kinematic",
+            },
+            crate::contact_report::now_unix(),
+        );
 
         // Destroy the previous run's actors BEFORE dropping the name mappings. Clearing
         // EntityManager first is what used to orphan them: the map was the only record of
         // what to clean up, so emptying it leaked every actor it referenced, and those
         // actors then blocked the spawn points this run needs.
         let report = self.destroy_all_spawned();
+        // Contacts the previous episode's leftovers had are not this episode's.
+        let _ = self.collision_monitor.take_traced();
         if report.attempted > 0 {
             tracing::info!(
                 "Initialize: cleaned up {} actor(s) from the previous run",
@@ -2685,10 +2792,15 @@ impl Coordinator {
         self.entities.count()
     }
 
-    pub fn update_frame(&mut self, _req: api::UpdateFrameRequest) -> api::UpdateFrameResponse {
+    pub fn update_frame(&mut self, req: api::UpdateFrameRequest) -> api::UpdateFrameResponse {
         // Stamp this frame's collisions with this frame's number, and log last frame's.
-        self.collision_monitor.next_frame();
+        let frame = self.collision_monitor.next_frame();
         self.drain_collisions();
+        if self.gap_trace.recording() {
+            self.trace_contacts();
+            self.gap_trace
+                .frame_time(frame, req.current_simulation_time);
+        }
 
         match decide_frame_action(self.sync_mode_enabled, self.has_ego) {
             FrameAction::WaitForEgo => {
@@ -2984,6 +3096,24 @@ impl Coordinator {
         } else {
             Some(read)
         };
+        // The gap trace's CARLA box: the same box the geometry row reports, centred where
+        // CARLA says, both in the actor's own frame, ROS-handed.
+        let trace_box = actual.map(|d| {
+            let l = &bb.transform.location;
+            let (x, y) = if kind == SpawnKind::MiscObject {
+                prop_offset_in_actor_frame(
+                    f64::from(l.x),
+                    f64::from(l.y),
+                    carla_transform.rotation.yaw,
+                )
+            } else {
+                (f64::from(l.x), f64::from(l.y))
+            };
+            gap_trace::BlueprintBox {
+                location: [x, -y, f64::from(l.z)],
+                extent: [d.length / 2.0, d.width / 2.0, d.height / 2.0],
+            }
+        });
         self.compare_geometry(name, &blueprint_key, &shape, actual);
 
         if kind == SpawnKind::Pedestrian {
@@ -3083,6 +3213,28 @@ impl Coordinator {
         if let Some(entity_type) = kind.entity_type() {
             self.entities
                 .insert(name.to_string(), entity_type, actor_id, origin_offset);
+            if self.gap_trace.recording() {
+                self.gap_trace.entity(gap_trace::EntityHeader {
+                    frame: self.collision_monitor.frame(),
+                    name: name.to_string(),
+                    kind: match entity_type {
+                        EntityType::Ego => gap_trace::Kind::Ego,
+                        EntityType::Vehicle => gap_trace::Kind::Vehicle,
+                        EntityType::Pedestrian => gap_trace::Kind::Pedestrian,
+                        EntityType::MiscObject => gap_trace::Kind::MiscObject,
+                    },
+                    declared: gap_trace::DeclaredBox {
+                        center: shape.center,
+                        dimensions: shape
+                            .declared
+                            .map_or([0.0; 3], |d| [d.length, d.width, d.height]),
+                    },
+                    origin_offset: [origin_offset.x, origin_offset.y, origin_offset.yaw],
+                    actor_id,
+                    blueprint: blueprint_key.clone(),
+                    blueprint_box: trace_box,
+                });
+            }
         }
 
         if kind == SpawnKind::Ego {
@@ -3349,6 +3501,25 @@ impl Coordinator {
     }
 
     pub fn despawn_entity(&mut self, req: api::DespawnEntityRequest) -> api::DespawnEntityResponse {
+        if !self.gap_trace.recording() {
+            return self.despawn_entity_inner(req);
+        }
+        // The staged frame still holds this entity: write it while the actor exists.
+        self.trace_emit_staged(None);
+        let response = self.despawn_entity_inner(req);
+        self.trace_contacts();
+        if self.entities.count() == 0 {
+            // SSv2 despawns every entity when a scenario ends, and sends nothing more until
+            // the next Initialize -- which may never come for a suite's last scenario.
+            self.gap_trace.end_episode();
+        }
+        response
+    }
+
+    fn despawn_entity_inner(
+        &mut self,
+        req: api::DespawnEntityRequest,
+    ) -> api::DespawnEntityResponse {
         let name = &req.name;
 
         // Whether this despawn removes the ego, read before the entry goes away. `has_ego`
@@ -3385,7 +3556,7 @@ impl Coordinator {
             // the ledger: torn down after a reconnect to the same server, forgotten after a
             // restart, and reaped by its mark either way.
             if was_ego {
-                self.collision_monitor.abandon();
+                self.abandon_collision_monitor();
                 self.has_ego = false;
             }
             return match self.entities.remove(name) {
@@ -3632,6 +3803,10 @@ impl Coordinator {
         if carla_unreachable && !self.carla_unreachable {
             self.carla_unreachable = true;
             tracing::warn!("A teleport timed out; CARLA treated as unreachable");
+        }
+        if self.gap_trace.recording() {
+            // The tracked path's snapshot when it took one (roadmap 023), else our own.
+            self.trace_entity_status(&updated, tracked_view.as_ref().map(|v| &v.snapshot));
         }
         let mut result = entity_status_result(&unknown, &teleport_failures);
         if !autopilot_failures.is_empty() {
@@ -4942,6 +5117,8 @@ impl Coordinator {
 #[derive(Debug, Clone, Copy)]
 struct EntityShape {
     origin_offset: OriginOffset,
+    /// The declared `bounding_box.center` (x, y, z), zero when absent (the gap trace).
+    center: [f64; 3],
     /// The declared box; `None` when absent or degenerate.
     declared: Option<Dimensions>,
     subtype: EntitySubtype,
@@ -4963,6 +5140,9 @@ impl EntityShape {
             .filter(Dimensions::is_valid);
         EntityShape {
             origin_offset: origin_offset_of(bounding_box),
+            center: bounding_box
+                .and_then(|b| b.center.as_ref())
+                .map_or([0.0; 3], |c| [c.x, c.y, c.z]),
             declared,
             subtype,
             axles: None,
@@ -4991,6 +5171,50 @@ fn prop_box_in_actor_frame(read: Dimensions, yaw_deg: f32) -> Option<Dimensions>
     } else {
         None
     }
+}
+
+/// A prop's box-centre offset as CARLA reads it, into the prop's own frame (CARLA axes),
+/// by the same reading as [`prop_box_in_actor_frame`]: at a multiple of 90° CARLA reports
+/// the box in world axes, so the offset is turned back by the yaw. Only called when that
+/// function recovered the box.
+fn prop_offset_in_actor_frame(x: f64, y: f64, yaw_deg: f32) -> (f64, f64) {
+    let quarters = (f64::from(yaw_deg) / 90.0).round();
+    let (sin, cos) = (-quarters * std::f64::consts::FRAC_PI_2).sin_cos();
+    let (x, y) = (x * cos - y * sin, x * sin + y * cos);
+    // Exact quarter turns: no 1e-17 residue or -0.0 in the trace.
+    let clean = |v: f64| (v * 1e9).round() / 1e9 + 0.0;
+    (clean(x), clean(y))
+}
+
+/// An SSv2 pose as the gap trace writes it: `[x, y, z, roll, pitch, yaw]`, map frame.
+fn ssv2_trace_pose(pose: &Pose) -> gap_trace::Pose6 {
+    let p = pose.position.unwrap_or_default();
+    let (roll, pitch, yaw) = pose.orientation.as_ref().map_or((0.0, 0.0, 0.0), |q| {
+        coordinate_conversion::quaternion_to_euler(q.x, q.y, q.z, q.w)
+    });
+    [p.x, p.y, p.z, roll, pitch, yaw]
+}
+
+/// An actor's state from a world snapshot as the gap trace writes it: its transform and
+/// velocity in the map frame, raw (no `OriginOffset` undone).
+fn carla_trace_state(
+    actor: &carla::client::ActorSnapshot,
+    map_origin: MapOrigin,
+) -> gap_trace::CarlaState {
+    let t = actor.transform();
+    let v = actor.velocity();
+    let (x, y, z) = map_origin.carla_to_map(
+        f64::from(t.location.x),
+        f64::from(t.location.y),
+        f64::from(t.location.z),
+    );
+    let (roll, pitch, yaw) = coordinate_conversion::carla_to_ros_rotation(
+        f64::from(t.rotation.roll),
+        f64::from(t.rotation.pitch),
+        f64::from(t.rotation.yaw),
+    );
+    let (vx, vy, vz) = coordinate_conversion::carla_to_ros_velocity(v.x, v.y, v.z);
+    ([x, y, z, roll, pitch, yaw], [vx, vy, vz])
 }
 
 /// The origin offset an SSv2 entity declares: its `bounding_box.center` x and y. Absent or
@@ -5647,6 +5871,17 @@ mod tests {
         assert_eq!(prop_box_in_actor_frame(at_90, 90.0), Some(barrier));
         assert_eq!(prop_box_in_actor_frame(at_90, -270.0), Some(barrier));
         assert_eq!(prop_box_in_actor_frame(barrier, 45.0), None);
+    }
+
+    /// The gap trace's prop box offset is turned back with its extent (roadmap 024): read in
+    /// world axes at a quarter turn, written in the prop's own.
+    #[test]
+    fn a_turned_props_box_offset_is_turned_back_into_its_frame() {
+        assert_eq!(prop_offset_in_actor_frame(0.2, 0.1, 0.0), (0.2, 0.1));
+        assert_eq!(prop_offset_in_actor_frame(0.2, 0.1, 90.0), (0.1, -0.2));
+        assert_eq!(prop_offset_in_actor_frame(0.2, 0.1, -90.0), (-0.1, 0.2));
+        assert_eq!(prop_offset_in_actor_frame(0.2, 0.1, 180.0), (-0.2, -0.1));
+        assert_eq!(prop_offset_in_actor_frame(0.0, 0.0, 270.0), (0.0, 0.0));
     }
 
     /// A prop matched turned (roadmap 022) keeps its position and is turned a quarter
