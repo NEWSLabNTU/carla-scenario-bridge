@@ -876,6 +876,10 @@ pub struct Coordinator {
     map_aliases: HashMap<String, String>,
     /// CARLA time plus the episode epoch, reported to SSv2 (roadmap 015).
     episode_clock: EpisodeClock,
+    /// Why the world's epoch marker is still to be checked against `episode_clock`
+    /// (`epoch_marker`), if it is: set at start-up and on every episode change, cleared once
+    /// csb could see the world's actors.
+    epoch_marker_due: Option<&'static str>,
     /// Lanelet2 signal ID to OpenDRIVE sign ID for the loaded town.
     signal_map: SignalMap,
     /// Lanelet2 signal IDs already reported as unmapped. SSv2 sends states every frame, so
@@ -969,6 +973,7 @@ impl Coordinator {
             config_dir,
             signal_map: SignalMap::new(),
             episode_clock,
+            epoch_marker_due: Some("start-up"),
             warned_unmapped_signals: HashSet::new(),
             warned_arrow_shapes: false,
             world,
@@ -1493,6 +1498,9 @@ impl Coordinator {
             // The new episode's epoch, recorded before anything can kill this process: a
             // restart would otherwise resume the old episode's (gap 11).
             self.record_clock();
+            // And in the new world, for a vehicle side that starts after this reload.
+            self.epoch_marker_due = Some("map load");
+            self.write_epoch_marker();
             if let Err(e) = self.enable_sync_mode() {
                 tracing::warn!("Could not re-apply synchronous mode to the new world: {e}");
             }
@@ -2281,6 +2289,117 @@ impl Coordinator {
             ),
         }
         self.record_clock();
+        // The new server's world carries no marker; a vehicle side started from here on
+        // reads it.
+        self.epoch_marker_due = Some("CARLA restart");
+        self.write_epoch_marker();
+    }
+
+    /// Leave exactly one epoch marker in the world, recording csb's epoch (`epoch_marker`),
+    /// if one is due. Stays due while csb cannot see the world's actors: the client's actor
+    /// list is only as new as the last frame it received, and a csb that has not ticked yet
+    /// (start-up, CARLA paused) has none -- it would spawn a duplicate, or miss a stale one.
+    fn write_epoch_marker(&mut self) {
+        let Some(why) = self.epoch_marker_due else {
+            return;
+        };
+        use crate::epoch_marker as em;
+        let epoch = self.episode_clock.epoch();
+        let seen_a_frame = self.world.snapshot().is_ok_and(|s| s.frame() != 0);
+        if !seen_a_frame {
+            return;
+        }
+        let markers: Vec<(u32, i64)> =
+            match self.world.actors().and_then(|a| a.filter(em::BLUEPRINT)) {
+                Ok(actors) => actors
+                    .iter()
+                    .filter_map(|actor| {
+                        let role = actor
+                            .attributes()
+                            .ok()?
+                            .iter()
+                            .find(|a| a.id() == "role_name")
+                            .map(|a| a.value_string())?;
+                        Some((actor.id(), em::parse(&role)?))
+                    })
+                    .collect(),
+                Err(e) => {
+                    tracing::warn!("Epoch marker ({why}): could not list the world's actors: {e}");
+                    return;
+                }
+            };
+        self.epoch_marker_due = None;
+        if epoch == 0 {
+            if let Some(&(id, recorded)) = markers.iter().max_by_key(|&&(id, _)| id) {
+                tracing::warn!(
+                    "Epoch marker ({why}): csb's epoch is 0 but the world records {} (actor \
+                     {id}); a vehicle side started now adopts that. csb probably lost its \
+                     clock record ({}); left in place",
+                    fmt_ns(recorded),
+                    self.clock_path.display()
+                );
+            }
+            return;
+        }
+        let plan = em::plan(epoch, &markers);
+        for &(id, recorded) in &plan.stale {
+            if recorded != epoch {
+                tracing::warn!(
+                    "Epoch marker ({why}): the world records {} (actor {id}), csb's epoch is \
+                     {}; replacing it",
+                    fmt_ns(recorded),
+                    fmt_ns(epoch)
+                );
+            }
+            let destroyed = self
+                .world
+                .actors()
+                .ok()
+                .and_then(|a| a.find(id).ok().flatten())
+                .map(|actor| actor.destroy());
+            if let Some(Err(e)) = destroyed {
+                tracing::warn!("Epoch marker ({why}): could not destroy actor {id}: {e}");
+            }
+        }
+        if !plan.spawn {
+            tracing::debug!(
+                "Epoch marker ({why}): the world already records {}",
+                fmt_ns(epoch)
+            );
+            return;
+        }
+        let transform = Transform {
+            location: Location {
+                x: 0.0,
+                y: 0.0,
+                z: em::LOCATION_Z,
+            },
+            rotation: Rotation {
+                roll: 0.0,
+                pitch: 0.0,
+                yaw: 0.0,
+            },
+        };
+        let spawned = self
+            .world
+            .actor_builder(em::BLUEPRINT)
+            .and_then(|b| b.set_attribute("role_name", &em::role_name(epoch)))
+            .and_then(|b| b.spawn(transform));
+        match spawned {
+            // Not in `spawned_actors`: it belongs to the episode, not to a scenario, and
+            // teardown must leave it.
+            Ok(actor) => tracing::info!(
+                "Epoch marker ({why}): epoch {} recorded in the world (actor {})",
+                fmt_ns(epoch),
+                actor.id()
+            ),
+            Err(e) => tracing::warn!(
+                "Epoch marker ({why}): could not spawn {} ({e}); a vehicle side started in \
+                 this episode starts at epoch 0, {} behind",
+                em::BLUEPRINT,
+                fmt_ns(epoch)
+            ),
+        }
     }
 
     pub fn initialize(&mut self, req: api::InitializeRequest) -> api::InitializeResponse {
@@ -2544,6 +2663,9 @@ impl Coordinator {
         );
         self.tick_time += ticking;
         let frame = frame?;
+        // A marker still due (start-up, or a paused world after a change) can be written
+        // now: csb sees the world's actors from its first tick on.
+        self.write_epoch_marker();
         Ok(match frame {
             Ok((elapsed, delta)) => self.episode_clock.observe(elapsed, delta),
             Err(e) => {

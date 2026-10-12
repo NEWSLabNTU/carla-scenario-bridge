@@ -10,6 +10,7 @@ mod coordinate_conversion;
 mod coordinator;
 mod entity_manager;
 mod episode_clock;
+mod epoch_marker;
 mod frame_stats;
 mod lanelet_map;
 mod map_resolver;
