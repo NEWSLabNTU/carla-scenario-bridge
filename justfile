@@ -442,11 +442,13 @@ _require-ego-stack:
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
+    if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # Look where the ego actually is: its own domain (roadmap 017).
+    # Look where the ego actually is: its own domain (roadmap 017), over its RMW.
     export ROS_DOMAIN_ID={{ego_domain}}
+    if [ -n "${EGO_RMW_IMPLEMENTATION:-}" ]; then export RMW_IMPLEMENTATION="$EGO_RMW_IMPLEMENTATION"; fi
     # --reload-failed: play_launch does not respawn a composable that crashed inside its
     # container, and behavior_path_planner does that about once in 60 route resets
     # (autoware_universe#12460, an rclcpp race with no upstream fix). Without it the stack
@@ -476,8 +478,11 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     set -e
     # Three overlaid workspaces: base Autoware, then acb (acb_launch, sensor kit,
     # vehicle description, acb_bridge), then this one (csb_launch). The ego stack
-    # resolves packages from all three.
+    # resolves packages from all three. EGO_OVERLAY, when set, is a fourth sourced
+    # between Autoware and acb, so its packages shadow Autoware's but not acb's: e.g. a
+    # tier4_system_launch with the stock MRM nodes removed (a safety island's).
     source "{{autoware_setup}}"
+    if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
     source "{{acb_src}}/install/setup.bash"
     source "{{project}}/install/setup.bash"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
@@ -490,6 +495,12 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # Any domain works since roadmap 017: the scenario reaches this ego through the agent
     # relay (TCP), not over ROS. Kept apart from the scenario domain on purpose.
     export ROS_DOMAIN_ID={{ego_domain}}
+    # EGO_RMW_IMPLEMENTATION puts the ego on another RMW (e.g. rmw_zenoh_cpp, which then
+    # needs its router up). Only the ego: the scenario side stays on Cyclone, since the
+    # two meet over the relay's TCP socket. Exported after the setups, which on some
+    # Autoware installs export RMW_IMPLEMENTATION themselves. `_require-ego-stack` reads
+    # the same variable, so `just scenario` finds the ego where it is.
+    if [ -n "${EGO_RMW_IMPLEMENTATION:-}" ]; then export RMW_IMPLEMENTATION="$EGO_RMW_IMPLEMENTATION"; fi
     # A ROS launch argument cannot carry an empty value -- `goal_poses_file:=` is rejected
     # as "malformed launch argument", and the failure comes minutes in, after the whole
     # parse. The launch file already declares a default for it, so pass the argument only
@@ -505,6 +516,9 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     if [ -n "${CONTROL_TRACE_PATH:-}" ]; then
         optional_args+=(control_trace_path:="$CONTROL_TRACE_PATH")
     fi
+    # EGO_LAUNCH_ARGS: further name:=value launch arguments, split on whitespace (so no
+    # spaces inside a value), appended last; an argument the launch tree does not declare
+    # reaches any included file that declares it, e.g. one EGO_OVERLAY provides.
     # RVIZ_CONFIG replaces Autoware's autoware.rviz (window size and docks), with LAUNCH_RVIZ=true.
     if [ -n "${RVIZ_CONFIG:-}" ]; then
         optional_args+=(rviz_config:="$RVIZ_CONFIG")
@@ -555,7 +569,8 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         accel_map_path:="$accel_map" \
         brake_map_path:="$brake_map" \
         ${LIDAR_DETECTION_MODEL:+lidar_detection_model:="$LIDAR_DETECTION_MODEL"} \
-        "${optional_args[@]}"
+        "${optional_args[@]}" \
+        ${EGO_LAUNCH_ARGS:-}
 
 # Launch one background AV's vehicle side -- Autoware + acb_bridge + vehicle agent -- in its
 # own ROS domain. The background AV is a scenario entity whose controller is `agent`
