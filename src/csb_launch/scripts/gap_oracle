@@ -32,7 +32,13 @@ poses, the 2D check `CollisionCondition` makes, with its height gate) and CARLA'
       puts the body on the ground), so a walker, whose CARLA origin is its body centre, is
       judged by its feet. Not the ego: its SSv2 pose is read back before the tick and
       trails CARLA's by one tick of motion by protocol (doc appendix, "Pairing"). Frames
-      flagged `spawn` or `contact_hold`, and frames with no CARLA state, are info.
+      flagged `spawn` or `contact_hold`, and frames with no CARLA state, are info; so is
+      the recovery right after a hold (`hold_recovery`: the run of frames adjacent to a
+      `contact_hold` run whose error only shrinks -- below the snap distance the tracker
+      closes it over a few frames). Nor an entity SSv2 reads back from CARLA like the
+      ego (`read_back`: a simulator-driven NPC, controller simulator_autopilot), found
+      from the trace itself: while it moves, its SSv2 pose is CARLA's previous one. Its
+      one-tick lag widens G1's band as the ego's does.
   G4  verdict class, G1-G3 joined with the JUnit result (SSv2's testcases; run_suite's
       `carla_contact` testcase is not SSv2's verdict and is skipped):
         PASS+contact                          SSv2 passed, the ego hit something SSv2 could
@@ -140,6 +146,49 @@ def read_junit(path):
 # --- geometry per frame -------------------------------------------------------------------
 
 
+# Read-back detection (G3): a frame counts when CARLA moved at least READ_BACK_STEP since
+# the previous frame; it matches when SSv2's pose (offset applied) is within
+# READ_BACK_MATCH of the step of CARLA's previous pose and further from CARLA's current one.
+READ_BACK_STEP = 0.05  # m per frame (1 m/s at 20 Hz)
+READ_BACK_MATCH = 0.25  # fraction of the step
+READ_BACK_MIN_FRAMES = 10
+READ_BACK_FRACTION = 0.9
+
+
+def read_back_entities(trace, kinds):
+    """{name: (match fraction, moving frames, first frame, last frame)} of the non-ego
+    entities whose SSv2 pose is CARLA's pose of the frame before: the bridge reports their
+    pose back to SSv2 (read before the tick, as the ego's) instead of applying SSv2's."""
+    out = {}
+    for name, h in trace.entities.items():
+        if kinds.get(name) == "ego":
+            continue
+        o = h.origin_offset
+        prev = None
+        moving, matched, first, last = 0, 0, None, None
+        for f in trace.frames:
+            s = f.entities.get(name)
+            if s is None or s.carla is None:
+                prev = None
+                continue
+            if prev is not None:
+                step = math.hypot(s.carla.x - prev.x, s.carla.y - prev.y)
+                if step >= READ_BACK_STEP:
+                    p = s.ssv2
+                    e = gg.actor_pose_from_entity(gg.Pose2D(p.x, p.y, p.yaw), o.x, o.y, o.yaw)
+                    to_prev = math.hypot(e.x - prev.x, e.y - prev.y)
+                    to_now = math.hypot(e.x - s.carla.x, e.y - s.carla.y)
+                    moving += 1
+                    if to_prev <= READ_BACK_MATCH * step and to_prev < to_now:
+                        matched += 1
+                    first = f.frame if first is None else first
+                    last = f.frame
+            prev = s.carla
+        if moving >= READ_BACK_MIN_FRAMES and matched >= READ_BACK_FRACTION * moving:
+            out[name] = (matched / moving, moving, first, last)
+    return out
+
+
 @dataclass(frozen=True)
 class _Body:
     box: object  # gg.OrientedBox
@@ -237,6 +286,7 @@ def analyze(trace, tol=None, junit=None):
         if other is not None and ego is not None:
             contact_frames.setdefault(frozenset((ego, other)), set()).add(c.frame)
     w = tol.contact_window
+    read_back = read_back_entities(trace, kinds)
 
     def track(key, value, where):
         if value is not None and (key not in margins or value < margins[key][0]):
@@ -255,7 +305,7 @@ def analyze(trace, tol=None, junit=None):
             s = f.entities[n]
             bodies[n] = (ssv2_body(h, s), carla_body(h, s))
             g3 = _g3(h, s, tol)
-            if kinds.get(n) != "ego":
+            if kinds.get(n) != "ego" and n not in read_back:
                 g3_rows.setdefault(n, []).append((idx, f.frame, f.sim_time, *g3))
             else:
                 lag[n] = g3[1] or 0.0  # one tick of motion, by protocol
@@ -292,6 +342,10 @@ def analyze(trace, tol=None, junit=None):
     g3, g3_info = _g3_findings(g3_rows, kinds, tol)
     findings += g3
     info += g3_info
+    for n, (fraction, moving, first, last) in read_back.items():
+        info.append(_finding("G3", [n], [first, last], moving,
+                             {"match_fraction": _r(fraction)}, kind="read_back"))
+    info.sort(key=lambda f: (f["check"], f["frames"][0]))
 
     g4 = _g4(findings, trace, junit)
     signature = set()
@@ -469,9 +523,17 @@ def _g3_numbers(run, tol):
 def _g3_findings(rows_by_name, kinds, tol):
     findings, info = [], []
     for name, rows in rows_by_name.items():
+        previous = None
         for status, run in _intervals(rows, lambda r: None if r[3] == "ok" else r[3]):
             frames_ = [r[1] for r in run]
-            if status == "missed":
+            after_hold = (previous is not None and previous[0] == "contact_hold"
+                          and previous[1][-1][0] + 1 == run[0][0])
+            previous = (status, run)
+            if status == "beyond" and after_hold and all(
+                    b[4] <= a[4] + 1e-9 for a, b in zip(run, run[1:])):
+                info.append(_finding("G3", [name], frames_, len(run), _g3_numbers(run, tol),
+                                     kind="hold_recovery"))
+            elif status == "missed":
                 info.append(_finding("G3", [name], frames_, len(run), {}, kind="missed"))
             elif status in ("spawn", "contact_hold"):
                 info.append(_finding("G3", [name], frames_, len(run), _g3_numbers(run, tol),

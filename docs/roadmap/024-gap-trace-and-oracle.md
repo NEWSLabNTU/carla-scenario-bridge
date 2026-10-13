@@ -85,6 +85,12 @@ pose, offset applied, and CARLA's) plus `--touch` (0.05 m) is timing, not geomet
 reported as info `lag_band` (the separation edge there: 0.27 m against a 0.44 m lag);
 (3) G3 compares z box bottom to box bottom, since a CARLA walker's origin is its body centre
 (0.65 m above SSv2's origin in the step-4 pedestrian trace, at the feet).
+Two more from the step-7 baseline, both G3: (4) an entity SSv2 reads back from CARLA like
+the ego -- a `simulator_autopilot` NPC, whose SSv2 pose is CARLA's of the frame before -- is
+not judged on pose (info `read_back`, detected from the trace: while it moves, SSv2's pose
+sits on CARLA's previous one), and its one-tick lag widens G1's band as the ego's does;
+(5) a divergence run adjacent to a `contact_hold` run whose error only shrinks is the
+tracker closing a sub-snap error after the hold (info `hold_recovery`).
 NPC-NPC pairs are judged too and reported at low priority (they rarely change an ego
 verdict). Output: `findings.json` per run -- including the run's **gap signature** (contracts
 broken × entity class × geometry) and the min margin difference, which part 2 consumes as
@@ -137,7 +143,7 @@ Written before the known gaps were fixed; four corrections from what those phase
    passes the ego 1 m to the side. G1 must fire
    (overlap in SSv2's geometry only). `town01_rear_contact`: both geometries and the contact
    must agree (no G1, no G2).
-7. [ ] **Baseline.** All nine starter scenarios (`basic/` 7, one UC-ACC and one UC-AEB
+7. [x] **Baseline.** All nine starter scenarios (`basic/` 7, one UC-ACC and one UC-AEB
    variant) plus the reproducers of 021-023, with the trace on; every finding triaged here
    as real gap, oracle bug, or tolerance to tune. That table is the hand-off to 025.
 8. [ ] **Spike: SSv2's `random_test_runner` on CARLA** (added 2026-10-13, user). SSv2 ships
@@ -161,6 +167,90 @@ Written before the known gaps were fixed; four corrections from what those phase
 - The baseline table exists, with every starter-scenario finding classified.
 
 ### Results
+
+**2026-10-13, step 7 -- baseline: every finding classified; two oracle bugs fixed, no
+tolerance changed.** Installed binaries at `d2746ca` (newer than every source, acb's
+included; no rebuild). Simulation side restarted with `GAP_TRACE_DIR` (log
+`play_log/bridge/2026-10-13_12-34-12`), one ego stack via the relay, Town01 (Town02 for the
+episode change), `npc_motion: tracked`, `CARLA_MAPS=data/carla-autoware-bridge`, `run_suite
+--physical-verdict`, one `run_suite` per scenario file so each trace maps to its run by time
+window; every trace judged with `gap_oracle --junit`. AWF: one variant each, from scratch
+copies with every `ScenarioModifier` list cut to one value (SSv2 then expands a single
+variant): UC-ACC `vxi_ego` 8.333, `vxi_npc0` 5.556, `vx_target_npc0` 1.944; UC-AEB `vxi_ego`
+8.333, `dxi_ego_pedestrian0` 30. `town02_episode_change` hit the known Town02 load timeout
+(`load world 'Town02': time-out of 120000ms`) on the first try and passed on the rerun.
+Counts below are after the oracle fixes (before -> after where they differ):
+
+| scenario | verdict | frames | G1 | G2 | G3 | info | G4 |
+|---|---|---|---|---|---|---|---|
+| `town01_ego_drive` | PASS 2/2 | 732 | 0 | 0 | 0 | 0 | agree |
+| `town01_engage_state` | PASS 2/2 | 673 | 0 | 0 | 0 | 0 | agree |
+| `town01_pedestrian` | PASS 2/2 | 2270 | 0 | 0 | 2 | 0 | agree |
+| `town01_rear_contact` | PASS 2/2 (23 contacts) | 303 | 0 | 0 | 1 -> 0 | 4 -> 5 | agree |
+| `town01_simulator_autopilot` | PASS 2/2 | 730 | 0 | 0 | 4 -> 3 | 0 -> 1 | agree |
+| `town01_traffic_light` | PASS 2/2 | 3436 | 0 | 0 | 0 | 0 | agree |
+| `town02_episode_change` | FAIL (Town02 load timeout), rerun PASS 2/2 | 0 / 101 | 0 | 0 | 0 | 0 | unknown / agree |
+| UC-ACC-001-0001, 1 variant | PASS 2/2 | 1353 | 0 | 0 | 1 | 0 | agree |
+| UC-AEB-001-0001, 1 variant | PASS 2/2 | 1041 | 0 | 0 | 0 | 0 | agree |
+| `gap/town01_truck_pass` (positive control) | FAIL 1/2 (`ssv2_collision_held`, by design) | 244 | 1 | 0 | 1 | 0 | FAIL(collision)+overlap-only-in-SSv2 |
+| `gap/town01_entity_bodies` | PASS 2/2 | 331 | 0 | 0 | 0 | 0 | agree |
+| `gap/town01_motorbike_body` | PASS 2/2 | 304 | 0 | 0 | 1 | 0 | agree |
+| `bench/town01_npc_20`, run 1 | PASS 2/2 | 1202 | 0 | 0 | 74 | 0 | agree |
+| `bench/town01_npc_20`, run 2 | PASS 2/2 | 1202 | 0 | 0 | 74 | 0 | agree |
+
+No G2 anywhere: every ego contact (23, all in `town01_rear_contact`) had an SSv2 overlap
+within ±2 frames, and no static hit by the ego. The only G1 and the only non-`agree` G4 are
+the positive control's. Every G3 below repeated exactly where a scenario was run twice (bench
+today ×2 and step 5 ×2: 74 each, identical intervals; the pedestrian's two yaw runs as in
+step 4). Info, not triaged: `rear_contact` 2 `lag_band` (frame 243: difference 0.12 m, band
+0.16; frame 273: -0.25, band 0.52), 2 `contact_hold` (245-272 max 1.61 m, 276-290 0.57 m),
+1 `hold_recovery` (291-293, new); `simulator_autopilot` 1 `read_back` (`npc_autopilot`,
+frames 124-726, every moving frame on CARLA's previous pose). Also seen, not a G finding: an
+episode with no entities (`town02_episode_change`) never gets an `end` line until the next
+`Initialize` (the recorder closes an episode on the last despawn), so the oracle marks it
+INCOMPLETE; harmless.
+
+Triage (the hand-off to 025):
+
+| # | finding | class | evidence | proposed action / owner |
+|---|---|---|---|---|
+| 1 | G1 `truck_pass` ego-truck, frames 185-244 | **real gap** (modelling: declared box vs blueprint), by construction | SSv2 penetration 2.29 m, CARLA gap ≥ 0.40 m, `d_ssv2 - d_carla` -3.55 m; declared 12 m truck spawned as a 4.79 m Model 3 | none: it is the positive control. The class (`C1:vehicle:ssv2`) is 025's first target |
+| 2 | G3 bench `npc_05`, frames 25-1202 (1178 frames, z 80.3 m) | **real gap** (bridge: tracked NPC vs the static world, snap into a collider), triggered by a **scenario artefact** (bench lane is a shoulder) | see "npc_05" below: on CARLA's 0.3 m shoulder lane, wheels on the curb (roll 3.6° from spawn), front hits the `CityLamp81` pole at x 360.94 at frame 25, a snap at 0.9 m error teleports it into the pole keeping roll/pitch/z, PhysX ejects it at vz 39.7 m/s; 4/4 runs | new tracking fix phase before 025: (a) never snap a blocked body into penetration -- hand it to kinematic (`set_simulate_physics(false)`) and follow SSv2, as before 023, flagged in the trace; (b) a snap resets roll/pitch and takes z from the ground; (c) NPC-vs-static contacts reach `collision_monitor` and the trace (an NPC G2); (d) `gen_npc_benchmark.py` skips lanelets narrower than ~2.5 m |
+| 3 | 69 G3 on the bench (×2) + `simulator_autopilot` `npc_route` 450-462, 706-730 | **real gap** (bridge: tracker in corners) | all on 24-55° turns at 8 m/s; error is cross-track (0.24-0.58 m) with along-track ≤ 0.08 m, and always on the **outside** of the turn (69/69); yaw 1.7-3.6°. 023's budget (p95 ≤ 0.007 m) was measured on a straight | same fix phase: a curvature (centripetal) feed-forward in `npc_tracking::command`, gains re-measured on the bench's corners; C3's 0.2 m / 2° stays the target |
+| 4 | 4 G3 bench on straights (`npc_11` 306-367, `npc_14` 970-994: yaw 2.4/3.3°, xy ≤ 0.16; `npc_18` 245-248, `npc_11` 880-882: 7-8° turns) | **real gap**, same as 3 | each follows a corner: the yaw error left at the exit decays at the yaw gain (2/s) | with 3 |
+| 5 | G3 `pedestrian_0` yaw, frames 135-163 (174°) and 2206-2270 (108°) | **real gap** (bridge: walker control at rest), verdict-neutral | position ≤ 0.03 m throughout; standing still, the walker spins 18°/frame: the bridge normalises a noise-sized commanded velocity (> 1e-6 m/s) into `control.direction` and CARLA turns the walker toward it; at the end it turns away and stays at -161.6°. Both boxes are square (0.6 / 0.375 m), so no footprint changes | same fix phase: below ~0.05 m/s send speed 0 and SSv2's heading as direction |
+| 6 | G3 `UC-ACC` `Npc1` 539-541 (0.57 m) | **real gap** (bridge: spawn at speed) | SSv2 adds `Npc1` at frame 537 already moving ~5.5 m/s; the body spawns at rest (0.5 m/s after one tick, +0.49 m/s per frame, the force bound) and is snapped at 542 | same fix phase: seed the body's velocity with SSv2's twist at spawn |
+| 7 | G3 `truck_pass` truck 193-195 (0.71 m) | **scenario artefact** (speed step) | the hold steps 8 -> 1.6 m/s in one frame; the tracked body brakes at 0.49 m/s per frame and runs past until the snap at 196 | none in the bridge; `linear` dynamics in the scenario if it should be silent |
+| 8 | G3 `motorbike_body` 155-159 (0.51 m) | **scenario artefact** (speed step) | SSv2 steps 4.4 -> 8 m/s at frame 153; the body accelerates at the bound; snap at 160 | none |
+| 9 | G3 `simulator_autopilot` `npc_route` 114-116 (0.66 m) | **scenario artefact** (speed step) | 0 -> 6 m/s in one frame at 113; snap at 117 | none |
+| 10 | G3 `simulator_autopilot` `npc_autopilot` 131-681 (551 frames, 0.40 m) | **oracle bug** | a `simulator_autopilot` NPC is read back like the ego: its SSv2 pose equals CARLA's previous one exactly (0.000 m p95), so the 0.39 m "error" is one tick at 8 m/s | fixed: rule 4 (`read_back`); G3 4 -> 3 |
+| 11 | G3 `rear_contact` `npc_rear` 291-293 (0.35 -> 0.20 m) | **oracle bug** | the frames right after the `contact_hold` window; the error (0.33 m, under the 0.5 m snap distance) is closed by the tracker in 3 frames, by design | fixed: rule 5 (`hold_recovery`); G3 1 -> 0 |
+
+No **tolerance to tune**: the G3 budget held its meaning in every case above (every
+excursion it flagged had a cause), so the defaults stay. Oracle changes
+(`src/csb_launch/scripts/gap_oracle`, test-first: 5 tests in `test_gap_oracle.py` seen
+failing, then green; csb_launch pytest 149 passed): rules 4 and 5. On every trace of
+steps 4-7 the counts are unchanged except those two (step-6 positive control still G1 1,
+step-6 rear contact still silent, with one more info line, a 1-frame `hold_recovery`).
+
+**npc_05** (finding 2). The bench puts it on lanelet 12083, which the converted Town01 tags
+`subtype=road` but which is CARLA's road 7 lane 2, a 0.3 m **shoulder**, against the
+sidewalk (centre y 324.46 in CARLA; the sidewalk's edge at 324.3). A 2.16 m Model 3 centred
+there has its right wheels on the curb: roll 3.6° from the spawn frame. SSv2 drives it at
+8 m/s westward; at frame 24 -> 25 its front (x ~ 361.2) meets the pole of street lamp
+`CityLamp81` (`get_environment_objects`, x 360.94): velocity -8.0 -> +2.17 m/s, no other NPC
+within 15 m, and no contact line (NPCs carry no collision sensor). The error grows to 0.9 m,
+past `SNAP_DISTANCE` (0.5), and `track_npc` snaps it -- `snap_to = now.clone()` with x, y and
+yaw replaced, so into the pole, keeping z, roll and pitch. PhysX resolves the penetration
+upward: frame 27 vz 39.7 m/s, roll -75°, pitch -30°. Every later frame snaps x, y and yaw
+again (in plane it tracks to 0.00 m) while z is left to physics and the tumbling attitude is
+kept: z peaks at 80.3 m near frame 100, and the car lands on its side (roll -87°, z 1.5 m)
+where it stays to the end. Same frames and numbers in all four bench runs. Cause: a
+scenario artefact (a shoulder lanelet in the bench) exposing a real bridge gap (SSv2 has no
+static world, the tracked body does, and the snap is a teleport into it). Fix as row 2; not
+fixed here (findings are inputs to fixes).
+
+**Step 8 (random_test_runner spike): not done.**
 
 **2026-10-13, step 6 -- acceptance holds: G1 fires on the truck, rear contact silent.**
 `gap_oracle` (`src/csb_launch/scripts/gap_oracle`, stdlib, imports `gap_geometry` /

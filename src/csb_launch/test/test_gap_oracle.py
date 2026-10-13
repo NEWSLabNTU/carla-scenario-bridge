@@ -376,6 +376,64 @@ class G3PoseDivergence(unittest.TestCase):
         self.assertEqual(len(missed), 1)
         self.assertEqual((missed[0]["frames"], missed[0]["count"]), ([4, 7], 4))
 
+    def test_a_read_back_entity_is_not_judged(self):
+        # A simulator-driven NPC (controller simulator_autopilot, roadmap 017): SSv2 adopts
+        # CARLA's pose, read back before the tick like the ego's, so its SSv2 pose at frame k
+        # is CARLA's at k-1 -- one tick behind by protocol, 0.4 m at 8 m/s (baseline: 551
+        # frames of G3 on town01_simulator_autopilot's npc_autopilot).
+        frames = [frame(i, ("ego", state("ego", 50.0)), ("car", state("car", 0.4 * i, dx=0.4)))
+                  for i in range(1, 15)]
+        r = run(make_trace(["ego", "car"], frames))
+        self.assertEqual(checks(r, "G3"), [])
+        notes = [n for n in info(r, "G3") if n["kind"] == "read_back"]
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]["entities"], ["car"])
+        self.assertAlmostEqual(notes[0]["numbers"]["match_fraction"], 1.0, places=6)
+
+    def test_a_moving_puppet_off_its_pose_is_still_judged(self):
+        # Moving at 0.4 m per frame, 0.5 m beside its pose: neither on its own pose nor on
+        # CARLA's previous one, so a pose divergence, not a read-back.
+        frames = [frame(i, ("ego", state("ego", 50.0)), ("car", state("car", 0.4 * i, dy=0.5)))
+                  for i in range(1, 15)]
+        r = run(make_trace(["ego", "car"], frames))
+        self.assertEqual(len(checks(r, "G3")), 1)
+        self.assertEqual([n for n in info(r, "G3") if n["kind"] == "read_back"], [])
+
+    def test_a_read_back_entitys_lag_widens_the_band(self):
+        # The car is read back (CARLA 0.4 m ahead of SSv2) and drives 4.4 m ahead of an ego
+        # keeping pace: SSv2's boxes overlap 0.1 m, CARLA's are 0.1 m clear. |d_ssv2 -
+        # d_carla| = 0.2 m, within the car's lag + touch (0.45): timing, so info; without
+        # the car's lag the band would be 0.05 and this a finding.
+        frames = [frame(i, ("ego", state("ego", 0.4 * i - 4.4)),
+                        ("car", state("car", 0.4 * i, dx=0.4)))
+                  for i in range(1, 15)]
+        r = run(make_trace(["ego", "car"], frames))
+        self.assertEqual(checks(r, "G1"), [])
+        self.assertEqual({n["kind"] for n in info(r, "G1")}, {"lag_band"})
+
+    def test_recovery_right_after_a_contact_hold_is_info(self):
+        # The hold ends with the body still off its pose; below the snap distance (0.5 m)
+        # the tracker closes the error over a few frames instead of snapping (baseline:
+        # town01_rear_contact npc_rear frames 291-293, 0.35 -> 0.2 m).
+        frames = self.frames(set(), n=12)
+        errs = {3: 1.0, 4: 1.0, 5: 0.6, 6: 0.4, 7: 0.3, 8: 0.25}
+        for i, dy in errs.items():
+            flags = ("contact_hold",) if i <= 5 else ()
+            frames[i - 1].entities["car"] = state("car", 0.0, dy=dy, flags=flags)
+        r = run(make_trace(["ego", "car"], frames))
+        self.assertEqual(checks(r, "G3"), [])
+        rec = [n for n in info(r, "G3") if n["kind"] == "hold_recovery"]
+        self.assertEqual(len(rec), 1)
+        self.assertEqual(rec[0]["frames"], [6, 8])
+
+    def test_a_growing_error_after_a_hold_is_a_finding(self):
+        frames = self.frames(set(), n=12)
+        for i, dy in {4: 1.0, 5: 0.6, 6: 0.4, 7: 0.5, 8: 0.6}.items():
+            flags = ("contact_hold",) if i <= 5 else ()
+            frames[i - 1].entities["car"] = state("car", 0.0, dy=dy, flags=flags)
+        r = run(make_trace(["ego", "car"], frames))
+        self.assertEqual([f["frames"] for f in checks(r, "G3")], [[6, 8]])
+
 
 # --- G4 -----------------------------------------------------------------------------------
 
