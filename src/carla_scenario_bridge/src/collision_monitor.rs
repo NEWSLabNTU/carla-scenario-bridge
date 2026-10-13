@@ -352,6 +352,14 @@ impl CollisionMonitor {
             .record(error, yaw_error, snapped);
     }
 
+    /// A tracked NPC skipped this frame: it was not in the world snapshot.
+    pub fn record_tracking_missed(&mut self, name: &str) {
+        self.tracking
+            .entry(name.to_string())
+            .or_default()
+            .record_missed();
+    }
+
     fn tracking_rows(&self) -> Vec<ReportTracking> {
         self.tracking
             .iter()
@@ -365,6 +373,7 @@ impl CollisionMonitor {
                     yaw_p95: s.yaw_p95,
                     yaw_max: s.yaw_max,
                     snaps: s.snaps,
+                    missed: s.missed,
                 }
             })
             .collect()
@@ -378,12 +387,14 @@ impl CollisionMonitor {
                 _ => String::new(),
             };
             tracing::info!(
-                "Tracked '{}': {} frames, error p95 {:.3} / max {:.3} m{yaw}, {} snap(s)",
+                "Tracked '{}': {} frames, error p95 {:.3} / max {:.3} m{yaw}, {} snap(s), \
+                 {} missed",
                 row.name,
                 row.frames,
                 row.error_p95,
                 row.error_max,
-                row.snaps
+                row.snaps,
+                row.missed
             );
         }
     }
@@ -753,10 +764,11 @@ mod tests {
         m.record_tracking("npc", 0.1, Some(1.0), false);
         m.record_tracking("npc", 0.6, Some(6.0), true);
         m.record_tracking("walker", 0.05, None, false);
+        m.record_tracking_missed("npc");
         let rows = m.tracking_rows();
         assert_eq!(rows.len(), 2);
         let npc = rows.iter().find(|r| r.name == "npc").unwrap();
-        assert_eq!((npc.frames, npc.snaps), (2, 1));
+        assert_eq!((npc.frames, npc.snaps, npc.missed), (2, 1, 1));
         assert!((npc.error_max - 0.6).abs() < 1e-6);
         let walker = rows.iter().find(|r| r.name == "walker").unwrap();
         assert_eq!(walker.yaw_p95, None);

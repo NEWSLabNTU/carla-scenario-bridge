@@ -138,6 +138,67 @@ fallback.
 
 ### Results
 
+**Follow-up: the world stopped ticking after a map change (2026-10-13, fixed).** Found by 024 step 5:
+`town01_npc_20` run straight after `basic/` had left CARLA on Town02. Initialize loaded
+Town01, the 20 NPCs spawned at frame 2, and on the next `UpdateEntityStatus` every one hit
+`actor N is not in the world snapshot` (`track_npc`); the frame failed and SSv2 aborted
+with `SimulationError`. A rerun with Town01 already loaded passed, as did every later run.
+First suspicion, **wrong** (the result below has the real cause): `world.snapshot()` is the client's cached copy of the last tick CARLA streamed, not
+a request, so right after a spawn -- and most after a `load_world`, while the client's
+stream re-subscribes -- it can predate the actors; `track_npc` treats a missing actor as a
+hard error, so one stale copy fails the whole frame. With `tracked` the default, any
+scenario with NPCs after a map change is exposed. Fix (bridge):
+
+1. **Fresh enough or wait briefly**: the view's snapshot must be at least as new as the
+   frame the last tick returned; an older one is re-read until it is, bounded (a few tens of
+   ms), then used as is with a warning.
+2. **A missing actor skips that NPC for the frame**, not the frame: no command sent (CARLA
+   keeps the last one), one warning per NPC per episode, counted as `missed` in the NPC's
+   tracking statistics (log line, contact report row). Every NPC missing for more than a
+   few consecutive frames is an error again, as before -- a real loss, not a lag.
+3. The gap-trace recorder reads the same view, so its frame lines get the same guarantee.
+
+Verified by: a unit test of the freshness and miss rules on a stale view; live,
+`town02_episode_change` (or any Town02 scenario) followed by `scenarios/bench/
+town01_npc_20.xosc`, repeated, with no failed frame.
+
+*Result (2026-10-13).* The three points are in, but the live loop showed the snapshot was
+never stale: **the world was not ticking.** After a map change `load_scenario_map` re-applied
+synchronous mode (`enable_sync_mode` sets `sync_mode_enabled`) and then, in the cleanup
+below it, cleared `sync_mode_enabled` again -- a July line older than the re-apply. CARLA
+stayed synchronous while csb believed it async, so `update_frame` took `WaitForEgo` and did
+not tick, and spawns skipped their settling tick. `town01_npc_20` has no ego, so after a
+`load_world` its world never advanced and the 20 NPCs never reached any snapshot; with
+Town01 already loaded the flag stayed set from Initialize and it passed. A scenario with
+an ego was exposed only until the ego spawned. Fix: that line is gone (`coordinator.rs`,
+comment at the map-load cleanup). The design's points, kept as defence:
+
+1. `Coordinator::fresh_snapshot` (tracked view and the gap trace's own snapshot): the
+   frame every `world.tick()` returns is kept (`last_tick_frame`, cleared on a world
+   change); a snapshot older than it is re-read every `SNAPSHOT_REREAD_PAUSE` (1 ms) for at
+   most `SNAPSHOT_FRESH_WAIT` (30 ms), then used with a warning (`Stale world snapshot
+   ...`; info when it caught up; the first 10 per episode, then one in 100).
+2. A tracked NPC missing from the snapshot is skipped (`track_npc` returns `false`), warned
+   once per episode, counted as `missed` (`TrackingStats`, the `Tracked '...'` log line,
+   `ReportTracking.missed` with `serde(default)`, so older reports parse). Every tracked NPC
+   missing for more than `MISS_LIMIT_FRAMES` (5, 0.25 s at 20 Hz) consecutive frames fails
+   the frame as before (`npc_tracking::MissWatch`).
+3. The gap trace reads through `fresh_snapshot` too; a missed NPC is the schema's existing
+   null CARLA state, so no schema change.
+
+Unit tests (`npc_tracking`): a stale view re-read until it catches up, one that never does
+used after the bound, a missing NPC skipped and counted without failing, every NPC
+missing failing only past the limit; the report round-trips `missed` and parses without it.
+270 Rust tests, 108 Python, clippy and fmt clean. Live, `run_suite --physical-verdict`,
+`town02_episode_change` then `town01_npc_20`, three times: before the sync fix (the three
+points alone) the bench failed **3/3** at frame 7 -- every NPC missing for 6 frames, no
+stale snapshot logged (no tick to be stale against); with it, **3/3 PASS**, each after a
+`load_world` to Town01, with no stale-snapshot, missing-NPC or missed lines. One of the
+three `town02_episode_change` runs failed Initialize on the known `load world 'Town02'`
+120 s timeout (host), unrelated. `basic/town01_rear_contact` PASS 2/2 both before and after.
+So the cache race the fix was designed for did not occur in 6 bench runs; that path is
+verified by unit tests only.
+
 **Step 6 (2026-10-13).** `NpcMotion`'s default is `Tracked` (`config.rs`, test
 `npc_motion_defaults_to_tracked_and_takes_file_or_parameter`), `bridge_config.yaml` says
 `npc_motion: tracked`, and both launch files' `npc_motion` describe empty as "the config

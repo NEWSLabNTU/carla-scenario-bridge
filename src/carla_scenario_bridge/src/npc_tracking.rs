@@ -23,6 +23,16 @@ pub const DEFAULT_MAX_ACCEL: f64 = 10.0;
 /// Frames after the ego's last contact with a tracked NPC during which it is not snapped
 /// (one second at 20 Hz): SSv2's pose for it may run through the ego.
 pub const CONTACT_HOLD_FRAMES: u64 = 20;
+/// How long a tracked frame waits for the client's cached world snapshot to catch up with
+/// the last tick before using it anyway (roadmap 023, "a stale snapshot fails the frame").
+/// A few tens of ms: under 1 ms is the normal case (LibCarla's `Tick` waits for its own
+/// frame), and a frame is 50 ms at 20 Hz, of which CARLA's tick already takes ~10.
+pub const SNAPSHOT_FRESH_WAIT: std::time::Duration = std::time::Duration::from_millis(30);
+/// Pause between re-reads of a stale snapshot. A re-read is a local copy, not an RPC.
+pub const SNAPSHOT_REREAD_PAUSE: std::time::Duration = std::time::Duration::from_millis(1);
+/// Consecutive frames on which *every* tracked NPC may be missing from the snapshot before
+/// the frame fails: 5 frames (0.25 s at 20 Hz) is a lag; longer is a real loss.
+pub const MISS_LIMIT_FRAMES: u32 = 5;
 
 /// Feedback gains, 1/s.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -231,6 +241,7 @@ pub struct TrackingStats {
     errors: Vec<f32>,
     yaw_errors: Vec<f32>,
     snaps: u32,
+    missed: u32,
 }
 
 /// A summary of [`TrackingStats`], for the log and the contact report.
@@ -243,6 +254,8 @@ pub struct TrackingSummary {
     pub yaw_p95: Option<f64>,
     pub yaw_max: Option<f64>,
     pub snaps: u32,
+    /// Frames skipped because the NPC was not in the world snapshot: no command sent.
+    pub missed: u32,
 }
 
 impl TrackingStats {
@@ -256,6 +269,11 @@ impl TrackingStats {
         self.snaps += u32::from(snapped);
     }
 
+    /// One frame skipped: the NPC was not in the world snapshot.
+    pub fn record_missed(&mut self) {
+        self.missed += 1;
+    }
+
     pub fn summary(&self) -> TrackingSummary {
         let yaw = (!self.yaw_errors.is_empty()).then_some(&self.yaw_errors);
         TrackingSummary {
@@ -265,6 +283,7 @@ impl TrackingStats {
             yaw_p95: yaw.map(|y| p95(y)),
             yaw_max: yaw.map(|y| max(y)),
             snaps: self.snaps,
+            missed: self.missed,
         }
     }
 }
@@ -282,6 +301,90 @@ fn p95(values: &[f32]) -> f64 {
 
 fn max(values: &[f32]) -> f64 {
     values.iter().copied().fold(0.0_f32, f32::max).into()
+}
+
+/// Whether a world snapshot of `snapshot_frame` is at least as new as the last tick
+/// (`None`: nothing ticked yet in this world, so any snapshot will do).
+pub fn snapshot_is_fresh(snapshot_frame: u64, last_tick: Option<u64>) -> bool {
+    last_tick.is_none_or(|tick| snapshot_frame >= tick)
+}
+
+/// A snapshot from [`read_fresh`] and how it was obtained.
+#[derive(Debug)]
+pub struct FreshRead<S> {
+    pub snapshot: S,
+    /// Its frame number.
+    pub frame: u64,
+    /// Reads it took; 1 when the first was fresh.
+    pub reads: u32,
+    /// Whether it is as new as the last tick; `false` once `bound` ran out.
+    pub fresh: bool,
+}
+
+/// Read a snapshot, and re-read it while it is older than `last_tick`, for at most `bound`
+/// (pausing `pause` between reads). A read error ends it at once. Past the bound the last
+/// read is returned as is, `fresh: false`.
+pub fn read_fresh<S, E>(
+    last_tick: Option<u64>,
+    bound: std::time::Duration,
+    pause: std::time::Duration,
+    mut read: impl FnMut() -> Result<S, E>,
+    frame_of: impl Fn(&S) -> u64,
+) -> Result<FreshRead<S>, E> {
+    let started = std::time::Instant::now();
+    let mut reads = 0;
+    loop {
+        let snapshot = read()?;
+        reads += 1;
+        let frame = frame_of(&snapshot);
+        let fresh = snapshot_is_fresh(frame, last_tick);
+        if fresh || started.elapsed() >= bound {
+            return Ok(FreshRead {
+                snapshot,
+                frame,
+                reads,
+                fresh,
+            });
+        }
+        std::thread::sleep(pause);
+    }
+}
+
+/// The miss rule for tracked NPCs not in the world snapshot (roadmap 023): a missing NPC is
+/// skipped for the frame, warned about once per episode; only every tracked NPC missing
+/// for more than [`MISS_LIMIT_FRAMES`] consecutive frames fails the frame.
+#[derive(Debug, Default)]
+pub struct MissWatch {
+    warned: std::collections::HashSet<String>,
+    /// Consecutive frames on which every tracked NPC looked up was missing.
+    all_missed_run: u32,
+}
+
+impl MissWatch {
+    /// `name` was missing this frame. Returns whether to warn (its first miss this episode).
+    pub fn missed(&mut self, name: &str) -> bool {
+        self.warned.insert(name.to_string())
+    }
+
+    /// The end of a frame in which `looked_up` tracked NPCs were looked up and `missed` of
+    /// them were not in the snapshot. Returns whether the frame fails.
+    pub fn end_frame(&mut self, looked_up: usize, missed: usize) -> bool {
+        if looked_up == 0 {
+            return false;
+        }
+        if missed >= looked_up {
+            self.all_missed_run += 1;
+            self.all_missed_run > MISS_LIMIT_FRAMES
+        } else {
+            self.all_missed_run = 0;
+            false
+        }
+    }
+
+    /// A new episode: warn afresh, forget the run.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 #[cfg(test)]
@@ -617,5 +720,90 @@ mod tests {
         walker.record(0.1, None, false);
         assert_eq!(walker.summary().yaw_p95, None);
         assert_eq!(TrackingStats::default().summary().error_p95, 0.0);
+    }
+
+    #[test]
+    fn a_snapshot_older_than_the_last_tick_is_stale() {
+        assert!(snapshot_is_fresh(10, None));
+        assert!(snapshot_is_fresh(10, Some(10)));
+        assert!(snapshot_is_fresh(11, Some(10)));
+        assert!(!snapshot_is_fresh(9, Some(10)));
+    }
+
+    #[test]
+    fn a_stale_view_is_re_read_until_it_catches_up() {
+        let frames = std::cell::Cell::new(7_u64);
+        let read = || -> Result<u64, ()> {
+            let f = frames.get();
+            frames.set(f + 1);
+            Ok(f)
+        };
+        let r = read_fresh(
+            Some(9),
+            std::time::Duration::from_secs(1),
+            std::time::Duration::ZERO,
+            read,
+            |f| *f,
+        )
+        .unwrap();
+        assert_eq!((r.frame, r.reads, r.fresh), (9, 3, true));
+    }
+
+    #[test]
+    fn a_view_that_never_catches_up_is_used_after_the_bound() {
+        let bound = std::time::Duration::from_millis(5);
+        let started = std::time::Instant::now();
+        let r = read_fresh(
+            Some(9),
+            bound,
+            std::time::Duration::from_millis(1),
+            || Ok::<_, ()>(3_u64),
+            |f| *f,
+        )
+        .unwrap();
+        assert!(!r.fresh && r.frame == 3 && r.reads > 1, "{r:?}");
+        assert!(started.elapsed() >= bound);
+        // A fresh first read never waits, and an error ends the wait at once.
+        let r = read_fresh(Some(9), bound, bound, || Ok::<_, ()>(9_u64), |f| *f).unwrap();
+        assert_eq!((r.reads, r.fresh), (1, true));
+        assert!(read_fresh(Some(9), bound, bound, || Err::<u64, _>("gone"), |f| *f).is_err());
+    }
+
+    #[test]
+    fn a_missing_npc_is_skipped_and_counted_not_an_error() {
+        let mut w = MissWatch::default();
+        let mut stats = TrackingStats::default();
+        // Two NPCs, one missing, many frames: never an error, warned once, counted each time.
+        let mut warnings = 0;
+        for _ in 0..(MISS_LIMIT_FRAMES * 3) {
+            warnings += u32::from(w.missed("npc_a"));
+            stats.record_missed();
+            assert!(!w.end_frame(2, 1));
+        }
+        assert_eq!(warnings, 1);
+        let sum = stats.summary();
+        assert_eq!((sum.frames, sum.missed), (0, MISS_LIMIT_FRAMES * 3));
+        // Every NPC missing, but only for the limit: still a lag.
+        for _ in 0..MISS_LIMIT_FRAMES {
+            assert!(!w.end_frame(2, 2));
+        }
+        // A frame with nothing tracked neither fails nor ends the run.
+        assert!(!w.end_frame(0, 0));
+        // A new episode warns afresh.
+        w.reset();
+        assert!(w.missed("npc_a"));
+    }
+
+    #[test]
+    fn every_npc_missing_beyond_the_limit_fails_the_frame() {
+        let mut w = MissWatch::default();
+        for _ in 0..MISS_LIMIT_FRAMES {
+            assert!(!w.end_frame(3, 3));
+        }
+        assert!(w.end_frame(3, 3));
+        assert!(w.end_frame(3, 3));
+        // One NPC back ends the run.
+        assert!(!w.end_frame(3, 2));
+        assert!(!w.end_frame(3, 3));
     }
 }

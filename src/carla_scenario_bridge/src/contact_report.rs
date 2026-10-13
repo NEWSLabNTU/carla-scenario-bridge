@@ -75,6 +75,10 @@ pub struct ReportTracking {
     pub yaw_max: Option<f64>,
     /// Frames on which the body was teleported back (past 0.5 m / 5 deg).
     pub snaps: u32,
+    /// Frames skipped because the NPC was not in the world snapshot (no command sent).
+    /// Absent in reports written before it existed.
+    #[serde(default)]
+    pub missed: u32,
 }
 
 /// One ego run, from the ego's spawn to its despawn (or teardown, or CARLA restart).
@@ -338,12 +342,20 @@ mod tests {
             yaw_p95: None,
             yaw_max: None,
             snaps: 0,
+            missed: 2,
         });
         let json = serde_json::to_value(&r).unwrap();
         assert_eq!(json["tracking"][0]["snaps"], 0);
+        assert_eq!(json["tracking"][0]["missed"], 2);
         assert!(json["tracking"][0].get("yaw_p95").is_none());
-        let back: ContactReport = serde_json::from_value(json).unwrap();
+        let back: ContactReport = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(back.tracking[0].yaw_max, None);
+        assert_eq!(back.tracking[0].missed, 2);
+        // A report written before `missed` existed still parses, as 0.
+        let mut old = json;
+        old["tracking"][0].as_object_mut().unwrap().remove("missed");
+        let back: ContactReport = serde_json::from_value(old).unwrap();
+        assert_eq!(back.tracking[0].missed, 0);
     }
 
     #[test]

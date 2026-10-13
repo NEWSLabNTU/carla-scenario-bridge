@@ -913,6 +913,15 @@ pub struct Coordinator {
     /// Time spent inside `world.tick()` since [`Coordinator::take_tick_time`] last read
     /// it, for the frame budget's processing time (which excludes it).
     tick_time: Duration,
+    /// The frame number the last `world.tick()` returned in this world (`None` until one,
+    /// and again after a world change). A world snapshot older than this is the client's
+    /// stale cache: [`Coordinator::fresh_snapshot`] waits for it to catch up (roadmap 023).
+    last_tick_frame: Option<u64>,
+    /// Snapshots read stale this episode (caught up or not), to keep their log lines few.
+    stale_snapshots: u32,
+    /// Tracked NPCs missing from the snapshot: warned once, failed only when all are, for
+    /// more than `npc_tracking::MISS_LIMIT_FRAMES` frames (roadmap 023).
+    miss_watch: npc_tracking::MissWatch,
     /// CARLA's Traffic Manager, created on the first `simulator_autopilot` spawn. LibCarla
     /// ticks it inside `world.tick()` when it is synchronous (verified on 0.9.16: a
     /// registered vehicle drives with only world ticks), so csb stays the only ticker.
@@ -1013,6 +1022,9 @@ impl Coordinator {
             map_origin: MapOrigin::default(),
             carla_unreachable: false,
             tick_time: Duration::ZERO,
+            last_tick_frame: None,
+            stale_snapshots: 0,
+            miss_watch: npc_tracking::MissWatch::default(),
             traffic_manager: None,
             road_graph: None,
             autopilot: HashMap::new(),
@@ -1375,7 +1387,7 @@ impl Coordinator {
         let own;
         let snapshot = match snapshot {
             Some(s) => s,
-            None => match self.world.snapshot() {
+            None => match self.fresh_snapshot() {
                 Ok(s) => {
                     own = s;
                     &own
@@ -1586,6 +1598,7 @@ impl Coordinator {
             let world = prepared?;
             self.world_id = world.id().ok();
             self.world = world;
+            self.last_tick_frame = None;
             self.forget_road_graph();
             // The new episode's epoch, recorded before anything can kill this process: a
             // restart would otherwise resume the old episode's (gap 11).
@@ -1605,7 +1618,14 @@ impl Coordinator {
             self.accel_history.clear();
             self.walker_height.clear();
             self.tracked_npcs.clear();
-            self.sync_mode_enabled = false;
+            self.miss_watch.reset();
+            self.stale_snapshots = 0;
+            // `sync_mode_enabled` is left as `enable_sync_mode` above set it. It used to be
+            // cleared here (a line from before the load re-applied synchronous mode), which
+            // left CARLA synchronous with csb believing it async: frames waited for an ego
+            // without ticking, so after a map change a scenario with no ego never advanced
+            // and its NPCs never reached a snapshot (roadmap 023, "a stale snapshot fails
+            // the frame"), and spawns skipped their settling tick.
             // The reloaded world's lights are CARLA's own again, so we owe no unfreeze.
             self.froze_traffic_lights.mark_restored();
             self.held_light_timings.clear();
@@ -2199,6 +2219,7 @@ impl Coordinator {
         self.client = client;
         self.world = world;
         self.world_id = world_id;
+        self.last_tick_frame = None;
         self.consecutive_carla_failures = 0;
         self.carla_unreachable = false;
         self.forget_road_graph();
@@ -2361,6 +2382,8 @@ impl Coordinator {
         self.accel_history.clear();
         self.walker_height.clear();
         self.tracked_npcs.clear();
+        self.miss_watch.reset();
+        self.stale_snapshots = 0;
 
         match self.episode_clock.last_frame() {
             Some((e_last, d_last)) => {
@@ -2549,6 +2572,8 @@ impl Coordinator {
         self.accel_history.clear();
         self.walker_height.clear();
         self.tracked_npcs.clear();
+        self.miss_watch.reset();
+        self.stale_snapshots = 0;
         if self.gap_trace.recording() {
             // The last frame of the previous episode, while its actors still exist.
             self.trace_emit_staged(None);
@@ -2757,18 +2782,22 @@ impl Coordinator {
     /// could not be read, the protocol's "unknown").
     fn tick_frame(&mut self) -> std::result::Result<i64, carla::CarlaError> {
         let mut ticking = Duration::ZERO;
+        let mut ticked = None;
         let frame = tick_then_read(
             &mut self.world,
             self.substeps,
             |w| {
                 let started = Instant::now();
-                let result = w.tick().map(|_| ());
+                let result = w.tick().map(|f| ticked = Some(f));
                 ticking += started.elapsed();
                 result
             },
             read_frame_of,
         );
         self.tick_time += ticking;
+        if ticked.is_some() {
+            self.last_tick_frame = ticked;
+        }
         let frame = frame?;
         // A marker still due (start-up, or a paused world after a change) can be written
         // now: csb sees the world's actors from its first tick on.
@@ -3204,8 +3233,9 @@ impl Coordinator {
         // not yet settled. A genuinely broken connection is caught by update_frame, which
         // owns reconnection.
         if self.sync_mode_enabled {
-            if let Err(e) = self.world.tick() {
-                tracing::warn!("Tick after spawning '{name}' failed: {e}");
+            match self.world.tick() {
+                Ok(f) => self.last_tick_frame = Some(f),
+                Err(e) => tracing::warn!("Tick after spawning '{name}' failed: {e}"),
             }
         }
 
@@ -3671,6 +3701,9 @@ impl Coordinator {
         // Tracked NPCs (roadmap 023) are read from one world snapshot and commanded through
         // one actor list per frame, fetched on the first tracked entity.
         let mut tracked_view: Option<TrackedView> = None;
+        // Tracked NPCs looked up in that snapshot this frame, and those it did not have.
+        let mut tracked_looked_up = 0_usize;
+        let mut tracked_missing: Vec<String> = Vec::new();
 
         for entity_status in &req.status {
             let name = &entity_status.name;
@@ -3734,7 +3767,7 @@ impl Coordinator {
                         teleport_failures.push(format!("{name}: skipped, CARLA unreachable"));
                     } else {
                         let started = std::time::Instant::now();
-                        if let Err(e) = self.track_npc(
+                        match self.track_npc(
                             name,
                             actor_id,
                             npc,
@@ -3748,9 +3781,17 @@ impl Coordinator {
                             origin_offset,
                             &mut tracked_view,
                         ) {
-                            carla_unreachable = started.elapsed() > SLOW_FAILURE;
-                            tracing::warn!("Tracking '{name}': {e:#}");
-                            teleport_failures.push(format!("{name}: {e:#}"));
+                            Ok(found) => {
+                                tracked_looked_up += 1;
+                                if !found {
+                                    tracked_missing.push(name.clone());
+                                }
+                            }
+                            Err(e) => {
+                                carla_unreachable = started.elapsed() > SLOW_FAILURE;
+                                tracing::warn!("Tracking '{name}': {e:#}");
+                                teleport_failures.push(format!("{name}: {e:#}"));
+                            }
                         }
                     }
                 }
@@ -3797,6 +3838,26 @@ impl Coordinator {
                     action_status: entity_status.action_status.clone(),
                     pose: entity_status.pose,
                 });
+            }
+        }
+
+        // A missing NPC was skipped above; every one missing for too long is a real loss.
+        if self
+            .miss_watch
+            .end_frame(tracked_looked_up, tracked_missing.len())
+        {
+            tracing::error!(
+                "Every tracked NPC has been missing from the world snapshot for more than {} \
+                 frames: failing the frame",
+                npc_tracking::MISS_LIMIT_FRAMES
+            );
+            let frame = tracked_view.as_ref().map(|v| v.snapshot.frame());
+            for name in &tracked_missing {
+                teleport_failures.push(format!(
+                    "{name}: not in the world snapshot (frame {frame:?}) for more than {} \
+                     frames",
+                    npc_tracking::MISS_LIMIT_FRAMES
+                ));
             }
         }
 
@@ -4901,9 +4962,59 @@ impl Coordinator {
         Some((pose, action_status))
     }
 
+    /// The world snapshot, at least as new as the last tick when it gets there within
+    /// `npc_tracking::SNAPSHOT_FRESH_WAIT` (roadmap 023, "a stale snapshot fails the
+    /// frame"). `world.snapshot()` is the client's cached copy of the last tick CARLA
+    /// streamed, not a request: right after a spawn, and most after a `load_world` while the
+    /// client's stream re-subscribes, it can predate the frame `world.tick()` returned.
+    /// Past the bound the stale copy is returned with a warning; a missing actor in it is
+    /// the caller's to absorb.
+    fn fresh_snapshot(&mut self) -> Result<carla::client::WorldSnapshot> {
+        let started = Instant::now();
+        let world = &self.world;
+        let read = npc_tracking::read_fresh(
+            self.last_tick_frame,
+            npc_tracking::SNAPSHOT_FRESH_WAIT,
+            npc_tracking::SNAPSHOT_REREAD_PAUSE,
+            || world.snapshot(),
+            |s| s.frame() as u64,
+        )
+        .wrap_err("world snapshot")?;
+        if read.reads > 1 || !read.fresh {
+            self.stale_snapshots += 1;
+            // Every one while few, then one in a hundred: a lagging stream is an event,
+            // a persistently lagging one should not flood the log.
+            let n = self.stale_snapshots;
+            if n <= 10 || n.is_multiple_of(100) {
+                let tick = self.last_tick_frame.unwrap_or_default();
+                let waited = started.elapsed().as_secs_f64() * 1e3;
+                if read.fresh {
+                    tracing::info!(
+                        "Stale world snapshot (frame {} < tick {tick}): fresh after \
+                         {waited:.1} ms, {} reads ({n} this episode)",
+                        read.frame,
+                        read.reads
+                    );
+                } else {
+                    tracing::warn!(
+                        "Stale world snapshot (frame {} < tick {tick}) still stale after \
+                         {waited:.1} ms, {} reads: used as is ({n} this episode)",
+                        read.frame,
+                        read.reads
+                    );
+                }
+            }
+        }
+        Ok(read.snapshot)
+    }
+
     /// One frame of a tracked NPC (roadmap 023): measure it against SSv2's pose, record the
     /// error, and command its velocity (or snap it back). `status` is `None` while SSv2
     /// holds the NPC still: zero velocity and yaw rate.
+    ///
+    /// Returns `false` when the NPC was not in the world snapshot: skipped for this frame,
+    /// no command sent (CARLA keeps the last one), counted as missed; the caller decides
+    /// with `npc_tracking::MissWatch` whether the frame fails.
     #[allow(clippy::too_many_arguments)]
     fn track_npc(
         &mut self,
@@ -4914,23 +5025,37 @@ impl Coordinator {
         status: Option<&traffic_simulator_msgs::ActionStatus>,
         origin_offset: OriginOffset,
         view: &mut Option<TrackedView>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if view.is_none() {
             let ids: Vec<u32> = self.tracked_npcs.keys().copied().collect();
+            let snapshot = self.fresh_snapshot()?;
             *view = Some(TrackedView {
-                snapshot: self.world.snapshot().wrap_err("world snapshot")?,
+                snapshot,
                 actors: self.world.actors_by_ids(&ids).wrap_err("tracked actors")?,
             });
         }
         let view = view.as_ref().expect("filled above");
-        let body = view
-            .snapshot
-            .find(actor_id)
-            .ok_or_else(|| eyre::eyre!("actor {actor_id} is not in the world snapshot"))?;
-        let now = body.transform();
 
         // SSv2's pose and twist as the CARLA body's target (npc_tracking::world_twist).
         let target_tf = ros_pose_to_carla_transform(pose, origin_offset, self.map_origin);
+        let Some(body) = view.snapshot.find(actor_id) else {
+            // Not in the snapshot: skip this NPC for the frame, not the frame. Its heading
+            // is still taken, so next frame's pose yaw rate spans one frame, not two.
+            if let Some(entry) = self.tracked_npcs.get_mut(&actor_id) {
+                entry.last_yaw_deg = Some(f64::from(target_tf.rotation.yaw));
+            }
+            self.collision_monitor.record_tracking_missed(name);
+            if self.miss_watch.missed(name) {
+                tracing::warn!(
+                    "Tracking '{name}': actor {actor_id} is not in the world snapshot \
+                     (frame {}); skipped for the frame, CARLA keeps its last command \
+                     (warned once per episode, counted as missed)",
+                    view.snapshot.frame()
+                );
+            }
+            return Ok(false);
+        };
+        let now = body.transform();
         let ros_yaw = pose.orientation.as_ref().map_or(0.0, |q| {
             coordinate_conversion::quaternion_to_euler(q.x, q.y, q.z, q.w).2
         });
@@ -5098,7 +5223,7 @@ impl Coordinator {
                 vehicle.apply_control(&control).wrap_err("steer")?;
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     fn set_actor_transform(&self, actor_id: u32, transform: &Transform) -> Result<()> {
