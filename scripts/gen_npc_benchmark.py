@@ -11,8 +11,18 @@ NPCs start on straight lanelets away from junctions, spread round-robin across l
 road carries them all, at least SPACING m apart within a lanelet. Positions are LanePositions
 (lanelet ID + s), which SSv2 resolves itself, so no pose has to be hand-matched to a lane.
 
+Geometry is read the way SSv2 reads it: from each node's lat/lon through the map's
+TransverseMercator projector (WGS84, k0 0.9996, origin 0/0), not from the `local_x`/`local_y`
+tags, which sit 0.709 % further out in y (2.3 m at Town01's y -326). Checked against a
+trace: the old bench's npc_05 (lanelet 12083, s 10) spawned at y -324.33, the projected
+centre to the centimetre, while the tags put it at -326.65. With --carla-port each start is
+then checked against CARLA at that point: the lane there must be a driving lane at least
+MIN_LANE_WIDTH wide (roadmap 032: lanelet 12083 is tagged `road` but is CARLA's 0.3 m
+shoulder), near its centre, with no level obstacle within CLEARANCE.
+
 Usage:
     scripts/gen_npc_benchmark.py --carla-port 2000   # writes scenarios/bench/town01_npc_{10,20,50}.xosc
+    scripts/gen_npc_benchmark.py --carla-port 2000 --counts 20   # the one 024/032 judge
     scripts/gen_npc_benchmark.py --counts 5 100 --out /tmp/bench
 """
 
@@ -37,16 +47,25 @@ MAX_TURN_DEG = 10.0
 MIN_LENGTH = 2 * MARGIN + 5.0
 # With --carla-port: no level obstacle (pole, planter, sign) within this of a start point.
 CLEARANCE = 2.5
+# With --carla-port: CARLA's lane at a start point is at least this wide (a car is 2.16 m).
+MIN_LANE_WIDTH = 2.5
+# The map's projector (map_projector_info.yaml), as SSv2 applies it to every node's lat/lon.
+PROJECTOR = "+proj=tmerc +lat_0=0 +lon_0=0 +k=0.9996 +ellps=WGS84 +units=m"
+
+
+def projector():
+    """lat/lon -> SSv2's map frame (metres). pyproj is a dev dependency of this script only."""
+    from pyproj import Transformer
+
+    t = Transformer.from_crs("EPSG:4326", PROJECTOR, always_xy=True)
+    return lambda lat, lon: t.transform(lon, lat)
 
 
 def load_lanelets(path):
     """Return [(lanelet_id, length_m, centerline)] for straight road lanelets, sorted by id."""
     root = ET.parse(path).getroot()
-    nodes = {}
-    for n in root.iter("node"):
-        tags = {t.get("k"): t.get("v") for t in n.iter("tag")}
-        if "local_x" in tags:
-            nodes[n.get("id")] = (float(tags["local_x"]), float(tags["local_y"]))
+    project = projector()
+    nodes = {n.get("id"): project(float(n.get("lat")), float(n.get("lon"))) for n in root.iter("node")}
     ways = {w.get("id"): [nd.get("ref") for nd in w.iter("nd")] for w in root.iter("way")}
 
     out = []
@@ -100,10 +119,12 @@ def point_at(center, s):
 
 
 def carla_driving_check(port):
-    """A predicate: is this map-frame point on a CARLA driving lane, clear of the kerb?
+    """A predicate: is this map-frame point on a wide CARLA driving lane, clear of the kerb?
 
     Some Town01 road lanelets run over planters and poles in CARLA's level, where CARLA
-    refuses the spawn and SSv2 fails the scenario. The lanelet map cannot tell; CARLA can.
+    refuses the spawn and SSv2 fails the scenario; some are CARLA's 0.3 m shoulders, where a
+    car starts with two wheels on the kerb (roadmap 032, gap A). The lanelet map cannot tell;
+    CARLA can. Read-only: the queries need Town01 loaded and change nothing.
     """
     import carla  # only needed with --carla-port
 
@@ -111,6 +132,8 @@ def carla_driving_check(port):
     client.set_timeout(20.0)
     world = client.get_world()
     cmap = world.get_map()
+    if not cmap.name.endswith("Town01"):
+        sys.exit(f"CARLA has {cmap.name} loaded; these checks need Town01")
     obstacles = [
         bb
         for label in (
@@ -125,11 +148,15 @@ def carla_driving_check(port):
 
     def ok(xy):
         loc = carla.Location(x=xy[0], y=-xy[1], z=0.5)  # ROS -> CARLA: flip Y
-        wp = cmap.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
-        on = wp and wp.transform.location
-        # Many Town01 road lanelets sit a half or whole lane off CARLA's driving lanes
-        # (2-7 m); a start must be on a driving lane's centre.
-        if not on or math.hypot(on.x - loc.x, on.y - loc.y) > 1.0:
+        # The nearest lane of any type: a shoulder or sidewalk here is a reject, not a lane
+        # to project onto (projecting onto driving lanes alone passed 12083's shoulder).
+        wp = cmap.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Any)
+        if not wp or wp.lane_type != carla.LaneType.Driving or wp.lane_width < MIN_LANE_WIDTH:
+            return False
+        on = wp.transform.location
+        # Some Town01 road lanelets sit a half or whole lane off CARLA's driving lanes;
+        # a start must be on a driving lane's centre.
+        if math.hypot(on.x - loc.x, on.y - loc.y) > 1.0:
             return False
         return all(math.hypot(b.location.x - loc.x, b.location.y - loc.y) > CLEARANCE for b in obstacles)
 
