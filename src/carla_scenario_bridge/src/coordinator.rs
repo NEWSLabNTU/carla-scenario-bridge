@@ -736,6 +736,9 @@ struct TrackedNpc {
     last_command: Option<(f64, f64)>,
     /// Blocked last frame (`npc_tracking::blocked`, which holds it until the body moves on).
     blocked: bool,
+    /// Not tracked yet: its first command is not force-bounded when SSv2 already moves it
+    /// (`npc_tracking::first_frame_change`, roadmap 032 gap D).
+    first: bool,
     /// Origin above the bottom of the vehicle's CARLA box, m: a snap puts the box bottom on
     /// the ground (`npc_tracking::snap_attitude`). Unused for walkers (`walker_teleport_z`).
     lift: f32,
@@ -3198,6 +3201,7 @@ impl Coordinator {
                     last_yaw_deg: None,
                     last_command: None,
                     blocked: false,
+                    first: true,
                     lift: {
                         let bb = actor.bounding_box();
                         walker_lift(bb.transform.location.z, bb.extent.z)
@@ -5219,11 +5223,17 @@ impl Coordinator {
                 steer,
             } => {
                 // A finite force: the change from the body's velocity is capped
-                // (npc_tracking::limit_change), so a contact holds it back like a car.
+                // (npc_tracking::limit_change), so a contact holds it back like a car --
+                // except on the first frame of an NPC SSv2 adds moving, which starts at
+                // speed (npc_tracking::first_frame_change).
                 let (vx, vy) = npc_tracking::limit_change(
                     (vx, vy),
                     body_planar,
-                    npc_tracking::max_change(npc.performance, dt),
+                    npc_tracking::first_frame_change(
+                        npc.first,
+                        status.is_some(),
+                        npc_tracking::max_change(npc.performance, dt),
+                    ),
                 );
                 (vx, vy, yaw_rate_deg, steer)
             }
@@ -5269,16 +5279,14 @@ impl Coordinator {
         };
         if let Some(entry) = self.tracked_npcs.get_mut(&actor_id) {
             entry.last_command = Some((vx, vy));
+            entry.first = false;
         }
         if npc.walker {
             let walker = carla::client::Walker::try_from(actor.clone())
                 .map_err(|_| eyre::eyre!("actor {actor_id} is not a walker"))?;
-            let speed = vx.hypot(vy);
-            let (dx, dy) = if speed > 1e-6 {
-                (vx / speed, vy / speed)
-            } else {
-                (0.0, 0.0)
-            };
+            // Standing, it faces SSv2's heading at speed 0: a noise-sized command normalised
+            // into a direction spun it 18 deg per frame (roadmap 032, gap C).
+            let (dx, dy, speed) = npc_tracking::walker_control(vx, vy, target.yaw_deg);
             let mut control = walker.control().wrap_err("read walker control")?;
             // The control's direction is CARLA's own C++ Vector3D (a POD), not carla::geom's.
             control.direction.x = dx as f32;

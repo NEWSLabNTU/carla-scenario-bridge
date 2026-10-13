@@ -56,9 +56,15 @@ creating. Gains re-measured on the bench's corners (24-55° at 8 m/s) and the 02
 **C -- a standing walker stays still.** Below a speed floor (~0.05 m/s, a named constant)
 the walker gets speed 0 and SSv2's heading as its direction instead of the normalised noise.
 
-**D -- spawn at speed.** A tracked NPC is spawned with SSv2's twist at spawn applied as its
-initial velocity (`set_target_velocity` right after spawn, before the settling tick), so an
-entity SSv2 adds moving starts moving.
+**D -- spawn at speed.** An entity SSv2 adds moving starts moving. As built (step 3): the
+spawn request carries no speed -- SSv2 hard-codes `set_initial_speed(0.0)`
+(`traffic_simulator/api/api.hpp:210`, an `@todo`) and a pedestrian spawn has no speed field
+-- so nothing can be applied at spawn. SSv2's first status for the new entity is the spawn
+pose with a twist already at speed; the body's first tracked frame applies that frame's
+command without the force bound, when SSv2 passes the twist through. An NPC SSv2 still
+holds before `npc_logic_started` starts at rest, bounded, as before. Walkers need nothing:
+`WalkerControl` sets their speed directly. (First written as a velocity set right after
+spawn, before the settling tick.)
 
 **E -- NPC contacts.** Each tracked NPC vehicle gets a collision sensor like the ego's; its
 events reach `collision_monitor` (kind of the other actor, impulse) and the gap trace's
@@ -80,7 +86,7 @@ stays as `scenarios/gap/` reproducer of A (the shoulder start is what makes it o
    trace flag (schema, reader, oracle, tests). Live: the old bench ×2 -- `npc_05` falls back
    to kinematic and stays on the road (z within 0.5 m of the ground for the whole run), no
    other NPC falls back.
-3. [ ] **C and D.** Walker speed floor; spawn at speed. Live: `town01_pedestrian` (the yaw
+3. [x] **C and D.** Walker speed floor; spawn at speed. Live: `town01_pedestrian` (the yaw
    G3 gone), the UC-ACC variant of 024's baseline (the `Npc1` G3 gone).
 4. [ ] **B.** Curvature feed-forward with tests (a constant-radius target tracked within
    budget at 8 m/s in the pure model); gains on the bench. Live: bench ×2 and
@@ -103,6 +109,39 @@ stays as `scenarios/gap/` reproducer of A (the shoulder start is what makes it o
   (E's sensors included, or E opt-in).
 
 ### Results
+
+**2026-10-13, step 3 -- C and D done: the walker yaw G3 (174° / 108°) and `Npc1`'s spawn
+G3 are gone; pedestrian G3 2 -> 0, UC-ACC G3 1 -> 0.** `npc_tracking`: `walker_control`
+(below `WALKER_SPEED_FLOOR` speed 0, direction SSv2's heading) and `first_frame_change`
+(a body's first tracked frame is not force-bounded when SSv2 already moves it), tests first
+(3 new, 279 Rust passed / 1 skipped, 151 pytest, `just check` clean). `WALKER_SPEED_FLOOR`
+0.05 m/s from 024's step-7 pedestrian trace: standing, SSv2's poses step by its position
+precision (0.0038 / 0.0075 m/s alternating, frames 135-156), a command of at most 0.007 m/s
+over 203 standing frames; the floor is 7x that, and leaves at most 0.05/6 = 0.008 m
+uncorrected. **D departs from the design text**: SSv2 sends no speed at spawn
+(`traffic_simulator` `API::spawn` sets `initial_speed` 0.0, "@todo"; a pedestrian request has
+no field), and its first status of an added entity is the spawn pose with the twist already
+at speed (UC-ACC `Npc1`: pose = spawn pose at 5.5 m/s), so nothing is known to seed before
+the settling tick. The seed is the first tracked frame instead: its command (SSv2's twist +
+the position term) is applied unbounded, and only when the twist is passed -- an NPC still
+held before `npc_logic_started` starts at rest under the force bound as before. Walkers need
+nothing for D: `WalkerControl` sets speed directly. **Live** (simulation side traced, one ego
+stack via the relay, Town01, `run_suite --physical-verdict`, bridge log
+`play_log/bridge/2026-10-13_23-09-18`): `town01_pedestrian` PASS 2/2, 2383 frames, oracle G1 0
+G2 0 **G3 0** info 0, G4 agree; CARLA walker yaw 90.0002° on every frame (024: spins to 174° /
+108°), max |yaw| difference 0.00°, xy max 0.094 m, 0 snaps. UC-ACC variant (`vxi_ego` 8.333,
+`vxi_npc0` 5.556, `vx_target_npc0` 1.944) PASS 2/2, 1322 frames, G1 0 G2 0 **G3 0**, info 1
+(`spawn`, `Npc1` frame 507 only, xy 0.208 m), G4 agree; `Npc1` added at frame 507 leaves the
+first tick at 4.17 m/s (024: 0.5), error 0.208 / 0.155 / 0.112 / 0.082 m over 507-510 (024:
+0.03, 0.20, 0.40, 0.57, then a snap), report 0 snaps, max 0.278 m (024: 1 snap, 0.572 m). The
+0.21 m first frame is SSv2's: its first pose is the spawn pose while its twist says 5.5 m/s,
+so the start-of-step pose sits 0.275 m behind the body. `town01_rear_contact` ×2 PASS 2/2:
+run 1 259 frames 22 contacts, G1 **1** (ego-`npc_rear` frame 199 only, CARLA geometry,
+penetration 0.03 m, margin difference 0.196 vs band 0.147, at the contact onset) G2 0 G3 0
+info 3; run 2 261 frames 23 contacts, G1 0 G2 0 G3 0 info 4 (its onset frame 202, 0.128 vs
+band 0.169, is a `lag_band`). Not from C or D -- `npc_rear` is held at spawn (0 m/s on its
+first frames), so neither path touches it -- the same 1-frame onset edge step 2 saw once; a
+lag-band tolerance question for step 7, not a regression. `npc_rear` 0 snaps, 0 fallback.
 
 **2026-10-13, step 2 -- A done: `npc_05` falls back at frame 27 and stays on the road; bench
 G3 74 -> 73.** `npc_tracking`: `blocked` (rule), `act` (a snap of a blocked body becomes

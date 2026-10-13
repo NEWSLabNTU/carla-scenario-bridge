@@ -273,6 +273,42 @@ pub fn max_change(declared: Option<(f64, f64)>, dt: f64) -> f64 {
     (bound + FORCE_MARGIN) * dt
 }
 
+/// The velocity change allowed on a tracked frame, m/s (roadmap 032, gap D): `bound`
+/// ([`max_change`]), except on a body's first tracked frame when SSv2 already moves it
+/// (`moving`: its twist is passed, i.e. not held before `npc_logic_started`). SSv2 adds an
+/// entity moving -- UC-ACC's `Npc1` at ~5.5 m/s -- but its spawn request carries no speed
+/// (`initial_speed` is always 0 in `traffic_simulator`'s `API::spawn`); unbounded, that first
+/// command sets the body's velocity outright, so it starts at speed instead of accelerating
+/// from rest at the force bound and falling 0.57 m behind. A held NPC starts at rest.
+pub fn first_frame_change(first: bool, moving: bool, bound: f64) -> f64 {
+    if first && moving {
+        f64::INFINITY
+    } else {
+        bound
+    }
+}
+
+/// Below this commanded speed a walker stands still, m/s (roadmap 032, gap C). A standing
+/// SSv2 pedestrian's poses step by its position precision -- 0.004 and 0.008 m/s alternating,
+/// a command of at most 0.007 m/s (`town01_pedestrian`, 024 step 7, 203 standing frames) --
+/// and CARLA turns a walker toward any direction it is given, at 18 deg per frame, however
+/// slow. Seven times that noise; left uncorrected under it, a walker's error is at most
+/// `floor / WALKER_GAINS.position` = 0.008 m, under a twentieth of G3's 0.2 m.
+pub const WALKER_SPEED_FLOOR: f64 = 0.05;
+
+/// A walker's `WalkerControl` for a commanded velocity: `(direction x, direction y, speed)`,
+/// CARLA frame. Below [`WALKER_SPEED_FLOOR`] it stands -- speed 0, facing SSv2's heading
+/// (`heading_deg`, CARLA yaw) -- instead of turning toward a normalised noise vector.
+pub fn walker_control(vx: f64, vy: f64, heading_deg: f64) -> (f64, f64, f64) {
+    let speed = vx.hypot(vy);
+    if speed.is_finite() && speed >= WALKER_SPEED_FLOOR {
+        (vx / speed, vy / speed, speed)
+    } else {
+        let (sin, cos) = heading_deg.to_radians().sin_cos();
+        (cos, sin, 0.0)
+    }
+}
+
 /// Above this a heading change between frames is a teleport, not a turn, deg/s.
 pub const MAX_POSE_YAW_RATE_DEG: f64 = 180.0;
 
@@ -929,6 +965,51 @@ mod tests {
         let sum = s.summary();
         assert_eq!((sum.frames, sum.snaps, sum.fallback), (1, 0, 2));
         assert_eq!(TrackingStats::default().summary().fallback, 0);
+    }
+
+    #[test]
+    fn a_standing_walker_faces_ssv2s_heading_and_does_not_move() {
+        // town01_pedestrian frames 135-156: SSv2's position noise, 0.0038-0.0075 m/s in any
+        // direction, used to be normalised into the walker's direction.
+        for (vx, vy) in [(0.0, 0.0), (0.0038, 0.0), (-0.005, 0.0049), (0.0, -0.0075)] {
+            let (dx, dy, speed) = walker_control(vx, vy, 90.0);
+            assert_eq!(speed, 0.0);
+            assert!(close(dx, 0.0) && close(dy, 1.0), "({dx}, {dy})");
+        }
+        let (dx, dy, _) = walker_control(0.01, 0.0, -161.6);
+        assert!(
+            close(dx, (-161.6f64).to_radians().cos()) && close(dy, (-161.6f64).to_radians().sin())
+        );
+        // Not a number: stand.
+        assert_eq!(walker_control(f64::NAN, 0.0, 0.0), (1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_walking_walker_goes_where_it_is_commanded() {
+        let (dx, dy, speed) = walker_control(0.0, 1.4, 0.0);
+        assert!(close(dx, 0.0) && close(dy, 1.0) && close(speed, 1.4));
+        // At the floor it walks; just under it, it stands.
+        assert!(close(
+            walker_control(WALKER_SPEED_FLOOR, 0.0, 90.0).2,
+            WALKER_SPEED_FLOOR
+        ));
+        assert_eq!(walker_control(WALKER_SPEED_FLOOR - 1e-4, 0.0, 90.0).2, 0.0);
+        // Left uncorrected under the floor, the error stays far inside G3's 0.2 m.
+        const { assert!(WALKER_SPEED_FLOOR / WALKER_GAINS.position < 0.01) };
+    }
+
+    #[test]
+    fn an_npc_added_moving_starts_at_speed() {
+        let bound = max_change(None, DT);
+        // UC-ACC Npc1: added at 5.5 m/s, first tracked frame. The command is not bounded,
+        // so the body takes it outright instead of 0.49 m/s.
+        let change = first_frame_change(true, true, bound);
+        assert_eq!(limit_change((5.5, 0.0), (0.0, 0.0), change), (5.5, 0.0));
+        // Afterwards the force bound holds again.
+        let change = first_frame_change(false, true, bound);
+        assert!(close(limit_change((5.5, 0.0), (0.0, 0.0), change).0, bound));
+        // Still held by SSv2 (npc_logic_started false): it starts at rest, bounded.
+        assert_eq!(first_frame_change(true, false, bound), bound);
     }
 
     #[test]
