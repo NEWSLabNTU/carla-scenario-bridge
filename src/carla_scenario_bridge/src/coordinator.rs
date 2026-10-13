@@ -5225,10 +5225,14 @@ impl Coordinator {
                 // A finite force: the change from the body's velocity is capped
                 // (npc_tracking::limit_change), so a contact holds it back like a car --
                 // except on the first frame of an NPC SSv2 adds moving, which starts at
-                // speed (npc_tracking::first_frame_change).
-                let (vx, vy) = npc_tracking::limit_change(
+                // speed (npc_tracking::first_frame_change). The turn SSv2's target makes
+                // this frame is not charged to the cap (npc_tracking::bounded_command,
+                // roadmap 032 gap B): it used all of it in the bench's corners.
+                let (vx, vy) = npc_tracking::bounded_command(
                     (vx, vy),
                     body_planar,
+                    target.yaw_rate_deg,
+                    dt,
                     npc_tracking::first_frame_change(
                         npc.first,
                         status.is_some(),

@@ -41,10 +41,14 @@ pub struct Gains {
     pub yaw: f64,
 }
 
-/// From the step-2 spike: settled p95 0.02-0.04 m and yaw p95 <= 1.0 deg on Town01.
+/// Position 5/s from 023's step-2 spike (settled p95 0.02-0.04 m on Town01's straights).
+/// Yaw 4/s since roadmap 032 step 4, when the yaw correction began to be steered: a body turns
+/// at ~0.98 of its steer's kinematic rate, and the yaw error a corner leaves is that shortfall
+/// over the gain -- in the pure model at 0.95, 8 m/s on 6-20 m radii, 1.1-0.3 deg at 4/s
+/// against 2.0 on 6 m at 023's 2/s (budget 2 deg). On the bench: yaw p95 1.55 -> 0.66 deg.
 pub const VEHICLE_GAINS: Gains = Gains {
     position: 5.0,
-    yaw: 2.0,
+    yaw: 4.0,
 };
 /// From the step-2 spike: k_p 5-8 settles a walker to within 0.02 m.
 pub const WALKER_GAINS: Gains = Gains {
@@ -231,19 +235,24 @@ pub fn command(
             yaw_rate_deg: target.yaw_rate_deg,
         };
     }
+    let yaw_rate_deg = target.yaw_rate_deg + gains.yaw * eyaw;
+    // Steered from the commanded yaw rate, correction included (roadmap 032, gap B): the
+    // tyres undo a set angular velocity within the tick -- `npc_11` on a straight held a
+    // 2.4 deg error for 60 frames, commanded -4.7 deg/s and turning 0.0 -- so the steer is
+    // what turns the body, and steering SSv2's rate alone left every yaw error in place.
     let steer = steering.map(|s| {
         let speed = target.vx.hypot(target.vy);
         if speed < STEER_MIN_SPEED || s.max_steer_deg <= 0.0 {
             return 0.0;
         }
-        let curvature = target.yaw_rate_deg.to_radians() / speed;
+        let curvature = yaw_rate_deg.to_radians() / speed;
         let angle = (s.wheelbase * curvature).atan().to_degrees();
         (angle / s.max_steer_deg).clamp(-1.0, 1.0)
     });
     Command::Track {
         vx: target.vx + gains.position * ex,
         vy: target.vy + gains.position * ey,
-        yaw_rate_deg: target.yaw_rate_deg + gains.yaw * eyaw,
+        yaw_rate_deg,
         steer,
     }
 }
@@ -261,6 +270,32 @@ pub fn limit_change(command: (f64, f64), body: (f64, f64), max_change: f64) -> (
     }
     let k = max_change.max(0.0) / change;
     (body.0 + dx * k, body.1 + dy * k)
+}
+
+/// `v` turned through one frame of the target's yaw rate (CARLA frame: positive turns x
+/// toward y, as the yaw does). A body following a turn needs its velocity turned by `ω·dt`
+/// every frame -- the centripetal change, `v·ω·dt`: 0.46 m/s a frame at 8 m/s on a 7 m
+/// radius -- which is the turn itself, not a correction.
+pub fn turned(v: (f64, f64), yaw_rate_deg: f64, dt: f64) -> (f64, f64) {
+    let (sin, cos) = (yaw_rate_deg.to_radians() * dt).sin_cos();
+    (v.0 * cos - v.1 * sin, v.0 * sin + v.1 * cos)
+}
+
+/// The curvature feed-forward of the force bound (roadmap 032, gap B): [`limit_change`]
+/// measured from the body's velocity carried through the target's turn ([`turned`]), not from
+/// the body's velocity itself. As built in 023 the bound charged the turn to the force: on
+/// the bench's 6-7 m corners at 8 m/s the centripetal 9-11 m/s2 (12-18 at SSv2's entries)
+/// used all of the 10 m/s2 bound, nothing was left to correct with, and the body drifted to
+/// the outside of every corner, 0.24-0.58 m. Turning never adds speed, so a body held back
+/// by a contact still pushes with no more than `max_change`. Straight, it is `limit_change`.
+pub fn bounded_command(
+    command: (f64, f64),
+    body: (f64, f64),
+    yaw_rate_deg: f64,
+    dt: f64,
+    max_change: f64,
+) -> (f64, f64) {
+    limit_change(command, turned(body, yaw_rate_deg, dt), max_change)
 }
 
 /// The velocity change allowed per frame for a vehicle declaring `max_acceleration` and
@@ -996,6 +1031,158 @@ mod tests {
         assert_eq!(walker_control(WALKER_SPEED_FLOOR - 1e-4, 0.0, 90.0).2, 0.0);
         // Left uncorrected under the floor, the error stays far inside G3's 0.2 m.
         const { assert!(WALKER_SPEED_FLOOR / WALKER_GAINS.position < 0.01) };
+    }
+
+    /// Share of the steer's kinematic yaw rate a tracked body turns at: the bench's corners
+    /// turn at 0.98 of it (024/032 traces, `npc_09` at 65 deg/s); 0.95 leaves a margin.
+    const UNDERSTEER: f64 = 0.95;
+
+    /// SSv2's target on a 90 deg right turn of radius `r` at `speed`, CARLA frame: 1 s
+    /// eastbound along +x, the arc, then southbound (+y) out of it. `(target, s)` at time `t`.
+    fn corner_target(t: f64, speed: f64, r: f64) -> Target {
+        let lead = speed; // 1 s of straight
+        let arc = r * std::f64::consts::FRAC_PI_2;
+        let s = speed * t;
+        let rate = (speed / r).to_degrees();
+        if s < lead {
+            Target {
+                x: s,
+                y: 0.0,
+                yaw_deg: 0.0,
+                vx: speed,
+                vy: 0.0,
+                yaw_rate_deg: 0.0,
+            }
+        } else if s < lead + arc {
+            let phi = (s - lead) / r;
+            Target {
+                x: lead + r * phi.sin(),
+                y: r * (1.0 - phi.cos()),
+                yaw_deg: phi.to_degrees(),
+                vx: speed * phi.cos(),
+                vy: speed * phi.sin(),
+                yaw_rate_deg: rate,
+            }
+        } else {
+            Target {
+                x: lead + r,
+                y: r + (s - lead - arc),
+                yaw_deg: 90.0,
+                vx: 0.0,
+                vy: speed,
+                yaw_rate_deg: 0.0,
+            }
+        }
+    }
+
+    /// Track [`corner_target`] through the pure model of a tracked body the bench's traces
+    /// show (roadmap 032 step 4): the body keeps the velocity it is set over the tick (within
+    /// 0.03 m/s in corners), and turns only as its steer turns it -- a set angular velocity is
+    /// undone by the tyres within the tick (`npc_11`, 2.4 deg off on a straight: commanded
+    /// -4.7 deg/s, turned 0.0) -- at [`UNDERSTEER`] of the kinematic bicycle's rate. The yaw
+    /// rate comes from SSv2's poses, as `track_npc` takes it. Returns (max xy error m, max yaw
+    /// error deg, snaps), measured after each tick against SSv2's pose, from the arc on.
+    fn run_corner(speed: f64, r: f64) -> (f64, f64, u32) {
+        let bound = max_change(Some((5.0, 8.0)), DT); // the bench's declared Performance
+        let first = corner_target(0.0, speed, r);
+        let (mut x, mut y, mut yaw) = (first.x, first.y, first.yaw_deg);
+        let mut v = (first.vx, first.vy);
+        let mut previous_yaw = first.yaw_deg;
+        let (mut worst_xy, mut worst_yaw, mut snaps) = (0.0_f64, 0.0_f64, 0);
+        for k in 1..=100 {
+            let mut t = corner_target(f64::from(k) * DT, speed, r);
+            t.yaw_rate_deg = pose_yaw_rate(Some(previous_yaw), t.yaw_deg, DT, 0.0);
+            previous_yaw = t.yaw_deg;
+            let current = Current { x, y, yaw_deg: yaw };
+            let (vx, vy, steer) = match command(&t, &current, DT, VEHICLE_GAINS, Some(MODEL3), true)
+            {
+                Command::Track { vx, vy, steer, .. } => (vx, vy, steer.unwrap()),
+                Command::Snap {
+                    x: sx,
+                    y: sy,
+                    yaw_deg,
+                    vx,
+                    vy,
+                    ..
+                } => {
+                    snaps += 1;
+                    (x, y, yaw) = (sx, sy, yaw_deg);
+                    (vx, vy, 0.0)
+                }
+            };
+            v = bounded_command((vx, vy), v, t.yaw_rate_deg, DT, bound);
+            let wheel = (steer * MODEL3.max_steer_deg).to_radians();
+            let turn = UNDERSTEER * v.0.hypot(v.1) * wheel.tan() / MODEL3.wheelbase;
+            x += v.0 * DT;
+            y += v.1 * DT;
+            yaw += turn.to_degrees() * DT;
+            if f64::from(k) * DT >= 1.0 {
+                worst_xy = worst_xy.max((x - t.x).hypot(y - t.y));
+                worst_yaw = worst_yaw.max(wrap_deg(yaw - t.yaw_deg).abs());
+            }
+        }
+        (worst_xy, worst_yaw, snaps)
+    }
+
+    #[test]
+    fn a_constant_radius_corner_is_tracked_within_budget_at_8_mps() {
+        // The bench's tight corners: 8 m/s on 6-7 m, 9.1-10.7 m/s2 of centripetal
+        // acceleration against the 10 m/s2 force bound (SSv2's entries reach 12-18). As built
+        // in 023 the bound spent itself turning the velocity and the body drifted to the
+        // outside (this model, 6 m: 0.22 m and growing; the bench: 0.5 m and a snap), and the
+        // yaw, steered from SSv2's rate alone, fell behind for good (4.6-4.8 deg here).
+        for r in [6.0, 7.0, 10.0, 20.0] {
+            let (xy, yaw, snaps) = run_corner(8.0, r);
+            assert_eq!(snaps, 0, "r {r}: snapped");
+            assert!(xy <= 0.2, "r {r}: xy {xy:.3} m");
+            assert!(yaw <= 2.0, "r {r}: yaw {yaw:.2} deg");
+        }
+    }
+
+    #[test]
+    fn the_turn_is_not_charged_to_the_force_bound() {
+        // On a 7 m turn at 8 m/s the velocity turns 0.057 rad a frame: 0.46 m/s of change.
+        let rate = (8.0_f64 / 7.0).to_degrees();
+        let body = (8.0, 0.0);
+        let turned_body = turned(body, rate, DT);
+        let a = (8.0_f64 / 7.0) * DT;
+        assert!(close(turned_body.0, 8.0 * a.cos()) && close(turned_body.1, 8.0 * a.sin()));
+        // A command on the turned velocity passes unbounded ...
+        assert_eq!(
+            bounded_command(turned_body, body, rate, DT, 0.1),
+            turned_body
+        );
+        // ... and a correction on top of it is bounded from there.
+        let push = (turned_body.0, turned_body.1 + 1.0);
+        let v = bounded_command(push, body, rate, DT, 0.1);
+        assert!(
+            close(v.0, turned_body.0) && close(v.1, turned_body.1 + 0.1),
+            "{v:?}"
+        );
+        // Straight, it is limit_change exactly: a body held at 4 m/s may push to 4.5.
+        assert_eq!(
+            bounded_command((-8.0, 0.0), (-4.0, 0.0), 0.0, DT, 0.5),
+            limit_change((-8.0, 0.0), (-4.0, 0.0), 0.5)
+        );
+        // Turning never adds speed to a held body.
+        let held = bounded_command((0.0, 8.0), (2.0, 0.0), rate, DT, 0.5);
+        assert!(held.0.hypot(held.1) <= 2.5 + 1e-9, "{held:?}");
+    }
+
+    #[test]
+    fn a_yaw_error_is_steered_out() {
+        // 2 deg left of SSv2's heading on a straight: the tyres undo a set angular velocity,
+        // so the correction is steered, at the same rate as the yaw-rate command.
+        let t = cruising();
+        let mut c = on_track(&t);
+        c.yaw_deg = 178.0;
+        let (_, _, w, steer) = track(command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true));
+        assert!(close(w, 2.0 * VEHICLE_GAINS.yaw), "{w}");
+        let expected = (2.9 * w.to_radians() / 8.0).atan().to_degrees() / 70.0;
+        assert!(
+            steer.unwrap() > 0.0 && close(steer.unwrap(), expected),
+            "{steer:?}"
+        );
     }
 
     #[test]

@@ -17,7 +17,7 @@ against).
 | # | Gap | Evidence | Seen in |
 |---|---|---|---|
 | A | **A snap into the static world.** A blocked tracked body is teleported into what blocks it, keeping its z, roll and pitch; PhysX resolves the penetration upward | bench `npc_05`: lamp pole at frame 25, vz 39.7 m/s, z 80.3 m, on its side to the end; 4/4 runs | bench (×4) |
-| B | **Outside of the turn in corners.** Cross-track error 0.24-0.58 m, along-track ≤ 0.08 m, yaw 1.7-3.6°, always on the outside; the yaw error left at a corner exit decays at the yaw gain (2/s) | 69 + 4 G3 on the bench, `npc_route` 450-462 / 706-730 | bench, `simulator_autopilot` |
+| B | **Outside of the turn in corners.** Cross-track error 0.24-0.58 m, along-track ≤ 0.08 m, yaw 1.7-3.6°, always on the outside; a yaw error is left at a corner exit (024 read it as decaying at the yaw gain, 2/s; step 4 found it does not decay at all -- the tyres cancel the commanded turn) | 69 + 4 G3 on the bench, `npc_route` 450-462 / 706-730 | bench, `simulator_autopilot` |
 | C | **A standing walker spins.** A noise-sized velocity is normalised into `WalkerControl.direction`; 18°/frame while position stays within 0.03 m | `pedestrian_0` yaw 174° and 108° | `town01_pedestrian` |
 | D | **An NPC added while moving spawns at rest.** SSv2 adds it at ~5.5 m/s; the body reaches 0.5 m/s after a tick, +0.49 m/s per frame (the force bound), and is snapped | UC-ACC `Npc1` 539-541, 0.57 m | UC-ACC |
 | E | **NPC contacts with the world are invisible.** NPCs carry no collision sensor, so A left no contact line, and an NPC-vs-static G2 cannot exist | `npc_05` | bench |
@@ -46,12 +46,21 @@ sidewalk (the scenario artefact that exposed A).
 - The threshold values are named constants, chosen from the bench's `npc_05` frames and
   checked against the bench's other 19 NPCs (no fallback for an unblocked NPC).
 
-**B -- curvature feed-forward.** `npc_tracking::command` adds the centripetal term the
-corner needs: the target's curvature (from SSv2's yaw rate over speed, already computed for
-the yaw-rate fix) feeds the steering feed-forward and the lateral component of the
-commanded velocity, so the body is not left to correct a lateral error the corner keeps
-creating. Gains re-measured on the bench's corners (24-55° at 8 m/s) and the 023 spike's
-7 m-radius corner. C3's 0.2 m / 2° stays the target.
+**B -- curvature feed-forward.** As built (step 4), from the bench's traces: the outside
+error was the **force bound** charging the turn itself -- SSv2's 6-7 m corners at 8 m/s need
+9-11 m/s2 of centripetal change (12-18 at its entries) against the 10 m/s2 bound, so the bound
+spent itself turning the velocity and the position correction got nothing -- and the **yaw
+error was never steered**: the tyres undo a set angular velocity within the tick, so a yaw
+correction carried only by `set_target_angular_velocity` did nothing. So
+`npc_tracking::bounded_command` measures the bound from the body's velocity carried through
+the target's turn (`turned`: rotated by SSv2's yaw rate x dt, the centripetal term fed
+forward, never adding speed), and `command` steers from the commanded yaw rate (SSv2's +
+`k_yaw` x error) instead of SSv2's alone; `VEHICLE_GAINS.yaw` 2 -> 4/s. The commanded velocity
+already carried SSv2's lateral component (`world_twist`). C3's 0.2 m / 2° stays the target.
+(First written as: the target's curvature, from SSv2's yaw rate over speed, feeds the
+steering feed-forward and the lateral component of the commanded velocity, so the body is not
+left to correct a lateral error the corner keeps creating; gains re-measured on the bench's
+corners and the 023 spike's 7 m-radius corner.)
 
 **C -- a standing walker stays still.** Below a speed floor (~0.05 m/s, a named constant)
 the walker gets speed 0 and SSv2's heading as its direction instead of the normalised noise.
@@ -88,7 +97,7 @@ stays as `scenarios/gap/` reproducer of A (the shoulder start is what makes it o
    other NPC falls back.
 3. [x] **C and D.** Walker speed floor; spawn at speed. Live: `town01_pedestrian` (the yaw
    G3 gone), the UC-ACC variant of 024's baseline (the `Npc1` G3 gone).
-4. [ ] **B.** Curvature feed-forward with tests (a constant-radius target tracked within
+4. [x] **B.** Curvature feed-forward with tests (a constant-radius target tracked within
    budget at 8 m/s in the pure model); gains on the bench. Live: bench ×2 and
    `town01_simulator_autopilot`.
 5. [ ] **E.** NPC collision sensors, the contact lines, the oracle's NPC-vs-static G2; cost
@@ -109,6 +118,55 @@ stays as `scenarios/gap/` reproducer of A (the shoulder start is what makes it o
   (E's sensors included, or E opt-in).
 
 ### Results
+
+**2026-10-13, step 4 -- B done: bench G3 73 -> 2 per run (both SSv2 corners beyond
+tyre grip), `npc_route`'s corner G3 gone, no new fallback.** **Diagnosis**, from step 2's bench
+traces replaying the command law on SSv2's recorded targets (`s032_4/diag.py`, `summ.py`,
+`replay.py`): of the four candidates, (d) **the force bound** decides the cross-track error --
+in 71 of the 73 windows the bound binds on 55-100 % of the frames, the corners need 5.4-18.8
+m/s2 of centripetal change (`npc_09` 76-84: R 7.0 m, 9.4 m/s2) against the 10 m/s2 bound
+(declared 5/8 + 2), the body follows the bounded command to 0.03 m/s, and so drifts outside
+by 0.036 m a frame to the 0.5 m snap; a closed-loop replay of the position law (body = the
+bounded command, as measured) reproduces it (corner frames p95 0.325 m, max 0.56, 21 snaps)
+and with the turn fed forward drops it to p95 0.020 / max 0.112, 0 snaps. (b) **the steer**
+decides the yaw: a set angular velocity is undone by the tyres within the tick -- `npc_11`
+306-367 on a straight held 2.37° for 60 frames, commanded -4.7 deg/s and turning 0.0 (so 024's
+"decays at the yaw gain" was not a decay at all), `npc_14` 970-994 commanded +5 and turned -1
+-- and the steer fed forward only SSv2's rate, at which the body turns at 0.98 of the kinematic
+rate (`npc_09`, -64.5 against -65.6 deg/s), so the yaw fell behind for good. (a) is not it:
+SSv2's twist already carries the lateral component and the body holds the commanded velocity
+to 0.03 m/s; (c) is 0.01 m: `s* = p* - v*dt` sits off the arc by (v dt)^2/2R. **Fix**
+(departs from design B's text, updated above): `turned` / `bounded_command` (the bound
+measured from the body's velocity rotated by SSv2's yaw rate x dt; speed never added, so a
+held body still pushes with at most the bound), `command` steers from the commanded yaw rate,
+`VEHICLE_GAINS.yaw` 2 -> 4/s (pure model at 0.95 understeer, 8 m/s on 6/7/10/20 m: max yaw
+1.12/0.94/0.63/0.31° at 4/s; at 6 m 2.01° at 2/s, 1.46 at 3, 0.90 at 5, 0.57 at 8; xy 0.039
+m at 6 m whatever the yaw gain). Tests first (3 new: a constant-radius corner tracked within 0.2 m / 2° at 8 m/s
+on 6-20 m in the pure model -- as built 0.22 m and 4.6-4.8°; the turn not charged to the
+bound, straight unchanged; a yaw error steered out), 282 Rust passed / 1 skipped, 151 pytest,
+`just check` clean. **Live** (simulation side traced, one ego stack via the relay, Town01,
+`run_suite --physical-verdict`, bridge log `play_log/bridge/2026-10-13_23-31-58`): bench ×2
+PASS 2/2 each, 1202 frames, oracle G1 0 G2 0 **G3 2** (73 at step 2) info 20, G4 agree, both
+runs identical; the two are `npc_07` 254-256 (0.233 m, 1.77°) and `npc_09` 961-965 (0.253 m,
+1.89°), each at SSv2's tightest point -- R 3.9-4.1 m at 8.5 m/s, 17.6 / 18.8 m/s2, 1.8-1.9 g --
+where the body's velocity turns ~60 % of the commanded rotation per tick (the tyres' grip,
+not the bound: the command is unbounded there) and runs 0.15-0.25 m wide; a real car would
+too. Bench-wide, every tracked NPC frame from 10 on: xy p95/p99 0.221/0.428 -> **0.059/0.103
+m**, yaw p95/p99 1.55/2.24 -> **0.66/1.11°**, frames over 0.2 m 1262 -> 12, over 2° 392 -> 0.
+The 20 info are `spawn` at frame 2 (0.29 m, one frame each): step 3's D -- the first tracked
+frame now starts the body at speed while SSv2's first pose is still the spawn pose -- not B.
+`npc_05` hands over to kinematic at frame 27 in both runs as in step 2; no other fallback.
+Bridge processing p95 whole run 1.10 / 0.89 ms (step 2: 0.88 / 0.83); run 1's 1.10 is two
+200-frame windows at 1.60/1.48 with CARLA's tick p95 at 12-13 ms (host load), its other
+windows 0.86-0.97. `town01_simulator_autopilot` PASS, 846 frames, G3 1 info 1 (`read_back`):
+`npc_route`'s corners (024: 450-462 0.28 m, 706-730 0.38 m / 2.1°) are gone -- its worst
+frame after the start 0.086 m, 0.90° -- and the one G3 is 024's row-9 speed step (0 -> 6 m/s
+in a frame, 230-232, 0.655 m, the same number to the micron, 116 frames later than 024's run).
+`town01_rear_contact` PASS, 282 frames, 24 contacts, G1 **1** (ego-`npc_rear` frame 222, the
+contact onset, CARLA geometry, penetration 0.07 m, margin difference 0.1545 against band
+0.1533), G2 0 G3 0, info 3 (1 `lag_band`, 2 `contact_hold` 224-250 1.44 m / 255-265 0.34 m);
+`npc_rear` 0 snaps, 0 fallback, yaw p95 0.45°. The same 1-frame onset edge steps 2 and 3 saw,
+1 mm over the band, on a straight where B changes nothing but the steered yaw; for step 7.
 
 **2026-10-13, step 3 -- C and D done: the walker yaw G3 (174° / 108°) and `Npc1`'s spawn
 G3 are gone; pedestrian G3 2 -> 0, UC-ACC G3 1 -> 0.** `npc_tracking`: `walker_control`
