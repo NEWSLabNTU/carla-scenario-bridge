@@ -548,9 +548,12 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # reload the stack never plans again. A composable can only be reloaded alone when it is
     # a process of its own, which is play_launch's isolated mode (0.15 defaults to observable,
     # one process per container, as ros2 launch). The guide's command carries both.
+    # EGO_PLAY_LAUNCH_ARGS: further play_launch options (e.g. `-c <runtime config>`),
+    # split on whitespace, placed before the launch file.
     exec play_launch launch --web-addr 0.0.0.0:8082 \
         --container-mode isolated --composable-respawn on-crash \
         --log-dir play_log/ego \
+        ${EGO_PLAY_LAUNCH_ARGS:-} \
         acb_launch carla_simulator.launch.xml \
         map_path:="{{map_path}}" \
         vehicle_name:=hero \
