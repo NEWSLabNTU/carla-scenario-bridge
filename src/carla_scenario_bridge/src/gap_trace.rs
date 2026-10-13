@@ -67,6 +67,10 @@ pub enum Record {
         carla_frame: u64,
         sim_time: f64,
         ego_id: u32,
+        /// The tracked NPC whose own sensor saw the contact (roadmap 032 step 5); absent for
+        /// the ego's sensor, so an ego line is written exactly as before.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subject: Option<String>,
         other_id: Option<u32>,
         name: Option<String>,
         other_type: String,
@@ -398,7 +402,8 @@ impl GapTrace {
         }
     }
 
-    /// Contacts `collision_monitor` drained, with the other actor's SSv2 name when known.
+    /// Contacts `collision_monitor` drained, with the other actor's SSv2 name when known:
+    /// the ego's sensor's, and tracked NPCs' own (`subject`, roadmap 032 step 5).
     pub fn contacts(&mut self, events: Vec<(RawCollision, Option<String>)>) {
         if events.is_empty() {
             return;
@@ -420,6 +425,7 @@ impl GapTrace {
                     carla_frame: event.carla_frame,
                     sim_time: event.sim_time.max(0.0),
                     ego_id,
+                    subject: event.subject,
                     other_id: event.other_id,
                     name,
                     other_type: event.other_type,
@@ -674,7 +680,39 @@ mod tests {
                 "static.pole".into()
             },
             impulse: 30.0,
+            subject: None,
         }
+    }
+
+    /// Roadmap 032 step 5: a tracked NPC's own sensor. `subject` names it; a line without
+    /// one is the ego's, written exactly as before.
+    #[test]
+    fn an_npc_sensor_contact_names_its_subject() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(100);
+        let mut t = GapTrace::with_channel(PathBuf::from("/nonexistent"), tx);
+        t.begin_episode(1, "tracked", 0.0);
+        t.entity(header("ego", Kind::Ego, 10));
+        t.entity(header("npc_05", Kind::Vehicle, 11));
+        t.entity(header("npc_09", Kind::Vehicle, 12));
+        let npc = |other: Option<u32>| RawCollision {
+            subject: Some("npc_05".into()),
+            ..hit(25, other)
+        };
+        t.contacts(vec![
+            (npc(None), None),
+            (npc(Some(12)), Some("npc_09".into())),
+            (npc(Some(10)), Some("ego".into())),
+            (hit(25, None), None),
+        ]);
+        let v = lines(&rx);
+        let contacts: Vec<&Value> = v.iter().filter(|l| l["type"] == "contact").collect();
+        assert_eq!(contacts.len(), 4);
+        assert_eq!(contacts[0]["subject"], "npc_05");
+        assert_eq!(contacts[0]["other_kind"], "static");
+        assert_eq!(contacts[0]["ego_id"], 10);
+        assert_eq!(contacts[1]["other_kind"], "vehicle");
+        assert_eq!(contacts[2]["other_kind"], "ego");
+        assert!(contacts[3].get("subject").is_none());
     }
 
     #[test]
@@ -758,6 +796,7 @@ mod tests {
             other_type: "static.pole".into(),
             other_kind: "static",
             impulse: 30.0,
+            subject: None,
         };
         assert_eq!(
             parse(&r),
@@ -935,7 +974,16 @@ mod tests {
                 (id == 10).then_some(([f as f64 + 0.1, 0.0, 0.0, 0.0, 0.0, 0.0], [2.0, 0.0, 0.0]))
             });
         }
-        t.contacts(vec![(hit(4, None), None)]);
+        t.contacts(vec![
+            (hit(4, None), None),
+            (
+                RawCollision {
+                    subject: Some("barrier".into()),
+                    ..hit(4, None)
+                },
+                None,
+            ),
+        ]);
         t.shutdown(std::time::Duration::from_secs(5));
         let path = dir.join("20261011T015319.572Z_2.jsonl");
         assert!(path.exists(), "{} not written", path.display());
@@ -967,7 +1015,8 @@ assert t.frames[2].entities["barrier"].contact_hold
 assert t.frames[3].entities["barrier"].kinematic and not t.frames[2].entities["barrier"].kinematic
 assert t.frames[0].entities["barrier"].carla is None
 assert abs(t.frames[4].entities["ego"].carla.x - 5.1) < 1e-9
-assert len(t.contacts) == 1 and t.contacts[0].other_kind == "static" and t.contacts[0].ego_id == 10
+assert len(t.contacts) == 2 and t.contacts[0].other_kind == "static" and t.contacts[0].ego_id == 10
+assert t.contacts[0].subject is None and t.contacts[1].subject == "barrier"
 assert t.end.frames == 5 and t.end.dropped_frames == 0 and t.end.complete
 print("ok")
 "#;

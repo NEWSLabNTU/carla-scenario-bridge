@@ -79,6 +79,14 @@ npc_motion: tracked
 # Empty = no trace (the default). The ROS parameter / launch arg `gap_trace_dir` overrides it.
 gap_trace_dir: ""
 
+# NPC contact sensors (roadmap 032 step 5): a sensor.other.collision on every tracked NPC
+# vehicle (not walkers), so an NPC's contacts with the static world and other NPCs -- which
+# the ego's sensor cannot see -- reach the gap trace (contact lines with `subject`), the
+# oracle (low-priority G2) and the contact report's `npc_contacts`. Never the ego's
+# `contacts`, so run_suite's carla_contact verdict is unchanged. Needs collision_monitor.
+# Unset = on. The ROS parameter / launch arg `npc_contact_sensors` overrides it.
+# npc_contact_sensors: true
+
 # Telling the sensor bridges before we despawn something.
 #
 # acb attaches sensors to the vehicles this bridge spawns and listens to their streams, so

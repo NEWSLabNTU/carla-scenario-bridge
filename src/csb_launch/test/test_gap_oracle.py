@@ -89,19 +89,20 @@ def frame(n, *states):
     return gt.Frame(frame=n, sim_time=n * 0.05, entities=dict(states))
 
 
-def contact(n, other=None, kind=None, impulse=500.0, ego_id=211):
+def contact(n, other=None, kind=None, impulse=500.0, ego_id=211, subject=None):
+    """A contact the ego's sensor saw, or with `subject` the named NPC's own (032)."""
     if kind == "unknown":
         return gt.Contact(frame=n, carla_frame=1000 + n, sim_time=n * 0.05, ego_id=ego_id,
                           other_id=999, name=None, other_type="vehicle.audi.tt",
-                          other_kind="unknown", impulse=impulse)
+                          other_kind="unknown", impulse=impulse, subject=subject)
     if other is None:
         return gt.Contact(frame=n, carla_frame=1000 + n, sim_time=n * 0.05, ego_id=ego_id,
                           other_id=None, name=None, other_type="static.pole",
-                          other_kind="static", impulse=impulse)
+                          other_kind="static", impulse=impulse, subject=subject)
     h = HEADERS[other]
     return gt.Contact(frame=n, carla_frame=1000 + n, sim_time=n * 0.05, ego_id=ego_id,
                       other_id=h.actor_id, name=other, other_type=h.blueprint,
-                      other_kind=h.kind, impulse=impulse)
+                      other_kind=h.kind, impulse=impulse, subject=subject)
 
 
 def make_trace(names, frames, contacts=(), end=True):
@@ -290,6 +291,86 @@ class G2ContactSsv2CannotSee(unittest.TestCase):
         t = make_trace(["ego", "truck"], self.frames({5}), [contact(8, "truck")])
         self.assertEqual(len(checks(run(t), "G2")), 1)
         self.assertEqual(checks(run(t, contact_window=3), "G2"), [])
+
+
+class G2NpcContacts(unittest.TestCase):
+    """Contacts a tracked NPC's own collision sensor saw (`subject`, roadmap 032 step 5): low
+    priority, as NPC-NPC G1 pairs are, and never a second copy of an ego contact."""
+
+    def npc_frames(self, overlap_frames=(), n=12):
+        # The ego far ahead; the car 4 m behind the truck's origin overlaps the truck's
+        # declared 12 m box (SSv2), 20 m behind it does not. CARLA's Model 3s are 1.8 m clear
+        # at 4 m.
+        return [frame(i, ("ego", state("ego", 100.0)), ("truck", state("truck", 0.0)),
+                      ("car", state("car", -4.0 if i in overlap_frames else -20.0)))
+                for i in range(1, n)]
+
+    def test_an_npc_static_hit_is_a_low_priority_finding(self):
+        t = make_trace(["ego", "truck", "car"], self.npc_frames(),
+                       [contact(5, subject="truck", impulse=4000.0),
+                        contact(6, subject="truck", impulse=900.0)])
+        r = run(t)
+        g2 = checks(r, "G2")
+        self.assertEqual(len(g2), 1)
+        f = g2[0]
+        self.assertEqual((f["priority"], f["entities"], f["frames"], f["count"]),
+                         ("low", ["truck", "static"], [5, 6], 2))
+        self.assertEqual(f["numbers"]["max_impulse"], 4000.0)
+        self.assertEqual(f["numbers"]["other_kind"], "static")
+        self.assertIn("C2:npc_static:carla", r["signature"])
+        self.assertNotIn("C2:static:carla", r["signature"])
+        self.assertEqual((r["counts"]["G2"], r["counts"]["G2_ego"], r["counts"]["G2_npc"]),
+                         (1, 0, 1))
+
+    def test_an_npc_seeing_the_ego_is_not_counted_twice(self):
+        # The ego's sensor and the truck's both report their contact: one G2, the ego's.
+        t = make_trace(["ego", "truck"], [truck_behind(i, gap=20.0) for i in range(1, 12)],
+                       [contact(5, "truck"), contact(5, "ego", subject="truck")])
+        g2 = checks(run(t), "G2")
+        self.assertEqual([(f["priority"], f["entities"]) for f in g2],
+                         [("high", ["ego", "truck"])])
+        # Seen only from the NPC's side (the ego's sensor missed it): still not an NPC
+        # finding -- the ego's contacts are the ego sensor's to report.
+        t = make_trace(["ego", "truck"], [truck_behind(i, gap=20.0) for i in range(1, 12)],
+                       [contact(5, "ego", subject="truck")])
+        self.assertEqual(checks(run(t), "G2"), [])
+
+    def test_both_sides_of_an_npc_pair_are_one_finding(self):
+        t = make_trace(["ego", "truck", "car"], self.npc_frames(),
+                       [contact(5, "car", subject="truck"), contact(5, "truck", subject="car")])
+        g2 = checks(run(t), "G2")
+        self.assertEqual(len(g2), 1)
+        self.assertEqual((g2[0]["priority"], g2[0]["entities"], g2[0]["count"]),
+                         ("low", ["truck", "car"], 2))
+        self.assertIn("C2:npc_pair:carla", run(t)["signature"])
+
+    def test_an_npc_pair_ssv2_saw_overlap_is_silent(self):
+        t = make_trace(["ego", "truck", "car"], self.npc_frames({4}),
+                       [contact(5, "car", subject="truck")])
+        self.assertEqual(checks(run(t), "G2"), [])
+
+    def test_an_npc_pair_contact_counts_as_overlap_in_carla(self):
+        # SSv2's boxes overlap on 1-5, CARLA's bodies are 1.8 m apart; the truck's sensor
+        # recorded the pair at frame 1, so 1-3 agree and only 4-5 are a (low) G1.
+        t = make_trace(["ego", "truck", "car"], self.npc_frames({1, 2, 3, 4, 5}, n=6),
+                       [contact(1, "car", subject="truck")])
+        g1 = checks(run(t), "G1")
+        self.assertEqual([(f["priority"], f["frames"]) for f in g1], [("low", [4, 5])])
+
+    def test_npc_contacts_do_not_decide_the_verdict_class(self):
+        t = make_trace(["ego", "truck", "car"], self.npc_frames(), [contact(5, subject="truck")])
+        self.assertEqual(run(t, go.read_junit(self.junit(PASS)))["g4"]["class"], "agree")
+        self.assertEqual(run(t, go.read_junit(self.junit(FAIL_COLLISION)))["g4"]["class"],
+                         "FAIL(collision)+no-contact")
+
+    def test_the_summary_line_splits_g2(self):
+        t = make_trace(["ego", "truck", "car"], self.npc_frames(), [contact(5, subject="truck")])
+        self.assertIn("G2 1 (0 ego, 1 npc)", go.summary_line("t", run(t)))
+
+    def junit(self, text):
+        p = Path(tempfile.mkdtemp()) / "result.junit.xml"
+        p.write_text(text)
+        return p
 
 
 # --- G3 -----------------------------------------------------------------------------------

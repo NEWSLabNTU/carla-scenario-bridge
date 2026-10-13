@@ -80,7 +80,22 @@ events reach `collision_monitor` (kind of the other actor, impulse) and the gap 
 contact lines, so the oracle can report an NPC-vs-static contact (G2 at low priority, as
 NPC-NPC pairs are). Sensors follow the never-destroy-a-vehicle-with-sensors rule
 (`destroy_with_children`). Its cost -- one sensor per NPC, 20 on the bench -- is measured;
-if it costs more than the frame budget allows, E stays opt-in behind a parameter.
+if it costs more than the frame budget allows, E stays opt-in behind a parameter. As built
+(step 5): parameter `npc_contact_sensors` (config key, ROS param, launch arg, `just run`'s
+`NPC_CONTACT_SENSORS`), default **on** -- within budget. Walkers get none. Each NPC sensor is
+stopped and destroyed by csb (its listener) before its vehicle on every destroy path
+(despawn, teardown at Initialize/shutdown; dropped unspoken when CARLA is unreachable or
+restarted, as the ego's is), and `destroy_with_children` still backs it. An NPC sensor's
+events are kept out of everything that judges the ego: not in the ego's log or the contact
+report's `contacts` (so `physical_verdict`'s `carla_contact` is unchanged) but in a separate
+`npc_contacts` list (`serde(default)`, schema 1), and not in the ego-contact window
+(`touched_within`) that holds a tracked NPC. Trace: the contact line gains optional
+`subject` (the NPC's name; absent = the ego's sensor, schema 1). Oracle: an NPC-side contact
+is G2 priority `low` (signature `C2:npc_static` / `C2:npc_pair`), both NPCs' reports of one
+pair are one finding, an NPC's contact with the ego is left to the ego's sensor (no second
+count, not used in G1), and only the ego's G2 enters G4. Found live: CARLA 0.9.16 reports
+the static world as an actor with id 0 (`static.pole`), not as no actor, so every world hit
+-- the ego's too -- read as `unknown` actor 0; csb now maps id 0 to the static world.
 
 **Bench generator.** `gen_npc_benchmark.py` skips lanelets narrower than ~2.5 m (by CARLA
 lane width at the spawn, not the Lanelet2 tag), and the bench is regenerated. The old bench
@@ -100,7 +115,7 @@ stays as `scenarios/gap/` reproducer of A (the shoulder start is what makes it o
 4. [x] **B.** Curvature feed-forward with tests (a constant-radius target tracked within
    budget at 8 m/s in the pure model); gains on the bench. Live: bench ×2 and
    `town01_simulator_autopilot`.
-5. [ ] **E.** NPC collision sensors, the contact lines, the oracle's NPC-vs-static G2; cost
+5. [x] **E.** NPC collision sensors, the contact lines, the oracle's NPC-vs-static G2; cost
    on the bench with and without.
 6. [ ] **Bench.** Generator skips narrow lanes; regenerated bench; the old one kept as A's
    reproducer.
@@ -118,6 +133,41 @@ stays as `scenarios/gap/` reproducer of A (the shoulder start is what makes it o
   (E's sensors included, or E opt-in).
 
 ### Results
+
+**2026-10-14, step 5 -- E done: `npc_05`'s lamp pole is now a contact line and a low-priority
+G2; NPC sensors on by default (bench processing p95 0.96-1.08 ms with, 0.92 without).**
+`collision_monitor`: `RawCollision.subject`, `attach_npc` / `detach_npc` /
+`detach_all_npcs` / `forget_npc`, NPC events routed to per-NPC logs (INFO), never the ego's
+log or `touched_within`; `actor_or_world` (id 0 = static world). `contact_report`:
+`npc_contacts` (`ReportNpcContact`, flattened, `serde(default)`). `gap_trace`: contact
+`subject` (skipped when `None`). Coordinator: attach after a tracked `Npc` spawn, detach
+before the despawn's `destroy_with_children` and before teardown; forget when CARLA is
+unreachable. `gap_trace.py` (`Contact.subject`, `ego_side`), `gap_oracle` (G2 low for NPC
+side, pair dedupe, NPC-ego skipped in G2 and G1, G4 and `no-contact` on ego contacts only,
+counts `G2_ego` / `G2_npc`, summary `G2 n (a ego, b npc)`), appendix. Tests first: 6 Rust
+(report separation, routing/window, NPC warn line, actor 0, trace `subject`, config) + the
+Python reader in the cross-language test; 9 pytest (reader `subject`, G2 NPC-static / NPC-ego
+no double count / pair dedupe / pair seen by SSv2 / pair contact as CARLA overlap in G1 / G4 /
+summary); 288 Rust passed / 1 skipped, 160 pytest, `just check` clean. **Live** (simulation
+side traced, one ego stack via the relay, Town01, `run_suite --physical-verdict`, bridge log
+`play_log/bridge/2026-10-14_01-37-19`): bench x3 on the final build PASS 2/2 each, 1202
+frames; each has exactly one contact, `{"subject": "npc_05", "other_id": null, "other_type":
+"static.pole", "other_kind": "static", "frame": 25, "impulse": 19167}` -> oracle G2 **low**
+`[npc_05, static]` frame 25, signature `C2:npc_static:carla`; G1 0, G3 2 (step 4's `npc_07` /
+`npc_09` corners) info 20, G4 agree; `npc_05` still hands over to kinematic at 27. A first
+bench on the build before the actor-0 fix saw the same hit as `unknown:0` (hence the fix).
+Mid-run, CARLA held 20 `sensor.other.collision` on the 20 NPCs. `town01_rear_contact` PASS 2/2,
+418 frames, `carla_contact` pass; 46 contact lines = 23 ego-side (`npc_rear`) + 23 NPC-side
+(`npc_rear` -> ego); oracle G1 0 G2 0 G3 0 info 2 -- the NPC side not counted again; contact
+report `contacts` one row (`npc_rear`, 23 events, as before), `npc_contacts` one row
+(`npc_rear` -> `ego`, 23). `town01_pedestrian` PASS 2/2, 2287 frames, oracle all 0; mid-run
+one collision sensor (the ego's): walkers get none. After every scenario CARLA held 0
+collision sensors and 0 vehicles (read-only client, `get_actors(ids)`). **Cost** (bench,
+traced, whole run, ms): sensors off processing p95 0.92 / tick p95 6.91; on 1.01 / 7.20, 0.98
+/ 6.94, 0.96 / 6.84, 1.08 / 6.96 -- +0.04-0.16 ms, inside step 4's 0.89-1.10 and well within
+its +0.5 ms; CARLA's tick unchanged within noise. Spawn frame max 370-405 ms with sensors
+(296 without; step 4 312-641). Egoless scenarios (the bench) write no contact report, so
+their NPC contacts are in the trace only.
 
 **2026-10-13, step 4 -- B done: bench G3 73 -> 2 per run (both SSv2 corners beyond
 tyre grip), `npc_route`'s corner G3 gone, no new fallback.** **Diagnosis**, from step 2's bench

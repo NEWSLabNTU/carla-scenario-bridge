@@ -25,6 +25,17 @@
 //! scenario's JUnit result**. A collision in this table on a run SSv2 passed -- or an empty
 //! table on a run SSv2 failed on `CollisionCondition` -- is the disagreement gap 3 is about.
 //!
+//! # NPC sensors (roadmap 032 step 5)
+//!
+//! With `npc_contact_sensors` on (the default), every tracked NPC vehicle carries a sensor of
+//! its own, so an NPC's contacts with the static world and with other NPCs -- invisible to
+//! the ego's sensor -- reach the gap trace (`subject` on the contact line) and the oracle's
+//! low-priority G2. Their events are kept apart from the ego's everywhere the ego is judged:
+//! not in the ego's log or its report's `contacts` (they go to `npc_contacts`), and not in
+//! the ego-contact window the tracker holds an NPC by (`touched_within`). Each NPC sensor is
+//! stopped and destroyed before its vehicle ([`CollisionMonitor::detach_npc`]), on every path
+//! that destroys one.
+//!
 //! # Threading
 //!
 //! CARLA delivers sensor data on its own thread. The callback does as little as it can:
@@ -32,7 +43,7 @@
 //! every `UpdateFrame`) and queues it. The coordinator drains the queue on its own thread,
 //! where the entity manager can name the other actor, and all logging happens there.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -43,7 +54,9 @@ use carla::sensor::data::CollisionEvent;
 use carla::sensor::SensorDataBase;
 use eyre::{eyre, Result};
 
-use crate::contact_report::{self, ContactReport, ReportContact, ReportGeometry, ReportTracking};
+use crate::contact_report::{
+    self, ContactReport, ReportContact, ReportGeometry, ReportNpcContact, ReportTracking,
+};
 use crate::npc_tracking::TrackingStats;
 
 /// At most one WARN per other actor per this much simulation time. A sustained contact --
@@ -69,6 +82,9 @@ pub struct RawCollision {
     pub other_type: String,
     /// Magnitude of the normal impulse, N·s.
     pub impulse: f64,
+    /// SSv2 name of the tracked NPC whose own sensor saw this (roadmap 032 step 5); `None`
+    /// for the ego's sensor.
+    pub subject: Option<String>,
 }
 
 /// Everything recorded about one other actor over a run.
@@ -141,8 +157,12 @@ impl CollisionLog {
         } else {
             String::new()
         };
+        let who = match &event.subject {
+            None => "ego".to_string(),
+            Some(npc) => format!("NPC '{npc}'"),
+        };
         Some(format!(
-            "CARLA collision: ego hit {} at SSv2 frame {} (CARLA frame {}, t={:.2}s), \
+            "CARLA collision: {who} hit {} at SSv2 frame {} (CARLA frame {}, t={:.2}s), \
              normal impulse {:.1} N·s{tail}. Diagnostic only; SSv2's CollisionCondition \
              is the verdict.",
             describe(event.other_id, contact.name.as_deref(), &contact.other_type),
@@ -259,6 +279,12 @@ pub struct CollisionMonitor {
     /// Every drained event with the other actor's SSv2 name, kept for the gap trace
     /// (roadmap 024) until [`CollisionMonitor::take_traced`]; `None` keeps nothing.
     traced: Option<Vec<(RawCollision, Option<String>)>>,
+    /// Attach a sensor to every tracked NPC vehicle too (`npc_contact_sensors`, roadmap 032).
+    npc_sensors_enabled: bool,
+    /// The NPC sensors, by the NPC's actor id, with the NPC's SSv2 name.
+    npc_sensors: HashMap<u32, (Sensor, String)>,
+    /// What each NPC's sensor saw, by NPC name; never mixed into `log` (the ego's).
+    npc_logs: BTreeMap<String, CollisionLog>,
 }
 
 impl CollisionMonitor {
@@ -287,7 +313,29 @@ impl CollisionMonitor {
             tracking: Default::default(),
             last_contact: Default::default(),
             traced: None,
+            npc_sensors_enabled: false,
+            npc_sensors: HashMap::new(),
+            npc_logs: BTreeMap::new(),
         }
+    }
+
+    /// Give tracked NPC vehicles sensors of their own (`npc_contact_sensors`). Nothing when
+    /// the monitor itself is off.
+    pub fn set_npc_sensors(&mut self, on: bool) {
+        self.npc_sensors_enabled = on && self.enabled;
+        tracing::info!(
+            "NPC contact sensors {} (npc_contact_sensors{})",
+            if self.npc_sensors_enabled {
+                "on"
+            } else {
+                "off"
+            },
+            if on && !self.enabled {
+                ", but the collision monitor is off"
+            } else {
+                ""
+            }
+        );
     }
 
     /// Keep drained events for [`CollisionMonitor::take_traced`] (the gap trace is on).
@@ -323,6 +371,7 @@ impl CollisionMonitor {
         self.geometry.clear();
         self.tracking.clear();
         self.last_contact.clear();
+        self.npc_logs.clear();
         if let Some(traced) = self.traced.as_mut() {
             traced.clear();
         }
@@ -434,7 +483,7 @@ impl CollisionMonitor {
             // A second ego in one run: close the first one's account before the next.
             self.finish_run(|_| None);
         }
-        match self.try_attach(world, ego) {
+        match self.try_attach(world, ego, None) {
             Ok(sensor) => {
                 tracing::info!(
                     "Collision monitor: sensor.other.collision (actor {}) attached to ego \
@@ -453,20 +502,95 @@ impl CollisionMonitor {
         }
     }
 
-    fn try_attach(&self, world: &mut World, ego: &Actor) -> Result<Sensor> {
+    /// Attach a collision sensor to a tracked NPC vehicle (roadmap 032 step 5), when NPC
+    /// sensors are on. Best effort, like the ego's: a failure is logged and the NPC runs
+    /// without one. Pair every call with [`CollisionMonitor::detach_npc`] before the NPC is
+    /// destroyed.
+    pub fn attach_npc(&mut self, world: &mut World, npc: &Actor, name: &str) {
+        if !self.npc_sensors_enabled {
+            return;
+        }
+        // A respawn on a reused id: the old sensor first.
+        self.detach_npc(npc.id());
+        match self.try_attach(world, npc, Some(name.to_string())) {
+            Ok(sensor) => {
+                tracing::debug!(
+                    "Collision sensor (actor {}) attached to NPC '{name}' (actor {})",
+                    sensor.id(),
+                    npc.id()
+                );
+                self.npc_sensors
+                    .insert(npc.id(), (sensor, name.to_string()));
+            }
+            Err(e) => tracing::warn!(
+                "Could not attach a collision sensor to NPC '{name}' (actor {}): {e:#}. Its \
+                 contacts will not be seen.",
+                npc.id()
+            ),
+        }
+    }
+
+    /// Stop and destroy an NPC's sensor, if it has one. Must run **before** the NPC is
+    /// destroyed, for the reason [`CollisionMonitor::finish_run`] gives for the ego's.
+    pub fn detach_npc(&mut self, npc_id: u32) {
+        if let Some((sensor, name)) = self.npc_sensors.remove(&npc_id) {
+            stop_and_destroy(sensor, &format!("NPC '{name}'"));
+        }
+    }
+
+    /// [`CollisionMonitor::detach_npc`] for every NPC: before a teardown.
+    pub fn detach_all_npcs(&mut self) {
+        let ids: Vec<u32> = self.npc_sensors.keys().copied().collect();
+        for id in ids {
+            self.detach_npc(id);
+        }
+    }
+
+    /// Drop an NPC's sensor handle without a word to CARLA (unreachable or restarted; see
+    /// [`CollisionMonitor::abandon`]).
+    pub fn forget_npc(&mut self, npc_id: u32) {
+        if let Some((sensor, _)) = self.npc_sensors.remove(&npc_id) {
+            std::mem::forget(sensor);
+        }
+    }
+
+    /// What NPCs' own sensors saw, in the report's shape, in order of first contact.
+    pub fn npc_report_contacts(&self) -> Vec<ReportNpcContact> {
+        let mut rows: Vec<ReportNpcContact> = self
+            .npc_logs
+            .iter()
+            .flat_map(|(npc, log)| {
+                log.report_contacts()
+                    .into_iter()
+                    .map(move |contact| ReportNpcContact {
+                        npc: npc.clone(),
+                        contact,
+                    })
+            })
+            .collect();
+        rows.sort_by_key(|r| r.contact.first_ssv2_frame);
+        rows
+    }
+
+    fn try_attach(
+        &self,
+        world: &mut World,
+        parent: &Actor,
+        subject: Option<String>,
+    ) -> Result<Sensor> {
         let actor = world
             .actor_builder("sensor.other.collision")
             .map_err(|e| eyre!("find blueprint: {e}"))?
             .spawn_opt(
                 Transform::from_na(&nalgebra::Isometry3::identity()),
-                Some(ego),
+                Some(parent),
                 carla::rpc::AttachmentType::Rigid,
             )
             .map_err(|e| eyre!("spawn: {e}"))?;
         let sensor = match Sensor::try_from(actor) {
             Ok(s) => s,
             Err(actor) => {
-                // Not a sensor after all; do not leave it attached to the ego.
+                // Not a sensor after all; do not leave it attached to its parent.
                 let _ = actor.destroy();
                 return Err(eyre!("spawned actor is not a sensor"));
             }
@@ -487,9 +611,10 @@ impl CollisionMonitor {
                 ssv2_frame: frame.load(Ordering::Relaxed),
                 carla_frame,
                 sim_time,
-                other_id: other.as_ref().map(|a| a.id()),
+                other_id: other.as_ref().and_then(|a| actor_or_world(a.id())),
                 other_type: other.as_ref().map(|a| a.type_id()).unwrap_or_default(),
                 impulse,
+                subject: subject.clone(),
             };
             if let Ok(mut q) = queue.lock() {
                 q.push(raw);
@@ -513,13 +638,25 @@ impl CollisionMonitor {
             Err(_) => return,
         };
         for event in &events {
-            if let Some(id) = event.other_id {
-                let last = self.last_contact.entry(id).or_insert(event.ssv2_frame);
-                *last = (*last).max(event.ssv2_frame);
-            }
             let name = event.other_id.and_then(&mut name_of);
-            if let Some(line) = self.log.record(event, name.as_deref()) {
-                tracing::warn!("{line}");
+            match &event.subject {
+                None => {
+                    if let Some(id) = event.other_id {
+                        let last = self.last_contact.entry(id).or_insert(event.ssv2_frame);
+                        *last = (*last).max(event.ssv2_frame);
+                    }
+                    if let Some(line) = self.log.record(event, name.as_deref()) {
+                        tracing::warn!("{line}");
+                    }
+                }
+                // An NPC's own sensor: its log, at INFO -- an NPC on a curb is not the ego's
+                // news -- and never the ego-contact window.
+                Some(npc) => {
+                    let log = self.npc_logs.entry(npc.clone()).or_default();
+                    if let Some(line) = log.record(event, name.as_deref()) {
+                        tracing::info!("{line}");
+                    }
+                }
             }
             if let Some(traced) = self.traced.as_mut() {
                 traced.push((event.clone(), name));
@@ -531,6 +668,9 @@ impl CollisionMonitor {
     /// restarted), so stopping or destroying it would only wait on a dead connection.
     /// What it recorded is still logged.
     pub fn abandon(&mut self) {
+        for (_, (sensor, _)) in self.npc_sensors.drain() {
+            std::mem::forget(sensor);
+        }
         if let Some((sensor, ego_name)) = self.attached.take() {
             // Leaked, not dropped: LibCarla's ServerSideSensor destructor stops a listening
             // sensor, which is an RPC to the dead server (and an exception thrown from a
@@ -543,6 +683,7 @@ impl CollisionMonitor {
             );
             self.write_report(&ego_name, false);
             self.log = CollisionLog::default();
+            self.npc_logs.clear();
         }
     }
 
@@ -562,24 +703,31 @@ impl CollisionMonitor {
         let Some((sensor, ego_name)) = self.attached.take() else {
             return;
         };
-        let sensor_id = sensor.id();
-        if let Err(e) = sensor.stop() {
-            tracing::debug!("Collision sensor {sensor_id} stop failed (already gone?): {e}");
-        }
-        match sensor.destroy() {
-            Ok(_) => tracing::debug!("Collision sensor {sensor_id} destroyed"),
-            Err(e) => tracing::debug!(
-                "Collision sensor {sensor_id} destroy failed ({e}); the ego's \
-                 destroy_with_children will take it"
-            ),
-        }
+        stop_and_destroy(sensor, "the ego");
 
         // Anything the callback queued before the stop.
         self.drain(name_of);
         tracing::info!("{}", self.log.summary(&ego_name));
+        self.log_npc_contacts();
         self.log_tracking();
         self.write_report(&ego_name, true);
         self.log = CollisionLog::default();
+        self.npc_logs.clear();
+    }
+
+    /// One line per NPC that touched anything, while the ego lived.
+    fn log_npc_contacts(&self) {
+        for row in self.npc_report_contacts() {
+            let c = &row.contact;
+            tracing::info!(
+                "NPC '{}' contacts: {} from SSv2 frame {}, {} event(s), max impulse {:.1} N·s",
+                row.npc,
+                describe(c.other_id, c.name.as_deref(), &c.other_type),
+                c.first_ssv2_frame,
+                c.count,
+                c.max_impulse
+            );
+        }
     }
 
     /// Hand the run's record to the report writer thread, if reports are on.
@@ -597,8 +745,34 @@ impl CollisionMonitor {
             contacts: self.log.report_contacts(),
             geometry: self.geometry.clone(),
             tracking: self.tracking_rows(),
+            npc_contacts: self.npc_report_contacts(),
         };
         contact_report::write_in_background(dir, report);
+    }
+}
+
+/// The other actor's id as the log keys it: `None` for the static world. CARLA 0.9.16 hands
+/// the world back as an actor with id 0 (`static.pole`, `static.building`, ...), not as no
+/// actor -- measured on the bench's `npc_05` lamp pole (roadmap 032 step 5) -- so without
+/// this a world hit reads as an unknown actor 0. Spawned props have real ids.
+fn actor_or_world(id: u32) -> Option<u32> {
+    (id != 0).then_some(id)
+}
+
+/// Stop a sensor this client listens to, then destroy it: in that order, or CARLA 0.9.16
+/// floods the stream with `Invalid session` and can segfault (acb `docs/issues/015`). A
+/// failure is only logged: its parent's `destroy_with_children` takes whatever is left.
+fn stop_and_destroy(sensor: Sensor, on: &str) {
+    let sensor_id = sensor.id();
+    if let Err(e) = sensor.stop() {
+        tracing::debug!("Collision sensor {sensor_id} on {on}: stop failed (already gone?): {e}");
+    }
+    match sensor.destroy() {
+        Ok(_) => tracing::debug!("Collision sensor {sensor_id} on {on} destroyed"),
+        Err(e) => tracing::debug!(
+            "Collision sensor {sensor_id} on {on}: destroy failed ({e}); its parent's \
+             destroy_with_children will take it"
+        ),
     }
 }
 
@@ -614,7 +788,92 @@ mod tests {
             other_id: other,
             other_type: "vehicle.tesla.model3".into(),
             impulse,
+            subject: None,
         }
+    }
+
+    /// The same event as an NPC's own sensor saw it (roadmap 032 step 5).
+    fn npc_hit(npc: &str, frame: u64, other: Option<u32>, impulse: f64) -> RawCollision {
+        RawCollision {
+            subject: Some(npc.into()),
+            ..hit(frame, 0.05 * frame as f64, other, impulse)
+        }
+    }
+
+    #[test]
+    fn actor_zero_is_the_static_world() {
+        assert_eq!(actor_or_world(0), None);
+        assert_eq!(actor_or_world(233), Some(233));
+    }
+
+    #[test]
+    fn an_npc_warning_names_the_npc_not_the_ego() {
+        let mut log = CollisionLog::default();
+        let line = log
+            .record(&npc_hit("npc_05", 25, None, 4100.0), None)
+            .unwrap();
+        assert!(line.contains("NPC 'npc_05' hit static world"), "{line}");
+        assert!(!line.contains("ego hit"), "{line}");
+    }
+
+    /// NPC sensors feed neither the ego's report nor the ego-contact window the tracker
+    /// holds NPCs by; they get their own list, by NPC.
+    #[test]
+    fn npc_events_stay_out_of_the_ego_report_and_the_contact_window() {
+        let mut m = CollisionMonitor::new(false, None);
+        m.keep_for_trace();
+        m.frame.store(30, Ordering::Relaxed);
+        {
+            let mut q = m.queue.lock().unwrap();
+            q.push(hit(28, 1.4, Some(7), 50.0)); // ego - npc_rear
+            q.push(npc_hit("npc_rear", 28, Some(1), 50.0)); // npc_rear - ego
+            q.push(npc_hit("npc_05", 25, None, 4100.0)); // npc_05 - lamp pole
+            q.push(npc_hit("npc_05", 26, None, 900.0));
+            q.push(npc_hit("npc_05", 29, Some(9), 10.0)); // npc_05 - npc_09
+        }
+        m.drain(|id| match id {
+            1 => Some("ego".into()),
+            7 => Some("npc_rear".into()),
+            9 => Some("npc_09".into()),
+            _ => None,
+        });
+        let ego = m.log.report_contacts();
+        assert_eq!(ego.len(), 1);
+        assert_eq!(ego[0].name.as_deref(), Some("npc_rear"));
+        assert!(m.touched_within(7, 5));
+        // npc_05's contact with npc_09 is not the ego touching npc_09.
+        assert!(!m.touched_within(9, 5));
+        assert!(!m.touched_within(1, 5));
+
+        let npc = m.npc_report_contacts();
+        let rows: Vec<(&str, Option<&str>, bool, u64, u64)> = npc
+            .iter()
+            .map(|r| {
+                (
+                    r.npc.as_str(),
+                    r.contact.name.as_deref(),
+                    r.contact.is_static,
+                    r.contact.first_ssv2_frame,
+                    r.contact.count,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("npc_05", None, true, 25, 2),
+                ("npc_rear", Some("ego"), false, 28, 1),
+                ("npc_05", Some("npc_09"), false, 29, 1),
+            ]
+        );
+        // The trace gets every event, the subject kept.
+        let traced = m.take_traced();
+        assert_eq!(traced.len(), 5);
+        assert_eq!(traced[2].0.subject.as_deref(), Some("npc_05"));
+        assert_eq!(traced[0].0.subject, None);
+        // A new episode forgets them.
+        m.begin_episode();
+        assert!(m.npc_report_contacts().is_empty());
     }
 
     #[test]

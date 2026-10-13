@@ -25,7 +25,11 @@ poses, the 2D check `CollisionCondition` makes, with its height gate) and CARLA'
       of a contact both worlds saw land there.
   G2  a CARLA contact with no SSv2 overlap of the same pair within +-N frames
       (--contact-window, 2); every static-world hit and every hit on a CARLA actor that is
-      no SSv2 entity. Contacts of one pair close in time are one finding.
+      no SSv2 entity. Contacts of one pair close in time are one finding. Contacts a tracked
+      NPC's own sensor saw (the trace's `subject`, roadmap 032): the same rules, priority
+      "low" as NPC-NPC G1 pairs are -- an NPC-vs-static hit, an NPC pair SSv2 never saw
+      touch (both NPCs' reports one finding); an NPC's contact with the ego is left to the
+      ego's sensor, never counted twice. Only the ego's G2 enters G4.
   G3  pose divergence of a non-ego entity: CARLA's transform against SSv2's pose moved by
       the entity's OriginOffset, beyond --pos (0.2 m) or --yaw-deg (2) in plane or --z
       (0.5 m) for --sustain (3) consecutive frames. z compares box bottoms (where each world
@@ -283,9 +287,14 @@ def analyze(trace, tol=None, junit=None):
     contact_frames = {}  # frozenset({ego, other}) -> frames with a recorded contact
     for c in trace.contacts:
         other = c.name if c.name in kinds else None
-        ego = ego_by_id.get(c.ego_id) or (egos[0] if egos else None)
-        if other is not None and ego is not None:
-            contact_frames.setdefault(frozenset((ego, other)), set()).add(c.frame)
+        # The sensor's side: the ego's, or a tracked NPC's own (032 step 5).
+        side = c.subject if c.subject in kinds else (
+            ego_by_id.get(c.ego_id) or (egos[0] if egos else None))
+        # An NPC's report of the ego is the ego sensor's to make: ego pairs judge as before.
+        if not c.ego_side and other in egos:
+            continue
+        if other is not None and side is not None and other != side:
+            contact_frames.setdefault(frozenset((side, other)), set()).add(c.frame)
     w = tol.contact_window
     read_back = read_back_entities(trace, kinds)
 
@@ -339,7 +348,7 @@ def analyze(trace, tol=None, junit=None):
     g1, g1_info = _g1(pairs, egos, kinds)
     findings += g1
     info += g1_info
-    findings += _g2(trace, egos, kinds, ssv2_overlap, tol)
+    findings += _g2(trace, egos, kinds, order, ssv2_overlap, tol)
     g3, g3_info = _g3_findings(g3_rows, kinds, tol)
     findings += g3
     info += g3_info
@@ -355,7 +364,11 @@ def analyze(trace, tol=None, junit=None):
             cls = f["other_kind"] if f["priority"] == "high" else "npc_pair"
             signature.add(f"C1:{cls}:{f['geometry']}")
         elif f["check"] == "G2":
-            signature.add(f"C2:{f['numbers']['other_kind']}:carla")
+            kind = f["numbers"]["other_kind"]
+            if f["priority"] != "high":
+                kind = "npc_static" if kind == "static" else (
+                    "npc_unknown" if kind == "unknown" else "npc_pair")
+            signature.add(f"C2:{kind}:carla")
         elif f["check"] == "G3":
             signature.add(f"C3:{kinds[f['entities'][0]]}:pose")
     if g4["class"] not in ("agree", "unknown"):
@@ -366,6 +379,8 @@ def analyze(trace, tol=None, junit=None):
         "G1_ego": sum(f["check"] == "G1" and f["priority"] == "high" for f in findings),
         "G1_npc": sum(f["check"] == "G1" and f["priority"] == "low" for f in findings),
         "G2": sum(f["check"] == "G2" for f in findings),
+        "G2_ego": sum(f["check"] == "G2" and f["priority"] == "high" for f in findings),
+        "G2_npc": sum(f["check"] == "G2" and f["priority"] == "low" for f in findings),
         "G3": sum(f["check"] == "G3" for f in findings),
         "info": len(info),
     }
@@ -443,15 +458,20 @@ def _g1(pairs, egos, kinds):
     return out, info
 
 
-def _g2(trace, egos, kinds, ssv2_overlap, tol):
+def _g2(trace, egos, kinds, order, ssv2_overlap, tol):
     ego_by_id, name_by_id = {}, {}
     for h in trace.headers:
         name_by_id[h.actor_id] = h.name
         if h.kind == "ego":
             ego_by_id[h.actor_id] = h.name
-    unseen = {}  # (ego, label) -> [contact]
+    unseen = {}  # (side, label) -> [contact]; a pair of two NPCs keyed in header order
     for c in sorted(trace.contacts, key=lambda c: (c.frame, c.carla_frame)):
         ego = ego_by_id.get(c.ego_id) or (egos[0] if egos else "ego")
+        # A tracked NPC's own sensor (032 step 5). Its contacts with the ego are the ego
+        # sensor's to report -- the same contact, seen twice -- so they are not counted here.
+        side = c.subject if not c.ego_side else ego
+        if not c.ego_side and (c.other_kind == "ego" or c.name in egos):
+            continue
         if c.other_kind == "static":
             label = "static"
         else:
@@ -460,13 +480,16 @@ def _g2(trace, egos, kinds, ssv2_overlap, tol):
                 label = f"unknown:{c.other_id}"
             else:
                 label = other
-                seen = ssv2_overlap.get(frozenset((ego, other)), set())
+                seen = ssv2_overlap.get(frozenset((side, other)), set())
                 w = tol.contact_window
                 if any(c.frame + k in seen for k in range(-w, w + 1)):
                     continue
-        unseen.setdefault((ego, label), []).append(c)
+                if not c.ego_side:
+                    # Both NPCs' sensors report one contact: one pair, one finding.
+                    side, label = sorted((side, label), key=lambda n: order.get(n, len(order)))
+        unseen.setdefault((side, label), []).append(c)
     out = []
-    for (ego, label), cs in unseen.items():
+    for (side, label), cs in unseen.items():
         groups = []
         for c in cs:
             if groups and c.frame - groups[-1][-1].frame <= max(1, 2 * tol.contact_window):
@@ -475,13 +498,13 @@ def _g2(trace, egos, kinds, ssv2_overlap, tol):
                 groups.append([c])
         for g in groups:
             out.append(_finding(
-                "G2", [ego, label], [c.frame for c in g], len(g),
+                "G2", [side, label], [c.frame for c in g], len(g),
                 {"max_impulse": _r(max(c.impulse for c in g)), "other_kind": g[0].other_kind,
                  "other_type": g[0].other_type, "other_id": g[0].other_id,
                  "carla_frames": [g[0].carla_frame, g[-1].carla_frame],
                  "sim_time": [_r(g[0].sim_time), _r(g[-1].sim_time)]},
-                priority="high"))
-    out.sort(key=lambda f: f["frames"][0])
+                priority="high" if g[0].ego_side else "low"))
+    out.sort(key=lambda f: (f["priority"] != "high", f["frames"][0]))
     return out
 
 
@@ -556,7 +579,8 @@ def _g4(findings, trace, junit):
     ego_g1 = [f for f in findings if f["check"] == "G1" and f["priority"] == "high"]
     ssv2_only = any(f["geometry"] == "ssv2" for f in ego_g1)
     carla_only = any(f["geometry"] == "carla" for f in ego_g1)
-    g2 = any(f["check"] == "G2" for f in findings)
+    # The ego's contacts only: an NPC's own (032 step 5) say nothing about the ego's verdict.
+    g2 = any(f["check"] == "G2" and f["priority"] == "high" for f in findings)
     holds = set()
     if verdict == "pass":
         if g2:
@@ -564,7 +588,7 @@ def _g4(findings, trace, junit):
         if carla_only:
             holds.add("PASS+overlap-only-in-CARLA")
     elif verdict == "fail_collision":
-        if not trace.contacts:
+        if not any(c.ego_side for c in trace.contacts):
             holds.add("FAIL(collision)+no-contact")
         if ssv2_only:
             holds.add("FAIL(collision)+overlap-only-in-SSv2")
@@ -586,7 +610,8 @@ def summary_line(name, result):
     diff_text = "n/a" if diff is None else f"{diff:+.2f} m"
     sig = ",".join(result["signature"]) or "-"
     flags = "" if result["complete"] else " INCOMPLETE"
-    return (f"{name}: G1 {c['G1']} ({c['G1_ego']} ego, {c['G1_npc']} npc) G2 {c['G2']} "
+    return (f"{name}: G1 {c['G1']} ({c['G1_ego']} ego, {c['G1_npc']} npc) "
+            f"G2 {c['G2']} ({c['G2_ego']} ego, {c['G2_npc']} npc) "
             f"G3 {c['G3']} info {c['info']} | G4 {g4} ({verdict}) | "
             f"min d_ssv2-d_carla {diff_text} | {result['frames']} frames, "
             f"{result['contacts']} contacts{flags} | signature {sig}")

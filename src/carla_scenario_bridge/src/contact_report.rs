@@ -43,6 +43,18 @@ pub struct ReportContact {
     pub max_impulse: f64,
 }
 
+/// One other actor (or the static world) a tracked NPC's own collision sensor saw it touch
+/// (roadmap 032 step 5). The ego's report keeps these apart from `contacts`: they are not
+/// the ego's, and `physical_verdict` judges the ego by `contacts` alone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportNpcContact {
+    /// SSv2 name of the NPC whose sensor saw the contact.
+    pub npc: String,
+    /// The other side, in the shape of an ego contact.
+    #[serde(flatten)]
+    pub contact: ReportContact,
+}
+
 /// One entity's body against the box its scenario declared (roadmap 022).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReportGeometry {
@@ -110,6 +122,11 @@ pub struct ContactReport {
     /// under the same schema; empty under `kinematic`.
     #[serde(default)]
     pub tracking: Vec<ReportTracking>,
+    /// What tracked NPCs' own collision sensors saw while the ego lived (roadmap 032 step
+    /// 5; `npc_contact_sensors`), by NPC in order of first contact. Added under the same
+    /// schema; a reader that does not know it ignores it, so the ego's verdict is unchanged.
+    #[serde(default)]
+    pub npc_contacts: Vec<ReportNpcContact>,
 }
 
 /// Where reports go, from the config/parameter value: unset is the default directory,
@@ -247,6 +264,7 @@ mod tests {
             contacts,
             geometry: vec![],
             tracking: vec![],
+            npc_contacts: vec![],
         }
     }
 
@@ -310,6 +328,38 @@ mod tests {
         assert_eq!(json["contacts"][0]["type"], "vehicle.tesla.model3");
         assert_eq!(json["contacts"][1]["static"], true);
         assert!(json["contacts"][1]["other_id"].is_null());
+        let back: ContactReport = serde_json::from_value(json).unwrap();
+        assert_eq!(back, r);
+    }
+
+    /// Roadmap 032 step 5: what tracked NPCs' own sensors saw is a list of its own, so
+    /// `physical_verdict`, which reads `contacts`, judges the ego's contacts and nothing else.
+    #[test]
+    fn npc_contacts_are_a_separate_optional_list() {
+        let old = r#"{"schema":1,"episode":1,"ego":"ego","start_unix":1.0,"end_unix":2.0,
+                      "complete":true,"contacts":[]}"#;
+        let back: ContactReport = serde_json::from_str(old).unwrap();
+        assert!(back.npc_contacts.is_empty());
+        let mut r = report(1.0, 1, vec![]);
+        r.npc_contacts.push(ReportNpcContact {
+            npc: "npc_05".into(),
+            contact: ReportContact {
+                other_id: None,
+                name: None,
+                other_type: "static.pole".into(),
+                is_static: true,
+                first_ssv2_frame: 25,
+                first_sim_time: 1.25,
+                count: 3,
+                max_impulse: 4100.0,
+            },
+        });
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["contacts"], serde_json::json!([]));
+        // Flat: the NPC's name beside the same fields an ego contact has.
+        assert_eq!(json["npc_contacts"][0]["npc"], "npc_05");
+        assert_eq!(json["npc_contacts"][0]["static"], true);
+        assert_eq!(json["npc_contacts"][0]["type"], "static.pole");
         let back: ContactReport = serde_json::from_value(json).unwrap();
         assert_eq!(back, r);
     }

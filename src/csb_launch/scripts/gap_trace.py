@@ -130,6 +130,14 @@ class Contact:
     other_type: str
     other_kind: str
     impulse: float  # N*s
+    # SSv2 name of the tracked NPC whose own collision sensor saw this contact; None for the
+    # ego's sensor. Added under schema 1 (roadmap 032 step 5): absent in older traces.
+    subject: object = None
+
+    @property
+    def ego_side(self):
+        """Seen by the ego's sensor (the contacts 021's report and G4 are about)."""
+        return self.subject is None
 
 
 @dataclass(frozen=True)
@@ -328,6 +336,11 @@ def _contact(ln):
     name = ln.get(o, "name", "name")
     if name is not None:
         name = ln.string(name, "name")
+    subject = o.get("subject")
+    if subject is not None:
+        subject = ln.string(subject, "subject")
+        if not subject:
+            raise ln.error("subject", "empty")
     return Contact(
         frame=ln.int_(o, "frame", minimum=0),
         carla_frame=ln.int_(o, "carla_frame", minimum=0),
@@ -338,6 +351,7 @@ def _contact(ln):
         other_type=ln.str_(o, "other_type"),
         other_kind=kind,
         impulse=ln.num(o, "impulse", minimum=0.0),
+        subject=subject,
     )
 
 
@@ -498,7 +512,7 @@ def to_json(record):
             "other_type": record.other_type,
             "other_kind": record.other_kind,
             "impulse": record.impulse,
-        }
+        } | ({} if record.subject is None else {"subject": record.subject})
     if isinstance(record, End):
         return {
             "type": "end",

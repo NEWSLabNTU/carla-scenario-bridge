@@ -185,6 +185,18 @@ class ValidTrace(unittest.TestCase):
         self.assertFalse(trace.frames[1].entities["ego"].kinematic)
         self.assertEqual(gt.load_trace(gt.dumps(trace).splitlines()), trace)
 
+    def test_subject_marks_a_contact_an_npc_sensor_saw(self):
+        # Roadmap 032 step 5: a tracked NPC's own collision sensor. Added under schema 1 --
+        # a line without `subject` is the ego's (SAMPLE has none), and writes back without it.
+        trace = gt.load_trace(mutate(7, lambda r: r.update(subject="truck")))
+        self.assertEqual(trace.contacts[1].subject, "truck")
+        self.assertIsNone(trace.contacts[0].subject)
+        self.assertEqual(gt.load_trace(gt.dumps(trace).splitlines()), trace)
+        self.assertNotIn("subject", gt.to_json(trace.contacts[0]))
+        # null reads as absent.
+        trace = gt.load_trace(mutate(7, lambda r: r.update(subject=None)))
+        self.assertIsNone(trace.contacts[1].subject)
+
     def test_omitted_flags_are_empty(self):
         trace = gt.load_trace(lines(SAMPLE))
         self.assertEqual(trace.frames[1].entities["ego"].flags, ())
@@ -325,6 +337,10 @@ class MalformedTrace(unittest.TestCase):
 
     def test_static_contact_with_actor_id(self):
         self.assertTraceError(mutate(7, lambda r: r.update(other_id=99)), 8, "other_id")
+
+    def test_subject_must_be_a_name(self):
+        self.assertTraceError(mutate(7, lambda r: r.update(subject=5)), 8, "subject")
+        self.assertTraceError(mutate(7, lambda r: r.update(subject="")), 8, "subject")
 
     def test_negative_impulse(self):
         self.assertTraceError(mutate(6, lambda r: r.update(impulse=-1.0)), 7, "impulse")

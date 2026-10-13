@@ -998,6 +998,7 @@ impl Coordinator {
         if gap_trace.is_on() {
             collision_monitor.keep_for_trace();
         }
+        collision_monitor.set_npc_sensors(config.npc_contact_sensors_enabled());
         Self {
             map_aliases: config.map_alias.clone(),
             config,
@@ -1480,8 +1481,10 @@ impl Coordinator {
             return TeardownReport::default();
         }
 
-        // Our own collision sensor goes before the ego it is attached to, and its run's
-        // summary is logged while the entity names can still be resolved.
+        // Our own collision sensors go before the vehicles they are attached to -- the NPCs'
+        // (032 step 5), then the ego's -- and the run's summary is logged while the entity
+        // names can still be resolved.
+        self.collision_monitor.detach_all_npcs();
         self.finish_collision_monitor();
 
         // The ledger drives the loop; the world only supplies the destroyer. Split this way
@@ -3302,6 +3305,11 @@ impl Coordinator {
             self.has_ego = true;
             self.collision_monitor.attach(&mut self.world, &actor, name);
             self.warm_up_localization(actor_id);
+        } else if tracked && kind == SpawnKind::Npc {
+            // Its own contacts -- the static world, other NPCs -- which the ego's sensor
+            // cannot see (roadmap 032 step 5). Detached before every destroy of the NPC.
+            self.collision_monitor
+                .attach_npc(&mut self.world, &actor, name);
         }
 
         tracing::info!(
@@ -3620,6 +3628,7 @@ impl Coordinator {
             }
             return match self.entities.remove(name) {
                 Some(actor_id) => {
+                    self.collision_monitor.forget_npc(actor_id);
                     tracing::warn!(
                         "Despawn '{name}' (actor {actor_id}): CARLA unreachable; left to the \
                          next teardown or the reaper"
@@ -3641,6 +3650,9 @@ impl Coordinator {
 
         match self.entities.remove(name) {
             Some(actor_id) => {
+                // An NPC's own collision sensor (032 step 5): stopped and destroyed by this
+                // client, its listener, before the vehicle goes.
+                self.collision_monitor.detach_npc(actor_id);
                 let started = Instant::now();
                 // Report failure when the actor could not be destroyed. This used to warn
                 // and return success regardless, so SSv2 believed an entity was gone while

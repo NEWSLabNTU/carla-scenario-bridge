@@ -180,6 +180,11 @@ pub struct BridgeConfig {
     /// unset = `$ROS_HOME/csb/contacts`, `off` = no reports, else that directory. Read it
     /// through [`BridgeConfig::contact_report_dir`].
     pub contact_report_dir: Option<String>,
+    /// Give every tracked NPC vehicle a collision sensor of its own, so its contacts with
+    /// the static world and other NPCs reach the gap trace and the oracle (roadmap 032 step
+    /// 5). Diagnostic only, like the ego's. Unset means on -- read it through
+    /// [`BridgeConfig::npc_contact_sensors_enabled`]. Needs `collision_monitor`.
+    pub npc_contact_sensors: Option<bool>,
     /// Traffic Manager for simulator-driven entities.
     pub traffic_manager: TrafficManagerConfig,
     /// The agent relay that entities with controller `agent` are driven through
@@ -294,7 +299,8 @@ impl BridgeConfig {
     }
 
     /// Apply ROS parameters (`carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
-    /// `reconnect_wait_seconds`, `weather`, `npc_motion`, `gap_trace_dir`, `contact_report_dir`) over the file and the environment: a launch file's explicit
+    /// `reconnect_wait_seconds`, `weather`, `npc_motion`, `gap_trace_dir`, `contact_report_dir`,
+    /// `npc_contact_sensors`) over the file and the environment: a launch file's explicit
     /// value is the most specific statement of intent. A malformed number is an error, not
     /// a silent default.
     pub fn apply_ros_params(&mut self, params: &crate::ros_args::RosParams) -> Result<()> {
@@ -345,6 +351,18 @@ impl BridgeConfig {
             .filter(|v| !v.trim().is_empty())
         {
             self.contact_report_dir = Some(dir.trim().to_string());
+        }
+        if let Some(v) = params
+            .get("npc_contact_sensors")
+            .filter(|v| !v.trim().is_empty())
+        {
+            self.npc_contact_sensors = Some(match v.trim().to_ascii_lowercase().as_str() {
+                "true" | "on" | "1" => true,
+                "false" | "off" | "0" => false,
+                other => {
+                    eyre::bail!("parameter npc_contact_sensors:={other}: expected true or false")
+                }
+            });
         }
         if params.get("background_avs").is_some_and(|v| !v.is_empty()) {
             bail!("{}", REMOVED_BACKGROUND_AVS);
@@ -399,6 +417,13 @@ impl BridgeConfig {
     /// only fires on contact, and the disagreement it exposes is otherwise invisible.
     pub fn collision_monitor_enabled(&self) -> bool {
         self.collision_monitor.unwrap_or(true)
+    }
+
+    /// Whether tracked NPC vehicles get collision sensors (roadmap 032 step 5). Defaults to
+    /// on: one sensor per NPC that fires only on contact, measured within the frame budget
+    /// on the 20-NPC bench.
+    pub fn npc_contact_sensors_enabled(&self) -> bool {
+        self.npc_contact_sensors.unwrap_or(true)
     }
 
     /// The contact-report directory, `None` when reports are off.
@@ -576,6 +601,37 @@ mod tests {
         );
         config.apply_ros_params(&params("/c")).expect("applies");
         assert_eq!(config.gap_trace_dir(), Some(std::path::PathBuf::from("/c")));
+    }
+
+    #[test]
+    fn npc_contact_sensors_default_on_and_take_file_or_parameter() {
+        let params = |v: &str| {
+            crate::ros_args::RosParams::from_args([
+                "--ros-args".to_string(),
+                "-p".to_string(),
+                format!("npc_contact_sensors:={v}"),
+            ])
+            .expect("parses")
+        };
+        let mut config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        assert!(config.npc_contact_sensors_enabled());
+        config.apply_ros_params(&params("")).expect("applies");
+        assert!(config.npc_contact_sensors_enabled());
+        for off in ["false", "off", "0", " False "] {
+            config.apply_ros_params(&params(off)).expect("applies");
+            assert!(!config.npc_contact_sensors_enabled(), "{off}");
+        }
+        for on in ["true", "on", "1"] {
+            config.apply_ros_params(&params(on)).expect("applies");
+            assert!(config.npc_contact_sensors_enabled(), "{on}");
+        }
+        assert!(config.apply_ros_params(&params("maybe")).is_err());
+        let mut config: BridgeConfig =
+            serde_yaml::from_str("npc_contact_sensors: false\n").expect("parses");
+        assert!(!config.npc_contact_sensors_enabled());
+        // An empty parameter keeps the file's.
+        config.apply_ros_params(&params("")).expect("applies");
+        assert!(!config.npc_contact_sensors_enabled());
     }
 
     #[test]

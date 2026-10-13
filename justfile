@@ -356,7 +356,8 @@ run:
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
         ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"} \
         ${WEATHER:+weather:="$WEATHER"} \
-        ${GAP_TRACE_DIR:+gap_trace_dir:="$GAP_TRACE_DIR"}
+        ${GAP_TRACE_DIR:+gap_trace_dir:="$GAP_TRACE_DIR"} \
+        ${NPC_CONTACT_SENSORS:+npc_contact_sensors:="$NPC_CONTACT_SENSORS"}
 
 # Start CARLA simulator as a background service
 carla-start:

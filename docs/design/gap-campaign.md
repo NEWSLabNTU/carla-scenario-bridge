@@ -179,7 +179,9 @@ reader rejects it unless asked not to.
 under the same schema; a reader rejects a schema it does not know, and every unknown
 `type`, `kind` or flag, so a typo does not read as absent data. The `kinematic` flag
 (roadmap 032, 2026-10-13) was added under schema 1: every trace written before it still
-reads, and only a reader older than the flag rejects a trace that carries it.
+reads, and only a reader older than the flag rejects a trace that carries it. The contact
+line's optional `subject` (roadmap 032 step 5, 2026-10-14) was added the same way: absent on
+every ego-sensor line, so traces written before it read unchanged.
 
 | `type` | Field | Type | Meaning |
 |---|---|---|---|
@@ -209,7 +211,8 @@ reads, and only a reader older than the flag rejects a trace that carries it.
 | (one per `collision_monitor` event) | `carla_frame` | int | CARLA frame of the event |
 | | `sim_time` | float | s |
 | | `ego_id` | int | the ego's CARLA actor id |
-| | `other_id` | int \| null | the other actor; null exactly for the static world |
+| | `subject` | string, optional | SSv2 name of the tracked NPC whose own collision sensor saw the contact (`npc_contact_sensors`, 032); absent when the ego's sensor saw it. An NPC's contact with the ego is also on the ego's line; the oracle counts the ego's |
+| | `other_id` | int \| null | the other actor; null exactly for the static world (CARLA 0.9.16 reports it as actor 0; the bridge writes null since 032 step 5 -- earlier traces carry a world hit as `unknown` actor 0) |
 | | `name` | string \| null | SSv2 name of the other actor, when it is an entity |
 | | `other_type` | string | the other actor's CARLA type id (`static.*` for the world), or empty |
 | | `other_kind` | `ego` \| `vehicle` \| `pedestrian` \| `misc_object` \| `static` \| `unknown` | `unknown`: a CARLA actor that is no SSv2 entity |
@@ -233,6 +236,9 @@ Example (one line each; wrapped here):
   "velocity": [4.0, 0.0, 0.0], "flags": ["contact_hold"]}}}
 {"type": "contact", "frame": 1, "carla_frame": 5021, "sim_time": 0.05, "ego_id": 211,
  "other_id": null, "name": null, "other_type": "static.pole", "other_kind": "static", "impulse": 30.0}
+{"type": "contact", "frame": 1, "carla_frame": 5021, "sim_time": 0.05, "ego_id": 211,
+ "subject": "truck", "other_id": null, "name": null, "other_type": "static.pole",
+ "other_kind": "static", "impulse": 4100.0}
 {"type": "end", "frame": 1, "sim_time": 0.05, "frames": 2, "dropped_frames": 0, "complete": true}
 ```
 
