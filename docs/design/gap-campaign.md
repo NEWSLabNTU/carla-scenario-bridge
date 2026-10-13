@@ -202,12 +202,13 @@ every ego-sensor line, so traces written before it read unchanged.
 | | `blueprint_box.extent` | [x, y, z] | half sizes, ≥ 0 |
 | `frame` | `frame` | int | SSv2 frame (`UpdateFrame`) |
 | (one per SSv2 frame) | `sim_time` | float | SSv2 simulation time, s |
+| | `carla_frame` | int, optional | CARLA frame of the snapshot `.carla` was read from -- the frame's last tick (032 N2); a contact belongs to frame *f* when its `carla_frame` is above frame *f*-1's and at most *f*'s. Absent when unknown and in traces before 032 step 8 |
 | | `entities` | object | entity name → state, for every live entity |
 | | `.ssv2` | pose | SSv2's pose of the entity origin: an NPC's intended pose; for the ego, the pose the bridge reported back |
 | | `.carla` | pose \| null | the actor's transform from this frame's world snapshot; null when the actor is missing from it |
 | | `.velocity` | [vx, vy, vz] \| null | the actor's velocity, map frame; null exactly when `.carla` is |
-| | `.flags` | list, optional | `spawn`: the entity's spawn frame (one snap by design); `contact_hold`: a tracked NPC held unsnapped within `CONTACT_HOLD_FRAMES` of an ego contact (023); `kinematic`: a tracked NPC handed to kinematic after a blocked snap (032), from the hand-over frame to the end of the episode -- physics off, at SSv2's pose. All three make G3 divergence *info*, not a finding |
-| `contact` | `frame` | int | SSv2 frame the event was seen in |
+| | `.flags` | list, optional | `spawn`: the entity's spawn frame (one snap by design); `contact_hold`: a tracked NPC held unsnapped within `CONTACT_HOLD_FRAMES` of an ego contact (023), or, since 032 step 8, on a frame it would have snapped with another physics body's box within `PROXIMITY_HOLD_M`; `kinematic`: a tracked NPC handed to kinematic after a blocked snap (032), from the hand-over frame to the end of the episode -- physics off, at SSv2's pose. All three make G3 divergence *info*, not a finding |
+| `contact` | `frame` | int | SSv2 frame of the event: the frame whose tick returned its `carla_frame` (since 032 step 8; before, the frame the bridge was in when the sensor callback ran, up to 4 frames late) |
 | (one per `collision_monitor` event) | `carla_frame` | int | CARLA frame of the event |
 | | `sim_time` | float | s |
 | | `ego_id` | int | the ego's CARLA actor id |

@@ -117,6 +117,9 @@ class Frame:
     frame: int
     sim_time: float
     entities: dict  # name -> EntityState
+    # CARLA frame of the snapshot CARLA's half was read from (the frame's last tick). Added
+    # under schema 1 (roadmap 032 N2): absent in older traces.
+    carla_frame: object = None
 
 
 @dataclass(frozen=True)
@@ -321,7 +324,10 @@ def _frame(ln, known):
         if name not in known:
             raise ln.error(f"entities.{name}", "no entity record declares this name")
         states[name] = _state(ln, name, s)
-    return Frame(frame=frame, sim_time=sim_time, entities=states)
+    carla_frame = o.get("carla_frame")
+    if carla_frame is not None:
+        carla_frame = ln.int_(o, "carla_frame", minimum=0)
+    return Frame(frame=frame, sim_time=sim_time, entities=states, carla_frame=carla_frame)
 
 
 def _contact(ln):
@@ -498,6 +504,7 @@ def to_json(record):
             "type": "frame",
             "frame": record.frame,
             "sim_time": record.sim_time,
+        } | ({} if record.carla_frame is None else {"carla_frame": record.carla_frame}) | {
             "entities": entities,
         }
     if isinstance(record, Contact):

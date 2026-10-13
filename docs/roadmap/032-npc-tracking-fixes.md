@@ -128,6 +128,34 @@ within 1 m of its centre, clear of level obstacles.
    reproducer.
 7. [x] **Re-baseline.** 024's baseline set rerun, traced and judged; the before/after table
    in this doc.
+8. [x] **Follow-ups from the re-baseline: N2, N3, N5** (added 2026-10-14, user). Acceptance
+   was not met; these three are the bridge / oracle defects behind it:
+   - **N2 -- never fall back next to the ego (safety).** A contact is labelled with the
+     counter at the time its callback runs, not the CARLA frame of the event, so in
+     `rear_contact` run 3 the ego contact arrived 4 frames late, step 2's blocked rule saw
+     no ego contact, `npc_rear` went kinematic at frame 269 and drove through the ego (ego
+     14 m/s, z 4.6 m, rolled; SSv2 -44.8 m/s²). Fix: (a) contacts are labelled by the CARLA
+     frame the event carries (`collision_monitor`, the trace's contact lines, `touched_within`
+     on that frame); (b) the blocked rule never hands an NPC to kinematic while its body is
+     within a proximity margin of the ego or of any physics vehicle (box-to-box distance from
+     the frame's snapshot, not only recorded contact) -- near them it holds as in contact;
+     (c) unit tests for both. Live: `rear_contact` ×5 with no fallback, no ego launch, and
+     the contact frames in the trace matching CARLA's.
+   - **N3 -- oracle crash.** `gap_oracle` `_g1` takes `max()` of an empty sequence when the
+     CARLA overlap of an interval comes only from the contact rule (ego airborne); a test on
+     a synthetic trace of that shape, then the fix; re-judge run 3's trace with the real
+     script.
+   - **N5 -- a hung tick.** The bridge hung 12+ min inside the settling `world.tick()` after
+     spawning `npc_autopilot`, right after creating a synchronous Traffic Manager, while
+     CARLA kept answering RPC; a fresh bridge passed. Fix: a watchdog on every
+     `world.tick()` (a bound well above the slowest legitimate tick -- the map-load and
+     spawn ticks measured, named constant) that fails the request with a clear error naming
+     the step and the time waited, so SSv2 gets an error instead of silence and `respawn`
+     can restart the bridge; log what CARLA reports at that moment (frame, sync settings).
+     Live: `town01_simulator_autopilot` and `town01_traffic_light` ×3 each.
+   Not in this step (scenario findings, later): N4 (the shoved ego's near-miss with a lamp
+   pole; ego-stack drift), N6 (motorbike speed step), N7 (`rear_contact`'s declared 4.5 m
+   boxes vs the 4.792 m Model 3).
 
 ## Acceptance
 
@@ -140,6 +168,94 @@ within 1 m of its centre, clear of level obstacles.
   (E's sensors included, or E opt-in).
 
 ### Results
+
+**2026-10-14, step 8 -- N2, N3, N5 done: contacts labelled by CARLA frame, no fallback next to
+a body, `gap_oracle` judges run 3, every tick bounded; `rear_contact` 5/5, `simulator_autopilot`
+3/3, `traffic_light` 3/3 PASS, no hang, no fallback outside the shoulder reproducer.**
+**N2.** (a) `collision_monitor`: every successful tick reports its CARLA frame (`note_tick`,
+settling and warm-up ticks included) into a CARLA frame -> SSv2 frame map (4096 ticks, cleared
+per episode); `drain` relabels each event with the SSv2 frame whose tick returned its
+`carla_frame` (between two noted ticks: the later; outside them: the callback's stamp), so
+the log, the report's `first_ssv2_frame`, the trace's contact lines, `touched_within` and with
+it `contact_hold` all use the event's frame; late events are counted in the run summary.
+`update_entity_status` now drains before tracking too (a contact of the last frame's ticks no
+longer waits for the next `UpdateFrame`). Trace: frame lines gain optional `carla_frame` (the
+snapshot's frame, schema 1: Rust writer, `gap_trace.py`, appendix), which makes the label
+checkable from the trace alone. (b) `body_clearance` (new): the oracle's
+`signed_distance` ported to Rust (separating axes, polygon distance, minus penetration),
+planar with no height gate on purpose (an airborne ego over an NPC is when it matters); every
+physics body csb spawns (ego, tracked NPCs, simulator- and agent-driven) keeps its
+`bounding_box()`; when a tracked NPC's command would snap, its box clearance to every other
+body in the frame's snapshot is measured and below `npc_tracking::PROXIMITY_HOLD_M` **0.5 m**
+it is held as in contact (`held`): no snap, the blocked latch cleared, so no kinematic
+hand-over; the trace's `contact_hold` flag marks that hold too. 0.5 m from the step-7 traces
+(`s032_8/proximity_scan.py`): run 3 handed over 0.163 m from the ego; over every step-7 trace
+no NPC not touching the ego came within 0.5 m of another body (bench x3 included) while at
+0.75 m bench NPCs do (16-20 frames per run); `npc_05` at its pole is 38.6 m from the nearest.
+(c) Tests (written with the code, not run red first): 2 in `npc_tracking` (`held`; the run-3 frame, blocked and 0.9 m off, tracks
+instead of falling back at 0.163 m and falls back at 38.6 m), 5 in `body_clearance`, 2 in
+`collision_monitor` (run 3's late events labelled 265/266/267 with 2 substeps, the 20-frame
+window counted from the true frame; unmapped frames keep the stamp, a new episode forgets the
+map), the trace's `carla_frame` in the Rust writer, the cross-language test and 2 pytest.
+**N3.** `_g1` takes the penetration over the frames that have a margin, `None` (and no deepest
+frame) when none does; test first, a synthetic airborne-ego interval made overlapping by the
+contact rule alone (crashed with `max() arg is an empty sequence` before the fix). Run 3
+re-judged with the installed script: G1 3 (264 CARLA 0.024 m; 266-268 SSv2 0.616 m; 271 CARLA,
+penetration unknown) G2 2 (static 269-270, 300-302) G3 1 (`npc_rear` 266-268) info 1, G4
+unknown (error) -- the patched copy's numbers. **N5.** `tick_watchdog` (new): every
+`world.tick()` -- the frame's substeps, the settling tick after a spawn, the localization
+warm-up -- runs on one long-lived helper thread (`csb-tick`) with the World handle, the ZMQ
+thread waiting at most `TICK_WATCHDOG` **90 s**. LibCarla bounds only `tick_cue` (client
+timeout 30 s) and the frame wait (carla-rust 60 s); neither fired in the 12-min hang, so a
+different `set_timeout` cannot help -- in 0.9.16 a synchronous Traffic Manager steps inside
+`World::Tick` and hands over on a condition variable without a timeout. 90 s: the worst
+`UpdateFrame` tick total over 1137 frame-budget windows of every bridge log since 2026-10-11
+is 1.90 s (p99 of the window maxima 0.69), spawn frames 0.30-0.64 s, map loads are not ticks;
+above carla-rust's 60 s so a timeout LibCarla reports stays the ordinary error and the
+reconnect path; with the 10 s state read it leaves SSv2's 420 s receive timeout room for the
+error. On expiry the request fails with `CARLA's world.tick() in <step> did not return
+(waited <s>, bound 90 s); CARLA snapshot frame <n>, settings: synchronous_mode ..., fixed_delta_seconds
+..., substepping ...; last tick returned CARLA frame ..., Traffic Manager running|not started`
+(the state read on its own thread, 10 s bound), the watchdog is wedged (no further tick from
+this process), the ZMQ server stops after that reply and `main` exits 75 without touching
+CARLA (gap trace closed incomplete), so `respawn` starts a fresh bridge whose `Initialize`
+reaps the actors (`destroy_with_children`). Ticks stay one at a time and awaited, csb the only
+ticker. Tests (with the code): 3 in `tick_watchdog` (one helper thread, an expiry wedges and refuses
+without waiting, a panic reaches the caller). 300 Rust passed / 1 skipped, 163 pytest,
+`just check` clean. **Live** (`just build`; simulation side restarted traced, bridge log
+`play_log/bridge/2026-10-14_06-14-15`; one fresh ego stack, up 22:14, all runs within 25 min;
+Town01, `run_suite --physical-verdict`, one `run_suite` per file, every trace judged with
+`gap_oracle --junit`; I/O pressure ~60, load ~30):
+
+| scenario | verdict | frames | contacts (label check) | fallback | G1/G2/G3/info, G4 |
+|---|---|---|---|---|---|
+| `rear_contact` r1 | PASS 2/2 | 463 | 44 (44 ok) | 0 | 0/0/0/3 (2 `lag_band`, `contact_hold` 405-430), agree |
+| r2 | PASS 2/2 | 281 | 46 (46 ok) | 0 | 0/0/0/3, agree |
+| r3 | PASS 2/2 | 260 | 46 (46 ok) | 0 | **1**/0/0/3 (frame 200, CARLA, 0.059 m, difference 0.217 vs band 0.125: N7's onset edge), PASS+overlap-only-in-CARLA |
+| r4 | PASS 2/2 | 467 | 48 (48 ok) | 0 | 0/0/0/4, agree |
+| r5 | PASS 2/2 | 302 | 46 (46 ok) | 0 | 0/0/0/3, agree |
+| `simulator_autopilot` x3 | PASS 2/2 each | 729 / 750 / 789 | 0 | 0 | 0/0/1/1 each (`npc_route` speed step, 024 row 9; `read_back`), agree |
+| `traffic_light` x3 | PASS 2/2 each | 3479 / 3794 / 3454 | 0 | 0 | 0/0/0/0, agree |
+| `gap/town01_npc_shoulder` | PASS 2/2 | 1202 | 1 (ok): `npc_05` pole frame 25 | `npc_05` at 27 | 0/1 low/2/20 (`npc_07` 254-256, `npc_09` 961-965; 20 `spawn`), agree |
+
+Contact labels: all 231 contacts sit in the frame whose `carla_frame` range holds them; no
+event arrived late this session (no relabel line), so the run-3 delivery lag was not
+reproduced -- the proximity hold is what makes it harmless if it recurs. Ego max z 0.187 m in
+every `rear_contact` (run 3 then: 4.6 m); `npc_rear` 0 snaps, 0 fallback; no G3 in any
+`rear_contact`. Watchdog: never fired (no hung tick in 6 TM / light runs). `npc_05` still
+falls back at 27 (38.6 m from any body), as designed. Bench processing p95 0.73-0.80 ms (step
+7: 0.80 / 0.79); CARLA's tick p95 10.2-10.6 ms against step 5's 6.8-7.2 under a heavier host,
+not separated from the helper-thread hand-off (microseconds by construction).
+**Acceptance, re-evaluated.** No NPC falls back except in the reproducer -- **holds now** for
+what was run (`rear_contact` x5, `simulator_autopilot`, `traffic_light`; the bench x2 and the
+other starters at step 7). Every starter passes -- **holds for the three rerun here**
+(`rear_contact` 5/5, `simulator_autopilot` 3/3, `traffic_light` 3/3); **still open**:
+`town02_episode_change` (the Town02 load flake, not run), and `rear_contact`'s N4 lamp-pole
+near miss, not seen in 5 runs on a fresh ego stack but not fixed (it came after ~75 min of one
+ego stack). Rows 2-6 gone, the truck's G1, the frame budget -- unchanged from step 7 (not
+rerun beyond the reproducer). Remaining scenario items: N4 (end `rear_contact` sooner / ego
+drift), N6 (`motorbike_body` speed step), N7 (declared 4.5 m vs the 4.792 m Model 3: run 3's G1
+here), and the Town02 load timeout.
 
 **2026-10-14, steps 6 and 7 -- bench regenerated; re-baseline done; acceptance does not hold:
 an NPC fell back against the ego in a starter, and `town01_rear_contact` failed 4 of 9.**

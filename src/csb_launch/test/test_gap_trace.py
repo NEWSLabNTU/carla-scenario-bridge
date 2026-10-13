@@ -197,6 +197,17 @@ class ValidTrace(unittest.TestCase):
         trace = gt.load_trace(mutate(7, lambda r: r.update(subject=None)))
         self.assertIsNone(trace.contacts[1].subject)
 
+    def test_carla_frame_of_a_frame_line(self):
+        # Roadmap 032 N2: the CARLA frame of the snapshot behind a frame line, so a contact's
+        # carla_frame can be checked against its label. Optional under schema 1 (SAMPLE has
+        # none), and written back only when present.
+        self.assertIsNone(gt.load_trace(lines(SAMPLE)).frames[1].carla_frame)
+        trace = gt.load_trace(mutate(5, lambda r: r.update(carla_frame=5021)))
+        self.assertEqual(trace.frames[1].carla_frame, 5021)
+        self.assertEqual(gt.to_json(trace.frames[1])["carla_frame"], 5021)
+        self.assertNotIn("carla_frame", gt.to_json(trace.frames[0]))
+        self.assertEqual(gt.load_trace(gt.dumps(trace).splitlines()), trace)
+
     def test_omitted_flags_are_empty(self):
         trace = gt.load_trace(lines(SAMPLE))
         self.assertEqual(trace.frames[1].entities["ego"].flags, ())
@@ -337,6 +348,10 @@ class MalformedTrace(unittest.TestCase):
 
     def test_static_contact_with_actor_id(self):
         self.assertTraceError(mutate(7, lambda r: r.update(other_id=99)), 8, "other_id")
+
+    def test_carla_frame_must_be_a_frame_number(self):
+        self.assertTraceError(mutate(5, lambda r: r.update(carla_frame=-1)), 6, "carla_frame")
+        self.assertTraceError(mutate(5, lambda r: r.update(carla_frame="x")), 6, "carla_frame")
 
     def test_subject_must_be_a_name(self):
         self.assertTraceError(mutate(7, lambda r: r.update(subject=5)), 8, "subject")

@@ -112,6 +112,25 @@ pub const BLOCKED_FRACTION: f64 = 0.5;
 /// (1.4 m/s), above the force bound's 0.5 m/s per frame.
 pub const BLOCKED_MIN_SPEED: f64 = 1.0;
 
+/// A tracked body whose CARLA box is closer than this to the ego's or any other physics
+/// body's (box to box, the frame's world snapshot) is held as if in contact (roadmap 032
+/// N2): not snapped, never handed to kinematic, m. The collision stream alone cannot be
+/// trusted with "next to": in `rear_contact` run 3 the ego contact arrived 4 frames late and
+/// `npc_rear` fell back with its box 0.163 m from the ego's, then drove through it. 0.5 m is
+/// three times that, and one frame of motion at a 10 m/s closing speed. It does not reach
+/// free traffic: over every step-7 trace (bench x3, starters, gap scenarios), no NPC that was
+/// not touching the ego came within 0.5 m of another body, while at 0.75 m the bench's own
+/// NPCs start to (16-20 frames per run, passing in the corners); `npc_05` falls back 38.6 m
+/// from the nearest body.
+pub const PROXIMITY_HOLD_M: f64 = 0.5;
+
+/// Whether a tracked body is held this frame -- not snapped, not blocked -- by a contact
+/// with the ego (`in_contact`, 023) or by another body's box within
+/// [`PROXIMITY_HOLD_M`] (`clearance`, `None` with no other body to measure against).
+pub fn held(in_contact: bool, clearance: Option<f64>) -> bool {
+    in_contact || clearance.is_some_and(|d| d < PROXIMITY_HOLD_M)
+}
+
 /// Whether a tracked body is blocked this frame (roadmap 032, gap A).
 ///
 /// It *becomes* blocked when its velocity along the velocity it was commanded last frame
@@ -975,6 +994,49 @@ mod tests {
         // Blocked but within the snap thresholds: it keeps tracking.
         let track = command(&t, &on_track(&t), DT, VEHICLE_GAINS, Some(MODEL3), true);
         assert_eq!(act(track, true), Action::Command(track));
+    }
+
+    #[test]
+    fn a_body_next_to_another_is_held_as_in_contact() {
+        // rear_contact run 3, frame 269: npc_rear's box 0.163 m from the ego's, the ego
+        // contact not yet drained (4 frames late).
+        assert!(held(false, Some(0.163)));
+        assert!(held(false, Some(-0.2)), "overlapping boxes");
+        assert!(held(true, None), "an ego contact holds as before");
+        assert!(held(true, Some(40.0)));
+        // npc_05 at the lamp pole: the nearest body 38.6 m away. Free traffic: 0.5 m and up.
+        assert!(!held(false, Some(38.6)));
+        assert!(!held(false, Some(PROXIMITY_HOLD_M)));
+        assert!(!held(false, None), "nothing else in the world");
+    }
+
+    #[test]
+    fn a_blocked_body_next_to_the_ego_never_falls_back() {
+        // The run-3 frame: blocked (moving -1.56 m/s against SSv2's westward command, the
+        // latch set) and far enough off to snap -- but 0.163 m from the ego, contact unseen.
+        let t = cruising();
+        let mut c = on_track(&t);
+        c.x -= 0.9;
+        let hold = held(false, Some(0.163));
+        let is_blocked = blocked(true, Some(WEST), WEST, (1.56, 0.0), hold);
+        let action = act(
+            command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), !hold),
+            is_blocked,
+        );
+        assert!(
+            matches!(action, Action::Command(Command::Track { .. })),
+            "held: tracked under the force bound, neither snapped nor kinematic: {action:?}"
+        );
+        // The same body 38.6 m from anything (npc_05 at its pole): falls back as before.
+        let hold = held(false, Some(38.6));
+        let is_blocked = blocked(true, Some(WEST), WEST, (1.56, 0.0), hold);
+        assert_eq!(
+            act(
+                command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), !hold),
+                is_blocked
+            ),
+            Action::Fallback
+        );
     }
 
     #[test]

@@ -8,9 +8,11 @@ use std::time::{Duration, Instant};
 use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
 use crate::blueprint_boxes::{self, BoxTable, Dimensions, SizeClass};
+use crate::body_clearance::{self, BodyBox};
 use crate::config::{BridgeConfig, NpcMotion, SensorReleaseConfig};
 use crate::gap_trace::{self, GapTrace};
 use crate::map_resolver::{lanelet_map_file, load_map_origin, town_from_map_path};
+use crate::tick_watchdog::{self, WatchError, Watchdog};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
 /// Minimum spawn height when the ground cannot be probed.
@@ -448,6 +450,69 @@ use crate::weather::{Weather, WeatherRequest};
 use crate::world_services::WeatherReply;
 
 /// `(elapsed_seconds, delta_seconds)` of `world`'s current snapshot.
+/// Why a watched tick failed (roadmap 032 N5).
+#[derive(Debug)]
+enum TickFailure {
+    /// CARLA (LibCarla) reported an error: the connection signal `update_frame` acts on.
+    Carla(carla::CarlaError),
+    /// The tick never returned; the bridge is wedged. The request's error message.
+    Hung(String),
+}
+
+impl std::fmt::Display for TickFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TickFailure::Carla(e) => write!(f, "{e}"),
+            TickFailure::Hung(reason) => f.write_str(reason),
+        }
+    }
+}
+
+/// How long the state read after a hung tick may take: a frame number from the client's
+/// cache and one settings RPC, normally milliseconds. CARLA answered RPC through the step-7
+/// hang; if it does not, the bridge must still reply to SSv2 well inside its 420 s.
+const HUNG_STATE_READ_WAIT: Duration = Duration::from_secs(10);
+
+/// CARLA's frame and synchronous-mode settings for the log after a hung tick, read on a
+/// thread of its own so that a CARLA that no longer answers cannot hang the reply too.
+fn carla_state_for_log(world: &World) -> String {
+    let world = world.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("csb-hung-state".into())
+        .spawn(move || {
+            let frame = world
+                .snapshot()
+                .map(|s| s.frame().to_string())
+                .unwrap_or_else(|e| format!("unknown ({e})"));
+            let settings = match world.settings() {
+                Ok(s) => format!(
+                    "synchronous_mode {}, fixed_delta_seconds {:?}, substepping {}, \
+                     max_substep_delta_time {}, max_substeps {}, no_rendering_mode {}",
+                    s.synchronous_mode,
+                    s.fixed_delta_seconds,
+                    s.substepping,
+                    s.max_substep_delta_time,
+                    s.max_substeps,
+                    s.no_rendering_mode
+                ),
+                Err(e) => format!("unreadable ({e})"),
+            };
+            let _ = tx.send(format!(
+                "CARLA snapshot frame {frame}, settings: {settings}"
+            ));
+        });
+    if spawned.is_err() {
+        return "CARLA's state not read (no thread)".to_string();
+    }
+    rx.recv_timeout(HUNG_STATE_READ_WAIT).unwrap_or_else(|_| {
+        format!(
+            "CARLA did not report its frame and settings within {} s",
+            HUNG_STATE_READ_WAIT.as_secs()
+        )
+    })
+}
+
 fn read_frame_of(world: &World) -> Result<(f64, f64)> {
     let snapshot = world.snapshot().wrap_err("world snapshot")?;
     let ts = snapshot.timestamp();
@@ -736,6 +801,9 @@ struct TrackedNpc {
     last_command: Option<(f64, f64)>,
     /// Blocked last frame (`npc_tracking::blocked`, which holds it until the body moves on).
     blocked: bool,
+    /// Held last frame (`npc_tracking::held`): an ego contact, or a body within
+    /// `PROXIMITY_HOLD_M`. The gap trace's `contact_hold` flag.
+    held: bool,
     /// Not tracked yet: its first command is not force-bounded when SSv2 already moves it
     /// (`npc_tracking::first_frame_change`, roadmap 032 gap D).
     first: bool,
@@ -886,6 +954,15 @@ pub struct Coordinator {
     /// actor: physics off, teleported to SSv2's pose every frame for the rest of the
     /// episode, flagged `kinematic` in the gap trace.
     kinematic_fallback: HashSet<u32>,
+    /// The box of every physics body csb spawned (ego, tracked NPCs, simulator- and
+    /// agent-driven vehicles), by actor: what a tracked NPC's proximity hold measures
+    /// against (roadmap 032 N2).
+    body_boxes: HashMap<u32, BodyBox>,
+    /// Every `world.tick()` runs under it (roadmap 032 N5).
+    tick_watchdog: Watchdog<std::result::Result<u64, carla::CarlaError>>,
+    /// Set when a tick never returned: the reason, for the error every later request gets
+    /// and for the log as the bridge exits (see [`Coordinator::wedged`]).
+    wedged: Option<String>,
     /// Directory holding per-map config, e.g. the traffic light signal mapping.
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
@@ -1031,6 +1108,9 @@ impl Coordinator {
             walker_height: HashMap::new(),
             tracked_npcs: HashMap::new(),
             kinematic_fallback: HashSet::new(),
+            body_boxes: HashMap::new(),
+            tick_watchdog: Watchdog::default(),
+            wedged: None,
             collision_monitor,
             world_id,
             clock_path,
@@ -1153,6 +1233,7 @@ impl Coordinator {
         self.settle_frames.remove(&actor_id);
         self.accel_history.remove(&actor_id);
         self.walker_height.remove(&actor_id);
+        self.body_boxes.remove(&actor_id);
         self.tracked_npcs.remove(&actor_id);
         self.kinematic_fallback.remove(&actor_id);
     }
@@ -1418,7 +1499,8 @@ impl Coordinator {
             },
         };
         let map_origin = self.map_origin;
-        self.gap_trace.emit_staged(now, |id| {
+        let carla_frame = Some(snapshot.frame() as u64);
+        self.gap_trace.emit_staged_at(now, carla_frame, |id| {
             snapshot
                 .find(id)
                 .map(|actor| carla_trace_state(&actor, map_origin))
@@ -1444,10 +1526,14 @@ impl Coordinator {
                     name: u.name.clone(),
                     actor_id,
                     ssv2: ssv2_trace_pose(pose),
-                    contact_hold: self.tracked_npcs.contains_key(&actor_id)
-                        && self
-                            .collision_monitor
-                            .touched_within(actor_id, npc_tracking::CONTACT_HOLD_FRAMES),
+                    // Held this frame: an ego contact, or another body's box within
+                    // PROXIMITY_HOLD_M when it would have snapped (roadmap 032 N2).
+                    contact_hold: self.tracked_npcs.get(&actor_id).is_some_and(|n| {
+                        n.held
+                            || self
+                                .collision_monitor
+                                .touched_within(actor_id, npc_tracking::CONTACT_HOLD_FRAMES)
+                    }),
                     kinematic: self.kinematic_fallback.contains(&actor_id),
                 })
             })
@@ -1638,6 +1724,7 @@ impl Coordinator {
             self.settle_frames.clear();
             self.accel_history.clear();
             self.walker_height.clear();
+            self.body_boxes.clear();
             self.tracked_npcs.clear();
             self.kinematic_fallback.clear();
             self.kinematic_fallback.clear();
@@ -2404,6 +2491,7 @@ impl Coordinator {
         self.settle_frames.clear();
         self.accel_history.clear();
         self.walker_height.clear();
+        self.body_boxes.clear();
         self.tracked_npcs.clear();
         self.kinematic_fallback.clear();
         self.miss_watch.reset();
@@ -2595,6 +2683,7 @@ impl Coordinator {
         self.settle_frames.clear();
         self.accel_history.clear();
         self.walker_height.clear();
+        self.body_boxes.clear();
         self.tracked_npcs.clear();
         self.kinematic_fallback.clear();
         self.miss_watch.reset();
@@ -2805,24 +2894,24 @@ impl Coordinator {
     ///
     /// On success, returns the simulation time (ns) after the last tick (0 if the snapshot
     /// could not be read, the protocol's "unknown").
-    fn tick_frame(&mut self) -> std::result::Result<i64, carla::CarlaError> {
-        let mut ticking = Duration::ZERO;
-        let mut ticked = None;
+    fn tick_frame(&mut self) -> std::result::Result<i64, TickFailure> {
+        let substeps = self.substeps.max(1);
+        let ssv2_frame = self.collision_monitor.frame();
+        let mut substep = 0;
         let frame = tick_then_read(
-            &mut self.world,
-            self.substeps,
-            |w| {
+            self,
+            substeps,
+            |c| {
+                substep += 1;
                 let started = Instant::now();
-                let result = w.tick().map(|f| ticked = Some(f));
-                ticking += started.elapsed();
-                result
+                let result = c.watched_tick(&format!(
+                    "UpdateFrame {ssv2_frame}, tick {substep} of {substeps}"
+                ));
+                c.tick_time += started.elapsed();
+                result.map(|_| ())
             },
-            read_frame_of,
+            |c| read_frame_of(&c.world),
         );
-        self.tick_time += ticking;
-        if ticked.is_some() {
-            self.last_tick_frame = ticked;
-        }
         let frame = frame?;
         // A marker still due (start-up, or a paused world after a change) can be written
         // now: csb sees the world's actors from its first tick on.
@@ -2834,6 +2923,73 @@ impl Coordinator {
                 0
             }
         })
+    }
+
+    /// One `world.tick()` under the watchdog (roadmap 032 N5): the CARLA frame it returned,
+    /// noted for the collision labels (032 N2). `step` names the caller in the error.
+    ///
+    /// A tick that does not return within [`tick_watchdog::TICK_WATCHDOG`] wedges the bridge
+    /// ([`Coordinator::wedged`]): CARLA's frame and settings are logged, and this and every
+    /// later tick fail without touching CARLA.
+    fn watched_tick(&mut self, step: &str) -> std::result::Result<u64, TickFailure> {
+        if let Some(reason) = &self.wedged {
+            return Err(TickFailure::Hung(reason.clone()));
+        }
+        let mut world = self.world.clone();
+        match self
+            .tick_watchdog
+            .run(tick_watchdog::TICK_WATCHDOG, move || world.tick())
+        {
+            Ok(Ok(frame)) => {
+                self.last_tick_frame = Some(frame);
+                self.collision_monitor.note_tick(frame);
+                Ok(frame)
+            }
+            Ok(Err(e)) => Err(TickFailure::Carla(e)),
+            Err(e) => Err(TickFailure::Hung(self.tick_hung(step, e))),
+        }
+    }
+
+    /// A tick that never returned: log what CARLA says now, wedge the bridge, and return
+    /// the request's error.
+    fn tick_hung(&mut self, step: &str, error: WatchError) -> String {
+        let waited = match error {
+            WatchError::Expired { waited } => format!("{:.1} s", waited.as_secs_f64()),
+            WatchError::Wedged => "an earlier tick".to_string(),
+            WatchError::WorkerGone => "no tick thread".to_string(),
+        };
+        let state = carla_state_for_log(&self.world);
+        let reason = format!(
+            "CARLA's world.tick() in {step} did not return (waited {waited}, bound {} s); {state}; \
+             last tick returned CARLA frame {:?}, Traffic Manager {}. csb ends this bridge so \
+             its supervisor starts a fresh one",
+            tick_watchdog::TICK_WATCHDOG.as_secs(),
+            self.last_tick_frame,
+            if self.traffic_manager.is_some() {
+                "running"
+            } else {
+                "not started"
+            }
+        );
+        tracing::error!("{reason}");
+        self.wedged = Some(reason.clone());
+        reason
+    }
+
+    /// Why the bridge cannot go on, once a tick never returned (roadmap 032 N5): the
+    /// server replies to the request in flight and then ends the process.
+    pub fn wedged(&self) -> Option<&str> {
+        self.wedged.as_deref()
+    }
+
+    /// The bridge ends after a hung tick: keep what the run recorded without a word to
+    /// CARLA (the tick thread may still be inside LibCarla) -- close the gap trace, marked
+    /// incomplete, and leave the actors to the next bridge's orphan reaper, which destroys
+    /// each with its children.
+    pub fn abandon_after_hang(&mut self) {
+        self.abandon_collision_monitor();
+        self.gap_trace.end_episode();
+        self.gap_trace.shutdown(Duration::from_secs(5));
     }
 
     /// Time spent inside `world.tick()` since the last call, and reset it.
@@ -2881,7 +3037,13 @@ impl Coordinator {
         let tick_started = Instant::now();
         let simulation_time_ns = match self.tick_frame() {
             Ok(t) => t,
-            Err(e) => {
+            Err(TickFailure::Hung(reason)) => {
+                return api::UpdateFrameResponse {
+                    result: Some(proto_err(reason)),
+                    simulation_time_ns: 0,
+                };
+            }
+            Err(TickFailure::Carla(e)) => {
                 tracing::error!("world.tick() failed: {e}");
                 self.note_failure_after(tick_started);
 
@@ -3204,6 +3366,7 @@ impl Coordinator {
                     last_yaw_deg: None,
                     last_command: None,
                     blocked: false,
+                    held: false,
                     first: true,
                     lift: {
                         let bb = actor.bounding_box();
@@ -3258,6 +3421,19 @@ impl Coordinator {
             }
         }
 
+        // Every physics body's box, for the proximity hold of tracked NPCs (roadmap 032 N2).
+        if tracked || kind.physics_driven() {
+            self.body_boxes.insert(
+                actor_id,
+                BodyBox {
+                    offset_x: f64::from(bb.transform.location.x),
+                    offset_y: f64::from(bb.transform.location.y),
+                    half_length: f64::from(bb.extent.x),
+                    half_width: f64::from(bb.extent.y),
+                },
+            );
+        }
+
         // Wait one tick for the actor to be fully initialized. Only meaningful once we
         // own the tick -- before sync mode is on, CARLA is advancing by itself.
         //
@@ -3265,9 +3441,13 @@ impl Coordinator {
         // not yet settled. A genuinely broken connection is caught by update_frame, which
         // owns reconnection.
         if self.sync_mode_enabled {
-            match self.world.tick() {
-                Ok(f) => self.last_tick_frame = Some(f),
-                Err(e) => tracing::warn!("Tick after spawning '{name}' failed: {e}"),
+            match self.watched_tick(&format!("the settling tick after spawning '{name}'")) {
+                Ok(_) => {}
+                Err(TickFailure::Carla(e)) => {
+                    tracing::warn!("Tick after spawning '{name}' failed: {e}")
+                }
+                // Not registered: the bridge ends after this reply.
+                Err(TickFailure::Hung(reason)) => return proto_err(reason),
             }
         }
 
@@ -3305,6 +3485,11 @@ impl Coordinator {
             self.has_ego = true;
             self.collision_monitor.attach(&mut self.world, &actor, name);
             self.warm_up_localization(actor_id);
+            // A warm-up tick that never returned (roadmap 032 N5): fail the spawn, so SSv2
+            // has the error before the bridge ends.
+            if let Some(reason) = &self.wedged {
+                return proto_err(reason.clone());
+            }
         } else if tracked && kind == SpawnKind::Npc {
             // Its own contacts -- the static world, other NPCs -- which the ego's sensor
             // cannot see (roadmap 032 step 5). Detached before every destroy of the NPC.
@@ -3739,6 +3924,10 @@ impl Coordinator {
         if let Some(link) = self.agent_link.as_ref() {
             link.set_npc_logic_started(req.npc_logic_started);
         }
+        // The contacts of the last frame's ticks, before the tracked NPCs are held by them
+        // (roadmap 032 N2): otherwise they wait for the next UpdateFrame's drain, a frame
+        // after the tracking that needs them.
+        self.drain_collisions();
         // Tracked NPCs (roadmap 023) are read from one world snapshot and commanded through
         // one actor list per frame, fetched on the first tracked entity.
         let mut tracked_view: Option<TrackedView> = None;
@@ -5052,6 +5241,32 @@ impl Coordinator {
         Ok(read.snapshot)
     }
 
+    /// The smallest box-to-box clearance in the plane between `actor_id`'s body and every
+    /// other physics body csb spawned, from `snapshot` (roadmap 032 N2). `None` when its own
+    /// box or pose is unknown, or no other body is in the snapshot.
+    fn clearance_to_bodies(
+        &self,
+        actor_id: u32,
+        snapshot: &carla::client::WorldSnapshot,
+    ) -> Option<f64> {
+        let place = |id: u32, b: &BodyBox| {
+            let t = snapshot.find(id)?.transform();
+            Some(b.at(
+                f64::from(t.location.x),
+                f64::from(t.location.y),
+                f64::from(t.rotation.yaw),
+            ))
+        };
+        let subject = place(actor_id, self.body_boxes.get(&actor_id)?)?;
+        body_clearance::min_clearance(
+            &subject,
+            self.body_boxes
+                .iter()
+                .filter(|(id, _)| **id != actor_id)
+                .filter_map(|(id, b)| place(*id, b)),
+        )
+    }
+
     /// One frame of a tracked NPC (roadmap 023): measure it against SSv2's pose, record the
     /// error, and command its velocity (or snap it back). `status` is `None` while SSv2
     /// holds the NPC still: zero velocity and yaw rate.
@@ -5154,8 +5369,22 @@ impl Coordinator {
         let in_contact = self
             .collision_monitor
             .touched_within(actor_id, npc_tracking::CONTACT_HOLD_FRAMES);
-        let command =
-            npc_tracking::command(&target, &current, dt, gains, npc.steering, !in_contact);
+        let mut hold = in_contact;
+        let mut command = npc_tracking::command(&target, &current, dt, gains, npc.steering, !hold);
+        // Nor next to the ego or another physics body, contact seen or not (roadmap 032 N2):
+        // a snap -- or the kinematic hand-over a blocked snap becomes -- would put it into
+        // that body. Measured only when it would snap: the hold changes nothing else.
+        if !hold && matches!(command, npc_tracking::Command::Snap { .. }) {
+            let clearance = self.clearance_to_bodies(actor_id, &view.snapshot);
+            if npc_tracking::held(false, clearance) {
+                hold = true;
+                command = npc_tracking::command(&target, &current, dt, gains, npc.steering, false);
+                tracing::debug!(
+                    "Tracking '{name}': {:.3} m from another body, held (no snap)",
+                    clearance.unwrap_or_default()
+                );
+            }
+        }
         // Held by something other than the ego (roadmap 032, gap A): a snap would teleport
         // it into that, and PhysX would throw it out (bench npc_05, 80 m up).
         let body_v = body.velocity();
@@ -5165,10 +5394,11 @@ impl Coordinator {
             npc.last_command,
             (target.vx, target.vy),
             body_planar,
-            in_contact,
+            hold,
         );
         if let Some(entry) = self.tracked_npcs.get_mut(&actor_id) {
             entry.blocked = is_blocked;
+            entry.held = hold;
         }
         let action = npc_tracking::act(command, is_blocked);
 

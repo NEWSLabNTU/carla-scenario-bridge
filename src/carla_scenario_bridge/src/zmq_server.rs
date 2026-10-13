@@ -110,6 +110,12 @@ impl ZmqServer {
             if let Err(e) = self.socket.send(&response_bytes, 0) {
                 tracing::error!("send error: {e}");
             }
+            // A tick never returned (roadmap 032 N5): the request has its error; stop
+            // serving, and let main end the process for a fresh bridge.
+            if self.coordinator.wedged().is_some() {
+                tracing::error!("A CARLA tick never returned: this bridge stops serving");
+                break;
+            }
         }
 
         tracing::info!("ZMQ server shutting down");
@@ -235,6 +241,16 @@ impl ZmqServer {
 
     /// Undo everything this bridge changed in CARLA: destroy its actors, unfreeze traffic
     /// lights it froze, restore async mode.
+    /// Why the bridge cannot go on after a hung tick, if one did not return.
+    pub fn wedged(&self) -> Option<String> {
+        self.coordinator.wedged().map(str::to_owned)
+    }
+
+    /// Close what the run recorded after a hung tick, without a word to CARLA.
+    pub fn abandon_after_hang(&mut self) {
+        self.coordinator.abandon_after_hang();
+    }
+
     pub fn cleanup(&mut self) {
         self.end_run();
         self.coordinator.shutdown();

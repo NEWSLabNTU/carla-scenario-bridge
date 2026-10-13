@@ -243,6 +243,23 @@ class G1OverlapDisagreement(unittest.TestCase):
         self.assertEqual(len(g1), 1)
         self.assertAlmostEqual(g1[0]["numbers"]["min_gap"], 0.2, places=6)
 
+    def test_a_contact_only_carla_overlap_with_the_ego_airborne(self):
+        # rear_contact run 3 (032 N3): the ego thrown 5 m up, so CARLA's height gate
+        # separates the boxes (no margin at all), yet CARLA recorded a contact -- the
+        # contact rule alone makes CARLA's side overlap. SSv2 1.5 m clear. The interval has
+        # no CARLA margin to take a penetration from: reported as unknown, not a crash.
+        frames = [frame(n, ("ego", state("ego", 0.0, dz=5.0)), ("car", state("car", -6.0)))
+                  for n in range(1, 6)]
+        r = run(make_trace(["ego", "car"], frames, [contact(2, "car")]))
+        g1 = checks(r, "G1")
+        self.assertEqual(len(g1), 1)
+        f = g1[0]
+        self.assertEqual((f["geometry"], f["frames"], f["priority"]), ("carla", [2, 4], "high"))
+        self.assertIsNone(f["numbers"]["max_penetration"])
+        self.assertIsNone(f["numbers"]["deepest_frame"])
+        self.assertAlmostEqual(f["numbers"]["min_gap"], 1.5, places=6)
+        self.assertIsNone(f["numbers"]["margin_difference"])
+
     def test_missing_carla_state_is_not_an_overlap_disagreement(self):
         frames = [frame(n, ("ego", state("ego", 0.0)),
                         ("truck", state("truck", -8.5, carla=False))) for n in range(1, 4)]

@@ -1,6 +1,7 @@
 mod agent_link;
 mod autopilot;
 mod blueprint_boxes;
+mod body_clearance;
 mod carla_version;
 mod clock_store;
 mod collision_monitor;
@@ -20,6 +21,7 @@ mod proto;
 mod resolved_signals;
 mod ros_args;
 mod sensor_release;
+mod tick_watchdog;
 mod traffic_light_mapper;
 mod weather;
 mod world_services;
@@ -30,6 +32,10 @@ use color_eyre::eyre::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Exit status after a hung tick (`EX_TEMPFAIL`): not a clean exit, so the supervisor
+/// restarts the bridge.
+const TICK_HUNG_EXIT: i32 = 75;
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -142,6 +148,16 @@ fn main() -> Result<()> {
 
     // Run server loop
     server.run(shutdown);
+
+    // A tick that never returned (roadmap 032 N5): SSv2 has its error; end the process without
+    // touching CARLA again -- the tick thread may still be inside LibCarla -- so the
+    // supervisor (play_launch respawn, `just run`'s loop) starts a fresh bridge. Its first
+    // Initialize reaps what this one left.
+    if let Some(reason) = server.wedged() {
+        tracing::error!("Exiting with status {TICK_HUNG_EXIT}: {reason}");
+        server.abandon_after_hang();
+        std::process::exit(TICK_HUNG_EXIT);
+    }
 
     // Cleanup: restore CARLA async mode
     server.cleanup();

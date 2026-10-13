@@ -60,6 +60,11 @@ pub enum Record {
     Frame {
         frame: u64,
         sim_time: f64,
+        /// The CARLA frame of the snapshot CARLA's half was read from: the frame's last tick
+        /// (roadmap 032 N2), so a contact's `carla_frame` can be checked against the SSv2
+        /// frame it is labelled with. Absent when unknown; older traces have none.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        carla_frame: Option<u64>,
         entities: BTreeMap<String, EntityState>,
     },
     Contact {
@@ -345,7 +350,15 @@ impl GapTrace {
 
     /// Write the staged frame if it is due by `now`, with CARLA's state from `carla_of`
     /// (`None`: the actor is not in the snapshot).
-    pub fn emit_staged<F>(&mut self, now: u64, mut carla_of: F)
+    pub fn emit_staged<F>(&mut self, now: u64, carla_of: F)
+    where
+        F: FnMut(u32) -> Option<CarlaState>,
+    {
+        self.emit_staged_at(now, None, carla_of);
+    }
+
+    /// [`GapTrace::emit_staged`] from the snapshot of CARLA frame `carla_frame`.
+    pub fn emit_staged_at<F>(&mut self, now: u64, carla_frame: Option<u64>, mut carla_of: F)
     where
         F: FnMut(u32) -> Option<CarlaState>,
     {
@@ -380,6 +393,7 @@ impl GapTrace {
         let record = Record::Frame {
             frame: staged.frame,
             sim_time: staged.sim_time,
+            carla_frame,
             entities,
         };
         if self.try_frame(record.to_line()) {
@@ -772,6 +786,7 @@ mod tests {
         let r = Record::Frame {
             frame: 7,
             sim_time: 0.35,
+            carla_frame: None,
             entities,
         };
         assert_eq!(
@@ -872,7 +887,7 @@ mod tests {
             (hit(2, None), None),
             (hit(2, Some(99)), None),
         ]);
-        t.emit_staged(2, |_| Some(([0.0; 6], [0.0; 3])));
+        t.emit_staged_at(2, Some(5021), |_| Some(([0.0; 6], [0.0; 3])));
         // Staged but never ticked: replaced, then left at the end.
         t.stage_frame(3, vec![]);
         t.end_episode();
@@ -890,6 +905,9 @@ mod tests {
         assert_eq!(v[3]["sim_time"], 0.05);
         assert_eq!(v[3]["entities"]["ego"]["flags"], json!(["spawn"]));
         assert_eq!(v[3]["entities"]["npc"]["carla"], Value::Null);
+        // The snapshot's CARLA frame when known (032 N2), and no key otherwise.
+        assert!(v[3].get("carla_frame").is_none());
+        assert_eq!(v[7]["carla_frame"], 5021);
         assert_eq!(v[4]["other_kind"], "vehicle");
         assert_eq!(v[4]["ego_id"], 10);
         assert_eq!(v[5]["other_kind"], "static");
@@ -970,7 +988,8 @@ mod tests {
                 ],
             );
             t.frame_time(f, 0.05 * f as f64);
-            t.emit_staged(f, |id| {
+            // A CARLA frame on every frame but the first (032 N2: optional).
+            t.emit_staged_at(f, (f > 1).then_some(5000 + f), |id| {
                 (id == 10).then_some(([f as f64 + 0.1, 0.0, 0.0, 0.0, 0.0, 0.0], [2.0, 0.0, 0.0]))
             });
         }
@@ -1010,6 +1029,7 @@ assert t.episode.episode == 2 and t.episode.npc_motion == "tracked", t.episode
 assert sorted(t.entities) == ["barrier", "ego"], t.entities
 assert t.entities["barrier"].blueprint_box is None
 assert [f.frame for f in t.frames] == [1, 2, 3, 4, 5]
+assert [f.carla_frame for f in t.frames] == [None, 5002, 5003, 5004, 5005]
 assert t.frames[0].entities["ego"].spawn and not t.frames[1].entities["ego"].spawn
 assert t.frames[2].entities["barrier"].contact_hold
 assert t.frames[3].entities["barrier"].kinematic and not t.frames[2].entities["barrier"].kinematic

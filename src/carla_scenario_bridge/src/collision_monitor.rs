@@ -42,6 +42,16 @@
 //! it stamps the event with the current SSv2 frame (an atomic the coordinator advances on
 //! every `UpdateFrame`) and queues it. The coordinator drains the queue on its own thread,
 //! where the entity manager can name the other actor, and all logging happens there.
+//!
+//! # Labels: the CARLA frame, not the arrival (roadmap 032 N2)
+//!
+//! The stream can deliver an event frames after its tick: in `rear_contact` run 3 the
+//! ego-`npc_rear` impact of SSv2 frame 265 reached the callback at 269, and the blocked rule,
+//! which then saw no ego contact, handed `npc_rear` to kinematic into the ego. So the
+//! coordinator reports every tick's returned CARLA frame ([`CollisionMonitor::note_tick`]),
+//! and a drained event is labelled with the SSv2 frame whose tick produced its CARLA frame --
+//! in the log, the report, the gap trace and the contact window alike. The callback's stamp
+//! is only the fallback for a CARLA frame no tick of this episode returned.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -65,12 +75,32 @@ use crate::npc_tracking::TrackingStats;
 /// full for the summary.
 pub const WARN_INTERVAL_S: f64 = 1.0;
 
+/// Ticks remembered for labelling events by CARLA frame: 4096 ticks are 200 s at 20 Hz with
+/// one tick per frame (the stream lags by frames, not minutes), about 100 KB.
+const TICK_MAP_LEN: usize = 4096;
+
+/// The SSv2 frame of an event at `carla_frame`: that of the tick that returned it, or, for a
+/// CARLA frame between two noted ticks, of the later one. `stamped` (the callback's counter)
+/// when it lies outside every noted tick.
+fn label_frame(ticks: &BTreeMap<u64, u64>, carla_frame: u64, stamped: u64) -> u64 {
+    if let Some(&frame) = ticks.get(&carla_frame) {
+        return frame;
+    }
+    let after = ticks.range(carla_frame..).next();
+    let before = ticks.range(..carla_frame).next_back();
+    match (before, after) {
+        (Some(_), Some((_, &frame))) => frame,
+        _ => stamped,
+    }
+}
+
 /// One contact, as the sensor callback saw it. Plain data so it can cross threads and be
 /// constructed in tests.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RawCollision {
     /// SSv2 frame: how many `UpdateFrame`s this bridge had received since `Initialize`
-    /// when the event arrived.
+    /// when the event arrived; from [`CollisionMonitor::drain`] on, the SSv2 frame whose tick
+    /// produced `carla_frame` (see the module docs).
     pub ssv2_frame: u64,
     /// CARLA's own frame number for the event.
     pub carla_frame: u64,
@@ -285,6 +315,10 @@ pub struct CollisionMonitor {
     npc_sensors: HashMap<u32, (Sensor, String)>,
     /// What each NPC's sensor saw, by NPC name; never mixed into `log` (the ego's).
     npc_logs: BTreeMap<String, CollisionLog>,
+    /// CARLA frame returned by each tick -> the SSv2 frame it was ticked in, this episode.
+    tick_frames: BTreeMap<u64, u64>,
+    /// Events this episode whose label differs from the callback's stamp (delivered late).
+    relabelled: u64,
 }
 
 impl CollisionMonitor {
@@ -316,6 +350,18 @@ impl CollisionMonitor {
             npc_sensors_enabled: false,
             npc_sensors: HashMap::new(),
             npc_logs: BTreeMap::new(),
+            tick_frames: BTreeMap::new(),
+            relabelled: 0,
+        }
+    }
+
+    /// A tick returned CARLA frame `carla_frame` during the current SSv2 frame. Call after
+    /// every successful `world.tick()`, settling ticks included.
+    pub fn note_tick(&mut self, carla_frame: u64) {
+        self.tick_frames
+            .insert(carla_frame, self.frame.load(Ordering::Relaxed));
+        while self.tick_frames.len() > TICK_MAP_LEN {
+            self.tick_frames.pop_first();
         }
     }
 
@@ -372,6 +418,8 @@ impl CollisionMonitor {
         self.tracking.clear();
         self.last_contact.clear();
         self.npc_logs.clear();
+        self.tick_frames.clear();
+        self.relabelled = 0;
         if let Some(traced) = self.traced.as_mut() {
             traced.clear();
         }
@@ -637,7 +685,18 @@ impl CollisionMonitor {
             Ok(mut q) => std::mem::take(&mut *q),
             Err(_) => return,
         };
-        for event in &events {
+        for mut event in events {
+            let label = label_frame(&self.tick_frames, event.carla_frame, event.ssv2_frame);
+            if label != event.ssv2_frame {
+                self.relabelled += 1;
+                tracing::debug!(
+                    "Contact at CARLA frame {} delivered in SSv2 frame {}: labelled {label}",
+                    event.carla_frame,
+                    event.ssv2_frame
+                );
+                event.ssv2_frame = label;
+            }
+            let event = &event;
             let name = event.other_id.and_then(&mut name_of);
             match &event.subject {
                 None => {
@@ -708,6 +767,13 @@ impl CollisionMonitor {
         // Anything the callback queued before the stop.
         self.drain(name_of);
         tracing::info!("{}", self.log.summary(&ego_name));
+        if self.relabelled > 0 {
+            tracing::info!(
+                "{} contact event(s) this run reached csb after the SSv2 frame they happened \
+                 in; labelled by their CARLA frame",
+                self.relabelled
+            );
+        }
         self.log_npc_contacts();
         self.log_tracking();
         self.write_report(&ego_name, true);
@@ -1083,5 +1149,82 @@ mod tests {
         assert!(!m.touched_within(7, 20));
         m.begin_episode();
         assert!(!m.touched_within(7, 1_000));
+    }
+
+    /// rear_contact run 3 (roadmap 032 N2): the impact was CARLA frame 21787317, ticked in
+    /// SSv2 frame 265, but its callback ran -- and stamped the counter -- at 269. The
+    /// contact is SSv2 frame 265 everywhere: the log, the trace, the contact window.
+    #[test]
+    fn a_late_contact_is_labelled_by_the_carla_frame_it_happened_in() {
+        let mut m = CollisionMonitor::new(false, None);
+        m.keep_for_trace();
+        m.frame.store(264, Ordering::Relaxed);
+        // Two ticks per SSv2 frame (substeps), 265 to 269.
+        let mut carla = 21_787_315;
+        for _ in 265..=269 {
+            m.next_frame();
+            for _ in 0..2 {
+                carla += 1;
+                m.note_tick(carla);
+            }
+        }
+        assert_eq!(m.frame(), 269);
+        let late = RawCollision {
+            ssv2_frame: 269,
+            carla_frame: 21_787_317,
+            ..hit(0, 376.3, Some(7), 7910.0)
+        };
+        // 21787317 is 265's second substep; 21787318 is 266's first, 21787320 267's: all
+        // three delivered at 269.
+        let late2 = RawCollision {
+            carla_frame: 21_787_320,
+            ..late.clone()
+        };
+        let mid = RawCollision {
+            carla_frame: 21_787_318,
+            ..late.clone()
+        };
+        m.queue.lock().unwrap().extend([late, mid, late2]);
+        m.drain(|_| Some("npc_rear".into()));
+        let traced: Vec<u64> = m.take_traced().iter().map(|(e, _)| e.ssv2_frame).collect();
+        assert_eq!(traced, vec![265, 266, 267]);
+        assert_eq!(m.log.report_contacts()[0].first_ssv2_frame, 265);
+        // The 20-frame hold counts from 267 (the last contact), not from 269.
+        m.frame.store(287, Ordering::Relaxed);
+        assert!(m.touched_within(7, 20));
+        m.frame.store(288, Ordering::Relaxed);
+        assert!(!m.touched_within(7, 20));
+    }
+
+    /// A CARLA frame this bridge never saw a tick return for -- older than the map, or from
+    /// before the episode -- keeps the callback's stamp.
+    #[test]
+    fn an_unmapped_carla_frame_keeps_the_callbacks_stamp() {
+        let mut m = CollisionMonitor::new(false, None);
+        m.keep_for_trace();
+        m.next_frame();
+        m.note_tick(500);
+        m.next_frame();
+        m.note_tick(501);
+        let before = RawCollision {
+            carla_frame: 400,
+            ..hit(2, 0.1, Some(7), 1.0)
+        };
+        let after = RawCollision {
+            carla_frame: 900,
+            ..hit(2, 0.1, Some(7), 1.0)
+        };
+        m.queue.lock().unwrap().extend([before, after]);
+        m.drain(|_| None);
+        let traced: Vec<u64> = m.take_traced().iter().map(|(e, _)| e.ssv2_frame).collect();
+        assert_eq!(traced, vec![2, 2]);
+        // A new episode forgets the old map.
+        m.begin_episode();
+        m.queue.lock().unwrap().push(RawCollision {
+            carla_frame: 500,
+            ..hit(0, 0.1, Some(7), 1.0)
+        });
+        m.drain(|_| None);
+        assert_eq!(m.take_traced()[0].0.ssv2_frame, 0);
     }
 }
