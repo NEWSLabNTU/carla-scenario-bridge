@@ -98,6 +98,102 @@ pub enum Command {
     },
 }
 
+/// Blocked rule (roadmap 032, gap A): a body moving along the velocity it was commanded last
+/// frame at less than this fraction of it -- or against it -- is held by something. Chosen
+/// from the 024 bench: the 19 free NPCs' worst frame keeps 0.94 of the command (corners at
+/// 8 m/s), `npc_05` meeting the lamp pole at frame 25 keeps -0.27 (-8.0 -> +2.17 m/s).
+pub const BLOCKED_FRACTION: f64 = 0.5;
+/// Below this commanded speed the blocked rule is off, m/s: a body starting or stopping
+/// moves at a few tenths of a m/s that no fraction judges reliably. Under a walker's pace
+/// (1.4 m/s), above the force bound's 0.5 m/s per frame.
+pub const BLOCKED_MIN_SPEED: f64 = 1.0;
+
+/// Whether a tracked body is blocked this frame (roadmap 032, gap A).
+///
+/// It *becomes* blocked when its velocity along the velocity it was commanded last frame
+/// (`last_command`, set before the tick it has just had) is below [`BLOCKED_FRACTION`] of
+/// it, or reversed, while that command is above [`BLOCKED_MIN_SPEED`]. Against last frame's
+/// command, not SSv2's: a body accelerating at the force bound (a start, a speed step) moves
+/// at what it was given and is not blocked.
+///
+/// It *stays* blocked (`was_blocked`) until it makes the same progress along SSv2's
+/// velocity (`target`), or SSv2 slows below the minimum: once held, the force-bounded
+/// command follows the body (bench `npc_05`, frame 26: commanded +1.7 m/s, away from the
+/// pole, and moving at it), so last frame's command alone would clear it a frame before the
+/// snap that throws it.
+///
+/// Never while the body is in contact with the ego: 023's contact hold covers those.
+pub fn blocked(
+    was_blocked: bool,
+    last_command: Option<(f64, f64)>,
+    target: (f64, f64),
+    body: (f64, f64),
+    in_contact: bool,
+) -> bool {
+    if in_contact {
+        return false;
+    }
+    if last_command.is_some_and(|c| short_of(body, c)) {
+        return true;
+    }
+    was_blocked && short_of(body, target)
+}
+
+/// Whether `body` moves along `reference` at less than [`BLOCKED_FRACTION`] of it, with
+/// `reference` faster than [`BLOCKED_MIN_SPEED`].
+fn short_of(body: (f64, f64), reference: (f64, f64)) -> bool {
+    let speed = reference.0.hypot(reference.1);
+    if !speed.is_finite() || speed <= BLOCKED_MIN_SPEED {
+        return false;
+    }
+    let along = (body.0 * reference.0 + body.1 * reference.1) / speed;
+    along < BLOCKED_FRACTION * speed
+}
+
+/// What a tracked frame does with its body.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Action {
+    /// Track or snap, as `command` decided.
+    Command(Command),
+    /// Hand the body to kinematic for the rest of the episode: physics off, teleported to
+    /// SSv2's pose every frame. A blocked body is never snapped into what blocks it.
+    Fallback,
+}
+
+/// The frame's action: a snap of a [`blocked`] body falls back to kinematic; anything else
+/// is the command as is (a blocked body under the snap thresholds keeps tracking).
+pub fn act(command: Command, blocked: bool) -> Action {
+    match command {
+        Command::Snap { .. } if blocked => Action::Fallback,
+        c => Action::Command(c),
+    }
+}
+
+/// Where a snap puts the body besides x, y and yaw (roadmap 032, gap A), CARLA degrees and m.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SnapAttitude {
+    pub roll_deg: f64,
+    pub pitch_deg: f64,
+    pub z: f64,
+}
+
+/// A snap's roll, pitch and z: SSv2's roll and pitch, not the body's (a tumbling body is put
+/// back upright), and the box bottom on the ground under the target -- `lift` (origin above
+/// the box bottom) over `ground_z`, or over SSv2's `commanded_z` when there is no ground.
+pub fn snap_attitude(
+    target_roll_deg: f64,
+    target_pitch_deg: f64,
+    ground_z: Option<f64>,
+    commanded_z: f64,
+    lift: f64,
+) -> SnapAttitude {
+    SnapAttitude {
+        roll_deg: target_roll_deg,
+        pitch_deg: target_pitch_deg,
+        z: ground_z.unwrap_or(commanded_z) + lift,
+    }
+}
+
 /// `deg` wrapped to (-180, 180].
 pub fn wrap_deg(deg: f64) -> f64 {
     let w = (deg + 180.0).rem_euclid(360.0) - 180.0;
@@ -242,6 +338,7 @@ pub struct TrackingStats {
     yaw_errors: Vec<f32>,
     snaps: u32,
     missed: u32,
+    fallback: u32,
 }
 
 /// A summary of [`TrackingStats`], for the log and the contact report.
@@ -256,6 +353,9 @@ pub struct TrackingSummary {
     pub snaps: u32,
     /// Frames skipped because the NPC was not in the world snapshot: no command sent.
     pub missed: u32,
+    /// Frames driven kinematic after a blocked body fell back (roadmap 032), the hand-over
+    /// frame included; 0 for an NPC tracked to the end.
+    pub fallback: u32,
 }
 
 impl TrackingStats {
@@ -274,6 +374,11 @@ impl TrackingStats {
         self.missed += 1;
     }
 
+    /// One frame driven kinematic after a fallback (roadmap 032).
+    pub fn record_fallback(&mut self) {
+        self.fallback += 1;
+    }
+
     pub fn summary(&self) -> TrackingSummary {
         let yaw = (!self.yaw_errors.is_empty()).then_some(&self.yaw_errors);
         TrackingSummary {
@@ -284,6 +389,7 @@ impl TrackingStats {
             yaw_max: yaw.map(|y| max(y)),
             snaps: self.snaps,
             missed: self.missed,
+            fallback: self.fallback,
         }
     }
 }
@@ -720,6 +826,109 @@ mod tests {
         walker.record(0.1, None, false);
         assert_eq!(walker.summary().yaw_p95, None);
         assert_eq!(TrackingStats::default().summary().error_p95, 0.0);
+    }
+
+    const WEST: (f64, f64) = (-8.0, 0.0);
+
+    #[test]
+    fn npc_05_at_the_lamp_pole_is_blocked() {
+        // 024 bench, frame 25: commanded -8.0 m/s westward, the body bounced to +2.17.
+        assert!(blocked(false, Some(WEST), WEST, (2.17, 0.0), false));
+        // Stopped dead, or sliding sideways along the obstacle: no progress, blocked.
+        assert!(blocked(false, Some(WEST), WEST, (0.0, 0.0), false));
+        assert!(blocked(false, Some(WEST), WEST, (-0.5, 3.0), false));
+    }
+
+    #[test]
+    fn a_held_body_stays_blocked_until_it_makes_progress() {
+        // Frame 26: the force-bounded command has followed the body (+2.17 + 0.5 cap toward
+        // the target = +1.67) and the body moves at it -- still held by the pole.
+        assert!(blocked(true, Some((1.67, 0.0)), WEST, (1.6, 0.0), false));
+        // The same frame without the latch: not blocked against its own command.
+        assert!(!blocked(false, Some((1.67, 0.0)), WEST, (1.6, 0.0), false));
+        // Free again and back above the fraction of SSv2's speed: cleared.
+        assert!(!blocked(true, Some((-4.5, 0.0)), WEST, (-4.4, 0.0), false));
+        // SSv2 stopped it: nothing to be blocked from.
+        assert!(!blocked(
+            true,
+            Some((0.5, 0.0)),
+            (0.0, 0.0),
+            (0.4, 0.0),
+            false
+        ));
+    }
+
+    #[test]
+    fn a_free_body_is_not_blocked() {
+        // The bench's worst free frame: 0.94 of the command, in a corner.
+        assert!(!blocked(
+            false,
+            Some((-8.39, 0.0)),
+            WEST,
+            (-7.89, 0.3),
+            false
+        ));
+        // Starting from rest at the force bound, SSv2 already at 8 m/s: it moves at what it
+        // was given.
+        assert!(!blocked(
+            false,
+            Some((-0.5, 0.0)),
+            WEST,
+            (-0.49, 0.0),
+            false
+        ));
+        assert!(!blocked(false, Some((-3.0, 0.0)), WEST, (-2.9, 0.0), false));
+        // Below the minimum commanded speed the rule is off.
+        assert!(!blocked(false, Some((-0.9, 0.0)), WEST, (0.0, 0.0), false));
+        // No command yet (first frame).
+        assert!(!blocked(false, None, WEST, (0.0, 0.0), false));
+        // In contact with the ego: the contact hold's case, not this rule's -- latched or not.
+        assert!(!blocked(false, Some(WEST), WEST, (2.17, 0.0), true));
+        assert!(!blocked(true, Some(WEST), WEST, (2.17, 0.0), true));
+        // Either side of the fraction.
+        let edge = -8.0 * BLOCKED_FRACTION;
+        assert!(!blocked(false, Some(WEST), WEST, (edge - 0.01, 0.0), false));
+        assert!(blocked(false, Some(WEST), WEST, (edge + 0.01, 0.0), false));
+    }
+
+    #[test]
+    fn a_blocked_body_is_never_snapped_into_place() {
+        let t = cruising();
+        let mut c = on_track(&t);
+        c.x -= 0.9; // npc_05's 0.9 m error, held back by the pole
+        let snap = command(&t, &c, DT, VEHICLE_GAINS, Some(MODEL3), true);
+        assert!(matches!(snap, Command::Snap { .. }));
+        assert_eq!(act(snap, true), Action::Fallback);
+        // Unblocked, the same snap is a snap.
+        assert_eq!(act(snap, false), Action::Command(snap));
+        // Blocked but within the snap thresholds: it keeps tracking.
+        let track = command(&t, &on_track(&t), DT, VEHICLE_GAINS, Some(MODEL3), true);
+        assert_eq!(act(track, true), Action::Command(track));
+    }
+
+    #[test]
+    fn an_unblocked_snap_is_upright_on_the_ground() {
+        // The body tumbling (roll -75, pitch -30, 12 m up); SSv2 says level road.
+        let a = snap_attitude(0.0, 0.0, Some(0.02), 0.0, 0.008);
+        assert_eq!(a.roll_deg, 0.0);
+        assert_eq!(a.pitch_deg, 0.0);
+        assert!(close(a.z, 0.028), "{a:?}");
+        // SSv2's own attitude on a slope is kept.
+        let a = snap_attitude(1.5, -4.0, Some(10.0), 0.0, 0.0);
+        assert!(close(a.roll_deg, 1.5) && close(a.pitch_deg, -4.0) && close(a.z, 10.0));
+        // No ground: SSv2's z.
+        assert!(close(snap_attitude(0.0, 0.0, None, 0.3, 0.9).z, 1.2));
+    }
+
+    #[test]
+    fn fallback_frames_are_counted() {
+        let mut s = TrackingStats::default();
+        s.record(0.9, Some(0.0), false);
+        s.record_fallback();
+        s.record_fallback();
+        let sum = s.summary();
+        assert_eq!((sum.frames, sum.snaps, sum.fallback), (1, 0, 2));
+        assert_eq!(TrackingStats::default().summary().fallback, 0);
     }
 
     #[test]

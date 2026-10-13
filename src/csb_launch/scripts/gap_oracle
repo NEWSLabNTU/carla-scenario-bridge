@@ -32,7 +32,8 @@ poses, the 2D check `CollisionCondition` makes, with its height gate) and CARLA'
       puts the body on the ground), so a walker, whose CARLA origin is its body centre, is
       judged by its feet. Not the ego: its SSv2 pose is read back before the tick and
       trails CARLA's by one tick of motion by protocol (doc appendix, "Pairing"). Frames
-      flagged `spawn` or `contact_hold`, and frames with no CARLA state, are info; so is
+      flagged `spawn`, `contact_hold` or `kinematic` (a blocked NPC handed to kinematic,
+      032: at SSv2's pose by construction), and frames with no CARLA state, are info; so is
       the recovery right after a hold (`hold_recovery`: the run of frames adjacent to a
       `contact_hold` run whose error only shrinks -- below the snap distance the tracker
       closes it over a few frames). Nor an entity SSv2 reads back from CARLA like the
@@ -486,7 +487,7 @@ def _g2(trace, egos, kinds, ssv2_overlap, tol):
 
 def _g3(header, s, tol):
     """(status, xy, yaw, z) of one entity state: status is "missed", "spawn",
-    "contact_hold", "beyond" or "ok"."""
+    "contact_hold", "kinematic", "beyond" or "ok"."""
     if s.carla is None:
         return "missed", None, None, None
     o = header.origin_offset
@@ -507,6 +508,8 @@ def _g3(header, s, tol):
         return "spawn", xy, yaw, dz
     if s.contact_hold:
         return "contact_hold", xy, yaw, dz
+    if s.kinematic:
+        return "kinematic", xy, yaw, dz
     return "beyond", xy, yaw, dz
 
 
@@ -535,7 +538,7 @@ def _g3_findings(rows_by_name, kinds, tol):
                                      kind="hold_recovery"))
             elif status == "missed":
                 info.append(_finding("G3", [name], frames_, len(run), {}, kind="missed"))
-            elif status in ("spawn", "contact_hold"):
+            elif status in ("spawn", "contact_hold", "kinematic"):
                 info.append(_finding("G3", [name], frames_, len(run), _g3_numbers(run, tol),
                                      kind=status))
             elif len(run) >= tol.sustain:

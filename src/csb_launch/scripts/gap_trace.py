@@ -23,7 +23,9 @@ SCHEMA = 1
 ENTITY_KINDS = ("ego", "vehicle", "pedestrian", "misc_object")
 CONTACT_KINDS = ("ego", "vehicle", "pedestrian", "misc_object", "static", "unknown")
 NPC_MOTIONS = ("tracked", "kinematic")
-FLAGS = ("spawn", "contact_hold")
+# `kinematic` added under schema 1 (roadmap 032): a reader of the two-flag schema rejects it,
+# but every trace written before it still reads here.
+FLAGS = ("spawn", "contact_hold", "kinematic")
 
 
 class TraceError(ValueError):
@@ -103,6 +105,11 @@ class EntityState:
     @property
     def contact_hold(self):
         return "contact_hold" in self.flags
+
+    @property
+    def kinematic(self):
+        """A tracked NPC handed to kinematic after a blocked snap (roadmap 032)."""
+        return "kinematic" in self.flags
 
 
 @dataclass(frozen=True)

@@ -56,6 +56,7 @@ borrowed from greybox fuzzing.
 - [029: Prebuilt Releases](029-prebuilt-releases.md) — release tarballs of the built workspace, split by side: the simulation side per ROS distro (Autoware-free, its 13 Autoware message/library packages vendored), the vehicle side per Autoware release, the agent SDK as one wheel; every CARLA version's bridge binary in the same tarball behind a launcher; support tiers; CI build and smoke test
 - [030: Agent API](030-agent-api.md) — one Python `Agent` interface for any autopilot (own class, YAML-configured ROS adapter, or a subclass of ours), protocol v2 `reset` / `episode_end`, `csb-agent check` / `new` / `supervise`, reset between scenarios with restart as an option
 - [031: Maps for Scenarios](031-maps-for-scenarios.md) — **deferred 2026-10-13**: build Autoware maps from any CARLA town, find a place on the maps for a designed scenario, generate a road no town has; open-source status, expected map defects and estimates noted
+- [032: NPC Tracking Fixes](032-npc-tracking-fixes.md) — the five tracking gaps 024's baseline found: no snap into the static world (kinematic fall-back, upright on the ground), curvature feed-forward in corners, standing walkers still, spawn at speed, NPC contact sensors; before 025
 
 ## Real-site twin and realistic rendering (019-)
 
@@ -114,3 +115,4 @@ Per-phase state:
 8. **029 Prebuilt releases**, **030 Agent API** -- phase docs 2026-10-13; 030 takes 028's
    agent-interface step.
 9. 031 Maps for scenarios -- deferred (user, 2026-10-13); analysis kept in its doc.
+10. **032 NPC tracking fixes** -- phase doc 2026-10-13, from 024's baseline triage; before 025.

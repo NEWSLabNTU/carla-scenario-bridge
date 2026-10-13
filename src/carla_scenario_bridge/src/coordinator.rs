@@ -731,6 +731,14 @@ struct TrackedNpc {
     /// SSv2's heading for it last frame, CARLA degrees: the yaw rate comes from the poses
     /// (`npc_tracking::pose_yaw_rate`).
     last_yaw_deg: Option<f64>,
+    /// The planar velocity commanded last frame, CARLA m/s: what the blocked rule
+    /// (`npc_tracking::blocked`) holds the body's velocity after the tick against.
+    last_command: Option<(f64, f64)>,
+    /// Blocked last frame (`npc_tracking::blocked`, which holds it until the body moves on).
+    blocked: bool,
+    /// Origin above the bottom of the vehicle's CARLA box, m: a snap puts the box bottom on
+    /// the ground (`npc_tracking::snap_attitude`). Unused for walkers (`walker_teleport_z`).
+    lift: f32,
 }
 
 /// A walker's height bookkeeping: its fixed origin-above-feet lift, and the last ground
@@ -871,6 +879,10 @@ pub struct Coordinator {
     walker_height: HashMap<u32, WalkerHeight>,
     /// NPCs moved by physics rather than teleported (roadmap 023), by actor.
     tracked_npcs: HashMap<u32, TrackedNpc>,
+    /// Tracked NPCs handed to kinematic after a blocked snap (roadmap 032, gap A), by
+    /// actor: physics off, teleported to SSv2's pose every frame for the rest of the
+    /// episode, flagged `kinematic` in the gap trace.
+    kinematic_fallback: HashSet<u32>,
     /// Directory holding per-map config, e.g. the traffic light signal mapping.
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
@@ -1014,6 +1026,7 @@ impl Coordinator {
             accel_history: HashMap::new(),
             walker_height: HashMap::new(),
             tracked_npcs: HashMap::new(),
+            kinematic_fallback: HashSet::new(),
             collision_monitor,
             world_id,
             clock_path,
@@ -1137,6 +1150,7 @@ impl Coordinator {
         self.accel_history.remove(&actor_id);
         self.walker_height.remove(&actor_id);
         self.tracked_npcs.remove(&actor_id);
+        self.kinematic_fallback.remove(&actor_id);
     }
 
     /// Bind the release channel, or explain why we are not using one.
@@ -1430,6 +1444,7 @@ impl Coordinator {
                         && self
                             .collision_monitor
                             .touched_within(actor_id, npc_tracking::CONTACT_HOLD_FRAMES),
+                    kinematic: self.kinematic_fallback.contains(&actor_id),
                 })
             })
             .collect();
@@ -1618,6 +1633,8 @@ impl Coordinator {
             self.accel_history.clear();
             self.walker_height.clear();
             self.tracked_npcs.clear();
+            self.kinematic_fallback.clear();
+            self.kinematic_fallback.clear();
             self.miss_watch.reset();
             self.stale_snapshots = 0;
             // `sync_mode_enabled` is left as `enable_sync_mode` above set it. It used to be
@@ -2382,6 +2399,7 @@ impl Coordinator {
         self.accel_history.clear();
         self.walker_height.clear();
         self.tracked_npcs.clear();
+        self.kinematic_fallback.clear();
         self.miss_watch.reset();
         self.stale_snapshots = 0;
 
@@ -2572,6 +2590,7 @@ impl Coordinator {
         self.accel_history.clear();
         self.walker_height.clear();
         self.tracked_npcs.clear();
+        self.kinematic_fallback.clear();
         self.miss_watch.reset();
         self.stale_snapshots = 0;
         if self.gap_trace.recording() {
@@ -3177,6 +3196,12 @@ impl Coordinator {
                     steering,
                     performance: shape.performance,
                     last_yaw_deg: None,
+                    last_command: None,
+                    blocked: false,
+                    lift: {
+                        let bb = actor.bounding_box();
+                        walker_lift(bb.transform.location.z, bb.extent.z)
+                    },
                 },
             );
             tracing::info!(
@@ -3801,6 +3826,9 @@ impl Coordinator {
                     pose: entity_status.pose,
                 });
             } else {
+                if self.kinematic_fallback.contains(&actor_id) {
+                    self.collision_monitor.record_tracking_fallback(name);
+                }
                 // NPC or ego overwrite: set transform from SSv2 pose
                 if let Some(pose) = entity_status.pose.as_ref() {
                     let mut transform =
@@ -5112,12 +5140,30 @@ impl Coordinator {
             .touched_within(actor_id, npc_tracking::CONTACT_HOLD_FRAMES);
         let command =
             npc_tracking::command(&target, &current, dt, gains, npc.steering, !in_contact);
+        // Held by something other than the ego (roadmap 032, gap A): a snap would teleport
+        // it into that, and PhysX would throw it out (bench npc_05, 80 m up).
+        let body_v = body.velocity();
+        let body_planar = (f64::from(body_v.x), f64::from(body_v.y));
+        let is_blocked = npc_tracking::blocked(
+            npc.blocked,
+            npc.last_command,
+            (target.vx, target.vy),
+            body_planar,
+            in_contact,
+        );
+        if let Some(entry) = self.tracked_npcs.get_mut(&actor_id) {
+            entry.blocked = is_blocked;
+        }
+        let action = npc_tracking::act(command, is_blocked);
 
         // The error the law acts on: against the start-of-step pose, before this step.
         let error = (target.x - vx * dt - current.x).hypot(target.y - vy * dt - current.y);
         let yaw_error = (!npc.walker)
             .then(|| npc_tracking::wrap_deg(target.yaw_deg - yaw_rate_deg * dt - current.yaw_deg));
-        let snapped = matches!(command, npc_tracking::Command::Snap { .. });
+        let snapped = matches!(
+            action,
+            npc_tracking::Action::Command(npc_tracking::Command::Snap { .. })
+        );
         self.collision_monitor
             .record_tracking(name, error, yaw_error, snapped);
 
@@ -5126,6 +5172,39 @@ impl Coordinator {
             .find(actor_id)
             .wrap_err("find tracked actor")?
             .ok_or_else(|| eyre::eyre!("actor {actor_id} not found"))?;
+        let command = match action {
+            npc_tracking::Action::Command(c) => c,
+            npc_tracking::Action::Fallback => {
+                let speed = target.vx.hypot(target.vy);
+                let along = if speed > 0.0 {
+                    (body_planar.0 * target.vx + body_planar.1 * target.vy) / speed
+                } else {
+                    0.0
+                };
+                // The span's `frame` is the gap trace's first `kinematic` frame.
+                tracing::warn!(
+                    "Tracking '{name}': blocked -- moving {along:.2} m/s along SSv2's \
+                     {speed:.2} m/s, {error:.2} m off -- so not snapped into what holds it: \
+                     kinematic for the rest of the episode (physics off, SSv2's pose every \
+                     frame)"
+                );
+                actor
+                    .set_simulate_physics(false)
+                    .wrap_err("set_simulate_physics(false) (fallback)")?;
+                // As the kinematic path places it from now on (update_entity_status).
+                let mut place = target_tf;
+                if let Some(z) = self.walker_teleport_z(actor_id, &place.location) {
+                    place.location.z = z;
+                }
+                actor
+                    .set_transform(&place)
+                    .wrap_err("set_transform (fallback)")?;
+                self.tracked_npcs.remove(&actor_id);
+                self.kinematic_fallback.insert(actor_id);
+                self.collision_monitor.record_tracking_fallback(name);
+                return Ok(true);
+            }
+        };
         let (vx, vy, yaw_rate_deg, steer) = match command {
             npc_tracking::Command::Track {
                 vx,
@@ -5141,10 +5220,9 @@ impl Coordinator {
             } => {
                 // A finite force: the change from the body's velocity is capped
                 // (npc_tracking::limit_change), so a contact holds it back like a car.
-                let body_v = body.velocity();
                 let (vx, vy) = npc_tracking::limit_change(
                     (vx, vy),
-                    (f64::from(body_v.x), f64::from(body_v.y)),
+                    body_planar,
                     npc_tracking::max_change(npc.performance, dt),
                 );
                 (vx, vy, yaw_rate_deg, steer)
@@ -5163,6 +5241,20 @@ impl Coordinator {
                 snap_to.rotation.yaw = yaw_deg as f32;
                 if let Some(z) = self.walker_teleport_z(actor_id, &snap_to.location) {
                     snap_to.location.z = z;
+                } else {
+                    // Upright on the ground under the target (roadmap 032, gap A), not the
+                    // body's roll, pitch and z: a snap never keeps a tumble.
+                    let ground = self.ground_height_at(&snap_to.location).map(f64::from);
+                    let attitude = npc_tracking::snap_attitude(
+                        f64::from(target_tf.rotation.roll),
+                        f64::from(target_tf.rotation.pitch),
+                        ground,
+                        f64::from(target_tf.location.z),
+                        f64::from(npc.lift),
+                    );
+                    snap_to.rotation.roll = attitude.roll_deg as f32;
+                    snap_to.rotation.pitch = attitude.pitch_deg as f32;
+                    snap_to.location.z = attitude.z as f32;
                 }
                 tracing::debug!(
                     "Snap '{name}': error {error:.2} m, yaw error {yaw_error:?} deg, target \
@@ -5175,6 +5267,9 @@ impl Coordinator {
                 (vx, vy, yaw_rate_deg, None)
             }
         };
+        if let Some(entry) = self.tracked_npcs.get_mut(&actor_id) {
+            entry.last_command = Some((vx, vy));
+        }
         if npc.walker {
             let walker = carla::client::Walker::try_from(actor.clone())
                 .map_err(|_| eyre::eyre!("actor {actor_id} is not a walker"))?;
@@ -5193,12 +5288,13 @@ impl Coordinator {
             control.jump = false;
             walker.apply_control(&control).wrap_err("walker control")?;
         } else {
-            // Gravity and the suspension keep z; only the plane is commanded.
+            // Gravity and the suspension keep z; only the plane is commanded. A snap sets the
+            // whole velocity to the command's: no vertical speed carried into the new pose.
             actor
                 .set_target_velocity(&carla::geom::Vector3D {
                     x: vx as f32,
                     y: vy as f32,
-                    z: body.velocity().z,
+                    z: if snapped { 0.0 } else { body_v.z },
                 })
                 .wrap_err("set_target_velocity")?;
             actor

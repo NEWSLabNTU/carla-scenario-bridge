@@ -360,6 +360,28 @@ class G3PoseDivergence(unittest.TestCase):
         self.assertEqual(hold["frames"], [4, 6])
         self.assertAlmostEqual(hold["numbers"]["max_xy"], 1.6, places=6)
 
+    def test_kinematic_fallback_frames_are_info(self):
+        # Roadmap 032: a blocked NPC handed to kinematic is at SSv2's pose by construction;
+        # its hand-over (and anything left of the block) is info, not a finding.
+        frames = self.frames(set(), n=12)
+        for i in range(4, 12):
+            frames[i - 1].entities["car"] = state("car", 0.0, dz=0.6 if i < 7 else 0.0,
+                                                  dy=0.9 if i < 7 else 0.0,
+                                                  flags=("kinematic",))
+        t = make_trace(["ego", "car"], [gt.Frame(f.frame, f.sim_time, dict(f.entities))
+                                        for f in frames])
+        r = run(t)
+        self.assertEqual(checks(r, "G3"), [])
+        notes = info(r, "G3")
+        self.assertEqual([n["kind"] for n in notes], ["kinematic"])
+        self.assertEqual(notes[0]["frames"], [4, 6])
+        # The same divergence without the flag is a finding.
+        for i in range(4, 7):
+            frames[i - 1].entities["car"] = state("car", 0.0, dy=0.9)
+        t = make_trace(["ego", "car"], [gt.Frame(f.frame, f.sim_time, dict(f.entities))
+                                        for f in frames])
+        self.assertEqual(len(checks(run(t), "G3")), 1)
+
     def test_ego_is_not_judged(self):
         frames = [frame(i, ("ego", state("ego", 0.0, dx=0.43)), ("car", state("car", 30.0)))
                   for i in range(1, 10)]

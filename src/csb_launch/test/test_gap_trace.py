@@ -174,6 +174,17 @@ class ValidTrace(unittest.TestCase):
         self.assertEqual(out, [json.loads(line) for line in lines(SAMPLE)])
         self.assertEqual(gt.load_trace(gt.dumps(trace).splitlines()), trace)
 
+    def test_kinematic_flag(self):
+        # Roadmap 032: a tracked NPC handed to kinematic after a blocked snap. Added under
+        # schema 1 -- traces without it still read (SAMPLE has none).
+        trace = gt.load_trace(
+            mutate(5, lambda r: r["entities"]["truck"].update(flags=["kinematic"])))
+        truck = trace.frames[1].entities["truck"]
+        self.assertTrue(truck.kinematic)
+        self.assertFalse(truck.contact_hold)
+        self.assertFalse(trace.frames[1].entities["ego"].kinematic)
+        self.assertEqual(gt.load_trace(gt.dumps(trace).splitlines()), trace)
+
     def test_omitted_flags_are_empty(self):
         trace = gt.load_trace(lines(SAMPLE))
         self.assertEqual(trace.frames[1].entities["ego"].flags, ())

@@ -360,6 +360,14 @@ impl CollisionMonitor {
             .record_missed();
     }
 
+    /// A tracked NPC driven kinematic this frame after a blocked fallback (roadmap 032).
+    pub fn record_tracking_fallback(&mut self, name: &str) {
+        self.tracking
+            .entry(name.to_string())
+            .or_default()
+            .record_fallback();
+    }
+
     fn tracking_rows(&self) -> Vec<ReportTracking> {
         self.tracking
             .iter()
@@ -374,6 +382,7 @@ impl CollisionMonitor {
                     yaw_max: s.yaw_max,
                     snaps: s.snaps,
                     missed: s.missed,
+                    fallback: s.fallback,
                 }
             })
             .collect()
@@ -388,13 +397,21 @@ impl CollisionMonitor {
             };
             tracing::info!(
                 "Tracked '{}': {} frames, error p95 {:.3} / max {:.3} m{yaw}, {} snap(s), \
-                 {} missed",
+                 {} missed{}",
                 row.name,
                 row.frames,
                 row.error_p95,
                 row.error_max,
                 row.snaps,
-                row.missed
+                row.missed,
+                if row.fallback > 0 {
+                    format!(
+                        ", {} frame(s) kinematic after a blocked fallback",
+                        row.fallback
+                    )
+                } else {
+                    String::new()
+                }
             );
         }
     }
@@ -765,10 +782,14 @@ mod tests {
         m.record_tracking("npc", 0.6, Some(6.0), true);
         m.record_tracking("walker", 0.05, None, false);
         m.record_tracking_missed("npc");
+        m.record_tracking_fallback("npc");
         let rows = m.tracking_rows();
         assert_eq!(rows.len(), 2);
         let npc = rows.iter().find(|r| r.name == "npc").unwrap();
-        assert_eq!((npc.frames, npc.snaps, npc.missed), (2, 1, 1));
+        assert_eq!(
+            (npc.frames, npc.snaps, npc.missed, npc.fallback),
+            (2, 1, 1, 1)
+        );
         assert!((npc.error_max - 0.6).abs() < 1e-6);
         let walker = rows.iter().find(|r| r.name == "walker").unwrap();
         assert_eq!(walker.yaw_p95, None);

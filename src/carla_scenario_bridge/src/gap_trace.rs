@@ -164,6 +164,9 @@ pub struct StagedEntity {
     pub ssv2: Pose6,
     /// A tracked NPC within `CONTACT_HOLD_FRAMES` of an ego contact (roadmap 023).
     pub contact_hold: bool,
+    /// A tracked NPC handed to kinematic after a blocked snap (roadmap 032): physics off,
+    /// at SSv2's pose.
+    pub kinematic: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -356,6 +359,9 @@ impl GapTrace {
             }
             if e.contact_hold {
                 flags.push("contact_hold");
+            }
+            if e.kinematic {
+                flags.push("kinematic");
             }
             entities.insert(
                 e.name,
@@ -789,6 +795,7 @@ mod tests {
             actor_id,
             ssv2: [x, 0.0, 0.0, 0.0, 0.0, 0.0],
             contact_hold: hold,
+            kinematic: false,
         }
     }
 
@@ -812,7 +819,13 @@ mod tests {
         });
         t.stage_frame(
             2,
-            vec![staged("ego", 10, 0.1, false), staged("npc", 11, 5.2, true)],
+            vec![
+                staged("ego", 10, 0.1, false),
+                StagedEntity {
+                    kinematic: true,
+                    ..staged("npc", 11, 5.2, true)
+                },
+            ],
         );
         t.frame_time(2, 0.10);
         t.contacts(vec![
@@ -843,7 +856,10 @@ mod tests {
         assert_eq!(v[5]["other_kind"], "static");
         assert_eq!(v[6]["other_kind"], "unknown");
         assert!(v[7]["entities"]["ego"].get("flags").is_none());
-        assert_eq!(v[7]["entities"]["npc"]["flags"], json!(["contact_hold"]));
+        assert_eq!(
+            v[7]["entities"]["npc"]["flags"],
+            json!(["contact_hold", "kinematic"])
+        );
         assert_eq!(
             v[8],
             json!({"type": "end", "frame": 2, "sim_time": 0.1, "frames": 2,
@@ -908,7 +924,10 @@ mod tests {
                 f,
                 vec![
                     staged("ego", 10, f as f64, false),
-                    staged("barrier", 12, 20.0, f == 3),
+                    StagedEntity {
+                        kinematic: f == 4,
+                        ..staged("barrier", 12, 20.0, f == 3)
+                    },
                 ],
             );
             t.frame_time(f, 0.05 * f as f64);
@@ -945,6 +964,7 @@ assert t.entities["barrier"].blueprint_box is None
 assert [f.frame for f in t.frames] == [1, 2, 3, 4, 5]
 assert t.frames[0].entities["ego"].spawn and not t.frames[1].entities["ego"].spawn
 assert t.frames[2].entities["barrier"].contact_hold
+assert t.frames[3].entities["barrier"].kinematic and not t.frames[2].entities["barrier"].kinematic
 assert t.frames[0].entities["barrier"].carla is None
 assert abs(t.frames[4].entities["ego"].carla.x - 5.1) < 1e-9
 assert len(t.contacts) == 1 and t.contacts[0].other_kind == "static" and t.contacts[0].ego_id == 10

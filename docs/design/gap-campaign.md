@@ -177,7 +177,9 @@ reader rejects it unless asked not to.
 
 **Versioning.** `schema` on the episode line, now `1`. A new optional field may be added
 under the same schema; a reader rejects a schema it does not know, and every unknown
-`type`, `kind` or flag, so a typo does not read as absent data.
+`type`, `kind` or flag, so a typo does not read as absent data. The `kinematic` flag
+(roadmap 032, 2026-10-13) was added under schema 1: every trace written before it still
+reads, and only a reader older than the flag rejects a trace that carries it.
 
 | `type` | Field | Type | Meaning |
 |---|---|---|---|
@@ -202,7 +204,7 @@ under the same schema; a reader rejects a schema it does not know, and every unk
 | | `.ssv2` | pose | SSv2's pose of the entity origin: an NPC's intended pose; for the ego, the pose the bridge reported back |
 | | `.carla` | pose \| null | the actor's transform from this frame's world snapshot; null when the actor is missing from it |
 | | `.velocity` | [vx, vy, vz] \| null | the actor's velocity, map frame; null exactly when `.carla` is |
-| | `.flags` | list, optional | `spawn`: the entity's spawn frame (one snap by design); `contact_hold`: a tracked NPC held unsnapped within `CONTACT_HOLD_FRAMES` of an ego contact (023). Both make G3 divergence *info*, not a finding |
+| | `.flags` | list, optional | `spawn`: the entity's spawn frame (one snap by design); `contact_hold`: a tracked NPC held unsnapped within `CONTACT_HOLD_FRAMES` of an ego contact (023); `kinematic`: a tracked NPC handed to kinematic after a blocked snap (032), from the hand-over frame to the end of the episode -- physics off, at SSv2's pose. All three make G3 divergence *info*, not a finding |
 | `contact` | `frame` | int | SSv2 frame the event was seen in |
 | (one per `collision_monitor` event) | `carla_frame` | int | CARLA frame of the event |
 | | `sim_time` | float | s |

@@ -79,6 +79,10 @@ pub struct ReportTracking {
     /// Absent in reports written before it existed.
     #[serde(default)]
     pub missed: u32,
+    /// Frames driven kinematic after the body was blocked and fell back (roadmap 032).
+    /// Absent in reports written before it existed.
+    #[serde(default)]
+    pub fallback: u32,
 }
 
 /// One ego run, from the ego's spawn to its despawn (or teardown, or CARLA restart).
@@ -343,6 +347,7 @@ mod tests {
             yaw_max: None,
             snaps: 0,
             missed: 2,
+            fallback: 30,
         });
         let json = serde_json::to_value(&r).unwrap();
         assert_eq!(json["tracking"][0]["snaps"], 0);
@@ -351,11 +356,18 @@ mod tests {
         let back: ContactReport = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(back.tracking[0].yaw_max, None);
         assert_eq!(back.tracking[0].missed, 2);
+        assert_eq!(back.tracking[0].fallback, 30);
         // A report written before `missed` existed still parses, as 0.
         let mut old = json;
         old["tracking"][0].as_object_mut().unwrap().remove("missed");
+        // ... and so does one written before `fallback` (roadmap 032).
+        old["tracking"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("fallback");
         let back: ContactReport = serde_json::from_value(old).unwrap();
         assert_eq!(back.tracking[0].missed, 0);
+        assert_eq!(back.tracking[0].fallback, 0);
     }
 
     #[test]
