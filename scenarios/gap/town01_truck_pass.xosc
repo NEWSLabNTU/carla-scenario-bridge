@@ -1,0 +1,234 @@
+<?xml version="1.0"?>
+<!--
+	Roadmap 024 step 6: the gap oracle's positive control. A declared 12 m truck whose CARLA
+	body is pinned to vehicle.tesla.model3 (4.79 m) closes on the driving ego from behind and
+	holds station with CARLA's Model 3 about 1.2 m off the ego's CARLA rear, while SSv2's 12 m
+	box reaches about 2.25 m into the ego's declared box. gap_oracle must report G1 (overlap in
+	SSv2's geometry only) on the ego-truck pair, and no CARLA contact.
+
+	The body is pinned with model3d, which names a CARLA blueprint: 022's second rule (the
+	scenario's explicit word), below `blueprint_map` and above the size match, which would
+	otherwise pick a truck for this box. The pin is the point: the mismatch is deliberate.
+
+	Why behind and not beside: the declared box and the Model 3 differ by 7.2 m in length but
+	only 0.2 m in width (2.5 vs 2.16 m; the ego's declared 2.1 m is even narrower than its
+	CARLA body), so a truck passing 1 m to the side is clear in both geometries. Along the
+	lane, SSv2's box ends 3.6 m past each end of CARLA's body (declared centre 4.0 m ahead of
+	the rear axle, the body centred there). Distances from the truck's origin (rear axle) to
+	the ego's, along the lane: SSv2's boxes meet at 10.75 m, CARLA's at 7.29 m; the truck holds
+	at 8.5 m (reference points, not freespace, so the condition reads the same in both worlds).
+
+	Verdict: SSv2 fails it, by design. Its CollisionCondition fires when the declared boxes
+	meet, and the scenario ends 3 s later with exitFailure, so the overlap lasts ~3 s of frames.
+	That is the disagreement the campaign looks for (SSv2 failing a run on a collision CARLA
+	never had), and gap_oracle's G4 class for it is FAIL(collision)+overlap-only-in-SSv2.
+	physical_verdict's carla_contact passes (no contact). A failure without the collision
+	(timeout, 120 s) means the truck never caught the ego: not a valid control run.
+	The ego drives west as in town01_motorbike_body.xosc; the truck starts 25 m behind it.
+-->
+<OpenSCENARIO>
+	<FileHeader author="carla-scenario-bridge" date="2026-10-13T00:00:00+00:00" description="Town01 declared 12 m truck on a Model 3 body holding behind the driving ego, the gap oracle positive control" revMajor="1" revMinor="2" />
+	<ParameterDeclarations />
+	<CatalogLocations />
+	<RoadNetwork>
+		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
+	</RoadNetwork>
+	<Entities>
+		<ScenarioObject name="ego">
+			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
+				<BoundingBox>
+					<Center x="1.5" y="0.0" z="0.9" />
+					<Dimensions width="2.1" height="1.8" length="4.5" />
+				</BoundingBox>
+				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="Autoware">
+					<Properties>
+						<Property name="maxJerk" value="1.5" />
+						<Property name="minJerk" value="-1.5" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+		<ScenarioObject name="truck">
+			<!-- A 12 x 2.5 x 3.5 m truck, origin at the rear axle; CARLA body pinned to the Model 3. -->
+			<Vehicle name="truck" vehicleCategory="truck" model3d="vehicle.tesla.model3">
+				<BoundingBox>
+					<Center x="4.0" y="0.0" z="1.75" />
+					<Dimensions width="2.5" height="3.5" length="12.0" />
+				</BoundingBox>
+				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
+				<Axles>
+					<FrontAxle maxSteering="0.5" wheelDiameter="1.0" trackWidth="2.0" positionX="7.0" positionZ="0.5" />
+					<RearAxle maxSteering="0.0" wheelDiameter="1.0" trackWidth="2.0" positionX="0.0" positionZ="0.5" />
+				</Axles>
+				<Properties />
+			</Vehicle>
+			<ObjectController>
+				<Controller name="">
+					<Properties>
+						<!-- Blind: it does not slow for the ego; the hold below is all that stops it. -->
+						<Property name="isBlind" value="true" />
+					</Properties>
+				</Controller>
+			</ObjectController>
+		</ScenarioObject>
+	</Entities>
+	<Storyboard>
+		<Init>
+			<Actions>
+				<Private entityRef="ego">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="190.8" y="-130.1" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+					<PrivateAction>
+						<RoutingAction>
+							<AcquirePositionAction>
+								<Position>
+									<WorldPosition x="120.0" y="-129.8" z="0.0" h="3.14159" p="0" r="0" />
+								</Position>
+							</AcquirePositionAction>
+						</RoutingAction>
+					</PrivateAction>
+				</Private>
+				<Private entityRef="truck">
+					<PrivateAction>
+						<TeleportAction>
+							<Position>
+								<WorldPosition x="215.8" y="-130.1" z="0.3" h="3.14159" p="0" r="0" />
+							</Position>
+						</TeleportAction>
+					</PrivateAction>
+				</Private>
+			</Actions>
+		</Init>
+		<Story name="town01_truck_pass">
+			<Act name="approach_act">
+				<ManeuverGroup maximumExecutionCount="1" name="truck_group">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="truck" />
+					</Actors>
+					<Maneuver name="truck_maneuver">
+						<Event name="go" priority="parallel">
+							<Action name="go_speed">
+								<PrivateAction>
+									<LongitudinalAction>
+										<SpeedAction>
+											<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+											<SpeedActionTarget>
+												<AbsoluteTargetSpeed value="8.0" />
+											</SpeedActionTarget>
+										</SpeedAction>
+									</LongitudinalAction>
+								</PrivateAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="go_time" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="2" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="hold" priority="parallel">
+							<Action name="hold_speed">
+								<PrivateAction>
+									<LongitudinalAction>
+										<SpeedAction>
+											<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+											<SpeedActionTarget>
+												<RelativeTargetSpeed entityRef="ego" value="0" speedTargetValueType="delta" continuous="true" />
+											</SpeedActionTarget>
+										</SpeedAction>
+									</LongitudinalAction>
+								</PrivateAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="closed_up" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="truck" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="false" rule="lessThan" value="8.5" />
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<ManeuverGroup maximumExecutionCount="1" name="end_group">
+					<Actors selectTriggeringEntities="false">
+						<EntityRef entityRef="ego" />
+					</Actors>
+					<Maneuver name="end_conditions">
+						<Event name="timeout" priority="parallel">
+							<Action name="exit_timeout">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="timeout_condition" delay="0" conditionEdge="none">
+										<ByValueCondition>
+											<SimulationTimeCondition value="120" rule="greaterThan" />
+										</ByValueCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+						<Event name="ssv2_collision" priority="parallel">
+							<Action name="exit_failure">
+								<UserDefinedAction>
+									<CustomCommandAction type="exitFailure" />
+								</UserDefinedAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="ssv2_collision_held" delay="3" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="truck" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<CollisionCondition>
+													<EntityRef entityRef="ego" />
+												</CollisionCondition>
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
+					</Maneuver>
+				</ManeuverGroup>
+				<StartTrigger>
+					<ConditionGroup>
+						<Condition name="start" delay="0" conditionEdge="none">
+							<ByValueCondition>
+								<SimulationTimeCondition value="0" rule="greaterThan" />
+							</ByValueCondition>
+						</Condition>
+					</ConditionGroup>
+				</StartTrigger>
+			</Act>
+		</Story>
+		<StopTrigger />
+	</Storyboard>
+</OpenSCENARIO>

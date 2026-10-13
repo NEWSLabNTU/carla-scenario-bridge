@@ -12,8 +12,10 @@ install(
 # `ros2 run csb_launch physical_verdict`: CARLA's contacts as a JUnit testcase (021).
 # `ros2 run csb_launch carla_poses`: poses on CARLA's map as OpenSCENARIO WorldPositions.
 # `ros2 run csb_launch chase_view`: a chase camera window on the ego, for demos (027).
+# `ros2 run csb_launch gap_oracle`: SSv2-vs-CARLA disagreements in a gap trace (024).
 install(
   PROGRAMS scripts/run_suite scripts/physical_verdict scripts/carla_poses scripts/chase_view
+    scripts/gap_oracle
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -30,6 +32,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_physical_verdict test/test_physical_verdict.py)
   ament_add_pytest_test(test_gap_geometry test/test_gap_geometry.py)
   ament_add_pytest_test(test_gap_trace test/test_gap_trace.py)
+  ament_add_pytest_test(test_gap_oracle test/test_gap_oracle.py)
 endif()
 
 ament_package()

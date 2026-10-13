@@ -74,6 +74,17 @@ CARLA or ROS needed at run time. It checks the campaign's differential contracts
 | **G3** pose divergence | SSv2 intended vs CARLA actual (after offsets) beyond 0.2 m / 2° in plane or 0.5 m in z, sustained 3+ frames (spawn snapping, rejected teleports, walker lift) |
 | **G4** verdict class | G1-G3 joined with the JUnit result: `PASS+contact`, `PASS+overlap-only-in-CARLA`, `FAIL(collision)+no-contact`, `FAIL(collision)+overlap-only-in-SSv2`, `agree` |
 
+Three rules the table does not spell out, settled building it (step 6) on the step-4
+`town01_rear_contact` trace, where a contact both worlds saw still produced 1-2-frame G1s at
+its edges: (1) CARLA's side of G1 counts a recorded contact of the pair as overlap at its
+frame and the `--contact-window` frames after it (the collision sensor reports the hit, not
+every frame the bodies then rest a few mm apart: 1 mm at the onset frame there); (2) a
+disagreement frame whose `|d_ssv2 - d_carla|` is within the ego's one-tick lag (its SSv2
+pose is read back before the tick, measured per frame as the in-plane distance between that
+pose, offset applied, and CARLA's) plus `--touch` (0.05 m) is timing, not geometry, and is
+reported as info `lag_band` (the separation edge there: 0.27 m against a 0.44 m lag);
+(3) G3 compares z box bottom to box bottom, since a CARLA walker's origin is its body centre
+(0.65 m above SSv2's origin in the step-4 pedestrian trace, at the feet).
 NPC-NPC pairs are judged too and reported at low priority (they rarely change an ego
 verdict). Output: `findings.json` per run -- including the run's **gap signature** (contracts
 broken × entity class × geometry) and the min margin difference, which part 2 consumes as
@@ -121,7 +132,7 @@ Written before the known gaps were fixed; four corrections from what those phase
    (roadmap 016), no frame dropped. Restated 2026-10-13 (user) from "within noise of off":
    the measured cost is small and constant (+0.05-0.15 ms p95 steady state, under 0.5 % of
    the 50 ms frame) but larger than the off runs' spread, so "within noise" could not hold.
-6. [ ] **Positive control.** A crafted scenario: a declared 12 m truck that `blueprint_map`
+6. [x] **Positive control.** A crafted scenario: a declared 12 m truck that `blueprint_map`
    pins to `vehicle.tesla.model3` (the override 022 keeps, so the mismatch is deliberate)
    passes the ego 1 m to the side. G1 must fire
    (overlap in SSv2's geometry only). `town01_rear_contact`: both geometries and the contact
@@ -150,6 +161,57 @@ Written before the known gaps were fixed; four corrections from what those phase
 - The baseline table exists, with every starter-scenario finding classified.
 
 ### Results
+
+**2026-10-13, step 6 -- acceptance holds: G1 fires on the truck, rear contact silent.**
+`gap_oracle` (`src/csb_launch/scripts/gap_oracle`, stdlib, imports `gap_geometry` /
+`gap_trace` from its own directory, `install(PROGRAMS)`), test-first: `test_gap_oracle` 36
+tests on synthetic traces written through `gap_trace.dumps` (seen failing on the missing
+script, then green): G1 SSv2-only (declared 12 m truck on a Model 3: penetration 2.25,
+CARLA gap 1.3, `d_ssv2 - d_carla` -3.55 m), CARLA-only (2 m bike on a Model 3), both clear,
+both overlapping, two intervals, NPC pair at low priority, height gate, missing CARLA state,
+contact as CARLA touch, lag band and its limit; G2 contact with/without SSv2 overlap within
++-2, static hit, non-entity actor, window flag; G3 sustained/brief/within tolerance, yaw, z,
+walker origin, flags, spawn/contact_hold as info, ego excluded, missed as info; G4 every
+class incl. `unknown` and `agree`, `carla_contact` testcase ignored; CLI exit 0 with
+findings, non-zero on an unreadable or missing trace, a cut trace judged and marked. The
+three rules above the table came from running it on the step-4 `town01_rear_contact` trace
+before any live run: as first written it reported two SSv2-only G1s there (frame 421:
+SSv2 -0.29 m, CARLA +0.001 m, the frame after the hit; frames 450-451: SSv2 -0.25/-0.03,
+CARLA +0.012/+0.114, the ego's SSv2 pose 0.44 m behind CARLA's at 9 m/s), both edges of a
+contact both worlds saw. Scenario `scenarios/gap/town01_truck_pass.xosc`: the truck declared
+12 x 2.5 x 3.5 m (centre x 4.0) with `model3d="vehicle.tesla.model3"` -- 022's rule 2, the
+scenario's own word, so no operator `blueprint_map` entry is needed; spawned as the Model 3
+(4.79 x 2.16 m) -- closes from behind at 8 m/s and holds the ego's speed at 8.5 m reference
+distance; SSv2's `CollisionCondition` held 3 s ends it with `exitFailure`, by design (the
+"SSv2 fails on a collision CARLA never had" class). Behind, not beside: the boxes differ by
+7.2 m in length but 0.2 m in width, so a 1 m lateral pass is clear in both geometries.
+**Live** (bridge + relay restarted with `GAP_TRACE_DIR`, ego via relay, Town01, `npc_motion:
+tracked`, `run_suite --physical-verdict`): `town01_truck_pass` FAIL 1/2 (SSv2:
+`ssv2_collision_held` "[truck] colliding with ... ego"; `carla_contact` pass), 45 s;
+`town01_rear_contact` PASS 2/2, 26 s. Oracle, with each JUnit:
+
+```
+20261013T020756.462Z_1.jsonl: G1 1 (1 ego, 0 npc) G2 0 G3 1 info 0 | G4 FAIL(collision)+overlap-only-in-SSv2 (fail_collision) | min d_ssv2-d_carla -3.57 m | 353 frames, 0 contacts | signature C1:vehicle:ssv2,C3:vehicle:pose,C4:FAIL(collision)+overlap-only-in-SSv2
+20261013T020850.798Z_2.jsonl: G1 0 (0 ego, 0 npc) G2 0 G3 0 info 3 | G4 agree (pass) | min d_ssv2-d_carla -1.58 m | 262 frames, 23 contacts | signature -
+```
+
+Truck: G1 ego-truck frames 294-353 (60, 3.0 s), SSv2 penetration max 2.31 m, CARLA gap min
+0.53 m (held 0.88-1.15), `d_ssv2 - d_carla` -3.57 m; the G3 is real, not the oracle's:
+frames 303-305, 0.63 m in plane -- the hold's step from 8 to 2 m/s is beyond the tracked
+body's braking (0.49 m/s per frame, ~10 m/s^2), so CARLA's Model 3 ran 0.2/0.44/0.63 m past
+its intended pose until the snap at 306 (0.004 m); exactly `--sustain` frames, so a
+`linear` hold would remove it. Rear contact: 23 contacts (frames 203-229, max 7942 N·s),
+both geometries overlap through them; info = one `lag_band` frame (233: SSv2 -0.09, CARLA
++0.086, band 0.50) and two `contact_hold` windows (205-231 max 1.51 m, 235-250 0.51 m).
+With the band off (`--touch -10`) the same trace reads G1 1 (frame 233), so the band is what
+keeps it silent here; the contact rule was not needed this run (the onset frames agreed).
+Also on old traces (not judged here, step 7's): the step-4 pedestrian trace has G3 on the
+walker's yaw (174° for 29 frames, 108° for 68); the first step-5 20-NPC bench trace has
+74 G3s: 73 tracking excursions of 3-70 frames (most 8-17), max 0.07-0.58 m in plane, and
+`npc_05` diverging from frame 25 to the end, 80 m off in z (left the road). The oracle
+takes 0.05 s on the 479-frame trace, 0.45 s on the 1202-frame 20-NPC one. `just test` 270
+Rust passed / 1 skipped, 144 pytest; `just check` clean. Bridge log
+`play_log/bridge/2026-10-13_10-06-58`.
 
 **2026-10-13, step 5 -- not ticked: off unchanged, on costs ~0.05-0.15 ms, above the
 off-run spread.** Build: acb submodule 3ed0a8a -> 8a5af50 (the `ad14899` pin), both
