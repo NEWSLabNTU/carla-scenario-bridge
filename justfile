@@ -549,9 +549,12 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # a process of its own, which is play_launch's isolated mode (0.15 defaults to observable,
     # one process per container, as ros2 launch). The guide's command carries both.
     # EGO_PLAY_LAUNCH_ARGS: further play_launch options (e.g. `-c <runtime config>`),
-    # split on whitespace, placed before the launch file.
+    # split on whitespace, placed before the launch file. EGO_CONTAINER_MODE overrides
+    # isolated: on rmw_zenoh_cpp every process is a zenoh peer and the peers mesh, so
+    # isolated's ~200 processes cost far more than observable's ~80 (one per container);
+    # observable gives up reloading one crashed composable alone.
     exec play_launch launch --web-addr 0.0.0.0:8082 \
-        --container-mode isolated --composable-respawn on-crash \
+        --container-mode "${EGO_CONTAINER_MODE:-isolated}" --composable-respawn on-crash \
         --log-dir play_log/ego \
         ${EGO_PLAY_LAUNCH_ARGS:-} \
         acb_launch carla_simulator.launch.xml \
