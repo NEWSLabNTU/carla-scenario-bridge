@@ -116,8 +116,11 @@ Written before the known gaps were fixed; four corrections from what those phase
 4. [x] **Bridge recorder.** Header at spawn, per-frame line from one snapshot, contacts from
    `collision_monitor`'s queue; writer thread; `gap_trace_dir` param and launch argument.
    Unit test: recorder output parses with the oracle's reader.
-5. [ ] **No change when off; no cost when on.** Starter scenarios unchanged with the param
-   unset; `frame_stats` p95 with it on within noise of off (20-NPC bench, roadmap 016).
+5. [x] **No change when off; bounded cost when on.** Starter scenarios unchanged with the
+   param unset; bridge processing p95 with it on at most +0.5 ms over off on the 20-NPC bench
+   (roadmap 016), no frame dropped. Restated 2026-10-13 (user) from "within noise of off":
+   the measured cost is small and constant (+0.05-0.15 ms p95 steady state, under 0.5 % of
+   the 50 ms frame) but larger than the off runs' spread, so "within noise" could not hold.
 6. [ ] **Positive control.** A crafted scenario: a declared 12 m truck that `blueprint_map`
    pins to `vehicle.tesla.model3` (the override 022 keeps, so the mismatch is deliberate)
    passes the ego 1 m to the side. G1 must fire
@@ -141,11 +144,50 @@ Written before the known gaps were fixed; four corrections from what those phase
 ## Acceptance
 
 - `gap_oracle` flags the positive control (G1) and stays silent on `town01_rear_contact`.
-- With `gap_trace_dir` unset the bridge behaves exactly as before; with it set, frame-time
-  p95 is unchanged within noise and no frame is dropped on the starter scenarios.
+- With `gap_trace_dir` unset the bridge behaves exactly as before; with it set, bridge
+  processing p95 rises by at most 0.5 ms and no frame is dropped (restated 2026-10-13 from
+  "unchanged within noise").
 - The baseline table exists, with every starter-scenario finding classified.
 
 ### Results
+
+**2026-10-13, step 5 -- not ticked: off unchanged, on costs ~0.05-0.15 ms, above the
+off-run spread.** Build: acb submodule 3ed0a8a -> 8a5af50 (the `ad14899` pin), both
+workspaces rebuilt (acb's, then this one), installed binaries newer than the sources; Town01,
+`npc_motion: tracked` (default), ego via relay, `run_suite --physical-verdict`, one
+simulation-side restart per mode. **Off**: `basic/` 7/7 PASS (every scenario 2/2,
+`town02_episode_change` included, first try); the bridge's params show `gap_trace_dir: ""`,
+no `Gap trace on` line, no `.jsonl` written anywhere on the volume. **On/off bench**
+(`scenarios/bench/town01_npc_20.xosc`, 20 tracked NPCs, 1201 frames each, all PASS; "whole
+run" `Frame budget` lines, ms):
+
+| run | trace | processing p50/p95 | UpdateEntityStatus p50/p95 | tick p50/p95 |
+|-----|-------|--------------------|----------------------------|--------------|
+| off 1 | off | 0.35 / 0.45 | 0.24 / 0.34 | 9.17 / 10.34 |
+| off 2 | off | 0.35 / 0.46 | 0.25 / 0.34 | 9.19 / 10.43 |
+| on 1  | on  | 0.50 / 0.90 | 0.38 / 0.74 | 6.21 / 10.12 |
+| on 2  | on  | 0.50 / 0.69 | 0.38 / 0.55 | 6.10 / 7.08 |
+| off 3 (after the on runs) | off | 0.44 / 0.59 | 0.32 / 0.47 | 6.17 / 7.54 |
+
+Every run has one processing max of 266-340 ms, frame 2 (20 spawns), on and off alike; no
+`tick > 100 ms`. Noise as the step defines it (off 1 vs off 2) is 0.01 ms at p95, and both
+on runs exceed it (+0.23 / +0.44 ms); even taking off 3 into the spread (0.45-0.59, CARLA's
+tick having dropped from 9.2 to 6.2 ms p50 between sessions, so the host moved), on 2 is
+0.10 ms above it and on 1 0.31 (its first two 200-frame windows read p95 1.67 / 1.06 with
+tick p95 13.8 / 12.2, a disturbed host; its later windows 0.63-0.71). Steady-state
+200-frame windows put the recorder's cost at +0.05-0.07 ms p50 and +0.05-0.15 ms p95 against
+the adjacent off 3, under 0.5 % of the 50 ms step -- a real, small, constant cost (the
+snapshot plus building a 20-entity frame on the ZMQ thread), not noise. So the criterion as
+written fails; it passes if restated as an absolute bound (e.g. p95 +0.5 ms), which is the
+user's call. **Traces** (on 1 / on 2): 7.26 MB each (~6 KB/frame), 1202 frames, 20 entities,
+0 contacts, 0 frames with an entity missing from CARLA's snapshot, `dropped_frames: 0`,
+`complete: true`; both load with `gap_trace.load_trace`. **Odd, not 024's**: the first bench
+run (off, straight after `basic/` left CARLA on Town02) failed -- Initialize loaded Town01,
+all 20 NPCs spawned at frame 2, and the next `UpdateEntityStatus` found every one "not in
+the world snapshot" (`track_npc`, `self.world.snapshot()`), a failed frame; SSv2 ended the
+scenario. The rerun with Town01 already loaded passed, as did every later run. Seen once;
+suspect a stale snapshot after `load_world` with tracked NPCs. Bridge logs:
+`play_log/bridge/2026-10-13_06-54-30` (off 1-2), `_07-38-56` (on), `_07-48-10` (off 3).
 
 **2026-10-13, step 4.** Recorder `src/carla_scenario_bridge/src/gap_trace.rs`, wired into the
 coordinator; param `gap_trace_dir` (config key, ROS param, `bridge.launch.xml` and
