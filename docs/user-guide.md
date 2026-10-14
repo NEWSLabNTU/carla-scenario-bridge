@@ -135,14 +135,18 @@ download link (`scripts/download_maps.sh`) is dead at the time of writing, so th
 public download yet; providing the maps is a separate effort. With a copy of the pack,
 `CSB_MAP_SOURCE=<pack dir> scripts/download_maps.sh` installs it under
 `data/carla-autoware-bridge/<Town>/` with the projector fix SSv2 needs; then generate each
-town's `carla/traffic_lights.yaml` as above. The script also repairs three defects of the
+town's `carla/traffic_lights.yaml` as above. The script also repairs four defects of the
 pack, idempotently (`scripts/repair_lanelet_traffic_lights.py`, `scripts/repair_lanelet_subtypes.py`,
-`scripts/repair_lanelet_local_coords.py`; run them on a copy you installed another way):
+`scripts/repair_lanelet_local_coords.py`, `scripts/repair_lanelet_turn_direction.py`; run them
+on a copy you installed another way):
 traffic lights whose type tags are empty (invisible to Autoware and SSv2); lanelets with no
 `subtype` tag -- the kerb strips beside every road -- which make Autoware's
 `map_based_prediction` abort as soon as a pedestrian is near one
 (`lanelet::NoSuchAttributeError: Could not find 1`); and stop lines and signs whose nodes
-carry only lat/lon, which Autoware projects up to 2.4 m away from where the pack meant them. Keep the towns side by side in one directory --
+carry only lat/lon, which Autoware projects up to 2.4 m away from where the pack meant them;
+and junction lanelets with no `turn_direction` tag, without which Autoware's `intersection`
+and `blind_spot` modules never launch (each lanelet that leaves a fork or joins a merge is
+tagged `straight`, `left` or `right` from its heading change). Keep the towns side by side in one directory --
 the scenarios below find them as `$(env CARLA_MAPS)/<Town>`:
 
 ```bash

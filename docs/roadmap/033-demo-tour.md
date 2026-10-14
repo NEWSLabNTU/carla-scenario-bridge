@@ -121,13 +121,18 @@ recording picks them up.
    and `blind_spot` modules never launch on it. **Decision (2026-10-14): tag them.** First
    (4a) `scripts/repair_lanelet_turn_direction.py`, the fourth repair pass beside the other
    three: tags every lanelet that lies inside a junction (OpenDRIVE junction connector:
-   a lanelet whose predecessor has more than one successor) `turn_direction=left|right|
+   a driveable lanelet that leaves a fork -- a predecessor with more than one successor --
+   or joins a merge -- a successor with more than one predecessor; Autoware's map
+   requirement vm-03-02 asks for the tag on every lanelet in an intersection, and nothing
+   else is needed to launch the modules) `turn_direction=left|right|
    straight` from its heading change, text insertion, idempotent, `.orig` kept; wired into
    `download_maps.sh` and the user guide; pytest on a small synthetic map; verified on
    Town01 by listing the route's junction lanelets and by Autoware launching
    `intersection` / `blind_spot` at them (planning debug or `/planning/scenario_planning/
    status/...` module states). Then re-run the Town01 starters once (the modules now slow
-   the ego at junctions) and note any change. Then the incident templates.
+   the ego at junctions) and note any change. **4a done (2026-10-14)**: 72 Town01 lanelets
+   tagged, both modules launch at the route's junctions, starters 6/6 unchanged (Results).
+   Then the incident templates.
 5. [ ] **Compose the tour** (`src/csb_examples/scenarios/demo/town01_tour.xosc`): route,
    triggers, add / delete, watchdogs, the single stop trigger. One ManeuverGroup per
    incident holding its add, delete and watchdog events: a `StoryboardElementStateCondition`
@@ -239,3 +244,64 @@ Runs: `tour_bare` PASS (1 run; junit 0 failures). Load-checked first with
 -home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-80a742b40cbd/scratchpad/s033_3`
 (`route_sites.yaml`, the map tools `ll.py` / `route.py` / `sites.py`, `gen_bare.py`,
 `tour_bare.xosc`, `analyse.py`, `run1/` with the CARLA track, Autoware route and timing).
+
+**Step 4a: `turn_direction` (2026-10-14).** `scripts/repair_lanelet_turn_direction.py`, the
+fourth repair pass (wired into `download_maps.sh` beside the other three and listed in the
+user guide; `src/csb_launch/test/test_repair_lanelet_turn_direction.py`, 6 tests on a
+synthetic fork-and-merge map, run by `just test`).
+
+*The rule.* Autoware 1.5 (universe source read at 0.40, same code path) launches
+`intersection` on any path lanelet whose `turn_direction` is `straight` / `left` / `right`
+(`IntersectionModuleManager::launchNewModules`; anything else reads "else" and is skipped)
+and `blind_spot` on `left` / `right`. Nothing else is required: no `right_of_way` means every
+conflicting lanelet is an attention lane, a missing stop line is derived from the first
+conflict, `intersection_area` is optional (`use_intersection_area: false`). The map
+requirements (vm-03-01/02) want the tag on *every* lanelet in an intersection. Junction
+lanelet = a road/highway lanelet that leaves a fork (a predecessor with > 1 successor, the
+doc's first heuristic) **or** joins a merge (a successor with > 1 predecessor), succession
+read as lanelet2 reads it (shared bound end points). In Town01/02 both clauses pick the same
+set; the merge clause adds turn-only connectors in Town03/05/10. Direction from the
+centreline's heading change entry -> exit, threshold **45 deg** (bisector of straight and a
+right angle; every town's junction lanelets sit at 0 +- 20 and 90 +- 20 deg), geometry from
+lat/lon. Known misses, in the docstring: straight-only middle lanes through multi-lane
+junctions (6 in Town03, 7 in Town05) stay untagged; mid-road lane adds tagged as junctions
+(15 in Town03); Town01's 11 converter-malformed connectors (stray first point, no
+predecessor, unroutable anyway) stay untagged.
+
+*Counts* (map pack, local only; second run tags 0, diff is insertions only):
+
+| Town | tagged | straight | left | right |
+|---|---|---|---|---|
+| Town01 | 72 | 24 | 24 | 24 |
+| Town02 | 48 | 16 | 16 | 16 |
+| Town03 | 183 | 80 | 44 | 59 |
+| Town05 | 248 | 116 | 64 | 68 |
+| Town10 | 71 | 26 | 19 | 26 |
+
+Town01 is twelve T junctions x 6 connectors. Checked against CARLA (read-only): all 72 match
+a CARLA `get_topology()` junction segment turning the same way; of the 81 untagged 4 m road
+lanelets, 79 have their midpoint outside any CARLA junction, the other 2 are malformed
+connectors. Route junction lanelets: **36717 straight** (bottom-left T, site 1), **38294
+straight** (bottom-right T, signalled, site 3), **35653 left** (top-right T, site 5), **40484
+straight**, **42063 straight** (x 337 road), **39793 right** (y -198, site 6); CARLA yaw
+change 0 / 0 / +90 / 0 / 0 / -90 deg, junction ids 87 / 143 / 26 / 222 / 278 / 194.
+
+*Live* (a fresh `just ego-av` on the tagged map, `tour_bare.xosc` once; a watcher on domain 1
+logging `/planning/cooperate_status/{intersection,intersection_occlusion,blind_spot}`,
+planning factors and `/control/command/turn_indicators_cmd`): **PASS**. One `intersection`
+(+ `intersection_occlusion`) instance at each of the six route junctions, created ~4 m before
+each and gone after it, all `safe` throughout; **`blind_spot` at both turns** (35653 left,
+39793 right). Turn signals now blink: left 228-246 s, right 277-295 s (wall time from the first odometry).
+Timing: first move -> goal **322.2 s** (step 3: 321.4), 1300 m, 4.04 m/s average, **no
+stop** (no sample under 0.5 m/s), slowest 1.89 m/s in the right turn (2.07 before); every
+site passed within 0.9 s of step 3's times. No planning factor from either module
+(nothing to yield to in an empty town; `occlusion.enable: false` in autoware_launch 1.5).
+
+*Starters* (`run_suite` over the six Town01 `basic/` scenarios on the same ego stack): **6/6
+PASS** (ego_drive 40 s, engage_state 44, pedestrian 129, rear_contact 72, simulator_autopilot
+51, traffic_light 185), as before 4a; their routes passed 2 `intersection` and 1
+`blind_spot` instances, no stop added. `just test`: 300 nextest + 169 pytest pass.
+
+Scratch: `/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-
+80a742b40cbd/scratchpad/s033_4a` (`pre/` maps before 4a, `survey*.py`, `check_topology.py`,
+`module_watch.py`, `analyse_modules.py`, `run1/` tour, `starters/` suite).

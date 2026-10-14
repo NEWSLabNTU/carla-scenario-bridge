@@ -103,6 +103,9 @@ YAML
     # A few nodes (stop lines, signs) carry only lat/lon, which Autoware projects with a
     # different transform than the one that made them: up to 2.4 m off. Tag them locally.
     python3 "$(dirname "$0")/repair_lanelet_local_coords.py" "$OUT"
+    # No lanelet carries turn_direction, so Autoware's intersection and blind_spot
+    # modules never launch. Tag the junction lanelets from their heading change.
+    python3 "$(dirname "$0")/repair_lanelet_turn_direction.py" "$OUT"
 
     if [ "$found" -eq 0 ]; then
         echo "ERROR: no town directories with lanelet2_map.osm under $MAP_SOURCE" >&2
@@ -140,6 +143,7 @@ ls "$OUT"
 python3 "$(dirname "$0")/repair_lanelet_traffic_lights.py" "$OUT"
 python3 "$(dirname "$0")/repair_lanelet_subtypes.py" "$OUT"
 python3 "$(dirname "$0")/repair_lanelet_local_coords.py" "$OUT"
+python3 "$(dirname "$0")/repair_lanelet_turn_direction.py" "$OUT"
 
 # Clean up zip
 rm -f "$ZIP"
