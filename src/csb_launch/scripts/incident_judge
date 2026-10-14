@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""Judge one run of a demo-tour incident (roadmap 033) by its row of the Incidents table.
+
+    ros2 run csb_launch incident_judge <trace.jsonl> --incident N --context <context.jsonl>
+        [--junit result.junit.xml] [--stop-line X Y YAW] [--json out.json]
+
+Reads the bridge's gap trace (`gap_trace_dir`, roadmap 024) for the bodies -- CARLA's
+transforms and blueprint boxes, CARLA's contacts -- and a log of SSv2's storyboard state
+changes (one JSON object per line: `{"ev": "state", "sim": <sim s>, "element":
+"<story>/<act>/<group>/<maneuver>/<event>[/<action>]", "to": "<state>"}`, as a subscriber of
+`/simulation/context` writes it) for when the incident's events ran. The incident's actors
+are the trace's entities named `i<N>_*`; its events are named as `gen_demo_incidents.py`
+names them (`<group>_start`, `_end`, `_watchdog`, `i4_broken_clear`, `i1_lead_brake`,
+`i3_red`, `i3_green`, ...).
+
+Every incident fails on: an ego contact with one of its actors (CARLA's sensor, or SSv2's
+CollisionCondition event `<actor>_contact`), an unplanned watchdog (`*_watchdog`: degraded),
+or, with --junit, a scenario that did not pass. Per row:
+
+  1 lead car brakes   the lead decelerates hard (peak >= 4.5 m/s2 over 0.25 s) and the ego
+                      stops behind it with a gap >= 2 m (box to box, both standing)
+  2 pedestrian        min distance ego-pedestrian reported; no contact
+  3 red light         the ego stands while red with its front short of the stop line
+                      (--stop-line, the line's pose; front <= +0.5 m past it), and
+                      moves again after green
+  4 blocked lane      the ego waits (stands >= 5 s) behind the broken-down car without
+                      contact, then proceeds after it is cleared (moves >= 10 m)
+  5 crossing traffic  no contact; the ego's wait before the turn and min gap reported
+  6 cyclist           no contact; min gap and whether the ego waited reported
+
+Distances are CARLA's: the signed distance between blueprint boxes at CARLA's transforms
+(`gap_geometry.carla_box`), negative when they overlap.
+"""
+
+import argparse
+import json
+import math
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import gap_geometry as gg  # noqa: E402
+import gap_trace as gt  # noqa: E402
+
+STILL_MPS = 0.1  # the ego or an actor standing
+MOVING_MPS = 0.5
+STOP_GAP_MIN_M = 2.0
+LEAD_DECEL_MIN = 4.5  # m/s2, the "brakes ~6 m/s2" check (peak over DECEL_WINDOW_S)
+DECEL_WINDOW_S = 0.25
+STOP_LINE_SLACK_M = 0.5
+I4_MIN_WAIT_S = 5.0
+I4_PROCEED_M = 10.0
+
+
+def events_from_context(lines):
+    """{event or action name: [sim times it went to completeState]}, plus every state change"""
+    done, changes = {}, []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            d = json.loads(raw)
+        except ValueError:
+            continue
+        if d.get("ev") != "state" or not d.get("element"):
+            continue
+        name = d["element"].split("/")[-1]
+        changes.append((d.get("sim"), name, d.get("to")))
+        # an element "ran" when it leaves standby: instant actions go straight to complete,
+        # lasting ones (a speed change, exitSuccess) through runningState first
+        if d.get("to") in ("runningState", "completeState") and d.get("from") in (None, "standbyState"):
+            done.setdefault(name, []).append(d.get("sim"))
+    return done, changes
+
+
+def context_offset(trace, done):
+    """trace sim_time minus the context's simulation time. The bridge's frames count from
+    `Initialize`; the interpreter's clock from the storyboard's start, seconds later. Anchored
+    on an incident actor's spawn frame against its group's `_start` event, else on the last
+    frame against the stop trigger (`goal_reached` / `timeout`), a frame or two late."""
+    times = {f.frame: f.sim_time for f in trace.frames}
+    for name, h in trace.entities.items():
+        group = name.rsplit("_", 1)[0] if name.count("_") > 1 else name.split("_")[0]
+        for g in (name.split("_")[0], group, "_".join(name.split("_")[:2])):
+            t = done.get(f"{g}_start")
+            if t and h.kind != "ego" and h.frame in times:
+                return times[h.frame] - 0.05 - t[0]
+    for ev in ("goal_reached", "timeout"):
+        t = done.get(ev)
+        if t and trace.frames:
+            return trace.frames[-1].sim_time - t[0]
+    return 0.0
+
+
+def junit_passed(path):
+    root = ET.parse(path).getroot()
+    suites = [root] if root.tag == "testsuite" else root.iter("testsuite")
+    cases = [c for s in suites for c in s.iter("testcase")]
+    bad = [c for c in cases if c.find("failure") is not None or c.find("error") is not None]
+    return bool(cases) and not bad
+
+
+def speed(state):
+    if state is None or state.velocity is None:
+        return None
+    return math.hypot(state.velocity[0], state.velocity[1])
+
+
+def box(trace, name, state):
+    h = trace.entities[name]
+    if state.carla is None or h.blueprint_box is None:
+        return None
+    p = gg.Pose2D(state.carla.x, state.carla.y, state.carla.yaw)
+    return gg.carla_box(p, h.blueprint_box.location, h.blueprint_box.extent)
+
+
+def front_point(b):
+    (ux, uy), _ = b.axes()
+    return b.cx + ux * b.half_length, b.cy + uy * b.half_length
+
+
+class Run:
+    def __init__(self, trace, incident, done):
+        self.trace, self.incident, self.done = trace, incident, done
+        self.prefix = f"i{incident}_"
+        self.actors = sorted(n for n in trace.entities if n.startswith(self.prefix))
+        self.rows = []  # (t, ego speed, ego box, {actor: (box, speed)})
+        last = {}  # actor -> (t, x, y) of its previous frame
+        for f in trace.frames:
+            ego = f.entities.get("ego")
+            if ego is None or ego.carla is None:
+                continue
+            others = {}
+            for a in self.actors:
+                s = f.entities.get(a)
+                if s is not None and s.carla is not None and not s.spawn:
+                    v = speed(s)
+                    prev = last.get(a)
+                    if s.kinematic and prev is not None and f.sim_time > prev[0]:
+                        # a kinematic body (032's blocked fallback) reports no velocity: it is
+                        # teleported to SSv2's pose each frame, so its speed is the pose change
+                        v = math.dist(prev[1:], (s.carla.x, s.carla.y)) / (f.sim_time - prev[0])
+                    last[a] = (f.sim_time, s.carla.x, s.carla.y)
+                    others[a] = (box(trace, a, s), v)
+            self.rows.append((f.sim_time, speed(ego), box(trace, "ego", ego), others, (ego.carla.x, ego.carla.y)))
+
+    def t(self, event):
+        ts = self.done.get(event)
+        return ts[0] if ts else None
+
+    def gaps(self, actor):
+        return [(t, gg.signed_distance(eb, o[actor][0]), v, o[actor][1])
+                for t, v, eb, o, _ in self.rows if actor in o and o[actor][0] is not None and eb is not None]
+
+    def min_gap(self, actors=None):
+        best = None
+        for a in actors or self.actors:
+            for t, d, _, _ in self.gaps(a):
+                if best is None or d < best[1]:
+                    best = (a, d, t)
+        return best
+
+    def contacts(self):
+        c = [x for x in self.trace.contacts if x.ego_side and (x.name or "").startswith(self.prefix)]
+        ssv2 = sorted(k[: -len("_contact")] for k in self.done
+                      if k.startswith(self.prefix) and k.endswith("_contact"))
+        return c, ssv2
+
+    def standing(self, t0=None, t1=None):
+        """[(start, end)] intervals the ego stood still within [t0, t1]"""
+        out, cur = [], None
+        for t, v, *_ in self.rows:
+            if (t0 is not None and t < t0) or (t1 is not None and t > t1):
+                continue
+            if v is not None and v < STILL_MPS:
+                cur = [t, t] if cur is None else [cur[0], t]
+            elif cur is not None:
+                out.append(tuple(cur))
+                cur = None
+        if cur is not None:
+            out.append(tuple(cur))
+        return out
+
+    def travelled(self, t0):
+        pts = [xy for t, *_, xy in self.rows if t >= t0]
+        return sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
+
+
+def peak_decel(gaps_rows, window=DECEL_WINDOW_S):
+    """peak deceleration of an actor (m/s2) over `window` from its speed samples [(t, v)]"""
+    best = 0.0
+    j = 0
+    for i, (t, v) in enumerate(gaps_rows):
+        while j < i and t - gaps_rows[j][0] > window:
+            j += 1
+        if t - gaps_rows[j][0] >= window * 0.8:
+            best = max(best, (gaps_rows[j][1] - v) / (t - gaps_rows[j][0]))
+    return best
+
+
+def judge(trace, incident, done, junit_ok=None, stop_line=None):
+    offset = context_offset(trace, done)
+    done = {k: [t + offset for t in v if t is not None and t == t] for k, v in done.items()}
+    run = Run(trace, incident, done)
+    m = {"incident": incident, "actors": run.actors, "context_offset_s": round(offset, 2)}
+    fail = []
+    if junit_ok is not None:
+        m["junit_passed"] = junit_ok
+        if not junit_ok:
+            fail.append("scenario did not pass (junit)")
+    carla_c, ssv2_c = run.contacts()
+    m["contacts_carla"] = [dict(actor=c.name, sim=round(c.sim_time, 2), impulse=round(c.impulse, 1)) for c in carla_c]
+    m["contacts_ssv2"] = ssv2_c
+    if carla_c or ssv2_c:
+        fail.append("contact with " + ", ".join(sorted({c.name for c in carla_c} | set(ssv2_c))))
+    degraded = sorted(k for k in done if k.startswith(f"i{incident}") and k.endswith("_watchdog"))
+    m["watchdog"] = degraded
+    if degraded:
+        fail.append("watchdog fired (degraded): " + ", ".join(degraded))
+    mg = run.min_gap()
+    if mg:
+        m["min_gap"] = dict(actor=mg[0], m=round(mg[1], 2), sim=round(mg[2], 2))
+    for a in run.actors:
+        g = run.gaps(a)
+        if g:
+            d = min(g, key=lambda r: r[1])
+            m.setdefault("min_gap_by_actor", {})[a] = dict(m=round(d[1], 2), sim=round(d[0], 2), ego_mps=round(d[2] or 0, 2))
+
+    if incident == 1:
+        lead = "i1_lead"
+        g = run.gaps(lead)
+        tb = run.t("i1_lead_brake")
+        m["brake_sim"] = tb
+        if tb is None:
+            fail.append("the lead never braked")
+        else:
+            vs = [(t, lv) for t, _, _, lv in g if lv is not None and t >= tb - 1.0]
+            m["lead_peak_decel"] = round(peak_decel(vs), 2)
+            if m["lead_peak_decel"] < LEAD_DECEL_MIN:
+                fail.append(f"lead peak deceleration {m['lead_peak_decel']} < {LEAD_DECEL_MIN} m/s2")
+            both = [d for t, d, ev, lv in g if t >= tb and ev is not None and ev < STILL_MPS and lv is not None and lv < STILL_MPS]
+            if not both:
+                fail.append("the ego never stood behind the standing lead")
+            else:
+                m["stop_gap"] = round(min(both), 2)
+                if m["stop_gap"] < STOP_GAP_MIN_M:
+                    fail.append(f"stop gap {m['stop_gap']} m < {STOP_GAP_MIN_M}")
+            ego_v_at_brake = [ev for t, d, ev, lv in g if t >= tb][:1]
+            gap_at_brake = [d for t, d, ev, lv in g if t >= tb][:1]
+            if ego_v_at_brake:
+                m["at_brake"] = dict(ego_mps=round(ego_v_at_brake[0] or 0, 2), gap_m=round(gap_at_brake[0], 2))
+        stood = run.standing(tb) if tb is not None else []
+        m["ego_wait_s"] = round(sum(b - a for a, b in stood), 1)
+
+    elif incident == 2:
+        ped = "i2_ped"
+        td = run.t("i2_ped_dart")
+        m["dart_sim"] = td
+        if td is None:
+            fail.append("the pedestrian never darted")
+        g = run.gaps(ped)
+        if g:
+            d = min(g, key=lambda r: r[1])
+            m["ped_min_distance"] = round(d[1], 2)
+        stood = run.standing(td) if td is not None else []
+        m["ego_stopped"] = bool(stood)
+        m["ego_wait_s"] = round(sum(b - a for a, b in stood), 1)
+        if td is not None:
+            vs = [v for t, v, *_ in run.rows if t >= td and t <= td + 8 and v is not None]
+            m["ego_min_mps_after_dart"] = round(min(vs), 2) if vs else None
+
+    elif incident == 3:
+        tr, tg = run.t("i3_red"), run.t("i3_green") or run.t("i3_watchdog")
+        m["red_sim"], m["green_sim"] = tr, tg
+        if tr is None or tg is None:
+            fail.append("the light never went red and back to green")
+        elif stop_line is None:
+            fail.append("--stop-line not given")
+        else:
+            sx, sy, syaw = stop_line
+            ux, uy = math.cos(syaw), math.sin(syaw)
+            past = [((front_point(eb)[0] - sx) * ux + (front_point(eb)[1] - sy) * uy, t, v)
+                    for t, v, eb, *_ in run.rows if tr <= t <= tg and eb is not None]
+            far = max(past) if past else None
+            m["front_vs_stop_line_max_m"] = round(far[0], 2) if far else None
+            stood = run.standing(tr, tg)
+            m["ego_wait_s"] = round(sum(b - a for a, b in stood), 1)
+            if not stood:
+                fail.append("the ego never stood at the red light")
+            if far and far[0] > STOP_LINE_SLACK_M:
+                fail.append(f"front {far[0]:.2f} m past the stop line while red")
+            stand_at = [d for d, t, v in past if v is not None and v < STILL_MPS]
+            if stand_at:
+                m["stop_line_gap_m"] = round(-max(stand_at), 2)
+            moved = run.travelled(tg)
+            m["after_green_m"] = round(moved, 1)
+            if moved < 10.0:
+                fail.append("the ego did not go on after green")
+            starts = [t for t, v, *_ in run.rows if t >= tg and v is not None and v > MOVING_MPS]
+            if starts:
+                m["green_to_move_s"] = round(starts[0] - tg, 1)
+
+    elif incident == 4:
+        tc = run.t("i4_broken_clear")
+        m["cleared_sim"] = tc
+        g = run.gaps("i4_broken")
+        stood = run.standing(None, tc) if tc is not None else run.standing()
+        stood = [s for s in stood if run.t("i4_broken_start") is not None and s[1] >= run.t("i4_broken_start")]
+        m["ego_wait_s"] = round(max((b - a for a, b in stood), default=0.0), 1)
+        standing_gaps = [d for t, d, ev, _ in g if ev is not None and ev < STILL_MPS]
+        if standing_gaps:
+            m["stop_gap"] = round(min(standing_gaps), 2)
+        if m["ego_wait_s"] < I4_MIN_WAIT_S:
+            fail.append(f"the ego waited {m['ego_wait_s']} s behind the broken-down car (< {I4_MIN_WAIT_S})")
+        if tc is None:
+            fail.append("the broken-down car was never cleared")
+        else:
+            moved = run.travelled(tc)
+            m["after_clear_m"] = round(moved, 1)
+            if moved < I4_PROCEED_M:
+                fail.append("the ego did not proceed after the lane was cleared")
+            starts = [t for t, v, *_ in run.rows if t >= tc and v is not None and v > MOVING_MPS]
+            if starts:
+                m["clear_to_move_s"] = round(starts[0] - tc, 1)
+
+    elif incident in (5, 6):
+        ts = run.t(f"i{incident}_start")
+        stood = run.standing(ts) if ts is not None else []
+        m["ego_stopped"] = bool(stood)
+        m["ego_wait_s"] = round(sum(b - a for a, b in stood), 1)
+        if ts is not None:
+            vs = [v for t, v, *_ in run.rows if t >= ts and v is not None]
+            m["ego_min_mps"] = round(min(vs), 2) if vs else None
+        if ts is None:
+            fail.append("the incident never started")
+
+    m["verdict"] = "FAIL" if fail else "PASS"
+    m["reasons"] = fail
+    return m
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("trace", type=Path)
+    ap.add_argument("--incident", type=int, required=True, choices=range(1, 7))
+    ap.add_argument("--context", type=Path, required=True)
+    ap.add_argument("--junit", type=Path)
+    ap.add_argument("--stop-line", type=float, nargs=3, metavar=("X", "Y", "YAW"))
+    ap.add_argument("--json", type=Path)
+    a = ap.parse_args()
+    trace = gt.load_trace(a.trace, require_end=False)
+    done, _ = events_from_context(a.context.read_text().splitlines())
+    junit_ok = junit_passed(a.junit) if a.junit else None
+    m = judge(trace, a.incident, done, junit_ok, a.stop_line)
+    text = json.dumps(m, indent=1)
+    if a.json:
+        a.json.write_text(text + "\n")
+    print(text)
+    return 0 if m["verdict"] == "PASS" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

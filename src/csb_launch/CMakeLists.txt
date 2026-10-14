@@ -15,7 +15,7 @@ install(
 # `ros2 run csb_launch gap_oracle`: SSv2-vs-CARLA disagreements in a gap trace (024).
 install(
   PROGRAMS scripts/run_suite scripts/physical_verdict scripts/carla_poses scripts/chase_view
-    scripts/gap_oracle
+    scripts/gap_oracle scripts/incident_judge
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -33,6 +33,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gap_geometry test/test_gap_geometry.py)
   ament_add_pytest_test(test_gap_trace test/test_gap_trace.py)
   ament_add_pytest_test(test_gap_oracle test/test_gap_oracle.py)
+  ament_add_pytest_test(test_incident_judge test/test_incident_judge.py)
 endif()
 
 ament_package()

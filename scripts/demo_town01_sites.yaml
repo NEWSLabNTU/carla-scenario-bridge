@@ -1,0 +1,234 @@
+# Phase 033 (demo tour): every pose of the six Town01 incident templates, generated from the
+# Lanelet2 map by the step 4b pose tool (scratch) from step 3's route; read by gen_demo_incidents.py.
+# Edit poses here, then regenerate the templates.
+map: Town01
+frame: map (ROS right-handed); CARLA = (x, -y), yaw -> -yaw. Poses from the Lanelet2 map's projected lat/lon
+  (= CARLA lane centres), never local_x/local_y. route_m is the arc length along the 033 step 3 tour route.
+incidents:
+  1:
+    name: lead_brake
+    title: Lead car brakes hard
+    start:
+      x: -1.98
+      y: -274.96
+      yaw: -1.571
+      route_m: 125.0
+    goal:
+      x: 251.53
+      y: -330.61
+      yaw: -0.0001
+      route_m: 429.0
+    trigger:
+      x: 27.53
+      y: -330.55
+      yaw: -0.0005
+      route_m: 205.0
+    lead_spawn:
+      x: 88.41
+      y: -288.33
+      yaw: -1.5708
+    lead_target:
+      x: 301.62
+      y: -330.61
+      yaw: -0.0
+    lead_on_road:
+      x: 106.62
+      y: -330.59
+      yaw: -0.0001
+    brake_at:
+      x: 171.62
+      y: -330.6
+      yaw: -0.0001
+    lead_end:
+      x: 241.62
+      y: -330.6
+      yaw: -0.0
+  3:
+    name: red_light
+    title: Red light
+    start:
+      x: 192.53
+      y: -330.6
+      yaw: -0.0001
+      route_m: 370.0
+    goal:
+      x: 396.34
+      y: -304.62
+      yaw: 1.5712
+      route_m: 595.0
+    trigger:
+      x: 251.63
+      y: -330.61
+      yaw: -0.0001
+      route_m: 429.1
+    signal: 43757
+    stop_line:
+      x: 325.73
+      y: -330.61
+      yaw: -0.0
+      route_m: 503.2
+  2:
+    name: ped_dart
+    title: Pedestrian darts out
+    start:
+      x: 362.53
+      y: -330.61
+      yaw: -0.0
+      route_m: 540.0
+    goal:
+      x: 396.3
+      y: -164.62
+      yaw: 1.571
+      route_m: 735.0
+    trigger:
+      x: 396.34
+      y: -298.52
+      yaw: 1.5712
+      route_m: 601.1
+    parked:
+      x: 398.72
+      y: -238.54
+      yaw: 1.571
+    ped_spawn:
+      x: 399.92
+      y: -234.04
+      yaw: 1.571
+    dart:
+      x: 396.33
+      y: -258.02
+      yaw: 1.5712
+      route_m: 641.6
+    ped_in_lane:
+      x: 396.72
+      y: -234.04
+      yaw: 1.571
+    ped_hold:
+      x: 396.62
+      y: -234.04
+      yaw: 1.571
+    ped_far:
+      x: 389.72
+      y: -234.04
+      yaw: 1.571
+    ego_past:
+      x: 396.31
+      y: -199.62
+      yaw: 1.571
+      route_m: 700.0
+  4:
+    name: blocked_lane
+    title: Blocked lane
+    start:
+      x: 396.32
+      y: -219.62
+      yaw: 1.571
+      route_m: 680.0
+    goal:
+      x: 396.36
+      y: -23.62
+      yaw: 1.5696
+      route_m: 876.0
+    trigger:
+      x: 396.3
+      y: -138.52
+      yaw: 1.571
+      route_m: 761.1
+    broken:
+      x: 396.3
+      y: -78.54
+      yaw: 1.5696
+    oncoming_a:
+      x: 392.34
+      y: -39.85
+      yaw: -1.572
+    oncoming_b:
+      x: 392.38
+      y: -10.35
+      yaw: -1.572
+    oncoming_target:
+      x: 392.35
+      y: -309.85
+      yaw: -1.5704
+    oncoming_end:
+      x: 392.33
+      y: -259.85
+      yaw: -1.5704
+  5:
+    name: cross_turn
+    title: Crossing traffic at a turn
+    start:
+      x: 396.29
+      y: -99.62
+      yaw: 1.571
+      route_m: 800.0
+    goal:
+      x: 334.88
+      y: -33.84
+      yaw: -1.5714
+      route_m: 990.0
+    trigger:
+      x: 386.32
+      y: 1.95
+      yaw: 3.0538
+      route_m: 907.0
+    cross_a:
+      x: 263.08
+      y: -1.97
+      yaw: -0.0001
+    cross_b:
+      x: 248.08
+      y: -1.97
+      yaw: -0.0002
+    cross_target:
+      x: 384.23
+      y: -2.02
+      yaw: -0.0005
+    cross_end:
+      x: 368.23
+      y: -2.01
+      yaw: -0.0005
+    turn_entry:
+      x: 348.22
+      y: 2.0
+      yaw: 3.1411
+      route_m: 945.1
+  6:
+    name: cyclist_inside
+    title: Cyclist on the inside
+    start:
+      x: 334.88
+      y: -28.84
+      yaw: -1.5714
+      route_m: 985.0
+    goal:
+      x: 283.17
+      y: -195.16
+      yaw: 3.1415
+      route_m: 1200.0
+    trigger:
+      x: 334.81
+      y: -143.84
+      yaw: -1.5714
+      route_m: 1100.0
+    cyclist_spawn:
+      x: 333.22
+      y: -125.84
+      yaw: -1.5714
+      route_m: 1082.0
+    cyclist_turn:
+      x: 333.19
+      y: -185.65
+      yaw: -1.5714
+    cyclist_far:
+      x: 333.14
+      y: -269.16
+      yaw: -1.5714
+    cyclist_end:
+      x: 333.15
+      y: -249.16
+      yaw: -1.5714
+    turn_entry:
+      x: 334.79
+      y: -185.64
+      yaw: -1.5714
+      route_m: 1141.8
