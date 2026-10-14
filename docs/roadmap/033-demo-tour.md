@@ -33,8 +33,9 @@ highway town (CARLA Town04 / Town06) that the map pack lacks -- deferred with 03
 
 ## Incidents
 
-Order follows the route; each is a self-contained **incident template** (a short `.xosc`
-that runs on its own under `run_suite`, then is composed into the tour).
+Numbers are ids; along the step 3 route they come in the order 1, 3, 2, 4, 5, 6. Each is a
+self-contained **incident template** (a short `.xosc` that runs on its own under
+`run_suite`, then is composed into the tour).
 
 | # | Incident | What the actors do | Autoware's expected handling (module) | Pass in rehearsal |
 |---|---|---|---|---|
@@ -110,12 +111,23 @@ recording picks them up.
    `DeleteEntityAction` mid-run (actor gone from CARLA, sensors first), a multi-waypoint
    `AssignRouteAction` for the ego through the relay (Autoware drives through without
    stopping), and where SSv2 publishes storyboard event states for captions.
-3. [ ] **Route.** The Town01 route and the six sites, as poses in a scratch file; one drive
+3. [x] **Route.** The Town01 route and the six sites, as poses in a scratch file; one drive
    of the bare route (no incidents) timed. Cruise: **15 km/h kept** (user decision
    2026-10-14) -- a ~1.2-1.4 km route, sites ~200 m apart; raising the cap is left for a
    later tour.
 4. [ ] **Incident templates** 1-6, each runnable alone; 5/5 rehearsal each; drop 6 if the
-   cyclist does not track.
+   cyclist does not track. Placed at the step 3 sites (route order 1, 3, 2, 4, 5, 6). The
+   Town01 map has **no `turn_direction` tag on any lanelet**, so Autoware's `intersection`
+   and `blind_spot` modules never launch on it. **Decision (2026-10-14): tag them.** First
+   (4a) `scripts/repair_lanelet_turn_direction.py`, the fourth repair pass beside the other
+   three: tags every lanelet that lies inside a junction (OpenDRIVE junction connector:
+   a lanelet whose predecessor has more than one successor) `turn_direction=left|right|
+   straight` from its heading change, text insertion, idempotent, `.orig` kept; wired into
+   `download_maps.sh` and the user guide; pytest on a small synthetic map; verified on
+   Town01 by listing the route's junction lanelets and by Autoware launching
+   `intersection` / `blind_spot` at them (planning debug or `/planning/scenario_planning/
+   status/...` module states). Then re-run the Town01 starters once (the modules now slow
+   the ego at junctions) and note any change. Then the incident templates.
 5. [ ] **Compose the tour** (`src/csb_examples/scenarios/demo/town01_tour.xosc`): route,
    triggers, add / delete, watchdogs, the single stop trigger. One ManeuverGroup per
    incident holding its add, delete and watchdog events: a `StoryboardElementStateCondition`
@@ -166,3 +178,64 @@ Runs: `spike_route_delete` PASS (1 run); `spike_readd` twice, the first failing 
 the second ending at the re-add with the `SemanticError`. Scratch: `/tmp/claude-1000005/
 -home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-80a742b40cbd/scratchpad/s033_2`
 (scenarios, generator, watchers, per-run logs).
+
+**Step 3: route (2026-10-14).** One Town01 route, **1307 m**, four waypoints plus the goal,
+picked from the Lanelet2 map (a lanelet graph walk) and checked against CARLA's
+`get_waypoint`: every route lanelet's centreline is on CARLA's driving-lane centre to 0.00 m.
+Start on the west edge road heading south (lanelet 24444, (-2.03, -149.96)); left round the
+bottom-left corner; east along the bottom road (9379); left at the bottom-right corner, north
+up the east edge road (13397, 309 m straight); left at the top-right corner, west along the
+top (149); **left** into the x 337 road (35653) and south down it through three junctions;
+**right** at y -198 (39793) onto the y -198 road west (21828) to the goal at (175.67, -195.15).
+Waypoints on 9379, 13397, 149 and 28257. Autoware's `/planning/mission_planning/route` was
+exactly the 19 lanelets planned (24444 31089 7768 36717 9379 38294 11783 23145 13397 19510 149
+35653 27676 40484 28257 42063 28958 39793 21828). Three signals on the way (43751, 43784, 43793)
+are not commanded and stay green.
+
+| Route order | Incident | Site | Ego trigger (route m, lanelet) | Actors |
+|---|---|---|---|---|
+| 1 | 1 lead car merges, brakes | bottom-left T (x 90): ego straight through (36717) | 212 m, 7768 | `i1_lead` on the stem 33476 s 80, turns left (37233) into 9379 ahead; brake at 9379 s 55 (334 m); 224 m straight after the T |
+| 2 | 3 red light | bottom-right T (x 337), straight-through approach | 429 m, 9379 | signal **43757** (reg 43852 on 9379; CARLA 373), stop line at 503 m |
+| 3 | 2 pedestrian dart-out | east edge road, NB straight, kerb on the right | 601 m, 13397 | `i2_parked` 13397 s 80 at the kerb, `i2_ped` behind it (s 84, 3.6 m right); ped at ~665 m |
+| 4 | 4 blocked lane | same straight, 160 m on; oncoming lane 15257 | 761 m, 13397 | `i4_broken` 13397 s 240 (821 m); oncoming on 15257 |
+| 5 | 5 crossing traffic at a turn | top-right T: ego turns **left** from the through road (149) into the stem (35653), unsignalled | 871 m, 13397 | `i5_cross_a/b` EB on 2113 (s 95 / 60) through 35576 |
+| 6 | 6 cyclist on the inside | T at x 337, y -198: ego turns **right** (39793) | 1082 m, 42063 | `i6_cyclist` SB on 28958 s 0, 1.4 m right of centre, straight on (39961) |
+
+Spacing: brake 334 m, red light 503, pedestrian ~665, blocked lane 821, left turn 945, right
+turn 1142 -- 125-200 m apart, not the 200 m hoped: 3 must sit at a signalled straight approach
+and 5 / 6 at the route's only left and right turns into a stem, which fixes their places.
+The order changed from the table's (1, 3, 2, ...): incident 2 needs a straight without
+junctions and the only one after 3 is the east edge road. Exact poses (lanelet, s, world
+x / y / yaw for each trigger and actor): `route_sites.yaml` in the scratch directory below.
+
+**Timing (one bare drive, Autoware via the relay, no incidents): PASS.** set_goal -> first move
+6.6 s; first move -> goal **321.4 s of simulation time (5.4 min), 1299 m, 4.04 m/s average**,
+cruise 4.17 m/s, slowest 2.07 m/s in the right turn at y -198; **no stop** (no sample under
+0.5 m/s between first move and goal); every site's trigger, turn entry and stop line passed
+within 0.2-1.3 m (0.5 s sampling). Site passing times (s after first move): 52 (1 trigger),
+81 (1 brake point), 105 / 122 (3 trigger / stop line), 147 (2), 186 (4), 211 / 231 (5 trigger /
+turn), 265 / 279 (6 trigger / turn). With ~1-2 min of incident handling the tour is
+**~6.5-7.5 min**, inside 5-8; no re-drive needed.
+
+Wall clock is longer than simulation time when the host is loaded: this drive took 376.7 s of
+wall time (real-time factor 0.85 overall, **0.19-0.42 for about 70 s** while other users'
+builds held the disk: load 120-180, `/proc/pressure/io` some avg60 80). The demo is watched in
+wall time, so rehearse and record on a quiet host; on this one, as loaded, the tour would run
+~8 min.
+
+Found on the way:
+- **No `turn_direction` on any Town01 lanelet** (0 of 300; neither the repaired map nor
+  `.orig`). Autoware's `intersection` and `blind_spot` modules key on it, so incidents 5 and
+  6 as written cannot be handled by them; step 4 now says so.
+- The map's `local_x` / `local_y` tags are not where the stack drives on east-west roads: they
+  are stretched 0.67 % in y (2.2 m off CARLA's lane on the bottom road, 1.3 m on y -198, 0 on
+  the top road), while the ego (this drive and the step 2 spike) runs on the lanes' projected
+  lat/lon, which match CARLA to 0.00 m. Site poses here use the projected lat/lon; any tool that
+  reads `local_*` (as `repair_lanelet_local_coords.py`'s note says Autoware does) puts things
+  on the bottom road at the kerb. Not chased further here.
+
+Runs: `tour_bare` PASS (1 run; junit 0 failures). Load-checked first with
+`openscenario_preprocessor`'s `load` (success). Scratch: `/tmp/claude-1000005/
+-home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-80a742b40cbd/scratchpad/s033_3`
+(`route_sites.yaml`, the map tools `ll.py` / `route.py` / `sites.py`, `gen_bare.py`,
+`tour_bare.xosc`, `analyse.py`, `run1/` with the CARLA track, Autoware route and timing).
