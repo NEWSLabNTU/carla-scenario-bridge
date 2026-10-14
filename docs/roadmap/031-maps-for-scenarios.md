@@ -58,6 +58,27 @@ list), repair passes ~1 week, recorder and `map_build` ~3-5 days, all 0.9.16 tow
 validated and documented ~1 week. If the converter scores poorly, the fallback is our own
 OpenDRIVE -> Lanelet2 converter restricted to what CARLA towns use (the larger half).
 
+**Built by hand once (Town04, 2026-10-14, for the crdt-tensor testbed's ramp merge).** The
+steps stage 1 would automate, with the two tools that came out of it now in `scripts/`:
+
+1. Lanelet2 from CARLA's own `Town04.xodr`, offline (`carla_map_gen --xodr`, CommonRoad
+   Scenario Designer 0.8.5 in a uv environment), then `repair_lanelet_subtypes.py` (52
+   lanelets) and `repair_lanelet_local_coords.py`.
+2. `repair_lanelet_far_traffic_lights.py`: the converter linked 69 of 128 traffic-light
+   elements to lanelets whose stop line is more than 60 m from every light the element
+   refers to (one at the ramp's foot pointed at a light 400 m away), and Autoware stopped at
+   the merge for a signal that never comes. The lanelets stop referencing them (defect 6
+   below). A dry run on the TUM pack's Town05 finds 2 of 54 such; not applied.
+3. `densify_pcd_along_lanes.py`: `carla_pcd_gen` samples at spawn points only, which left
+   the ramp bare (no point within 20 m of its middle) and NDT lost the vehicle there. Eight
+   lidars carried along every driving lane every 6 m, merged at 0.2 m: 3.0 M -> 21.0 M
+   points. This is stage 1's point-cloud step.
+4. `--generate-signal-table` with CARLA freshly reloaded: after the collector CARLA reported
+   no lights until `reload_world`.
+
+Defect 6, for the list above: traffic-light elements linked to a stop line far from their
+lights (step 2).
+
 ## Stage 2: find a place for a designed scenario
 
 `find_place --spec needs.yaml`: a per-lanelet feature index of every local map, built once
