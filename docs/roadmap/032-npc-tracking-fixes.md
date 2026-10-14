@@ -207,8 +207,9 @@ unknown (error) -- the patched copy's numbers. **N5.** `tick_watchdog` (new): ev
 warm-up -- runs on one long-lived helper thread (`csb-tick`) with the World handle, the ZMQ
 thread waiting at most `TICK_WATCHDOG` **90 s**. LibCarla bounds only `tick_cue` (client
 timeout 30 s) and the frame wait (carla-rust 60 s); neither fired in the 12-min hang, so a
-different `set_timeout` cannot help -- in 0.9.16 a synchronous Traffic Manager steps inside
-`World::Tick` and hands over on a condition variable without a timeout. 90 s: the worst
+different `set_timeout` cannot help -- in LibCarla 0.9.16 `SynchronizeFrame` (inside `World::Tick`)
+calls `TrafficManager::Tick` after the frame arrives, and `TrafficManagerLocal::SynchronousTick`
+waits on `step_end_trigger` with no timeout (read in the vendored 0.9.16 source). 90 s: the worst
 `UpdateFrame` tick total over 1137 frame-budget windows of every bridge log since 2026-10-11
 is 1.90 s (p99 of the window maxima 0.69), spawn frames 0.30-0.64 s, map loads are not ticks;
 above carla-rust's 60 s so a timeout LibCarla reports stays the ordinary error and the

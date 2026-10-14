@@ -8,8 +8,9 @@
 //! left to its own 420 s receive timeout, and the next scenario failed the same way. LibCarla
 //! bounds only part of a tick -- `tick_cue` is an RPC under the client timeout (30 s), and the
 //! wait for the new frame is carla-rust's 60 s -- and neither fired, so the wait was in a
-//! part with no bound at all (in 0.9.16 a synchronous Traffic Manager steps inside
-//! `World::Tick` and hands its step over on a condition variable with no timeout). A longer or
+//! part with no bound at all: in LibCarla 0.9.16 `SynchronizeFrame` (inside `World::Tick`),
+//! once the frame has arrived, calls `TrafficManager::Tick`, whose `TrafficManagerLocal::
+//! SynchronousTick` waits on `step_end_trigger` with no timeout. A longer or
 //! shorter client timeout (`set_timeout`) therefore changes nothing.
 //!
 //! # How
