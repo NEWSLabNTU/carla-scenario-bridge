@@ -79,6 +79,13 @@ steps stage 1 would automate, with the two tools that came out of it now in `scr
 Defect 6, for the list above: traffic-light elements linked to a stop line far from their
 lights (step 2).
 
+Defect 7 (found 2026-10-14 on the TUM pack's Town03 by the crdt-tensor testbed): road
+lanelets that start at fresh nodes exactly where their predecessor ends. Lanelet2's routing
+graph follows a lanelet only to one starting at the same point ids, so no route led from
+the roundabout's north entry to its south exit. `scripts/repair_lanelet_joins.py` merges
+the nodes of such meeting road lanelets (2 nodes in Town03, none in the other five towns);
+stage 1 needs the same check after any conversion.
+
 ## Stage 2: find a place for a designed scenario
 
 `find_place --spec needs.yaml`: a per-lanelet feature index of every local map, built once
