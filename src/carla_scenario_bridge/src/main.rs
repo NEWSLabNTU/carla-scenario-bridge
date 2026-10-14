@@ -132,6 +132,8 @@ fn main() -> Result<()> {
 
     // The configured weather, now that there is a world to apply it to.
     coord.reapply_weather("connect");
+    // The episode's epoch, for a vehicle side started before the first scenario.
+    coord.write_epoch_marker_at_connect();
 
     // World configuration services. Served from their own thread, applied on this one.
     // Without them the bridge still serves SSv2, so a ROS failure is loud but not fatal.

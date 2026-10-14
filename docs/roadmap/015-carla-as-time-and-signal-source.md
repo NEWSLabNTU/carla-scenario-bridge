@@ -579,6 +579,14 @@ csb/SSv2, for the whole session. The epoch marker (Decisions) fixes it from CARL
       start-up, as soon as csb can see the world's actors -- the client's actor list is only
       as new as its last frame, so a csb that has not ticked yet defers it to its first tick.
       Not in `spawned_actors`: it belongs to the episode, and teardown leaves it
+- [x] csb: the start-up marker is written at connect (`write_epoch_marker_at_connect`, right
+      after the weather), not at the first scenario tick, so a vehicle side started before
+      any scenario reads csb's epoch (crdt-tensor phase 15). A world CARLA ticks by itself
+      (asynchronous, what csb leaves on shutdown) sends a frame within 2 s
+      (`CONNECT_FRAME_WAIT`) and gets the full write. A paused synchronous world (left by a
+      csb that did not shut down cleanly) sends no frame until csb ticks; there csb spawns
+      its marker without listing, acb's newest-wins rule makes it the one read, and the
+      marker stays due, so the first tick destroys stale markers and collapses duplicates
 - [x] acb `clock.rs`: on the first frame of an episode it did not watch begin (start-up, or
       a connection on which no frame had arrived), `/clock` is withheld until the clock thread
       has read the marker (`actors().filter("util.actor.empty")`, newest valid `role_name`
@@ -606,7 +614,10 @@ csb/SSv2, for the whole session. The epoch marker (Decisions) fixes it from CARL
 **Known window.** A bridge that joins between a `load_world` returning and csb spawning the
 marker (one RPC) finds none and starts at 0. The marker is written right after the load, in
 the same paused (synchronous) world, so in practice only a bridge started in that same
-instant meets it.
+instant meets it. At start-up the window is the connect itself: the marker used to wait for
+the first scenario tick, so a vehicle side started between csb's start and the first
+scenario began at 0 while csb resumed a nonzero epoch from its clock record; it is now
+written at connect (above).
 
 ## Acceptance
 

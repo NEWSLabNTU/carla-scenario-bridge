@@ -473,6 +473,11 @@ impl std::fmt::Display for TickFailure {
 /// hang; if it does not, the bridge must still reply to SSv2 well inside its 420 s.
 const HUNG_STATE_READ_WAIT: Duration = Duration::from_secs(10);
 
+/// How long csb waits at connect for a frame of a world CARLA ticks by itself, to write
+/// the epoch marker (`write_epoch_marker_at_connect`). One tick of a loaded server is well
+/// under a second.
+const CONNECT_FRAME_WAIT: Duration = Duration::from_secs(2);
+
 /// CARLA's frame and synchronous-mode settings for the log after a hung tick, read on a
 /// thread of its own so that a CARLA that no longer answers cannot hang the reply too.
 fn carla_state_for_log(world: &World) -> String {
@@ -2595,6 +2600,12 @@ impl Coordinator {
             );
             return;
         }
+        self.spawn_epoch_marker(why, epoch);
+    }
+
+    /// Spawn one marker recording `epoch` (nonzero), without looking at what the world holds.
+    fn spawn_epoch_marker(&mut self, why: &str, epoch: i64) {
+        use crate::epoch_marker as em;
         let transform = Transform {
             location: Location {
                 x: 0.0,
@@ -2626,6 +2637,37 @@ impl Coordinator {
                 em::BLUEPRINT,
                 fmt_ns(epoch)
             ),
+        }
+    }
+
+    /// The start-up marker, written when csb connects rather than at the first scenario
+    /// tick, so that a vehicle side started before any scenario reads the right epoch.
+    ///
+    /// A world CARLA ticks by itself (asynchronous: the state csb leaves on shutdown) sends
+    /// a frame within one of its ticks; csb waits for it and writes the marker as after any
+    /// change. A paused synchronous world (a csb that did not shut down cleanly left it so)
+    /// sends none until csb ticks, and csb does not tick outside a scenario. There csb
+    /// spawns its marker without looking: acb reads the newest marker, so the new one
+    /// wins over a stale one, and the marker stays due, so the first tick removes the
+    /// stale ones and collapses duplicates.
+    pub fn write_epoch_marker_at_connect(&mut self) {
+        let Some(why) = self.epoch_marker_due else {
+            return;
+        };
+        let seen_a_frame = |w: &World| w.snapshot().is_ok_and(|s| s.frame() != 0);
+        if !seen_a_frame(&self.world) {
+            let asynchronous = self.world.settings().is_ok_and(|s| !s.synchronous_mode);
+            if asynchronous {
+                let _ = self.world.wait_for_tick_or_timeout(CONNECT_FRAME_WAIT);
+            }
+        }
+        if seen_a_frame(&self.world) {
+            self.write_epoch_marker();
+            return;
+        }
+        let epoch = self.episode_clock.epoch();
+        if epoch != 0 {
+            self.spawn_epoch_marker(&format!("{why}, before a frame"), epoch);
         }
     }
 
