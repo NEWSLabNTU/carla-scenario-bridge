@@ -26,6 +26,7 @@ flags worth giving it:
 | Flag | Where | Why |
 |---|---|---|
 | `--container-mode isolated --composable-respawn on-crash` | vehicle side | reloads a composable node whose process crashed. Autoware 1.5.0's `behavior_path_planner` aborts now and then when a new route arrives (`failed to add guard condition to wait set`, autoware_universe#12460; once in 27 UC-ACC variants here); without a reload the vehicle side cannot plan again and every later scenario fails in PLANNING. Autoware's containers declare no respawn, so only this brings it back, and a composable can be reloaded alone only when it is a process of its own (`isolated`; play_launch's default, `observable`, keeps one process per container as `ros2 launch` does) |
+| `--container-mode observable` | vehicle sides, three or more on one host | the shared mode: one process per container. `isolated` costs a process per composable node; three isolated vehicle sides took about 47 of 48 cores on one host, enough to stall a pointcloud map load and to make CARLA's switch to Town05 outrun the bridge's 120 s timeout. Shared, the three cost about 9 cores and came up in about 15 s each. You lose the per-node reload: a crashed composable takes its container's other nodes with it until the side is restarted (section 6, "Several vehicle sides on one host") |
 | `--web-addr 127.0.0.1:<port>` | every launch | each launch serves a web UI, 8080 by default; two on one port collide. This guide uses 8084 (simulation side), 8082 (vehicle side), 8083 (second vehicle side), 8081 (scenario) |
 
 Everything else is play_launch's default, which since 0.15.1 matches `ros2 launch`: no
@@ -250,7 +251,10 @@ in place of `ros2 launch`.
   a minute on a warm host; the first start builds TensorRT engines and takes several.
 
 **RViz.** The vehicle side opens Autoware's RViz on `$DISPLAY` by default. Pass `rviz:=false`
-on a headless host or for a second vehicle side. It shows the ego, its route and the objects
+on a headless host (no `DISPLAY`, or one you do not own) and for every vehicle side after the
+first. Without it a vehicle side on a host with no display of its own did not come up
+(2026-10-12, a headless shared server), and each extra RViz costs CPU and GPU memory for a
+window nobody watches. It shows the ego, its route and the objects
 it perceives while a scenario runs; between scenarios the ego is parked and its readouts
 (speed, distance to goal) keep their last values -- that is not a frozen RViz.
 
@@ -442,6 +446,28 @@ so it holds across scenarios on different towns. Empty (the default) leaves CARL
   both sides:
   `export CYCLONEDDS_URI=file://<workspace>/config/cyclonedds-localhost.xml`.
   It keeps all participants on one host; across hosts, use your network's DDS setup.
+- **The vehicle side never localizes; the pointcloud map never arrives**: the side runs on
+  another RMW than CycloneDDS, or on CycloneDDS without the profile above. Under Humble's
+  default RMW (Fast DDS) the pointcloud map, one large transient-local message, never
+  reached its subscribers on a shared host (2026-10-12), so NDT never initialised and the
+  ego never came up. Run every process of every side with
+  `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp` and the same `CYCLONEDDS_URI`; an Autoware
+  install that exports another RMW in its `setup.bash` overrides an earlier export, so set
+  both after sourcing it. Large messages also need kernel socket buffers bigger than the
+  stock 208 kB: install `config/99-cyclonedds-max.conf` (the values of Autoware's DDS
+  settings page) as root,
+  `sudo install -m 644 config/99-cyclonedds-max.conf /etc/sysctl.d/ && sudo sysctl -p
+  /etc/sysctl.d/99-cyclonedds-max.conf`. Without it a point cloud fragments into more
+  datagrams than a socket holds, which shows as `RcvbufErrors` in `netstat -su` and
+  publishers that stall.
+- **Several vehicle sides on one host**: start them one at a time, each after the previous
+  one logs `Startup complete`, in play_launch's shared container mode
+  (`--container-mode observable`) and with `rviz:=false` on all but one. Three sides
+  starting together, in `isolated` mode, saturated a 48-core host: the pointcloud map load
+  stalled and the first switch of CARLA to Town05 outran the bridge's 120 s timeout. A map
+  load that times out can leave CARLA holding the town without its traffic-light actors;
+  load it again with a long client timeout and regenerate the town's signal table
+  (section 2). Under `just ego-av`, `EGO_CONTAINER_MODE=observable` selects the shared mode.
 - **CARLA dies**: the running scenario fails within ~30 s; restart CARLA; the next scenario
   waits for it (up to `carla.reconnect_wait_seconds`, 120 s) and runs.
 - **CARLA just started**: it opens its RPC port before its first map is loaded; the bridge
