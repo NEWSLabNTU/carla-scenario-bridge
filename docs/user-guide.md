@@ -468,6 +468,11 @@ so it holds across scenarios on different towns. Empty (the default) leaves CARL
   load that times out can leave CARLA holding the town without its traffic-light actors;
   load it again with a long client timeout and regenerate the town's signal table
   (section 2). Under `just ego-av`, `EGO_CONTAINER_MODE=observable` selects the shared mode.
+  On a host with several GPUs, `gpu:=<index>` on a vehicle side's launch pins its CUDA
+  nodes to one card (`CUDA_VISIBLE_DEVICES`; empty, the default, inherits the
+  environment's); under `just ego-av`, `EGO_LAUNCH_ARGS="gpu:=1"`. `extra_launch:=<file>`
+  starts a launch file of your own beside a vehicle side, in its domain (a V2X node, a
+  recorder); it receives `vehicle_name`, `entity`, `map_path` and `use_sim_time`.
 - **CARLA dies**: the running scenario fails within ~30 s; restart CARLA; the next scenario
   waits for it (up to `carla.reconnect_wait_seconds`, 120 s) and runs.
 - **CARLA just started**: it opens its RPC port before its first map is loaded; the bridge
