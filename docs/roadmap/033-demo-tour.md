@@ -384,9 +384,10 @@ for timing: 1 at route 205 m, 5 at 907 m (`demo_town01_sites.yaml`).
   failure, but CARLA had created it: actor **9004** (`vehicle.tesla.model3`, `role_name=hero`)
   stands at CARLA (-1.98, 261.46), route m 110 on the west road; the retries then spawned the
   ego on top of it (contact, run failed). The bridge does not destroy an actor whose spawn
-  call timed out. It is still there (removing it was not permitted from this session); it
-  sits on the tour route before site 1, so remove it before step 5, and acb could attach to
-  it (`hero`) when it searches for the ego. Incident 1's start moved to route m 125 to clear it.
+  call timed out. *Correction 2026-10-15*: the next `Initialize`'s reaper destroyed it at
+  04:28:36Z ("Destroyed orphaned 'hero' (actor 9004)"), and a by-id query finds no 9004;
+  moving incident 1's start to route m 125 was harmless but unneeded. Cause and fix:
+  [034](034-bridge-failure-paths.md) step 4 (a timed-out spawn completes on the server).
 - The acb submodule pin had moved (3883f86) without a rebuild: rebuilt acb's workspace, then
   this one, before the runs.
 

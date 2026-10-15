@@ -205,17 +205,27 @@ penetration unknown) G2 2 (static 269-270, 300-302) G3 1 (`npc_rear` 266-268) in
 unknown (error) -- the patched copy's numbers. **N5.** `tick_watchdog` (new): every
 `world.tick()` -- the frame's substeps, the settling tick after a spawn, the localization
 warm-up -- runs on one long-lived helper thread (`csb-tick`) with the World handle, the ZMQ
-thread waiting at most `TICK_WATCHDOG` **90 s**. LibCarla bounds only `tick_cue` (client
-timeout 30 s) and the frame wait (carla-rust 60 s); neither fired in the 12-min hang, so a
+thread waiting at most `TICK_WATCHDOG` **45 s** (first built at 90 s; 40 s the same day, see
+below; 45 s since 034 step 3), the frame wait handed to LibCarla as `LIBCARLA_TICK_TIMEOUT`
+**10 s** (20 s before 034). LibCarla bounds
+only `tick_cue` (client timeout 30 s) and the frame wait; neither fired in the 12-min hang, so a
 different `set_timeout` cannot help -- in LibCarla 0.9.16 `SynchronizeFrame` (inside `World::Tick`)
 calls `TrafficManager::Tick` after the frame arrives, and `TrafficManagerLocal::SynchronousTick`
-waits on `step_end_trigger` with no timeout (read in the vendored 0.9.16 source). 90 s: the worst
-`UpdateFrame` tick total over 1137 frame-budget windows of every bridge log since 2026-10-11
-is 1.90 s (p99 of the window maxima 0.69), spawn frames 0.30-0.64 s, map loads are not ticks;
-above carla-rust's 60 s so a timeout LibCarla reports stays the ordinary error and the
-reconnect path; with the 10 s state read it leaves SSv2's 420 s receive timeout room for the
-error. On expiry the request fails with `CARLA's world.tick() in <step> did not return
-(waited <s>, bound 90 s); CARLA snapshot frame <n>, settings: synchronous_mode ..., fixed_delta_seconds
+waits on `step_end_trigger` with no timeout (read in the vendored 0.9.16 source). 40 s: SSv2's fork bounds every request but
+`Initialize` by `SIMULATOR_RESPONSE_TIMEOUT`, **90 s** by default (`zmq_multi_client.cpp`,
+2026-10-10; `failure-and-frame-budget.md` still says 420 s) -- the first build's 90 s plus the
+10 s state read would have let SSv2 give up before the error arrived, defeating N5; 40 + 10 s
+leaves it 40 s. The worst `UpdateFrame` tick total over 1137 frame-budget windows of every
+bridge log since 2026-10-11 is 1.90 s (p99 of the window maxima 0.69), spawn frames 0.30-0.64
+s, map loads are not ticks. *Corrected 2026-10-15 (034 step 3):* "twice the 20 s LibCarla
+frame wait" did not keep LibCarla's own errors ordinary -- a tick is the `tick_cue` RPC
+(client timeout 30 s) **plus** the frame wait, so 30 + 20 = 50 s outlasted a 40 s watchdog
+and a slow but alive server would have been treated as hung. Now the watchdog (45 s) sits
+above 30 + 10 s, the frame wait (10 s) is still 5x the worst tick, and 45 + 10 s of state
+read is 55 s inside SSv2's 90 (`budgets.rs`, with tests on the arithmetic; carla-rust's own
+`tick()` passes 60 s, which would outlast the watchdog). The live runs below ran the 90 s
+build; the 40 s change is constants only (clippy clean), not rebuilt into the running bridge. On expiry the request fails with `CARLA's world.tick() in <step> did not return
+(waited <s>, bound 40 s); CARLA snapshot frame <n>, settings: synchronous_mode ..., fixed_delta_seconds
 ..., substepping ...; last tick returned CARLA frame ..., Traffic Manager running|not started`
 (the state read on its own thread, 10 s bound), the watchdog is wedged (no further tick from
 this process), the ZMQ server stops after that reply and `main` exits 75 without touching

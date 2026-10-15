@@ -1,7 +1,9 @@
+mod actor_census;
 mod agent_link;
 mod autopilot;
 mod blueprint_boxes;
 mod body_clearance;
+mod budgets;
 mod carla_version;
 mod clock_store;
 mod collision_monitor;
@@ -21,6 +23,7 @@ mod proto;
 mod resolved_signals;
 mod ros_args;
 mod sensor_release;
+mod spawn_ladder;
 mod tick_watchdog;
 mod traffic_light_mapper;
 mod weather;
@@ -156,9 +159,19 @@ fn main() -> Result<()> {
     // supervisor (play_launch respawn, `just run`'s loop) starts a fresh bridge. Its first
     // Initialize reaps what this one left.
     if let Some(reason) = server.wedged() {
-        tracing::error!("Exiting with status {TICK_HUNG_EXIT}: {reason}");
+        // The socket first, so the replies the drain queued leave: the context terminates
+        // with its last handle and waits out the socket's linger.
+        server.close_flushed();
+        drop(zmq_ctx);
         server.abandon_after_hang();
-        std::process::exit(TICK_HUNG_EXIT);
+        tracing::error!("Exiting with status {TICK_HUNG_EXIT}: {reason}");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        // `_exit`, not `exit`: no atexit handlers or C++ static destructors, which could
+        // wait on the Traffic Manager mutex the hung thread holds (034).
+        // SAFETY: ends the process at once; nothing after it runs.
+        unsafe { libc::_exit(TICK_HUNG_EXIT) };
     }
 
     // Cleanup: restore CARLA async mode

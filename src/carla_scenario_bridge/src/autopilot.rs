@@ -48,6 +48,29 @@ pub const APPROACH_DECELERATION: f64 = 1.5;
 /// controller stops the vehicle outright, short of the goal.
 const APPROACH_MIN_SPEED: f64 = 1.0;
 
+/// What to do with csb's Traffic Manager (roadmap 034 step 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TmAction {
+    Keep,
+    ShutDown,
+}
+
+/// Keep the Traffic Manager only while it drives somebody. In LibCarla 0.9.16 every
+/// synchronous `World::Tick` (and every `apply_settings`) runs each registered TM's
+/// `SynchronousTick`, whose step handshake can lose a wakeup and wait forever (034,
+/// "What the CARLA source says" 1-2); with no TM registered that tick loops over nothing.
+/// So the TM goes when the last `simulator_autopilot` entity does -- at `Initialize`, after
+/// the previous run's are torn down, and at the despawn of the last one -- and the next
+/// such spawn creates it again (~4 s). csb cannot know at `Initialize` whether the coming
+/// scenario has one; nothing is lost by asking that of its first spawn instead.
+pub fn traffic_manager_action(running: bool, autopilot_entities: usize) -> TmAction {
+    if running && autopilot_entities == 0 {
+        TmAction::ShutDown
+    } else {
+        TmAction::Keep
+    }
+}
+
 /// Traffic Manager's speed unit is km/h (LibCarla `SetDesiredSpeed`, despite carla-rust's
 /// doc comment saying m/s); SSv2's is m/s.
 pub fn mps_to_kmh(mps: f64) -> f32 {
@@ -369,6 +392,25 @@ impl RouteProgress {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_traffic_manager_with_no_autopilot_entity_left_is_shut_down() {
+        // Initialize (the previous run torn down) and the last despawn both leave none.
+        assert_eq!(traffic_manager_action(true, 0), TmAction::ShutDown);
+    }
+
+    #[test]
+    fn a_traffic_manager_still_driving_someone_is_kept() {
+        assert_eq!(traffic_manager_action(true, 1), TmAction::Keep);
+        assert_eq!(traffic_manager_action(true, 3), TmAction::Keep);
+    }
+
+    #[test]
+    fn no_traffic_manager_is_started_by_the_decision() {
+        // Created lazily by the first simulator_autopilot spawn, never here.
+        assert_eq!(traffic_manager_action(false, 0), TmAction::Keep);
+        assert_eq!(traffic_manager_action(false, 2), TmAction::Keep);
+    }
 
     fn key(road: u32, lane: i32) -> LaneKey {
         LaneKey {

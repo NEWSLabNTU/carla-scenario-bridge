@@ -58,6 +58,7 @@ borrowed from greybox fuzzing.
 - [031: Maps for Scenarios](031-maps-for-scenarios.md) — **deferred 2026-10-13**: build Autoware maps from any CARLA town, find a place on the maps for a designed scenario, generate a road no town has; open-source status, expected map defects and estimates noted
 - [032: NPC Tracking Fixes](032-npc-tracking-fixes.md) — the five tracking gaps 024's baseline found: no snap into the static world (kinematic fall-back, upright on the ground), curvature feed-forward in corners, standing walkers still, spawn at speed, NPC contact sensors; before 025
 - [033: Demo Tour](033-demo-tour.md) — one continuous 5-8 min Town01 drive through six incidents (hard brake ahead, pedestrian dart-out, red light, blocked lane, crossing traffic at a turn, cyclist on the inside), captioned, never stalling; ramp merge and a multi-lane tour later
+- [034: Bridge Failure Paths](034-bridge-failure-paths.md) — a hung tick (a lost wakeup in CARLA 0.9.16's Traffic Manager) ends in an error, a drain and a restart inside SSv2's timeouts; no TM unless a scenario needs one; a timed-out spawn's late actor adopted, actors looked up by id; then upstream's TM fix backported into carla-rust's prebuilt LibCarla
 
 ## Real-site twin and realistic rendering (019-)
 
@@ -118,3 +119,5 @@ Per-phase state:
 9. 031 Maps for scenarios -- deferred (user, 2026-10-13); analysis kept in its doc.
 10. **032 NPC tracking fixes** -- phase doc 2026-10-13, from 024's baseline triage; before 025.
 11. **033 Demo tour** -- phase doc 2026-10-14; Town01, continuous, 5-8 min.
+12. **034 Bridge failure paths** -- phase doc 2026-10-15; steps 1-5 before 033 step 5, then
+    step 6 (LibCarla rebuild in carla-rust).

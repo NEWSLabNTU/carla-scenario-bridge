@@ -640,6 +640,7 @@ dependencies = [
  "ctrlc",
  "eyre",
  "futures",
+ "libc",
  "nalgebra",
  "prost",
  "prost-build",

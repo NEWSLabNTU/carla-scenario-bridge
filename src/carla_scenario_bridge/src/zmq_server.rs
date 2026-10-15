@@ -1,7 +1,7 @@
 use prost::Message;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::coordinator::Coordinator;
 use crate::frame_stats::{FrameStats, Outcome, RequestKind, SUMMARY_WINDOW_FRAMES};
@@ -19,7 +19,8 @@ use crate::world_services::WorldCommand;
 // docs/design/time-and-ticking.md.
 
 pub struct ZmqServer {
-    socket: zmq::Socket,
+    /// `None` once closed after a hung CARLA call ([`ZmqServer::close_flushed`]).
+    socket: Option<zmq::Socket>,
     coordinator: Coordinator,
     /// Set when a handler panicked: why. Every request but `Initialize` is refused until the
     /// next `Initialize`, because a handler that died half-way may have left the entity map
@@ -43,7 +44,7 @@ impl ZmqServer {
         socket.bind(&endpoint)?;
         tracing::info!("ZMQ REP socket bound to {endpoint}");
         Ok(Self {
-            socket,
+            socket: Some(socket),
             coordinator,
             poisoned: None,
             frame_stats: FrameStats::new(),
@@ -73,10 +74,30 @@ impl ZmqServer {
     pub fn run(&mut self, shutdown: Arc<AtomicBool>) {
         tracing::info!("ZMQ server ready, waiting for SSv2 requests...");
 
+        let Some(socket) = self.socket.take() else {
+            return;
+        };
+        self.serve(&socket, &shutdown);
+        // A CARLA call never returned (roadmap 032 N5, 034 step 2): the request in flight has
+        // its error. Answer whatever SSv2 sends next -- its deactivate's DespawnEntity comes
+        // within milliseconds -- with the same error and without a word to CARLA, until it
+        // has been quiet ~2 s (10 s at most); `main` then ends the process for a fresh bridge.
+        if let Some(reason) = self.coordinator.wedged().map(str::to_owned) {
+            tracing::error!("A CARLA call never returned: this bridge drains, then exits");
+            let answered = drain(&socket, &reason, DrainPolicy::default());
+            tracing::warn!(
+                "Drained {answered} request(s) with the hang error; closing the SSv2 socket"
+            );
+        }
+        self.socket = Some(socket);
+        tracing::info!("ZMQ server shutting down");
+    }
+
+    fn serve(&mut self, socket: &zmq::Socket, shutdown: &AtomicBool) {
         while !shutdown.load(Ordering::SeqCst) {
             self.serve_world_commands();
             // Poll with 100ms timeout so we can check shutdown
-            let mut items = [self.socket.as_poll_item(zmq::POLLIN)];
+            let mut items = [socket.as_poll_item(zmq::POLLIN)];
             match zmq::poll(&mut items, 100) {
                 Ok(0) => {
                     continue; // timeout, no message
@@ -92,7 +113,7 @@ impl ZmqServer {
             }
 
             // Receive the request
-            let msg = match self.socket.recv_bytes(0) {
+            let msg = match socket.recv_bytes(0) {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     tracing::error!("recv error: {e}");
@@ -107,18 +128,15 @@ impl ZmqServer {
             let response_bytes = guarded_dispatch(&mut poisoned, variant, || self.dispatch(&msg));
             self.poisoned = poisoned;
 
-            if let Err(e) = self.socket.send(&response_bytes, 0) {
+            if let Err(e) = socket.send(&response_bytes, 0) {
                 tracing::error!("send error: {e}");
             }
-            // A tick never returned (roadmap 032 N5): the request has its error; stop
-            // serving, and let main end the process for a fresh bridge.
+            // A CARLA call never returned (roadmap 032 N5): the request has its error; stop
+            // serving, and drain (see `run`).
             if self.coordinator.wedged().is_some() {
-                tracing::error!("A CARLA tick never returned: this bridge stops serving");
                 break;
             }
         }
-
-        tracing::info!("ZMQ server shutting down");
     }
 
     fn dispatch(&mut self, msg: &[u8]) -> Vec<u8> {
@@ -246,6 +264,18 @@ impl ZmqServer {
         self.coordinator.wedged().map(str::to_owned)
     }
 
+    /// Close the SSv2 socket so the replies already queued on it leave before the process
+    /// ends: a linger, then the close. The context's termination (when its last handle goes,
+    /// `main`'s first) waits out the linger.
+    pub fn close_flushed(&mut self) {
+        if let Some(socket) = self.socket.take() {
+            if let Err(e) = socket.set_linger(SOCKET_LINGER_MS) {
+                tracing::warn!("Could not set the SSv2 socket's linger: {e}");
+            }
+            drop(socket);
+        }
+    }
+
     /// Close what the run recorded after a hung tick, without a word to CARLA.
     pub fn abandon_after_hang(&mut self) {
         self.coordinator.abandon_after_hang();
@@ -255,6 +285,73 @@ impl ZmqServer {
         self.end_run();
         self.coordinator.shutdown();
     }
+}
+
+/// How long closing the SSv2 socket may wait for queued replies to leave (ms).
+const SOCKET_LINGER_MS: i32 = 1000;
+
+/// When a bridge that is draining after a hung CARLA call stops answering (034 step 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrainPolicy {
+    /// Quiet this long since the last request (or the start): SSv2 has had its answers.
+    pub idle: Duration,
+    /// Never longer than this, whatever arrives.
+    pub max: Duration,
+}
+
+impl Default for DrainPolicy {
+    fn default() -> Self {
+        Self {
+            idle: Duration::from_secs(2),
+            max: Duration::from_secs(10),
+        }
+    }
+}
+
+impl DrainPolicy {
+    pub fn should_end(&self, since_start: Duration, since_last: Duration) -> bool {
+        since_last >= self.idle || since_start >= self.max
+    }
+}
+
+/// Answer every request on `socket` with `reason` -- each in its own response variant,
+/// so SSv2 reads the description -- touching nothing else, until `policy` says stop.
+/// Returns how many were answered.
+pub fn drain(socket: &zmq::Socket, reason: &str, policy: DrainPolicy) -> usize {
+    let description = format!(
+        "csb is restarting after a CARLA call that never returned; this request was not \
+         run: {reason}"
+    );
+    let started = Instant::now();
+    let mut last = started;
+    let mut answered = 0;
+    loop {
+        let now = Instant::now();
+        if policy.should_end(now - started, now - last) {
+            break;
+        }
+        let mut items = [socket.as_poll_item(zmq::POLLIN)];
+        match zmq::poll(&mut items, 50) {
+            Ok(0) => continue,
+            Ok(_) => {}
+            Err(zmq::Error::EINTR) => continue,
+            Err(e) => {
+                tracing::error!("Drain: zmq::poll error: {e}");
+                break;
+            }
+        }
+        let Ok(msg) = socket.recv_bytes(0) else {
+            continue;
+        };
+        let variant = peek_request_variant(&msg);
+        if let Err(e) = socket.send(encode_error_response(variant, &description), 0) {
+            tracing::error!("Drain: send error: {e}");
+        }
+        answered += 1;
+        last = Instant::now();
+        tracing::warn!("Drain: answered request variant {variant:?} with the hang error");
+    }
+    answered
 }
 
 /// Log what one request produced for the frame budget: the step at DEBUG, warnings, and a
@@ -453,6 +550,73 @@ fn encode_error_response(variant: Option<u32>, description: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_drain_ends_when_idle_or_at_its_limit() {
+        let p = DrainPolicy::default();
+        assert_eq!(p.idle, Duration::from_secs(2));
+        assert_eq!(p.max, Duration::from_secs(10));
+        let s = Duration::from_secs_f64;
+        // Requests keep arriving: answer them, up to the limit.
+        assert!(!p.should_end(s(1.0), s(0.5)));
+        assert!(!p.should_end(s(9.9), s(1.9)));
+        // Nobody has asked for ~2 s: SSv2's deactivate despawn has its answer.
+        assert!(p.should_end(s(2.0), s(2.0)));
+        // A client that never stops asking cannot keep a wedged bridge alive.
+        assert!(p.should_end(s(10.0), s(0.1)));
+    }
+
+    #[test]
+    fn a_drain_answers_every_request_with_the_hang_and_its_own_variant() {
+        let ctx = zmq::Context::new();
+        let rep = ctx.socket(zmq::REP).unwrap();
+        rep.bind("inproc://drain-test").unwrap();
+        let client = {
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let req = ctx.socket(zmq::REQ).unwrap();
+                req.connect("inproc://drain-test").unwrap();
+                let mut answers = Vec::new();
+                for request in [
+                    simulation_request::Request::DespawnEntity(api::DespawnEntityRequest {
+                        name: "ego".into(),
+                    }),
+                    simulation_request::Request::UpdateFrame(api::UpdateFrameRequest::default()),
+                ] {
+                    let bytes = SimulationRequest {
+                        request: Some(request),
+                    }
+                    .encode_to_vec();
+                    req.send(&bytes, 0).unwrap();
+                    let reply = req.recv_bytes(0).unwrap();
+                    answers.push(SimulationResponse::decode(&reply[..]).unwrap());
+                }
+                answers
+            })
+        };
+        let policy = DrainPolicy {
+            idle: Duration::from_millis(300),
+            max: Duration::from_secs(5),
+        };
+        let started = Instant::now();
+        let answered = drain(&rep, "CARLA's world.tick() hung", policy);
+        assert_eq!(answered, 2);
+        assert!(started.elapsed() < Duration::from_secs(5), "ended on idle");
+        let answers = client.join().unwrap();
+        match &answers[0].response {
+            Some(simulation_response::Response::DespawnEntity(r)) => {
+                let r = r.result.as_ref().unwrap();
+                assert!(!r.success);
+                assert!(r.description.contains("world.tick() hung"));
+            }
+            other => panic!("expected a DespawnEntity failure, got {other:?}"),
+        }
+        assert!(matches!(
+            &answers[1].response,
+            Some(simulation_response::Response::UpdateFrame(r))
+                if !r.result.as_ref().unwrap().success
+        ));
+    }
 
     /// Encode a real request, then confirm the tag peek recovers its variant. Guards the
     /// field numbers against a proto change.

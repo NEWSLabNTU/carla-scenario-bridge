@@ -9,10 +9,11 @@ use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
 use crate::blueprint_boxes::{self, BoxTable, Dimensions, SizeClass};
 use crate::body_clearance::{self, BodyBox};
+use crate::budgets::{self, Deadline, HUNG_STATE_READ_WAIT};
 use crate::config::{BridgeConfig, NpcMotion, SensorReleaseConfig};
 use crate::gap_trace::{self, GapTrace};
 use crate::map_resolver::{lanelet_map_file, load_map_origin, town_from_map_path};
-use crate::tick_watchdog::{self, WatchError, Watchdog};
+use crate::tick_watchdog::{HangHook, WatchError, Watchdog};
 use crate::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 
 /// Minimum spawn height when the ground cannot be probed.
@@ -302,6 +303,10 @@ impl SpawnLedger {
         self.ids.contains(&actor_id)
     }
 
+    fn max_id(&self) -> Option<u32> {
+        self.ids.iter().copied().max()
+    }
+
     /// Destroy everything tracked, in ascending id order so a failure is reproducible.
     ///
     /// An actor is forgotten only when `destroy` reports success; one that fails stays on
@@ -433,6 +438,7 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
     commanded_z.max(FALLBACK_SPAWN_Z)
 }
 
+use crate::actor_census;
 use crate::collision_monitor::CollisionMonitor;
 use crate::contact_report::ReportGeometry;
 use crate::coordinate_conversion::{self, MapOrigin, OriginOffset};
@@ -446,6 +452,7 @@ use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs::entity_subtype::Enum as EntitySubtype;
 use crate::proto::traffic_simulator_msgs::{self, BoundingBox};
 use crate::sensor_release::SensorReleaseNotifier;
+use crate::spawn_ladder;
 use crate::weather::{Weather, WeatherRequest};
 use crate::world_services::WeatherReply;
 
@@ -467,11 +474,6 @@ impl std::fmt::Display for TickFailure {
         }
     }
 }
-
-/// How long the state read after a hung tick may take: a frame number from the client's
-/// cache and one settings RPC, normally milliseconds. CARLA answered RPC through the step-7
-/// hang; if it does not, the bridge must still reply to SSv2 well inside its 420 s.
-const HUNG_STATE_READ_WAIT: Duration = Duration::from_secs(10);
 
 /// How long csb waits at connect for a frame of a world CARLA ticks by itself, to write
 /// the epoch marker (`write_epoch_marker_at_connect`). One tick of a loaded server is well
@@ -556,6 +558,119 @@ impl EpisodeReload for CoordinatorReload<'_> {
     fn reload(&mut self) -> Result<carla::client::World> {
         self.coordinator.prepare_map(self.town, self.current_town)
     }
+}
+
+/// A census of CARLA's actors (034 step 5): what a short-lived client found by id.
+struct Census {
+    found: Vec<actor_census::Found>,
+}
+
+/// The test-only spawn timeout hook's variable (034 step 4).
+const SPAWN_TIMEOUT_ENV: &str = "CSB_TEST_SPAWN_TIMEOUT_MS";
+
+fn spawn_timeout_hook_from_env() -> Option<Duration> {
+    parse_spawn_timeout_hook(std::env::var(SPAWN_TIMEOUT_ENV).ok().as_deref())
+}
+
+fn parse_spawn_timeout_hook(value: Option<&str>) -> Option<Duration> {
+    let ms: u64 = value?.trim().parse().ok()?;
+    (ms > 0).then(|| Duration::from_millis(ms))
+}
+
+/// How far above the id watermark a timed-out spawn's actor is looked for: actor ids are
+/// handed out one per actor server-wide, so this covers every actor anybody (acb's sensors,
+/// other clients) created since the last id csb saw.
+const LATE_ACTOR_ID_MARGIN: u32 = 4096;
+
+/// CARLA's error for a spawn blocked at its point (`ActorSpawnResult.cpp`).
+fn is_collision_error(message: &str) -> bool {
+    message.contains("collision")
+}
+
+/// The CARLA calls of one entity's spawn ([`spawn_ladder::SpawnBackend`]).
+struct CarlaSpawn<'a> {
+    coordinator: &'a mut Coordinator,
+    blueprint: carla::client::ActorBlueprint,
+    blueprint_id: String,
+    /// The `role_name` set on it; `None` for a blueprint without the attribute.
+    role: Option<String>,
+    transform: Transform,
+}
+
+impl spawn_ladder::SpawnBackend for CarlaSpawn<'_> {
+    fn spawn(&mut self, z: f32, timeout: Duration) -> spawn_ladder::Attempt {
+        use spawn_ladder::Attempt;
+        let mut transform = self.transform.clone();
+        transform.location.z = z;
+        let timeout = self.coordinator.spawn_timeout_hook.unwrap_or(timeout);
+        self.coordinator.set_client_timeout(timeout);
+        let command = carla::rpc::Command::spawn_actor(self.blueprint.clone(), transform, None);
+        let result = match std::sync::Arc::get_mut(&mut self.coordinator.client) {
+            Some(client) => client
+                .apply_batch_sync(vec![command], false)
+                .map_err(|e| e.to_string()),
+            None => Err("the CARLA client is held by a call that never returned".to_string()),
+        };
+        self.coordinator
+            .set_client_timeout(budgets::CLIENT_RPC_TIMEOUT);
+        match result {
+            Err(e) => Attempt::CallFailed(e),
+            Ok(responses) => match responses.first() {
+                None => Attempt::CallFailed("CARLA returned no result for the spawn".into()),
+                Some(r) => match (r.error(), r.actor_id()) {
+                    (None, Some(id)) => Attempt::Spawned(id),
+                    (None, None) => Attempt::Refused("CARLA returned actor id 0".into()),
+                    (Some(e), _) if is_collision_error(e) => Attempt::Collision(e.to_string()),
+                    (Some(e), _) => Attempt::Refused(e.to_string()),
+                },
+            },
+        }
+    }
+
+    fn find_late(
+        &mut self,
+        watermark: u32,
+        timeout: Duration,
+    ) -> std::result::Result<Vec<u32>, String> {
+        let Some(role) = self.role.clone() else {
+            return Err(format!(
+                "'{}' takes no role_name, so its actor cannot be told from anybody else's",
+                self.blueprint_id
+            ));
+        };
+        let ids: Vec<u32> = (watermark.saturating_add(1)
+            ..=watermark.saturating_add(LATE_ACTOR_ID_MARGIN))
+            .collect();
+        // Through a client of its own: csb's answers from its actor cache first, which still
+        // holds actors destroyed since -- the previous scenario's `hero` was adopted that way
+        // in the first live run (034 step 4 results).
+        let probe = self
+            .coordinator
+            .probe_world(timeout)
+            .map_err(|e| format!("{e:#}"))?;
+        let found = probe
+            .1
+            .actors_by_ids(&ids)
+            .map_err(|e| format!("look up actors above {watermark}: {e}"))?;
+        let mut matches: Vec<u32> = found
+            .iter()
+            .filter(|a| a.type_id() == self.blueprint_id)
+            .filter(|a| role_name_of(a).as_deref() == Some(role.as_str()))
+            .map(|a| a.id())
+            .collect();
+        matches.sort_unstable();
+        Ok(matches)
+    }
+}
+
+/// An actor's `role_name` attribute, if it has one.
+fn role_name_of(actor: &carla::client::Actor) -> Option<String> {
+    actor
+        .attributes()
+        .ok()?
+        .iter()
+        .find(|a| a.id() == "role_name")
+        .map(|a| a.value_string())
 }
 
 /// What an `UpdateFrame` should do, given how far startup has progressed.
@@ -897,7 +1012,12 @@ pub struct Coordinator {
     /// The server's map list, fetched once (see `prepare_map`).
     available_maps: Option<Vec<String>>,
     /// Kept so the bridge can rebuild `world` after a CARLA outage.
-    client: Client,
+    /// Shared with the watchdog's helper thread for the map load; `set_timeout` needs it
+    /// unshared ([`Coordinator::set_client_timeout`]).
+    client: std::sync::Arc<Client>,
+    /// The deadline of the request in progress (`Initialize`, a spawn), which caps every
+    /// watched call's bound ([`Coordinator::bound`]); `None` between them and for frames.
+    request_deadline: Option<Deadline>,
     carla_host: String,
     carla_port: u16,
     world: World,
@@ -964,7 +1084,15 @@ pub struct Coordinator {
     /// against (roadmap 032 N2).
     body_boxes: HashMap<u32, BodyBox>,
     /// Every `world.tick()` runs under it (roadmap 032 N5).
-    tick_watchdog: Watchdog<std::result::Result<u64, carla::CarlaError>>,
+    tick_watchdog: Watchdog,
+    /// The highest id of an actor this process spawned (034 step 4's watermark keeps rising
+    /// after teardown empties the ledger).
+    highest_actor_id: Option<u32>,
+    /// The test-only fault hook (034 step 2, [`HangHook`]); `None` in every product run.
+    hang_hook: Option<HangHook>,
+    /// Test-only: every spawn RPC's timeout (`CSB_TEST_SPAWN_TIMEOUT_MS`, 034 step 4), to
+    /// force the timed-out spawn that is then adopted. `None` in every product run.
+    spawn_timeout_hook: Option<Duration>,
     /// Set when a tick never returned: the reason, for the error every later request gets
     /// and for the log as the bridge exits (see [`Coordinator::wedged`]).
     wedged: Option<String>,
@@ -1084,7 +1212,8 @@ impl Coordinator {
         Self {
             map_aliases: config.map_alias.clone(),
             config,
-            client,
+            client: std::sync::Arc::new(client),
+            request_deadline: None,
             carla_host,
             carla_port,
             config_dir,
@@ -1115,6 +1244,29 @@ impl Coordinator {
             kinematic_fallback: HashSet::new(),
             body_boxes: HashMap::new(),
             tick_watchdog: Watchdog::default(),
+            hang_hook: {
+                let hook = HangHook::from_env();
+                if let Some(h) = &hook {
+                    tracing::warn!(
+                        "TEST FAULT HOOK {} is set: {} (roadmap 034; never in a product run)",
+                        HangHook::FRAME_ENV,
+                        h.describe()
+                    );
+                }
+                hook
+            },
+            highest_actor_id: None,
+            spawn_timeout_hook: {
+                let hook = spawn_timeout_hook_from_env();
+                if let Some(t) = hook {
+                    tracing::warn!(
+                        "TEST FAULT HOOK {SPAWN_TIMEOUT_ENV} is set: every spawn RPC times out \
+                         after {} ms (roadmap 034; never in a product run)",
+                        t.as_millis()
+                    );
+                }
+                hook
+            },
             wedged: None,
             collision_monitor,
             world_id,
@@ -1223,6 +1375,8 @@ impl Coordinator {
     /// Record an actor this bridge created, so teardown can find it later.
     fn record_spawned(&mut self, actor_id: u32) {
         self.spawned_actors.record(actor_id);
+        // Kept after the actor goes: ids are never reused, so the watermark only rises.
+        self.highest_actor_id = Some(self.highest_actor_id.map_or(actor_id, |h| h.max(actor_id)));
     }
 
     /// Drop an actor from the teardown set once it is confirmed gone.
@@ -1300,51 +1454,161 @@ impl Coordinator {
         owned.extend(agent_link::load_ledger(&self.agent_ledger));
         self.store_agent_ledger();
 
-        let actors = match self.world.actors() {
-            Ok(actors) => actors,
+        // By id, through a client of its own (034 step 5, `actor_census`): the snapshot list
+        // misses what was created since the last tick and keeps what was destroyed since.
+        let census = match self.census() {
+            Ok(c) => c,
             Err(e) => {
-                tracing::warn!("Could not list actors to look for orphans: {e}");
+                tracing::warn!(
+                    "Could not take a census of CARLA's actors to look for orphans: {e:#}"
+                );
                 return;
             }
         };
+        let spawned = &self.spawned_actors;
+        let orphans = actor_census::orphans(&census.found, ENTITY_ROLE_PREFIX, &owned, |id| {
+            spawned.contains(id)
+        });
+        let mut destroyed = HashSet::new();
 
-        let orphans: Vec<(u32, String)> = actors
-            .iter()
-            .filter(|actor| !self.spawned_actors.contains(actor.id()))
-            .filter_map(|actor| {
-                let attrs = actor.attributes().ok()?;
-                let role = attrs
-                    .iter()
-                    .find(|a| a.id() == "role_name")
-                    .map(|a| a.value_string())?;
-                let ours = is_entity_role_name(&role)
-                    || (actor.type_id().starts_with("vehicle.") && owned.contains(&role));
-                ours.then(|| (actor.id(), role))
-            })
-            .collect();
-
-        if orphans.is_empty() {
-            return;
+        if !orphans.is_empty() {
+            tracing::warn!(
+                "Found {} actor(s) from a previous bridge process still in the world (census of \
+                 {} actors by id); destroying them so this run's spawn points are clear",
+                orphans.len(),
+                census.found.len()
+            );
         }
-
-        tracing::warn!(
-            "Found {} actor(s) from a previous bridge process still in the world; \
-             destroying them so this run's spawn points are clear",
-            orphans.len()
-        );
-
         for (actor_id, role) in orphans {
             // Their acb_bridge may still be listening to sensors attached to them, exactly
             // as for our own actors -- see the release protocol in issue 015.
             self.announce_release(actor_id, &role);
-            match destroy_actor_in(&self.world, actor_id) {
-                Ok(()) => tracing::warn!("Destroyed orphaned '{role}' (actor {actor_id})"),
+            match self.destroy_census_actor(&census, actor_id) {
+                Ok(children) => {
+                    destroyed.insert(actor_id);
+                    destroyed.extend(children);
+                    tracing::warn!("Destroyed orphaned '{role}' (actor {actor_id})");
+                }
                 Err(e) => tracing::error!(
-                    "Could not destroy orphaned '{role}' (actor {actor_id}): {e}. \
+                    "Could not destroy orphaned '{role}' (actor {actor_id}): {e:#}. \
                      Its spawn point is still occupied, and this run may stack a vehicle on it."
                 ),
             }
         }
+
+        // Sensors whose vehicle is gone -- before this sweep or by it. CARLA keeps ticking a
+        // sensor after its parent dies, so an orphaned LiDAR ray-casts every frame forever;
+        // twenty-one were once found on one server from bridges killed outright. Only
+        // parentless ones: a sensor on a live vehicle belongs to whoever attached it
+        // (issue 015's release protocol).
+        let remaining: Vec<actor_census::Found> = census
+            .found
+            .iter()
+            .filter(|f| !destroyed.contains(&f.id))
+            .cloned()
+            .collect();
+        let sensors = actor_census::parentless_sensors(&remaining);
+        if sensors.is_empty() {
+            return;
+        }
+        tracing::warn!(
+            "Found {} sensor(s) whose vehicle is gone; destroying them so they stop being \
+             ticked every frame",
+            sensors.len()
+        );
+        for actor_id in sensors {
+            if let Err(e) = self.destroy_by_ids(&[actor_id]) {
+                tracing::warn!("Could not destroy orphaned sensor {actor_id}: {e:#}");
+            }
+        }
+    }
+
+    /// Destroy an actor found by a census and, first, everything attached to it as the
+    /// census saw them: CARLA leaves a destroyed vehicle's sensors alive, and an orphaned IMU
+    /// segfaults the server on its next tick. Returns the children destroyed.
+    fn destroy_census_actor(&mut self, census: &Census, id: u32) -> Result<Vec<u32>> {
+        let children = actor_census::children_of(&census.found, id);
+        if !children.is_empty() {
+            if let Err(e) = self.destroy_by_ids(&children) {
+                tracing::warn!(
+                    "Could not destroy every actor attached to {id} ({children:?}): {e:#}. The \
+                     server may crash when it next ticks one."
+                );
+            }
+        }
+        self.destroy_by_ids(&[id])?;
+        Ok(children)
+    }
+
+    /// Destroy actors by id on the server, in one `apply_batch_sync`, in order.
+    ///
+    /// Not `Actor::destroy`: LibCarla refuses to destroy an actor its client's last episode
+    /// state does not show alive ("attempting to destroy an actor that is already dead",
+    /// `Actor.cpp:149-160`) -- every actor created since the last tick, and every actor a
+    /// census client (which never ticks) found. The first live run of 034 step 5 left the
+    /// dead bridge's props and walker in the world that way. A batch `DestroyActor` is
+    /// decided by the server. An actor already gone counts as destroyed.
+    fn destroy_by_ids(&mut self, ids: &[u32]) -> Result<()> {
+        let commands = ids
+            .iter()
+            .map(|&id| carla::rpc::Command::destroy_actor(id))
+            .collect();
+        let client = std::sync::Arc::get_mut(&mut self.client)
+            .ok_or_else(|| eyre::eyre!("the CARLA client is held by a call that never returned"))?;
+        let responses = client
+            .apply_batch_sync(commands, false)
+            .map_err(|e| eyre::eyre!("destroy {ids:?}: {e}"))?;
+        let failed: Vec<String> = ids
+            .iter()
+            .zip(&responses)
+            .filter_map(|(id, r)| {
+                r.error()
+                    .filter(|e| !e.contains("not found"))
+                    .map(|e| format!("{id}: {e}"))
+            })
+            .collect();
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(eyre::eyre!("{}", failed.join("; ")))
+        }
+    }
+
+    /// A short-lived client and its world, for lookups by id that must not be answered from
+    /// csb's own actor cache (`actor_census`). Keep the client alive while using the world.
+    fn probe_world(&self, timeout: Duration) -> Result<(Client, World)> {
+        let mut client = Client::connect(&self.carla_host, self.carla_port, None)
+            .map_err(|e| eyre::eyre!("connect a lookup client: {e}"))?;
+        client
+            .set_timeout(timeout)
+            .map_err(|e| eyre::eyre!("lookup client timeout: {e}"))?;
+        let world = client
+            .world()
+            .map_err(|e| eyre::eyre!("lookup client world: {e}"))?;
+        Ok((client, world))
+    }
+
+    /// Every actor CARLA holds now, by id, through a short-lived client of its own whose
+    /// actor cache is empty (`actor_census`). Its RPCs are bounded by what is left of the
+    /// request.
+    fn census(&self) -> Result<Census> {
+        let watermark = self.id_watermark().unwrap_or(0);
+        let (client, world) = self.probe_world(self.bound(budgets::CLIENT_RPC_TIMEOUT))?;
+        let found = actor_census::scan(watermark, |ids| {
+            let list = world.actors_by_ids(ids).map_err(|e| e.to_string())?;
+            Ok(list
+                .iter()
+                .map(|a| actor_census::Found {
+                    id: a.id(),
+                    type_id: a.type_id(),
+                    role: role_name_of(&a),
+                    parent: Some(a.parent_id()).filter(|&p| p != 0),
+                })
+                .collect())
+        })
+        .map_err(|e| eyre::eyre!("actors by id: {e}"))?;
+        drop(client);
+        Ok(Census { found })
     }
 
     /// Record the agent-driven vehicles this process has in the world, for the reaper of
@@ -1355,87 +1619,52 @@ impl Coordinator {
         }
     }
 
-    /// Destroy sensors whose vehicle is gone.
-    ///
-    /// CARLA keeps ticking a sensor after its parent dies, so an orphaned LiDAR ray-casts on
-    /// every frame forever. They accumulate: twenty-one were found on one server, from bridges
-    /// that had been killed outright rather than shut down, since a process that is SIGKILLed
-    /// never gets to release anything. Clearing them took a stack that had been failing three
-    /// runs in a row back to passing, though with three runs either side that is an
-    /// observation rather than a proven cause.
-    ///
-    /// Only parentless ones are touched. A sensor attached to a live vehicle belongs to
-    /// whichever bridge created it, and the release protocol in issue 015 exists precisely so
-    /// that this process does not destroy those behind its owner's back.
-    fn reap_parentless_sensors(&mut self) {
-        let actors = match self.world.actors() {
-            Ok(actors) => actors,
-            Err(e) => {
-                tracing::warn!("Could not list actors to look for orphaned sensors: {e}");
-                return;
-            }
-        };
-
-        let orphans: Vec<u32> = actors
-            .iter()
-            .filter(|actor| actor.type_id().starts_with("sensor."))
-            // `parent()` returns a Result whose Ok is the Option. A failure to read it is
-            // not evidence of an orphan, so only a definite None counts.
-            .filter(|actor| matches!(actor.parent(), Ok(None)))
-            .map(|actor| actor.id())
-            .collect();
-
-        if orphans.is_empty() {
-            return;
-        }
-
-        tracing::warn!(
-            "Found {} sensor(s) whose vehicle is gone; destroying them so they stop being \
-             ticked every frame",
-            orphans.len()
-        );
-        for actor_id in orphans {
-            if let Err(e) = destroy_actor_in(&self.world, actor_id) {
-                tracing::warn!("Could not destroy orphaned sensor {actor_id}: {e}");
-            }
-        }
-    }
-
-    /// The vehicle sitting on a spawn point, if any, as (actor id, role name).
+    /// The vehicle sitting on a spawn point, if any, described for the log; `exclude` is the
+    /// actor just spawned. Vehicles come from a census by id (034 step 5), so one created
+    /// since the last tick is named too, as a candidate whose pose is not known yet.
     ///
     /// Only used to explain a spawn that had to be lifted. Compares in the horizontal plane:
     /// a vehicle blocking a spawn does so by standing on the same patch of road, whatever
     /// its own z is.
-    fn vehicle_occupying(&self, x: f32, y: f32, _z: f32) -> Option<(u32, String)> {
+    fn vehicle_occupying(&self, x: f32, y: f32, exclude: u32) -> Option<String> {
         /// Half a car length. Close enough to be the thing that refused the spawn.
         const OCCUPIED_RADIUS_M: f32 = 2.5;
 
-        let actors = self.world.actors().ok()?;
-        // Bind the result before returning: the iterator borrows `actors`, so building it
-        // in tail position would drop the list while the temporary still holds the borrow.
-        let found = actors
+        // Which vehicles exist now, by id (034 step 5); their pose from the last frame.
+        let census = match self.census() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("No census of CARLA's actors to explain the lift: {e:#}");
+                return None;
+            }
+        };
+        let snapshot = self.world.snapshot().ok()?;
+        let mut unknown = Vec::new();
+        for f in census
+            .found
             .iter()
-            .filter(|actor| actor.type_id().starts_with("vehicle."))
-            .find_map(|actor| {
-                let t = actor.transform().ok()?;
-                let dx = t.location.x - x;
-                let dy = t.location.y - y;
-                if dx.hypot(dy) > OCCUPIED_RADIUS_M {
-                    return None;
+            .filter(|f| f.type_id.starts_with("vehicle."))
+        {
+            if f.id == exclude {
+                continue;
+            }
+            let role = f.role.clone().unwrap_or_else(|| "?".to_string());
+            match snapshot.find(f.id) {
+                Some(state) => {
+                    let t = state.transform();
+                    if (t.location.x - x).hypot(t.location.y - y) <= OCCUPIED_RADIUS_M {
+                        return Some(format!("actor {} ('{role}')", f.id));
+                    }
                 }
-                let role = actor
-                    .attributes()
-                    .ok()
-                    .and_then(|attrs| {
-                        attrs
-                            .iter()
-                            .find(|a| a.id() == "role_name")
-                            .map(|a| a.value_string())
-                    })
-                    .unwrap_or_else(|| "?".to_string());
-                Some((actor.id(), role))
-            });
-        found
+                None => unknown.push(format!("{} ('{role}')", f.id)),
+            }
+        }
+        (!unknown.is_empty()).then(|| {
+            format!(
+                "possibly actor(s) {} (created since the last tick, pose not known yet)",
+                unknown.join(", ")
+            )
+        })
     }
 
     /// Give whoever attached sensors to `actor_id` a chance to stop them first.
@@ -1641,11 +1870,7 @@ impl Coordinator {
         }
         self.restore_traffic_lights();
         self.restore_async_mode();
-        if let Some(tm) = self.traffic_manager.take() {
-            if let Err(e) = tm.shutdown() {
-                tracing::warn!("Traffic Manager shutdown: {e}");
-            }
-        }
+        self.shut_down_traffic_manager("bridge shutdown");
     }
 
     // --- Map and traffic lights ------------------------------------------------------
@@ -1700,9 +1925,10 @@ impl Coordinator {
             // enumerating maps mid-tick (observed: 66 s first load, >30 s listing on a
             // just-restarted server). Widen the timeout for the whole prepare path and
             // restore it afterwards even on failure.
-            let _ = self.client.set_timeout(Duration::from_secs(120));
+            let load_timeout = self.bound(budgets::LOAD_WORLD_RPC_TIMEOUT);
+            self.set_client_timeout(load_timeout);
             let prepared = self.reload_as_pause(&town, &current_town);
-            let _ = self.client.set_timeout(Duration::from_secs(30));
+            self.set_client_timeout(budgets::CLIENT_RPC_TIMEOUT);
             // CARLA stays synchronous across the load (reset_settings = false), and csb stays
             // its only ticker. Re-apply the settings to the new world anyway: the step and
             // physics substeps are this bridge's, and a failed load left the old world.
@@ -1875,9 +2101,87 @@ impl Coordinator {
         // csb ticks it -- csb is the only ticker (docs/design/time-and-ticking.md) -- and
         // the frame count after the load is exact. The default reverts it to async, where it
         // free-runs until someone reads it (and loads took 44 s to over 120 s).
-        self.client
-            .load_world_opt(town, false)
-            .map_err(|e| eyre::eyre!("load world '{town}': {e}"))
+        let client = self.client.clone();
+        let name = town.to_string();
+        let bound = self.bound(budgets::LOAD_WORLD_WATCHDOG);
+        match self.watched(
+            "load_world",
+            &format!("the load of '{town}'"),
+            bound,
+            move || client.load_world_opt(&name, false),
+        ) {
+            Ok(loaded) => loaded.map_err(|e| eyre::eyre!("load world '{town}': {e}")),
+            Err(reason) => Err(eyre::eyre!(reason)),
+        }
+    }
+
+    /// The bound a watched call gets: `step`, capped by the deadline of the request in
+    /// progress (034 step 3), never under [`budgets::LIBCARLA_TICK_TIMEOUT`].
+    fn bound(&self, step: Duration) -> Duration {
+        match &self.request_deadline {
+            Some(d) => d.cap(step, budgets::LIBCARLA_TICK_TIMEOUT),
+            None => step,
+        }
+    }
+
+    /// Set the CARLA client's RPC timeout. Impossible only while the helper thread still
+    /// holds the client, i.e. after a map load that never returned, when nothing is sent to
+    /// CARLA again anyway.
+    fn set_client_timeout(&mut self, timeout: Duration) {
+        match std::sync::Arc::get_mut(&mut self.client) {
+            Some(client) => {
+                if let Err(e) = client.set_timeout(timeout) {
+                    tracing::warn!("Could not set the CARLA client timeout: {e}");
+                }
+            }
+            None => tracing::warn!(
+                "CARLA client timeout left as is: a call that never returned still holds it"
+            ),
+        }
+    }
+
+    /// `apply_settings` under the watchdog (034 step 3): it runs up to 30 ticks, each one
+    /// through the Traffic Manager handshake.
+    fn apply_settings_watched(
+        &mut self,
+        step: &str,
+        settings: carla::rpc::EpisodeSettings,
+    ) -> Result<u64> {
+        let mut world = self.world.clone();
+        let bound = self.bound(budgets::SETTINGS_WATCHDOG);
+        match self.watched("apply_settings", step, bound, move || {
+            world.apply_settings(&settings, budgets::LIBCARLA_TICK_TIMEOUT)
+        }) {
+            Ok(applied) => applied.map_err(|e| eyre::eyre!("apply settings: {e}")),
+            Err(reason) => Err(eyre::eyre!(reason)),
+        }
+    }
+
+    /// `TrafficManager::SetSynchronousMode` under the watchdog, if there is a TM: it signals
+    /// the worker through the handshake that can lose a wakeup (034).
+    fn set_traffic_manager_synchronous(&mut self, on: bool) -> Result<()> {
+        let Some(mut tm) = self.traffic_manager.take() else {
+            return Ok(());
+        };
+        match self.watched(
+            "TrafficManager::SetSynchronousMode",
+            if on {
+                "synchronous mode"
+            } else {
+                "asynchronous mode"
+            },
+            budgets::TM_CALL_WATCHDOG,
+            move || {
+                let r = tm.set_synchronous_mode(on);
+                (tm, r)
+            },
+        ) {
+            Ok((tm, r)) => {
+                self.traffic_manager = Some(tm);
+                r.map_err(|e| eyre::eyre!("Traffic Manager synchronous mode: {e}"))
+            }
+            Err(reason) => Err(eyre::eyre!(reason)),
+        }
     }
 
     /// Load the explicit signal mapping, fill the rest by position matching, and write the
@@ -2331,7 +2635,7 @@ impl Coordinator {
 
         let world_id = world.id().ok();
         let restarted = world_id.is_none() || world_id != self.world_id;
-        self.client = client;
+        self.client = std::sync::Arc::new(client);
         self.world = world;
         self.world_id = world_id;
         self.last_tick_frame = None;
@@ -2342,11 +2646,7 @@ impl Coordinator {
             self.forget_previous_server();
             // Its Traffic Manager served the old server; LibCarla keeps one per port, so it
             // must be shut down for the next use to start a fresh one.
-            if let Some(tm) = self.traffic_manager.take() {
-                if let Err(e) = tm.shutdown() {
-                    tracing::warn!("Traffic Manager of the old server: shutdown failed: {e}");
-                }
-            }
+            self.shut_down_traffic_manager("CARLA restarted: the old server's");
         }
 
         // Whatever CARLA we are now talking to, it is not holding our settings.
@@ -2671,7 +2971,38 @@ impl Coordinator {
         }
     }
 
+    /// `Initialize`, under its deadline ([`budgets::INITIALIZE_BUDGET`], 034 step 3): every
+    /// watched call is capped by what is left of it, and a request past it fails naming the
+    /// step instead of outliving SSv2's 300 s.
     pub fn initialize(&mut self, req: api::InitializeRequest) -> api::InitializeResponse {
+        self.request_deadline = Some(Deadline::new(budgets::INITIALIZE_BUDGET));
+        let response = self.initialize_within(req);
+        self.request_deadline = None;
+        response
+    }
+
+    /// Why `Initialize` cannot go on after `step`: a call never returned, or the deadline
+    /// has passed.
+    fn initialize_stopped(&self, step: &str) -> Option<String> {
+        if let Some(reason) = &self.wedged {
+            return Some(reason.clone());
+        }
+        let deadline = self.request_deadline?;
+        deadline.expired().then(|| {
+            format!(
+                "Initialize ran past its {} s budget at {step} (SSv2 waits {} s); CARLA is too \
+                 slow to prepare a scenario now",
+                deadline.budget().as_secs(),
+                budgets::SSV2_INITIALIZE_TIMEOUT.as_secs()
+            )
+        })
+    }
+
+    fn initialize_within(&mut self, req: api::InitializeRequest) -> api::InitializeResponse {
+        let stopped = |reason: String| api::InitializeResponse {
+            result: Some(proto_err(reason)),
+            simulation_time_ns: 0,
+        };
         tracing::info!(
             "Initialize: step_time={}, realtime_factor={}",
             req.step_time,
@@ -2713,6 +3044,9 @@ impl Coordinator {
         // delivers the first frame.
         if let Err(e) = self.enable_sync_mode() {
             tracing::warn!("Could not put CARLA in synchronous mode at Initialize: {e}");
+        }
+        if let Some(reason) = self.initialize_stopped("synchronous mode") {
+            return stopped(reason);
         }
 
         // Fresh run, fresh warnings -- otherwise a second scenario in one process would
@@ -2760,21 +3094,23 @@ impl Coordinator {
         }
         self.entities.clear();
         self.commanded_lights.clear();
-        // The same seed every run, so simulator-driven traffic repeats.
-        if let Some(tm) = self.traffic_manager.as_mut() {
-            if let Err(e) = tm.set_random_device_seed(self.config.traffic_manager.seed) {
-                tracing::warn!("Could not reseed Traffic Manager: {e}");
-            }
+        // The previous run's simulator-driven vehicles are gone, so is the Traffic Manager:
+        // a scenario without one ticks with no TM in this process (034 step 1). The next
+        // `simulator_autopilot` spawn starts a new one, seeded as configured, so
+        // simulator-driven traffic repeats.
+        self.retire_traffic_manager("Initialize");
+        if let Some(reason) = self.initialize_stopped("the previous run's teardown") {
+            return stopped(reason);
         }
 
         // Load the town the scenario was authored against. A mismatch is not a visible
         // failure -- every pose would be interpreted against whatever town CARLA happened
         // to hold -- so an unresolvable path fails Initialize rather than guessing.
         if let Err(e) = self.load_scenario_map(&req.lanelet2_map_path) {
-            return api::InitializeResponse {
-                result: Some(proto_err(format!("Cannot prepare the map: {e}"))),
-                simulation_time_ns: 0,
-            };
+            return stopped(format!("Cannot prepare the map: {e}"));
+        }
+        if let Some(reason) = self.initialize_stopped("the map") {
+            return stopped(reason);
         }
 
         // Take authority over the signals (invariant 3).
@@ -2783,11 +3119,11 @@ impl Coordinator {
         // A previous bridge process may have died without tearing its vehicles down, and
         // they sit on the spawn points this run needs. Reap them after the map is settled
         // (a reload would have cleared them anyway) and before anything spawns.
+        // Sensors whose vehicle is gone go in the same sweep, from the same census.
         self.reap_orphaned_actors();
-        // Separately, and not from the tail of the call above: that function returns early
-        // when it finds no orphaned vehicles, which is the common case, so anything appended
-        // to it never runs.
-        self.reap_parentless_sensors();
+        if let Some(reason) = self.initialize_stopped("the reaper") {
+            return stopped(reason);
+        }
 
         tracing::info!(
             "Initialized (step_time={}). CARLA synchronous; csb is its only ticker.",
@@ -2886,14 +3222,9 @@ impl Coordinator {
         let delta = timing.fixed_delta_seconds;
         let mut settings = self.world.settings().wrap_err("get settings")?;
         apply_sync_timing(&mut settings, timing);
-        self.world
-            .apply_settings(&settings, Duration::from_secs(10))
-            .wrap_err("apply settings")?;
+        self.apply_settings_watched("synchronous mode", settings)?;
         self.sync_mode_enabled = true;
-        if let Some(tm) = self.traffic_manager.as_mut() {
-            tm.set_synchronous_mode(true)
-                .wrap_err("Traffic Manager synchronous mode")?;
-        }
+        self.set_traffic_manager_synchronous(true)?;
         tracing::info!(
             "CARLA sync mode enabled, fixed_delta_seconds={delta} ({} substep(s) per {}s \
              SSv2 frame), physics max_substep_delta_time={} x max_substeps={}",
@@ -2946,9 +3277,14 @@ impl Coordinator {
             |c| {
                 substep += 1;
                 let started = Instant::now();
-                let result = c.watched_tick(&format!(
-                    "UpdateFrame {ssv2_frame}, tick {substep} of {substeps}"
-                ));
+                let step = format!("UpdateFrame {ssv2_frame}, tick {substep} of {substeps}");
+                let hang =
+                    substep == 1 && c.hang_hook.as_ref().is_some_and(|h| h.fires_at(ssv2_frame));
+                let result = if hang {
+                    c.watched_hang(&step)
+                } else {
+                    c.watched_tick(&step)
+                };
                 c.tick_time += started.elapsed();
                 result.map(|_| ())
             },
@@ -2970,47 +3306,84 @@ impl Coordinator {
     /// One `world.tick()` under the watchdog (roadmap 032 N5): the CARLA frame it returned,
     /// noted for the collision labels (032 N2). `step` names the caller in the error.
     ///
-    /// A tick that does not return within [`tick_watchdog::TICK_WATCHDOG`] wedges the bridge
+    /// A tick that does not return within [`budgets::TICK_WATCHDOG`] wedges the bridge
     /// ([`Coordinator::wedged`]): CARLA's frame and settings are logged, and this and every
     /// later tick fail without touching CARLA.
     fn watched_tick(&mut self, step: &str) -> std::result::Result<u64, TickFailure> {
-        if let Some(reason) = &self.wedged {
-            return Err(TickFailure::Hung(reason.clone()));
-        }
         let mut world = self.world.clone();
-        match self
-            .tick_watchdog
-            .run(tick_watchdog::TICK_WATCHDOG, move || world.tick())
-        {
+        let bound = self.bound(budgets::TICK_WATCHDOG);
+        match self.watched("world.tick()", step, bound, move || {
+            world.tick_or_timeout(budgets::LIBCARLA_TICK_TIMEOUT)
+        }) {
             Ok(Ok(frame)) => {
                 self.last_tick_frame = Some(frame);
                 self.collision_monitor.note_tick(frame);
                 Ok(frame)
             }
             Ok(Err(e)) => Err(TickFailure::Carla(e)),
-            Err(e) => Err(TickFailure::Hung(self.tick_hung(step, e))),
+            Err(reason) => Err(TickFailure::Hung(reason)),
         }
     }
 
-    /// A tick that never returned: log what CARLA says now, wedge the bridge, and return
-    /// the request's error.
-    fn tick_hung(&mut self, step: &str, error: WatchError) -> String {
+    /// The test fault (034 step 2): a "tick" that blocks the helper thread forever, watched
+    /// exactly like a real one.
+    fn watched_hang(&mut self, step: &str) -> std::result::Result<u64, TickFailure> {
+        tracing::warn!("TEST FAULT HOOK: the tick of {step} is made to hang");
+        match self.watched(
+            "world.tick()",
+            step,
+            budgets::TICK_WATCHDOG,
+            || -> std::result::Result<u64, carla::CarlaError> {
+                loop {
+                    std::thread::park();
+                }
+            },
+        ) {
+            Ok(Ok(frame)) => Ok(frame),
+            Ok(Err(e)) => Err(TickFailure::Carla(e)),
+            Err(reason) => Err(TickFailure::Hung(reason)),
+        }
+    }
+
+    /// Run one CARLA call that can block inside LibCarla -- a tick, a settings change, a map
+    /// load, a Traffic Manager call -- on the watchdog's helper thread, waiting at most
+    /// `bound`. `Err` is the request's error once the call did not return: the bridge is
+    /// wedged ([`Coordinator::wedged`]) and nothing more is sent to CARLA from this process.
+    fn watched<T: Send + 'static>(
+        &mut self,
+        call: &str,
+        step: &str,
+        bound: Duration,
+        job: impl FnOnce() -> T + Send + 'static,
+    ) -> std::result::Result<T, String> {
+        if let Some(reason) = &self.wedged {
+            return Err(reason.clone());
+        }
+        match self.tick_watchdog.run(bound, job) {
+            Ok(value) => Ok(value),
+            Err(e) => Err(self.call_hung(call, step, bound, e)),
+        }
+    }
+
+    /// A watched call that never returned: log what CARLA says now, wedge the bridge, and
+    /// return the request's error.
+    fn call_hung(&mut self, call: &str, step: &str, bound: Duration, error: WatchError) -> String {
         let waited = match error {
             WatchError::Expired { waited } => format!("{:.1} s", waited.as_secs_f64()),
-            WatchError::Wedged => "an earlier tick".to_string(),
-            WatchError::WorkerGone => "no tick thread".to_string(),
+            WatchError::Wedged => "an earlier call".to_string(),
+            WatchError::WorkerGone => "no watchdog thread".to_string(),
         };
         let state = carla_state_for_log(&self.world);
         let reason = format!(
-            "CARLA's world.tick() in {step} did not return (waited {waited}, bound {} s); {state}; \
+            "CARLA's {call} in {step} did not return (waited {waited}, bound {} s); {state}; \
              last tick returned CARLA frame {:?}, Traffic Manager {}. csb ends this bridge so \
              its supervisor starts a fresh one",
-            tick_watchdog::TICK_WATCHDOG.as_secs(),
+            bound.as_secs(),
             self.last_tick_frame,
             if self.traffic_manager.is_some() {
                 "running"
             } else {
-                "not started"
+                "not running"
             }
         );
         tracing::error!("{reason}");
@@ -3154,10 +3527,7 @@ impl Coordinator {
             timing.fixed_delta_seconds,
             self.substeps
         );
-        if let Err(e) = self
-            .world
-            .apply_settings(&settings, Duration::from_secs(10))
-        {
+        if let Err(e) = self.apply_settings_watched("UpdateStepTime", settings) {
             return api::UpdateStepTimeResponse {
                 result: Some(proto_err(format!("Failed to apply settings: {e}"))),
             };
@@ -3174,6 +3544,36 @@ impl Coordinator {
     /// whether CARLA physics drives it) live in [`SpawnKind`] rather than in four copies of
     /// this logic.
     fn spawn_entity(
+        &mut self,
+        name: &str,
+        asset_key: &str,
+        pose: Option<&Pose>,
+        shape: EntityShape,
+        kind: SpawnKind,
+        role_name: Option<&str>,
+    ) -> ProtoResult {
+        // One deadline for the whole request (034 step 4): every attempt, the adoption of
+        // a late actor, the settling tick and the RPCs after it.
+        self.request_deadline = Some(Deadline::new(budgets::SPAWN_REQUEST_BUDGET));
+        let result = self.spawn_entity_within(name, asset_key, pose, shape, kind, role_name);
+        self.request_deadline = None;
+        self.set_client_timeout(budgets::CLIENT_RPC_TIMEOUT);
+        result
+    }
+
+    /// The highest actor id csb knows of: CARLA hands ids out in increasing order and never
+    /// reuses them, so an actor created after this has a higher one.
+    fn id_watermark(&self) -> Option<u32> {
+        let seen = self
+            .world
+            .actors()
+            .ok()
+            .and_then(|actors| actors.iter().map(|a| a.id()).max());
+        seen.max(self.spawned_actors.max_id())
+            .max(self.highest_actor_id)
+    }
+
+    fn spawn_entity_within(
         &mut self,
         name: &str,
         asset_key: &str,
@@ -3264,84 +3664,138 @@ impl Coordinator {
         }
 
         // Retry a colliding spawn at increasing height, same x/y. A leftover actor on the
-        // point is the usual cause; teardown now prevents most of those, and lifting clears
-        // the rest.
-        //
-        // ActorBuilder::spawn consumes the builder, so each attempt builds a fresh one.
+        // point is the usual cause; teardown and the reaper prevent most of those, and lifting
+        // clears the rest. A spawn call that failed (a timeout) is never lifted over: its
+        // actor may exist, and is looked for and adopted (034 step 4, `spawn_ladder`).
         let base_z = carla_transform.location.z;
         let base_x = carla_transform.location.x;
         let base_y = carla_transform.location.y;
-        let mut spawn_loc = carla_transform.location;
-        let mut last_error: Option<String> = None;
-        let mut actor = None;
 
         // An entity without a configured role still carries one: the mark that lets the
         // next bridge reap it if this one dies mid-scenario (reap_orphaned_actors).
         let entity_role = entity_role_name(name);
-        for (attempt, z) in spawn_retry_heights(base_z).enumerate() {
+        let (blueprint, role) = {
             let builder = match self.build_actor(&blueprint_key, role_name, &entity_role) {
                 Ok(b) => b,
                 Err(e) => return proto_err(format!("Cannot build '{name}': {e}")),
             };
+            let blueprint = builder.into_blueprint();
+            // What `build_actor` set: the configured role, else the entity mark, where the
+            // blueprint has the attribute.
+            let role = blueprint
+                .contains_attribute("role_name")
+                .then(|| role_name.unwrap_or(&entity_role).to_string());
+            (blueprint, role)
+        };
+        let watermark = self.id_watermark();
+        let deadline = self
+            .request_deadline
+            .unwrap_or_else(|| Deadline::new(budgets::SPAWN_REQUEST_BUDGET));
+        let outcome = {
+            let mut backend = CarlaSpawn {
+                coordinator: self,
+                blueprint,
+                blueprint_id: blueprint_key.clone(),
+                role,
+                transform: carla_transform.clone(),
+            };
+            match watermark {
+                Some(w) => spawn_ladder::run(
+                    &mut backend,
+                    spawn_retry_heights(base_z),
+                    w,
+                    &deadline,
+                    budgets::CLIENT_RPC_TIMEOUT,
+                    Instant::now,
+                ),
+                None => spawn_ladder::Outcome::Failed(
+                    "no actor id watermark (CARLA's actor list unreadable), so a timed-out \
+                     spawn could not be told apart; not attempted"
+                        .to_string(),
+                ),
+            }
+        };
+        // What is left of the request bounds every RPC after the spawn.
+        let rpc_timeout = self.bound(budgets::CLIENT_RPC_TIMEOUT);
+        self.set_client_timeout(rpc_timeout);
 
-            let mut candidate = carla_transform.clone();
-            candidate.location.z = z;
-            let candidate_loc = candidate.location;
-
-            match builder.spawn(candidate) {
-                Ok(a) => {
-                    if attempt > 0 {
-                        // Lifting is meant for ground that sits higher than the pose says.
-                        // If something is parked on the commanded point instead, the lift
-                        // has put this vehicle on top of it, and the run needs to know which
-                        // actor rather than just that the first attempts failed.
-                        match self.vehicle_occupying(base_x, base_y, base_z) {
-                            Some((other_id, other_role)) => tracing::warn!(
-                                "Spawned '{name}' on attempt {} at z={z:.2} (commanded \
-                                 z={base_z:.2}) because actor {other_id} ('{other_role}') is \
-                                 already on that point -- '{name}' is now stacked above it",
-                                attempt + 1
-                            ),
-                            None => tracing::info!(
-                                "Spawned '{name}' on attempt {} at z={z:.2} (commanded z={base_z:.2})",
-                                attempt + 1
-                            ),
-                        }
-                    }
-                    spawn_loc = candidate_loc;
-                    actor = Some(a);
-                    break;
-                }
-                Err(e) => {
+        let (actor_id, spawn_z) = match outcome {
+            spawn_ladder::Outcome::Spawned { actor, attempt, z } => {
+                for failed in 0..attempt {
                     tracing::warn!(
-                        "Spawn of '{name}' at z={z:.2} failed (attempt {}/{}): {e}",
-                        attempt + 1,
+                        "Spawn of '{name}' at z={:.2} collided (attempt {}/{})",
+                        base_z + failed as f32 * SPAWN_RETRY_STEP,
+                        failed + 1,
                         SPAWN_RETRIES + 1
                     );
-                    last_error = Some(e.to_string());
                 }
+                if attempt > 0 {
+                    // Lifting is meant for ground that sits higher than the pose says.
+                    // If something is parked on the commanded point instead, the lift
+                    // has put this vehicle on top of it, and the run needs to know which
+                    // actor rather than just that the first attempts failed.
+                    match self.vehicle_occupying(base_x, base_y, actor) {
+                        Some(other) => tracing::warn!(
+                            "Spawned '{name}' on attempt {} at z={z:.2} (commanded \
+                             z={base_z:.2}) because {other} is already on that point -- \
+                             '{name}' is now stacked above it",
+                            attempt + 1
+                        ),
+                        None => tracing::info!(
+                            "Spawned '{name}' on attempt {} at z={z:.2} (commanded z={base_z:.2})",
+                            attempt + 1
+                        ),
+                    }
+                }
+                (actor, z)
             }
-        }
-
-        let actor = match actor {
-            Some(a) => a,
-            None => {
-                let detail = last_error.unwrap_or_else(|| "no attempts were made".to_string());
+            spawn_ladder::Outcome::Adopted {
+                actor,
+                attempt,
+                z,
+                error,
+                others,
+            } => {
+                tracing::warn!(
+                    "Spawn of '{name}' at z={z:.2} failed as a call (attempt {}: {error}); CARLA \
+                     created it anyway as actor {actor} (above id watermark {}), adopted, not \
+                     spawned again",
+                    attempt + 1,
+                    watermark.unwrap_or_default()
+                );
+                if !others.is_empty() {
+                    tracing::warn!(
+                        "More actors of '{blueprint_key}' with its role above the watermark: \
+                         {others:?}; left to the reaper"
+                    );
+                }
+                (actor, z)
+            }
+            spawn_ladder::Outcome::Failed(why) => {
                 return proto_err(format!(
                     "Failed to spawn {} '{name}' (blueprint '{blueprint_key}') at \
-                     CARLA({base_x:.1}, {base_y:.1}, {base_z:.1}) after {} attempts at \
-                     increasing height; last error: {detail}. A leftover actor may be \
-                     occupying the spawn point.",
-                    kind.label(),
-                    SPAWN_RETRIES + 1
+                     CARLA({base_x:.1}, {base_y:.1}, {base_z:.1}): {why}",
+                    kind.label()
                 ));
             }
         };
-
-        let actor_id = actor.id();
-        // Record for teardown before anything else can fail. This is the only durable
-        // record of what to clean up; EntityManager is emptied on despawn and re-init.
+        // Record for teardown before anything else can fail.
         self.record_spawned(actor_id);
+        let actor = match self.world.actor(actor_id) {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                return proto_err(format!(
+                    "Spawned '{name}' as actor {actor_id}, but CARLA no longer has it"
+                ))
+            }
+            Err(e) => {
+                return proto_err(format!(
+                    "Spawned '{name}' as actor {actor_id}, but cannot read it back: {e}"
+                ))
+            }
+        };
+        let mut spawn_loc = carla_transform.location;
+        spawn_loc.z = spawn_z;
 
         let bb = actor.bounding_box();
         let read = Dimensions {
@@ -3795,6 +4249,25 @@ impl Coordinator {
     }
 
     pub fn despawn_entity(&mut self, req: api::DespawnEntityRequest) -> api::DespawnEntityResponse {
+        let name = req.name.clone();
+        let was_autopilot = self.autopilot.contains_key(&name);
+        let response = self.despawn_entity_traced(req);
+        if was_autopilot {
+            // The last simulator-driven vehicle gone: so is the Traffic Manager (034 step 1).
+            self.retire_traffic_manager(&format!("despawn of '{name}'"));
+            if let Some(reason) = self.wedged.clone() {
+                return api::DespawnEntityResponse {
+                    result: Some(proto_err(reason)),
+                };
+            }
+        }
+        response
+    }
+
+    fn despawn_entity_traced(
+        &mut self,
+        req: api::DespawnEntityRequest,
+    ) -> api::DespawnEntityResponse {
         if !self.gap_trace.recording() {
             return self.despawn_entity_inner(req);
         }
@@ -4214,6 +4687,40 @@ impl Coordinator {
             }
         }
         Ok(self.traffic_manager.as_mut().expect("set above"))
+    }
+
+    /// Shut the Traffic Manager down once no `simulator_autopilot` entity is left (roadmap
+    /// 034 step 1, [`autopilot::traffic_manager_action`]); the next such spawn starts a new
+    /// one. `why` names the occasion for the log. Under the watchdog: `Stop()` joins the TM's
+    /// worker through the same unsynchronized handshake as its tick.
+    fn retire_traffic_manager(&mut self, why: &str) {
+        let action =
+            autopilot::traffic_manager_action(self.traffic_manager.is_some(), self.autopilot.len());
+        if action == autopilot::TmAction::ShutDown {
+            self.shut_down_traffic_manager(&format!(
+                "{why}: no {} entity left",
+                autopilot::BEHAVIOR
+            ));
+        }
+    }
+
+    /// Shut the Traffic Manager down, if there is one, under the watchdog.
+    fn shut_down_traffic_manager(&mut self, why: &str) {
+        let Some(tm) = self.traffic_manager.take() else {
+            return;
+        };
+        let port = self.config.traffic_manager.port;
+        match self.watched(
+            "TrafficManager::ShutDown",
+            why,
+            budgets::TM_CALL_WATCHDOG,
+            move || tm.shutdown(),
+        ) {
+            Ok(Ok(())) => tracing::info!("Traffic Manager on port {port} shut down ({why})"),
+            Ok(Err(e)) => tracing::warn!("Traffic Manager shutdown ({why}): {e}"),
+            // Logged and wedged by `watched`.
+            Err(_) => {}
+        }
     }
 
     /// Build the loaded town's lane graph if it is not built yet.
@@ -4789,6 +5296,10 @@ impl Coordinator {
             tracing::info!("Sync mode was never enabled; leaving CARLA settings untouched");
             return;
         }
+        if self.wedged.is_some() {
+            // A call never returned; nothing more goes to CARLA (034 step 2).
+            return;
+        }
 
         match self.world.settings() {
             Ok(mut settings) => {
@@ -4798,17 +5309,12 @@ impl Coordinator {
                 // this bridge's choice for its scenario, not the shared server's.
                 settings.max_substep_delta_time = CARLA_DEFAULT_MAX_SUBSTEP_DELTA;
                 settings.max_substeps = CARLA_DEFAULT_MAX_SUBSTEPS;
-                if let Err(e) = self
-                    .world
-                    .apply_settings(&settings, Duration::from_secs(10))
-                {
+                if let Err(e) = self.apply_settings_watched("the restore of async mode", settings) {
                     tracing::warn!("Failed to restore async mode: {e}");
                 } else {
                     self.sync_mode_enabled = false;
-                    if let Some(tm) = self.traffic_manager.as_mut() {
-                        if let Err(e) = tm.set_synchronous_mode(false) {
-                            tracing::warn!("Traffic Manager asynchronous mode: {e}");
-                        }
+                    if let Err(e) = self.set_traffic_manager_synchronous(false) {
+                        tracing::warn!("Traffic Manager asynchronous mode: {e}");
                     }
                     tracing::info!("Restored CARLA to async mode");
                 }
@@ -5810,6 +6316,32 @@ fn sensor_not_supported() -> ProtoResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_spawn_timeout_hook_is_off_unless_set_to_milliseconds() {
+        assert_eq!(parse_spawn_timeout_hook(None), None);
+        assert_eq!(parse_spawn_timeout_hook(Some("")), None);
+        assert_eq!(parse_spawn_timeout_hook(Some("0")), None);
+        assert_eq!(parse_spawn_timeout_hook(Some("fast")), None);
+        assert_eq!(
+            parse_spawn_timeout_hook(Some(" 5 ")),
+            Some(Duration::from_millis(5))
+        );
+    }
+
+    #[test]
+    fn only_carlas_collision_error_climbs_the_ladder() {
+        // ActorSpawnResult.cpp's wording for a blocked point, and the others.
+        assert!(is_collision_error(
+            "Spawn failed because of collision at spawn position"
+        ));
+        assert!(!is_collision_error(
+            "Spawn failed because of invalid actor description"
+        ));
+        assert!(!is_collision_error(
+            "Unknown error while trying to spawn actor"
+        ));
+    }
 
     #[test]
     fn entity_marks_are_recognised_and_configured_roles_are_not() {

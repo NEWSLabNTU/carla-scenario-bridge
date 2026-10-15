@@ -20,6 +20,7 @@ Authoritative for both; history and measurements in roadmap
 | Failure | Detected by | csb does | The running scenario | The next one |
 |---|---|---|---|---|
 | CARLA crashes or hangs | RPC **timeout** (client timeout 30 s; a killed server times out, it does not refuse -- measured 016) | the request fails with its cause. Teleports never wait (LibCarla's `SetActorTransform` is fire-and-forget), so the first frame's `tick` is what times out; the first call that fails slowly (> 5 s) marks CARLA unreachable and later RPCs are skipped | the SSv2 fork ends it on the first failed frame (~30–60 s) | `Initialize` waits for CARLA (bounded), reconnects, reaps, runs |
+| A CARLA call never returns (the 0.9.16 Traffic Manager handshake, 034) | the watchdog: every tick, settings change, map load and TM `ShutDown`/`SetSynchronousMode` runs on one helper thread with a bound (below) | replies the request's error naming the call and step, then **drains**: every later request gets the same error at once, nothing goes to CARLA; idle ~2 s (10 s at most) → socket closed with a linger, `_exit(75)` | an error verdict within ~55 s; its deactivate despawn answered, no 90 s wait | `respawn` starts a fresh csb; its `Initialize` enables sync, reaps the dead one's actors by census |
 | csb panics in a handler | `catch_unwind` around dispatch | replies failure with the panic message; refuses everything but `Initialize` until the next one | fails on that request | `Initialize` resets the session |
 | csb dies (segfault in LibCarla, abort, OOM, kill) | process exit | the supervisor (`just run`) restarts it with backoff | a request in flight: SSv2's receive times out → error; a request queued after the death: the new csb refuses it (unknown entities) → failed frame → error | new csb serves it; reaps what the dead one left |
 | SSv2 dies mid-scenario | nothing (REP socket just idles) | nothing: CARLA stays paused with the scenario's actors | -- | `Initialize` destroys them (session reset + reap) |
@@ -68,7 +69,7 @@ whole cycle hold:
 - **SSv2 must not wait forever.** SSv2's ZMQ `REQ` client blocks in `recv` with no timeout,
   and a request sent to a csb that died is never answered by the next one, so the scenario
   hangs until killed by hand. The fork sets a receive timeout
-  (`simulation_interface` `ZMQ_RCVTIMEO`, `SIMULATOR_RESPONSE_TIMEOUT`, default 420 s, above the worst legitimate request:
+  (`simulation_interface` `ZMQ_RCVTIMEO`, `SIMULATOR_RESPONSE_TIMEOUT`, default 420 s at first, 90 s since 2026-10-10 with `Initialize` under its own `SIMULATOR_INITIALIZE_TIMEOUT` 300 s; csb's watchdog (032 N5, 034: 45 s per tick or settings change, 55 s with the state read) answers inside it; see "Timeouts" below. Originally chosen above the worst legitimate request:
   `Initialize` with a map load and the CARLA wait) and throws on expiry, which the
   interpreter reports as a simulation error. The socket is recreated after a timeout, since a
   `REQ` socket that missed its reply cannot send again.
@@ -95,6 +96,33 @@ response (`"csb internal error: <message>"`), the panic is logged at ERROR with 
 and the session is marked poisoned -- every request but `Initialize` is refused until the next
 `Initialize` resets it, because a handler that died half-way may have left the entity map and
 CARLA disagreeing. A segfault inside LibCarla cannot be caught; the supervisor covers it.
+
+### Timeouts
+
+Every bound csb puts on CARLA, nested inside SSv2's (`budgets.rs`, whose tests check the
+arithmetic; roadmap 034 step 3):
+
+| Bound | Value | Why |
+|---|---|---|
+| SSv2 response (`SIMULATOR_RESPONSE_TIMEOUT`) | 90 s | every request but `Initialize` |
+| SSv2 `Initialize` (`SIMULATOR_INITIALIZE_TIMEOUT`) | 300 s | |
+| CARLA client RPC | 30 s (120 s around the map listing and `load_world`) | |
+| LibCarla frame wait in `Tick` (`LIBCARLA_TICK_TIMEOUT`) | 10 s | 5x the worst tick measured (1.90 s); also each tick inside `apply_settings` |
+| Tick watchdog (`TICK_WATCHDOG`) | 45 s | above `tick_cue` 30 + frame 10, so LibCarla's own timeouts stay ordinary errors |
+| `apply_settings` watchdog | 45 s | `set_episode_settings` 30 + 1 s + its ticks |
+| `load_world` watchdog | 150 s | above the 120 s RPC |
+| TM `ShutDown` / `SetSynchronousMode` watchdog | 45 s | the same handshake as the tick |
+| State read after a hung call | 10 s | 45 + 10 = 55 s < 90 s |
+| One spawn request | deadline 75 s | attempts get min(30 s, left − 30 s); the settling tick is capped by what is left |
+| One `Initialize` | deadline 280 s | the watched steps are capped by what is left; a step past it fails `Initialize` naming it |
+| Drain after a hang | idle 2 s, at most 10 s | then the socket closes with a 1 s linger |
+
+A test-only fault hook makes the hang reproducible on a live stack:
+`CSB_TEST_HANG_TICK_AT=<SSv2 frame>` blocks that frame's first tick forever, and with
+`CSB_TEST_HANG_TICK_TOKEN=<file>` only while the file exists (removed when it fires, so the
+respawned bridge runs normally). `CSB_TEST_SPAWN_TIMEOUT_MS=<ms>` gives every spawn RPC that
+timeout, forcing the timed-out spawn that is then adopted. Both are off unless set, and the
+bridge logs a warning at start-up when one is.
 
 ## Frame budget
 

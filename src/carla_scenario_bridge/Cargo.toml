@@ -49,6 +49,9 @@ nalgebra = "0.34.1"
 
 # Utilities
 ctrlc = { version = "3", features = ["termination"] }
+# `_exit` after a hung CARLA call (roadmap 034): no atexit handlers, no static destructors
+# that could wait on the Traffic Manager mutex the hung thread holds.
+libc = "0.2"
 
 [build-dependencies]
 prost-build = "0.13"
