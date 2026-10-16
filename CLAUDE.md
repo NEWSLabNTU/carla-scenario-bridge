@@ -262,6 +262,16 @@ waiting on `/tmp/scenario_test_runner/result.junit.xml` has that string on its c
 and dies with the stale processes. Keep the string out of any long-lived command line (read
 the path from a variable set in a different process, or wait on the play_launch log instead).
 
+### A CARLA client must not outlive its server
+
+A LibCarla client whose server died keeps a dead RPC connection (it never reconnects) and a
+streaming client that does reconnect, to the next server on the same port. Its light-update
+callback then blocks inside the stream for the client's whole timeout, and a synchronous
+server waits for every subscriber before the next frame: the whole server hangs (the "port
+2000 hang", `docs/design/failure-and-frame-budget.md`). csb exits for a fresh process when
+its idle probe finds the connection dead; acb drops and rebuilds such clients. Any other
+long-lived client on the testbed's port needs the same, or must be restarted with CARLA.
+
 ### Never destroy a vehicle while its sensors are attached
 
 Destroy an actor's children first, in every client and language: in Rust

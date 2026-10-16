@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
+use crate::budgets;
 use crate::coordinator::Coordinator;
 use crate::frame_stats::{FrameStats, Outcome, RequestKind, SUMMARY_WINDOW_FRAMES};
 use crate::proto::simulation_api_schema::{
@@ -94,12 +95,25 @@ impl ZmqServer {
     }
 
     fn serve(&mut self, socket: &zmq::Socket, shutdown: &AtomicBool) {
+        let mut last_request = Instant::now();
+        let mut last_probe = Instant::now();
         while !shutdown.load(Ordering::SeqCst) {
             self.serve_world_commands();
             // Poll with 100ms timeout so we can check shutdown
             let mut items = [socket.as_poll_item(zmq::POLLIN)];
             match zmq::poll(&mut items, 100) {
                 Ok(0) => {
+                    // Between scenarios: is the CARLA connection still alive? A dead one
+                    // ends the bridge (Coordinator::probe_connection_idle).
+                    if last_request.elapsed() >= budgets::IDLE_PROBE_AFTER
+                        && last_probe.elapsed() >= budgets::IDLE_PROBE_EVERY
+                    {
+                        self.coordinator.probe_connection_idle();
+                        last_probe = Instant::now();
+                        if self.coordinator.server_lost().is_some() {
+                            break;
+                        }
+                    }
                     continue; // timeout, no message
                 }
                 Ok(_) => {} // message ready
@@ -112,6 +126,7 @@ impl ZmqServer {
                 }
             }
 
+            last_request = Instant::now();
             // Receive the request
             let msg = match socket.recv_bytes(0) {
                 Ok(bytes) => bytes,
@@ -262,6 +277,11 @@ impl ZmqServer {
     /// Why the bridge cannot go on after a hung tick, if one did not return.
     pub fn wedged(&self) -> Option<String> {
         self.coordinator.wedged().map(str::to_owned)
+    }
+
+    /// Why the bridge exits after its idle check found the CARLA connection dead.
+    pub fn server_lost(&self) -> Option<String> {
+        self.coordinator.server_lost().map(str::to_owned)
     }
 
     /// Close the SSv2 socket so the replies already queued on it leave before the process

@@ -174,6 +174,22 @@ fn main() -> Result<()> {
         unsafe { libc::_exit(TICK_HUNG_EXIT) };
     }
 
+    // The idle check found the CARLA connection dead: the server went away or was replaced.
+    // This client must not live on -- its stream subscription would reattach to the next
+    // server and stall it (Coordinator::probe_connection_idle) -- and there is nothing to
+    // restore on a server that is gone. Exit for a fresh bridge, as after a hung tick.
+    if let Some(reason) = server.server_lost() {
+        server.close_flushed();
+        drop(zmq_ctx);
+        tracing::error!("Exiting with status {TICK_HUNG_EXIT}: {reason}");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        // SAFETY: ends the process at once; nothing after it runs. `_exit` skips the C++
+        // destructors, which would make RPCs on the dead connection.
+        unsafe { libc::_exit(TICK_HUNG_EXIT) };
+    }
+
     // Cleanup: restore CARLA async mode
     server.cleanup();
 

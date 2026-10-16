@@ -69,6 +69,20 @@ pub const INITIALIZE_BUDGET: Duration = Duration::from_secs(280);
 /// late actor, the settling tick -- capped the same way inside SSv2's 90 s (034 step 4).
 pub const SPAWN_REQUEST_BUDGET: Duration = Duration::from_secs(75);
 
+/// Between scenarios, how long without a request before the bridge checks its CARLA
+/// connection ([`crate::coordinator::Coordinator::probe_connection_idle`]), and how often.
+/// Frames come every 50 ms during a scenario, so 5 s of quiet means none is running.
+pub const IDLE_PROBE_AFTER: Duration = Duration::from_secs(5);
+pub const IDLE_PROBE_EVERY: Duration = Duration::from_secs(2);
+
+/// The RPC timeout of that check. The probe asks for the server version, which CARLA's RPC
+/// threads answer without the game thread, so a live server answers in milliseconds even
+/// while the world waits for a tick; only a dead connection runs into this bound.
+pub const IDLE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Consecutive failed checks before the connection counts as lost and the bridge exits.
+pub const IDLE_PROBE_FAILURES: u32 = 2;
+
 /// A request's deadline: what is left of its budget, and the bound each step gets.
 #[derive(Debug, Clone, Copy)]
 pub struct Deadline {

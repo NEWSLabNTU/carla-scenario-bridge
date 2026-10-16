@@ -52,6 +52,28 @@ whole cycle hold:
   sensors). Nothing leaks: the ledger is torn down after the reconnect if the server
   survived, forgotten if it restarted, and the reaper catches marked actors either way.
 
+- **A CARLA restart between scenarios ends the bridge (2026-10-16).** A LibCarla client must
+  not outlive its server. Its RPC connection never reconnects -- every call then times out --
+  but its streaming client does, to the next server on the same port, and the world-tick
+  stream's token is the same on every server, so the old `on_tick` subscription resumes on
+  the new server. On a frame flagged with a light update (any map load) the client's
+  LightManager queries the lights from inside that stream callback over the dead RPC
+  connection and blocks 30 s without reading the stream, and a synchronous 0.9.16 server
+  busy-waits on its game thread in `ServerSession::Write` until every subscriber took the
+  previous frame (its session deadline timer is cancelled by each write and never re-armed,
+  so a stuck subscriber is never dropped). An idle csb sent nothing to CARLA, never noticed
+  its server was replaced, and stalled every fresh server on port 2000 at its first
+  synchronous map load (round 40's "port 2000 hang", reproduced at tick 94-498). Between
+  scenarios csb now probes its connection: after 5 s without a request, every 2 s, the
+  server version with a 2 s timeout (CARLA's RPC threads answer it without the game thread,
+  so a live but paused server answers in milliseconds). Two failures in a row and the bridge
+  exits with status 75, like a hung tick, so `respawn` starts a fresh process whose client
+  has no stale subscription; dropping the client in-process would not do, since every actor
+  and world handle keeps LibCarla's episode and its subscription alive. acb probes its
+  clients the same way (acb `conn_probe.rs`). Measured: before, every CARLA restart with the
+  bridges attached hung the next synchronous run within 500 ticks; after, the bridge exits
+  4 s after the server dies and three restart cycles ran 6,000-10,000 ticks each.
+
 ### csb crash and restart
 
 - **Supervisor.** csb is a long-lived singleton outside any launch file, so nothing restarted

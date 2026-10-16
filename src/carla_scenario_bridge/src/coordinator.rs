@@ -1096,6 +1096,11 @@ pub struct Coordinator {
     /// Set when a tick never returned: the reason, for the error every later request gets
     /// and for the log as the bridge exits (see [`Coordinator::wedged`]).
     wedged: Option<String>,
+    /// Set when the idle check found the CARLA connection dead: the reason the bridge exits
+    /// (see [`Coordinator::probe_connection_idle`]).
+    server_lost: Option<String>,
+    /// Consecutive failed idle checks.
+    idle_probe_failures: u32,
     /// Directory holding per-map config, e.g. the traffic light signal mapping.
     config_dir: PathBuf,
     /// Map directory name to CARLA town, for maps whose directory is not the town name.
@@ -1268,6 +1273,8 @@ impl Coordinator {
                 hook
             },
             wedged: None,
+            server_lost: None,
+            idle_probe_failures: 0,
             collision_monitor,
             world_id,
             clock_path,
@@ -3395,6 +3402,64 @@ impl Coordinator {
     /// server replies to the request in flight and then ends the process.
     pub fn wedged(&self) -> Option<&str> {
         self.wedged.as_deref()
+    }
+
+    /// Check, between scenarios, that the CARLA connection is still alive (the port-2000
+    /// hang, 2026-10-16).
+    ///
+    /// A CARLA client outlives its server badly. Its RPC connection never reconnects (every
+    /// call then times out), but LibCarla's streaming client does: the world-tick
+    /// subscription reattaches to whatever server comes up next on the same port, because
+    /// the broadcast stream's token is the same on every server. On each frame flagged with
+    /// a light update (any map load) the client's LightManager queries the lights from
+    /// inside that stream callback, over the dead RPC connection, and blocks for the full
+    /// RPC timeout (30 s) without reading the stream. A synchronous CARLA 0.9.16 server
+    /// busy-waits on its game thread in `ServerSession::Write` until each subscriber took the
+    /// previous frame, so the whole server stops answering until the timeout passes. An
+    /// idle bridge sends nothing to CARLA and so never noticed its server was replaced: it
+    /// stalled every fresh server on its port at the first map load in synchronous mode.
+    ///
+    /// The version RPC is answered by the server's RPC threads, so a live server answers
+    /// even while its world waits for a tick. After [`budgets::IDLE_PROBE_FAILURES`]
+    /// failures the connection is lost; the bridge then exits, as after a hung tick, so the
+    /// supervisor starts a fresh process whose client has no stale subscription. (Dropping
+    /// the client in-process is not enough: every actor and world handle keeps LibCarla's
+    /// episode, and its subscription, alive.)
+    pub fn probe_connection_idle(&mut self) {
+        if self.server_lost.is_some() || self.wedged.is_some() {
+            return;
+        }
+        if std::sync::Arc::get_mut(&mut self.client).is_none() {
+            return; // a watched call still holds the client; not idle
+        }
+        self.set_client_timeout(budgets::IDLE_PROBE_TIMEOUT);
+        let probe = self.client.server_version();
+        self.set_client_timeout(budgets::CLIENT_RPC_TIMEOUT);
+        match probe {
+            Ok(_) => self.idle_probe_failures = 0,
+            Err(e) => {
+                self.idle_probe_failures += 1;
+                tracing::warn!(
+                    "Idle check: CARLA did not answer the version RPC ({e}); {} of {}",
+                    self.idle_probe_failures,
+                    budgets::IDLE_PROBE_FAILURES
+                );
+                if self.idle_probe_failures >= budgets::IDLE_PROBE_FAILURES {
+                    let reason = format!(
+                        "the CARLA connection to {}:{} is dead (server gone or replaced); a \
+                         client that outlives its server stalls the next one",
+                        self.carla_host, self.carla_port
+                    );
+                    tracing::error!("{reason}");
+                    self.server_lost = Some(reason);
+                }
+            }
+        }
+    }
+
+    /// Why the bridge exits after the idle check found its connection dead.
+    pub fn server_lost(&self) -> Option<&str> {
+        self.server_lost.as_deref()
     }
 
     /// The bridge ends after a hung tick: keep what the run recorded without a word to
