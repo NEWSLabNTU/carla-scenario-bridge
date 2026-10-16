@@ -40,11 +40,11 @@ self-contained **incident template** (a short `.xosc` that runs on its own under
 | # | Incident | What the actors do | Autoware's expected handling (module) | Pass in rehearsal |
 |---|---|---|---|---|
 | 1 | **Lead car brakes hard** | an NPC merges ahead from a side street, cruises at 3 m/s, then brakes 6 m/s² to a stop when the ego is within 12 m (or at a brake point); drives off once the ego has stood 4 s | follows, then stops behind it (`obstacle_stop`; step 4b) | no contact; stop gap ≥ 2 m |
-| 2 | **Pedestrian darts out** | a car parked half on the kerb hides a pedestrian who steps out at 1.5 m/s when the ego is ~6 s away (front ~21 m), stops in the lane 4 s, then crosses | brakes for the emerging pedestrian (`obstacle_stop`; step 4b) | no contact; min distance reported |
+| 2 | **Pedestrian darts out** | a car parked half on the kerb hides a pedestrian who steps out (ramping to 1.5 m/s at 1.5 m/s²) when the ego is ~7 s away (origin 30 m from its line; step 4c), stops in the lane 4 s, then crosses | brakes for the emerging pedestrian (`obstacle_stop`; step 4b) | no contact; min distance reported |
 | 3 | **Red light** | the signal at the next junction turns red as the ego approaches | stops at the light, goes on green (`traffic_light`); as `town01_traffic_light` already does | stops before the junction; resumes on green |
 | 4 | **Blocked lane** | a broken-down vehicle stands in the ego's lane (hazards not commanded: no light action on this path), oncoming traffic in the other lane | waits behind it (`obstacle_stop`; no avoidance attempted) -- after 12 s standing the tow truck "clears" it (the watchdog, on camera) | no contact; waits, then proceeds |
 | 5 | **Crossing traffic at a turn** | two NPCs, 15 m apart, cross the junction the ego turns into | yields to both, then turns (module not observable: `intersection` RTC safe throughout, no planning factor; step 4b) | no contact; turns after them |
-| 6 | **Cyclist on the inside** | a cyclist rides alongside on the inside as the ego turns | waits for the cyclist (`blind_spot`) -- **dropped (step 4b)**: the bicycle tracks, but Autoware turns across it | no contact |
+| 6 | **Cyclist on the inside** | a cyclist rides alongside on the inside as the ego turns | waits for the cyclist (`blind_spot`) -- **dropped (step 4b)**: the bicycle tracks, but Autoware turns across it; why (step 4c): clustering perception reports it UNKNOWN and static, and Autoware's `blind_spot` misjudges right turns -- kept as a reproducer | no contact |
 
 Each incident is triggered by the ego's arrival at a point on the route (OpenSCENARIO
 `ReachPositionCondition` / `DistanceCondition`), so its timing holds whatever the ego's
@@ -395,3 +395,128 @@ Scratch: `/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d3
 80a742b40cbd/scratchpad/s033_4b` (`poses.py`, `run_one.sh` / `batch.sh`, `loadcheck.sh`,
 `aggregate.py` and `agg_reh.txt`; `i<N>/reh_<k>/` the rehearsal runs with trace, context and
 module logs, judge and oracle output; `shake*`/`pre_*` the shakedowns; `traces/`).
+
+**Step 4c: the two open items of 4b (2026-10-17).** Plan first, results below it.
+
+*A -- incident 2's G3 on `i2_ped`.* The 4b traces (reh_1, frames 672-692 and 813-830) show it
+frame by frame: SSv2's walker goes from 0 to **1.50 m/s in one frame** (0.075 m per 0.05 s
+step from the first moving frame) at the dart and again at the cross -- `speed()` in the
+generator is a `step` SpeedAction. The bridge commands the walker at once (`WalkerControl`,
+SSv2's velocity plus 6/s of the position error, no force bound on walkers), and CARLA's
+walker body ramps 0.08, 0.19, 0.33, 0.49, 0.68, 0.88, 1.10 ... m/s, peaks 2.42 m/s to win the
+lag back and settles in ~1 s; the error peaks 0.27 m at the 7th-8th frame. So the body
+cannot follow an unbounded acceleration and the bridge already asks for all it can give:
+**a scenario artefact of 032 N6's kind (a speed step), not a tracking gap**. Fix in the
+generator: the walker's start speeds become `linear` at a pace a person (and CARLA's walker)
+starts with, and the dart trigger moves out by what the ramp costs so the incident's timing
+holds. Accept: `town01_i2_*` 3+ runs, 0 G3, judge PASS.
+
+*B -- why `blind_spot` did not react to the cyclist.* Read in Autoware 0.48.0's module (the
+1.5.0 package; `scene.cpp`, `util.cpp`): it keeps an object only if
+`classification[0].label` is BICYCLE, PEDESTRIAN or MOTORCYCLE (CAR / TRUCK / BUS / TRAILER
+optional by `detect_non_vru`, all false; **UNKNOWN never**), whose *centre* lies in the
+attention area -- the strip from the ego path's right edge (path + ego width / 2 = 1.08 m)
+to the right bound of the rightmost lane (or a right shoulder / bicycle lane if the map has
+one) over the 100 m before the turn, carried through the junction -- and whose predicted
+path crosses the turning path's right bound / entry line and then its left bound within
+the TTC margins (2 s / 1 s) of the ego's own passage. The stack's perception is
+`lidar_detection_model: clustering`, which labels what it finds UNKNOWN; incident 2's
+walker was stopped for by `obstacle_stop`, never `run_out` (which also wants a VRU label),
+consistent with that. Hypothesis: **the cyclist reaches planning as UNKNOWN and the module
+filters it out before any geometry**. Check on a live run: the labels on
+`/perception/object_recognition/objects`, the attention area (`.../behavior_velocity_planner/
+debug/blind_spot` markers) against the cyclist's position, and
+`~/debug/blind_spot/decision_state`. If it is the label: the map and the scenario cannot
+fix it; the fix is a perception that classifies (or ground truth that labels a bicycle
+BICYCLE -- acb's ground-truth path today labels every `vehicle.*` CAR).
+
+*Results A (2026-10-17): a scenario artefact, fixed in the generator.* `WALKER_START_RATE =
+1.5` m/s² on both of the walker's starts (`i2_ped_walk`, `i2_ped_walk_on`). SSv2 follows it
+exactly (0.075 m/s per frame); the CARLA body still starts slowly (0.01-0.10 m/s per frame
+over the first 10 frames, its own ramp: the bridge's command is already SSv2's speed plus
+6/s of the error) and the walker's largest error is now **0.13 m** (was 0.27), under G3's
+0.2. Not a bridge gap, so no bridge change: a walker's `WalkerControl` carries no force
+bound to lift, and the lag is the body's. The ramp delays the pedestrian's arrival in the
+lane by ~0.5 s and its clearing of the ego's path by ~0.4 s, which the timing felt: with
+the dart trigger moved only 24 -> 26.5 m (the arrival delay at 4.17 m/s) the first run
+touched the pedestrian (`reh_1`, -0.16 m): the ego stopped 3.0 m short, stood 1 s, then
+crept on just as the pedestrian started across. The 4b runs show the same creep after ~1 s
+standing in every run (Autoware), so their 1.2 m worst case was the pedestrian leaving in
+time, not the ego waiting. **Dart trigger 30 m** (origin to the pedestrian's line; route m
+635.6): the pedestrian arrives ~1 s earlier relative to the ego and leaves as it stops.
+
+Runs (same stack, sim side traced): `reh_1` (26.5 m) FAIL contact, G3 0; at 30 m `d30_1`-
+`d30_5` **4/5 PASS**, pedestrian min distance 1.12 / 3.75 / 2.43 / 2.00 m, ego stood
+2.4-4.4 s, **G3 0 in all six runs**. The one failure (`d30_2`) is perception, not timing: the
+ego slowed to 2.8 m/s and then accelerated into the standing pedestrian, which
+`/perception/object_recognition/objects` reported only intermittently between 10 and 4 m
+(clustering: present 877.88, gone 878.48-879.08, back at 879.38 -- the walker standing
+still in the lane flickers in and out; a walking one does not). That failure mode exists
+for any timing in which the pedestrian stands in the ego's lane while it approaches; it is
+the incident's residual risk and is recorded here, not fixed (Autoware perception).
+
+*Results B (2026-10-17): Autoware, twice over; i6 stays a documented reproducer.*
+1. **The cyclist never reaches `blind_spot` as a cyclist.** Live (`probe_1`, the stock
+   stack): every object on `/perception/object_recognition/objects` is label 0
+   (**UNKNOWN**, 84 603 of 84 603), and the cyclist's twist is 0 with a single predicted
+   path ending where it stands (`multi_object_tracker`'s
+   `enable_unknown_object_motion_output: false`). `blind_spot` keeps only BICYCLE /
+   PEDESTRIAN / MOTORCYCLE (CAR / TRUCK / BUS / TRAILER by `detect_non_vru`; UNKNOWN never),
+   so it filters the cyclist out before any geometry: decision `Safe` from launch to the pass
+   judge line (ego 5 m before the turn at 4 m/s), then `OverPassJudge`. Geometry is not the
+   problem: the attention area is the strip x 332.72-333.64 (ego path + 1.08 m to the lane's
+   right bound; no shoulder or bicycle lane on Town01) and the cyclist rides at x 333.1-333.2,
+   inside it.
+2. **With a perception that classifies, the module still misjudges a right turn.**
+   `EGO_LAUNCH_ARGS=lidar_detection_model:=centerpoint` (no code change): the cyclist is
+   BICYCLE at 5.2-6.6 m/s with map-based predicted paths from ~7 m behind the ego, yet
+   `blind_spot` stays `Safe`: its debug `ego_passage_interval` reads e.g. `[5.57, 5.52]` --
+   exit *before* entry -- every frame. The module times the ego between two lines, the ego's
+   own straight-on edge (`virtual_ego_straight_path_after_turning`, x 333.46 here) and the
+   blind side's road edge carried through the junction
+   (`virtual_blind_lane_boundary_after_turning`, x 328.36); for a **left** turn it takes
+   entry at the first and exit at the second, for a **right** turn it swaps them
+   (`scene.cpp` / `experimental/scene.cpp`, `first_line` / `second_line`), so on a right turn
+   "entry" is the last moment and the interval collapses to the end of the turn; the
+   cyclist's own passage (e.g. [2.8, 4.9] s, read in the fixed runs) then ends more than the 1 s
+   margin before it and the module reads the
+   cyclist as gone. The object side is mirrored correctly; only the ego side is not. The
+   same lines are in Autoware 0.47.0, 0.48.0 (1.5.0's package), 0.49.0 and `main` as of
+   2026-10-16 -- a right-hand-traffic bug in a module written for left-hand traffic, where
+   the blind spot is on the left. (1.5.0 runs the module's `experimental` plugin.) Proof:
+   the 0.48.0 module rebuilt in the scratch directory with the two lines in the left-turn
+   order for both sides, overlaid with `EGO_OVERLAY`, on centerpoint: the interval reads
+   `[5.13, 11.14]`, the decision goes `Unsafe` (collision 4.0 -> 1.4 s), and the ego stops
+   ~4 m before the turn and lets the cyclist by: **3/3 PASS** (`cpfix_4`-`_6`, min gap
+   0.13-0.15 m -- the cyclist passes the standing ego inside the same lane, which is the
+   scenario's geometry -- ego stood 0.8-2.0 s, G1/G2/G3 0), against 2/2 contact on
+   centerpoint with the stock module (`cp_2`, `cp_3`; `cp_1` ran before CenterPoint's
+   engine finished building and saw no objects).
+
+*Decision.* Nothing in csb, acb's sensor path, the map or the scenario causes this, and
+neither fix belongs to this repo: incident 6 needs a classifying perception (CenterPoint
+lost 7 of 9 UC-AEB variants on this host -- acb's launch note -- so the demo keeps
+clustering) **and** a fixed `blind_spot`. Incident 6 stays out of the tour and out of the
+judged set, generated to `scenarios/demo/town01_i6_cyclist_inside.xosc` as the reproducer
+of both; the upstream report (Autoware universe, `blind_spot`: right-turn ego passage
+interval uses the lines in left-turn-mirrored order) is a separate step, not filed from
+here. Found on the way, not fixed: acb's ground-truth object path labels every `vehicle.*`
+CAR, bicycles and motorbikes included (`ground_truth_objects.rs`; CARLA's `base_type`
+attribute would give BICYCLE / MOTORCYCLE / TRUCK / BUS) -- irrelevant to the demo stack,
+which runs real perception, but the same filter would drop a ground-truth cyclist.
+
+*Verification (2026-10-17, a fresh stock `just ego-av`, sim side traced, then untraced
+again).* Incidents 1-5, five interleaved rounds: **25/25 PASS** by `incident_judge`, every
+trace G1 0 / G2 0 / G3 0, G4 agree; incident 2 pedestrian min distance 0.92 / 1.01 / 2.50 /
+1.43 / 2.42 m, ego stood 3.1-3.9 s, the walker's largest SSv2-CARLA error 0.135 m in every
+run (was 0.27). Starters (`run_suite`, six Town01 `basic/`): **6/6 PASS** (ego_drive 41 s,
+engage_state 45, pedestrian 127, rear_contact 24, simulator_autopilot 48, traffic_light
+184). Host load 7-82 (1 min) across the runs, no failure in a loaded one. `just test`:
+329 nextest + 174 pytest pass; `just check` clean.
+
+Scratch: `/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-
+80a742b40cbd/scratchpad/s_inc` (`run_one.sh` / `batch.sh` / `rounds.sh`; `bs_watch.py`, the
+objects / blind_spot debug / path watcher; `pedtl.py`, `objnear.py`; `i2/{reh,d30,fin}_*`,
+`i6/{probe,cp,cpfix}_*` with trace, judge, oracle and `bs.jsonl`; `bsfix/`, the 0.48.0
+module with the line order fixed and a `[bs_probe]` print, built for the overlay;
+`starters/`).

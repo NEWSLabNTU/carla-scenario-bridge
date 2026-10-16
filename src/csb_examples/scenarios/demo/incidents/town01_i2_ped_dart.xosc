@@ -137,7 +137,7 @@
 						</ByEntityCondition></Condition></ConditionGroup></StartTrigger>
 					</Event><Event name="i2_ped_dart" priority="parallel" maximumExecutionCount="1">
 						<Action name="i2_ped_walk"><PrivateAction><LongitudinalAction><SpeedAction>
-							<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+							<SpeedActionDynamics dynamicsShape="linear" value="1.5" dynamicsDimension="rate" />
 							<SpeedActionTarget><AbsoluteTargetSpeed value="1.5" /></SpeedActionTarget>
 						</SpeedAction></LongitudinalAction></PrivateAction></Action><Action name="i2_dart"><PrivateAction><RoutingAction><FollowTrajectoryAction initialDistanceOffset="0">
 							<TimeReference><Timing domainAbsoluteRelative="relative" offset="0" scale="1" /></TimeReference>
@@ -148,7 +148,7 @@
 						</FollowTrajectoryAction></RoutingAction></PrivateAction></Action><Action name="i2_dart_running"><GlobalAction><ParameterAction parameterRef="i2_ped_busy"><SetAction value="1" /></ParameterAction></GlobalAction></Action><Action name="i2_dart_log"><UserDefinedAction><CustomCommandAction type="test(i2, dart, i2_ped)" /></UserDefinedAction></Action>
 						<StartTrigger><ConditionGroup><Condition name="i2_ego_near" delay="0" conditionEdge="none"><ByEntityCondition>
 							<TriggeringEntities triggeringEntitiesRule="any"><EntityRef entityRef="ego" /></TriggeringEntities>
-							<EntityCondition><ReachPositionCondition tolerance="2.0"><Position><WorldPosition x="396.33" y="-258.02" z="0.00" h="1.5712" p="0" r="0" /></Position></ReachPositionCondition></EntityCondition>
+							<EntityCondition><ReachPositionCondition tolerance="2.0"><Position><WorldPosition x="396.33" y="-264.04" z="0.00" h="1.5712" p="0" r="0" /></Position></ReachPositionCondition></EntityCondition>
 						</ByEntityCondition></Condition><Condition name="i2_dart_live" delay="0" conditionEdge="none"><ByValueCondition><ParameterCondition parameterRef="i2_ped_phase" value="1" rule="equalTo" /></ByValueCondition></Condition></ConditionGroup></StartTrigger>
 					</Event><Event name="i2_ped_hold" priority="parallel" maximumExecutionCount="1">
 						<Action name="i2_ped_stop"><PrivateAction><LongitudinalAction><SpeedAction>
@@ -160,7 +160,7 @@
 						</ByValueCondition></Condition></ConditionGroup></StartTrigger>
 					</Event><Event name="i2_ped_cross" priority="parallel" maximumExecutionCount="1">
 						<Action name="i2_ped_walk_on"><PrivateAction><LongitudinalAction><SpeedAction>
-							<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+							<SpeedActionDynamics dynamicsShape="linear" value="1.5" dynamicsDimension="rate" />
 							<SpeedActionTarget><AbsoluteTargetSpeed value="1.5" /></SpeedActionTarget>
 						</SpeedAction></LongitudinalAction></PrivateAction></Action><Action name="i2_cross"><PrivateAction><RoutingAction><FollowTrajectoryAction initialDistanceOffset="0">
 							<TimeReference><Timing domainAbsoluteRelative="relative" offset="0" scale="1" /></TimeReference>

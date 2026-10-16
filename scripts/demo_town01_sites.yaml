@@ -95,9 +95,9 @@ incidents:
       yaw: 1.571
     dart:
       x: 396.33
-      y: -258.02
+      y: -264.04
       yaw: 1.5712
-      route_m: 641.6
+      route_m: 635.6
     ped_in_lane:
       x: 396.72
       y: -234.04

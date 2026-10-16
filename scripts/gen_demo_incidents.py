@@ -54,6 +54,11 @@ WATCHDOG_S = 20.0  # ego stood still this long while an incident is active -> cl
 I4_CLEAR_S = 12.0  # incident 4's staged "tow truck": the watchdog, on purpose
 I3_GREEN_AFTER_STOP_S = 8.0
 I3_GREEN_FALLBACK_S = 45.0
+# A walker starts walking at this rate, m/s2, never with a step: SSv2 otherwise sets it to
+# full pace in one frame (unbounded acceleration) and CARLA's walker body, which ramps from
+# rest at ~1.6-4 m/s2, trails it 0.27 m for 7 frames -- a G3 that is the scenario's, not
+# the bridge's (step 4c; 032 N6's kind). About a person's own start (~1 s to 1.5 m/s).
+WALKER_START_RATE = 1.5
 
 FILES = {
     1: "town01_i1_lead_brake.xosc",
@@ -65,6 +70,9 @@ FILES = {
 }
 # Incident 6 is dropped from the tour (step 4b: the cyclist tracks, but Autoware turns across
 # it, 2 of 2 runs): written beside the repo's other reproducers, not into the installed set.
+# Why (step 4c): the stack's clustering perception reports the cyclist UNKNOWN and static,
+# which `blind_spot` ignores, and with a classifying perception Autoware's `blind_spot`
+# still misjudges a right turn (its ego passage interval collapses). Kept as the reproducer.
 DROPPED_OUT = ROOT / "scenarios/demo"
 DROPPED = {6}
 
@@ -380,11 +388,11 @@ def incident_groups(i, S):
         # on across the oncoming lane to the far kerb.
         b = "i2_ped_busy"
         ped_extra = [
-            event("i2_ped_dart", [speed("i2_ped_walk", 1.5), trajectory("i2_dart", [(None, S["ped_spawn"]), (None, S["ped_in_lane"])], yaw=math.pi),
+            event("i2_ped_dart", [speed("i2_ped_walk", 1.5, rate=WALKER_START_RATE), trajectory("i2_dart", [(None, S["ped_spawn"]), (None, S["ped_in_lane"])], yaw=math.pi),
                                   set_param("i2_dart_running", b, 1), log("i2_dart_log", "i2", "dart", ped)],
                   [reach("i2_ego_near", "ego", S["dart"], 2.0), param_is("i2_dart_live", "i2_ped_phase", 1)]),
             event("i2_ped_hold", [speed("i2_ped_stop", 0.0)], [state("i2_ped_in_lane", "i2_ped_dart")]),
-            event("i2_ped_cross", [speed("i2_ped_walk_on", 1.5), trajectory("i2_cross", [(None, S["ped_hold"]), (None, S["ped_far"])], yaw=math.pi)],
+            event("i2_ped_cross", [speed("i2_ped_walk_on", 1.5, rate=WALKER_START_RATE), trajectory("i2_cross", [(None, S["ped_hold"]), (None, S["ped_far"])], yaw=math.pi)],
                   [state("i2_ped_held", "i2_ped_hold", delay=4.0)]),
             event("i2_ped_across", [speed("i2_ped_stop_far", 0.0), set_param("i2_ped_walked_far", b, 2)],
                   [state("i2_ped_crossed", "i2_ped_cross")]),
