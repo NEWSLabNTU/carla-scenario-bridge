@@ -150,7 +150,13 @@ and `blind_spot` modules never launch (each lanelet that leaves a fork or joins 
 tagged `straight`, `left` or `right` from its heading change); and road lanelets that start
 at fresh nodes exactly where their predecessor ends, which Lanelet2 does not treat as a
 successor, so routing stops there (one join in Town03, between the roundabout and its south
-exit). Keep the towns side by side in one directory --
+exit). One more repair needs CARLA holding the town and something ticking it (csb during a
+scenario): `scripts/repair_lanelet_signal_links.py <Town>` links every signalised approach
+lanelet to the regulatory element of the light CARLA controls it by (from each light's stop
+waypoints and the signal table) and gives that element a stop line at the stop waypoints. On
+the pack's Town05 most approach lanelets referenced no light or a neighbouring approach's, so
+Autoware crossed signalised junctions as unsignalised; restart the vehicle sides after it.
+Keep the towns side by side in one directory --
 the scenarios below find them as `$(env CARLA_MAPS)/<Town>`:
 
 ```bash

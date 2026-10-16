@@ -86,6 +86,19 @@ the roundabout's north entry to its south exit. `scripts/repair_lanelet_joins.py
 the nodes of such meeting road lanelets (2 nodes in Town03, none in the other five towns);
 stage 1 needs the same check after any conversion.
 
+Defect 8 (found 2026-10-16 on the TUM pack's Town05 by the crdt-tensor testbed, three
+Autoware vehicles under a signal controller at the junction at (30, 0)): approach lanelets
+linked to the wrong traffic light, or to none. Of that junction's four approaches two
+referenced no light, one the element of a neighbouring approach's light, and two elements
+were referenced only by walkways; the vehicles crept into the box on red and blocked each
+other there. Town-wide, 124 lanelets changed their links. The signal table was right (each
+element's light way pairs with the nearest CARLA light); the lanelet-to-element links were
+not. `scripts/repair_lanelet_signal_links.py` takes them from CARLA: each light's
+`get_stop_waypoints()`, the road lanelet containing each, the element the signal table pairs
+with the light, and a new stop line across the lanes at the stop waypoints. After it the same
+three vehicles stopped at red and crossed on green. Stage 1 needs this check after any
+conversion; it is the only repair that needs a live CARLA.
+
 ## Stage 2: find a place for a designed scenario
 
 `find_place --spec needs.yaml`: a per-lanelet feature index of every local map, built once
