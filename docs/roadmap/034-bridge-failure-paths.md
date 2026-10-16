@@ -201,8 +201,16 @@ exit 75 at 07:55:58.18 (play_launch: `Exited with code 75`), respawned bridge bo
 07:56:00; the junit holds `SimulationError ... failed frame` after 62 s; no 90 s SSv2 timeout;
 the next two PASS (48 s, 42 s); acb dropped the reaped `hero` and bound the new one
 (`Found vehicle: ID=9443`). A first T1 run (ego_drive hung, then engage_state; the 45 s
-build) gave the same timeline and PASS, but play_launch truncates the node's `out` on
-respawn, so its dead-process log was lost; the later runs tailed it.
+build) gave the same timeline and PASS, but play_launch truncated the node's `out` on
+respawn, so its dead-process log was lost; the later runs tailed it. **Fixed in play_launch
+`90c253bc`** (main, after 0.18.2; play_launch issue #0075): a respawn keeps the previous
+process's `out`/`err`/`pid`/`status` as `out.N`/`err.N`/`pid.N`/`status.N` (start order),
+the plain names stay the live process's. Verified 2026-10-16 with that build on the
+simulation side and this hook (pedestrian hung at frame 40): `node/carla_scenario_bridge/`
+held `out.1` (the dying bridge, pid 519519: the hook firing at 07:43:27, `did not return
+(waited 45.0 s, bound 45 s)` at 07:44:12, `Drained 1 request(s)`, `Exiting with status 75`),
+`status.1` = 75, and `out`/`pid` of the respawned bridge (pid 534223, up 07:44:16). No
+`tail -F` needed once the simulation side runs that play_launch.
 
 *Step 3.* `budgets.rs`: frame wait 10 s, tick 45 s, `apply_settings` 45 s, `load_world` 150 s,
 TM calls 45 s, `Initialize` deadline 280 s, spawn deadline 75 s; `enable_sync_mode`, the async

@@ -306,7 +306,7 @@ interception of every DDS take in every node and logged each event at DEBUG to
 of it on 2026-09-27 and took the volume to 0 bytes free, which then failed a colcon install
 and a git checkout mid-way. 0.15.0 (2026-10-11) intercepts only when a contract resolves or
 `--enforce-rules` is given, and logs events at trace; this workspace has no contracts, so
-nothing intercepts. Require play_launch >= 0.15.1 (`play_launch --version`; 0.15.1 also honours SSv2's on_exit=ShutdownOnce under the default Rust parser), and if `df` moves
+nothing intercepts. Require play_launch >= 0.15.1 (`play_launch --version`; 0.15.1 also honours SSv2's on_exit=ShutdownOnce under the default Rust parser), and the first release after 0.18.2 (main `90c253bc`, issue #0075) for the bridge's respawn to keep the dead process's log as `node/carla_scenario_bridge/out.1`/`err.1` -- older versions truncate it; and if `df` moves
 faster than a build explains, look at `play_log/*/` first:
 
 ```bash
