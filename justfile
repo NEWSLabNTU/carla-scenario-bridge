@@ -370,6 +370,19 @@ run:
 carla-start:
     "{{acb_src}}/scripts/carla_start.sh" {{carla_port}}
 
+# Isaac Sim (roadmap 036): install root, and the VNC display Isaac opens its window on
+isaac_root := env_var_or_default("ISAAC_ROOT", "/mnt/disk1/isaac-sim")
+isaac_display := env_var_or_default("ISAAC_DISPLAY", ":8")
+
+# Isaac Sim smoke test: version, start time, step time (headless; DISPLAY set = windowed)
+isaac-check:
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/csb_isaac/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
+
+# TurboVNC display for Isaac's window, localhost only (reach it through an SSH tunnel)
+isaac-vnc:
+    /opt/TurboVNC/bin/vncserver -list | grep -q "^{{isaac_display}}\s" || /opt/TurboVNC/bin/vncserver {{isaac_display}} -localhost -securitytypes None -geometry 1920x1080 -noxstartup
+    @echo "DISPLAY={{isaac_display}}"
+
 # Stop CARLA simulator service
 carla-stop:
     "{{acb_src}}/scripts/carla_stop.sh" {{carla_port}}
