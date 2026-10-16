@@ -17,6 +17,10 @@ frame transform). NAS originals: `~/nas/autoveh/dataset/2026-04_ntu_map`,
 **Relates to**: [018](018-install-and-world-config.md) (CARLA version as a carla-rust feature,
 run-time version check), acb vehicle model
 (0.10 uses Chaos vehicles; roadmap [014](014-feature-completeness.md) gap 8).
+**Update 2026-10-16**: the NTU mesh is now processed by a vendor (user decision). The mesh
+steps below are superseded by the vendor's delivery; its import into Isaac Sim, the
+competition simulator, is [040](040-ntu-offroad-field.md). Frame alignment, the Lanelet2 work
+and the realism measurements here still apply.
 
 ## Problem
 

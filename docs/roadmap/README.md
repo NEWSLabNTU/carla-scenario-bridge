@@ -60,6 +60,23 @@ borrowed from greybox fuzzing.
 - [033: Demo Tour](033-demo-tour.md) — one continuous 5-8 min Town01 drive through six incidents (hard brake ahead, pedestrian dart-out, red light, blocked lane, crossing traffic at a turn, cyclist on the inside), captioned, never stalling; ramp merge and a multi-lane tour later
 - [034: Bridge Failure Paths](034-bridge-failure-paths.md) — a hung tick (a lost wakeup in CARLA 0.9.16's Traffic Manager) ends in an error, a drain and a restart inside SSv2's timeouts; no TM unless a scenario needs one; a timed-out spawn's late actor adopted, actors looked up by id; then upstream's TM fix backported into carla-rust's prebuilt LibCarla
 
+## Simulator backends and Isaac Sim (035-041)
+
+SSv2 on more than one simulator, CARLA and Isaac Sim, chosen per run; the repository keeps
+its name ([design/simulator-backends.md](../design/simulator-backends.md)). Driven by a
+sponsor's off-road competition on Isaac Sim (user direction 2026-10-16).
+
+- [035: Backend Seam](035-backend-seam.md) — every carla-rust call behind a `SimBackend` trait, CARLA the only implementation, no behaviour change
+- [036: Isaac Sim Bring-up and the Domain Spike](036-isaac-bringup.md) — Isaac Sim 6.1 on this host (VNC and headless); several ROS domains in one process, Cyclone, lockstep, GPU cost per sensor set
+- [037: Isaac World Server and `IsaacBackend`](037-isaac-world-server.md) — SSv2 scenarios on Isaac through a lockstep world server and a small batched protocol; puppeteered NPCs, contacts, no Autoware yet
+- [038: Isaac Vehicle Bridge](038-isaac-vehicle-bridge.md) — Autoware drives a PhysX vehicle: sensors, vehicle interface, `/clock` on its domain; agent unchanged
+- [039: Several Autoware Instances on Isaac Sim](039-isaac-multi-autoware.md) — one domain per ego, relay-coordinated, ego count per GPU measured
+- [040: NTU Off-road Test Field](040-ntu-offroad-field.md) — the vendor's NTU mesh as an Isaac world, aligned to our Autoware maps, terrain friction zones, Lanelet2 course
+- [041: Competition Director](041-competition-director.md) — heats, team isolation, scoring from ground truth, Isaac simulation-control services for the operator
+
+035 and 036 can run in parallel; 037 needs both. 040 can start on the import script as soon as
+the vendor delivers, but its acceptance needs 030.
+
 ## Real-site twin and realistic rendering (019-)
 
 - [019: NTU Campus Digital Twin](019-ntu-campus-twin.md) — twin of the NTU campus from the vendor MLS scan and our Autoware maps; full re-tiling (the vendor's tiles are truncated at 2^32-1 points), road/building meshes, vegetation proxies, Lanelet2 regulatory elements + xodr, CARLA 0.10 import, lidar and camera realism measured against the real cloud ([design/survey-isaac-sim-and-digital-twin.md](../design/survey-isaac-sim-and-digital-twin.md))
