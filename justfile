@@ -353,6 +353,9 @@ run:
     source "{{project}}/install/setup.bash"
     # The simulation side: the bridge and the agent relay, in the scenario domain.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    # On CycloneDDS like every other process of the stack; an unset RMW is Fast DDS, whose
+    # relay SSv2 cannot see.
+    export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
     export ROS_DOMAIN_ID={{scenario_domain}}
     exec play_launch launch --web-addr 0.0.0.0:8084 \
         --log-dir play_log/bridge \
