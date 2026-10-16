@@ -81,6 +81,9 @@ alias install-deps := setup
 _check-setuptools:
     #!/usr/bin/env bash
     set -e
+    # A Python virtualenv first on PATH (a project's .venv) hides the system python3 that
+    # ROS and colcon need; drop it for this recipe.
+    PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/\.venv/bin$' | paste -sd:)
     path=$(python3 -c 'import setuptools; print(setuptools.__file__)')
     case "$path" in
         /usr/lib/python3/dist-packages/*) ;;
@@ -102,6 +105,7 @@ _check-setuptools:
 build: _check-setuptools
     #!/usr/bin/env bash
     set -e
+    PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/\.venv/bin$' | paste -sd:)
     cd "{{project}}"
     source /opt/ros/humble/setup.bash
     source "{{autoware_setup}}"
@@ -345,7 +349,7 @@ run:
     # which restarts the bridge on a crash (respawn="true"). `just build` after changes.
     set -e
     source "{{autoware_setup}}"
-    source "{{acb_src}}/install/setup.bash"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     # The simulation side: the bridge and the agent relay, in the scenario domain.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
@@ -394,7 +398,7 @@ acceptance scenario=(project + "/src/csb_examples/scenarios/basic/town01_ego_dri
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
-    source "{{acb_src}}/install/setup.bash"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     args=(--scenario "{{scenario}}" --runs {{runs}})
@@ -418,7 +422,7 @@ pcd-gen out_dir *args:
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
-    source "{{acb_src}}/install/setup.bash"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     ros2 run carla_pcd_gen carla_pcd_gen --map-dir "{{out_dir}}" {{args}}
 
 # Report whether CARLA is fit to run a scenario against, and why if not.
@@ -443,7 +447,7 @@ _require-ego-stack:
     set -e
     source "{{autoware_setup}}"
     if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
-    source "{{acb_src}}/install/setup.bash"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     # Look where the ego actually is: its own domain (roadmap 017), over its RMW.
@@ -483,7 +487,7 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # tier4_system_launch with the stock MRM nodes removed (a safety island's).
     source "{{autoware_setup}}"
     if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
-    source "{{acb_src}}/install/setup.bash"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
     # discovery flakes at this participant count - each run randomly failed to match
@@ -593,7 +597,7 @@ bg-av entity="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-a
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
-    source "{{acb_src}}/install/setup.bash"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain
     # 1000 in it is what keeps domain 1's unicast ports out of domain 0's range.
@@ -663,7 +667,7 @@ scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     set -e
     # The interpreter resolves the vehicle description package (acb_vehicle_description).
     source "{{autoware_setup}}"
-    source "{{acb_src}}/install/setup.bash"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
     # discovery flakes at this participant count. Every ROS process must share this.
@@ -688,7 +692,7 @@ e2e scenario_file=(project + "/src/csb_examples/scenarios/basic/town01_ego_drive
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
-    source "{{acb_src}}/install/setup.bash"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
