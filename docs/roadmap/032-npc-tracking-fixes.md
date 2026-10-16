@@ -156,6 +156,55 @@ within 1 m of its centre, clear of level obstacles.
    Not in this step (scenario findings, later): N4 (the shoved ego's near-miss with a lamp
    pole; ego-stack drift), N6 (motorbike speed step), N7 (`rear_contact`'s declared 4.5 m
    boxes vs the 4.792 m Model 3).
+9. [x] **Scenario findings N4, N6, N7** (added 2026-10-16). All three are scenario fixes; no
+   bridge or oracle code changes. *As built:* one bridge change after all -- a contact on
+   the last frame named `unknown` (below, N4) -- and N4's delay and N6's hold departed
+   from the numbers planned here; see Results.
+   - **N4 -- `rear_contact` ends before the shove reaches the pole.** From the 14 step-7/8
+     traces: the first contact is at ego CARLA x 183.6-187.5 (ROS frame, westbound), the
+     shoved ego reaches 8-9 m/s, and the 3 s exit delay ends the run 59 frames later at x
+     162.2-169.5 -- abreast of `CityLamp121` (x 163.9); the four static hits were at
+     contact +32..+56 frames. The ego-`npc_rear` contacts span contact +0..+26 frames. So
+     the exit delay drops 3 s -> **1.5 s** (~30 frames): the contacts still all land inside
+     the run, and it ends with the ego at x ~174-177, its front >= 7 m short of the pole,
+     whatever the ego stack's yaw drift. Moving the start east was the alternative; it keeps
+     the shove's 23 m of travel and moves it towards the next intersection, so no. The
+     long-lived ego stack's drift stays out of scope (acb/Autoware). Accept: `rear_contact`
+     x5, no static contact, ego's closest box distance to the pole reported. *As built:*
+     **1 s**, not 1.5 (with N7's honest boxes the 1.5 s end lands on the frame csb stops
+     holding `npc_rear`, where SSv2's blind NPC still overlaps the ego by ~0.5 m: a 1-frame
+     G1, 3 of 5); and the bridge keeps a despawned entity's name for contacts until the
+     next `Initialize`, because ending inside the contact showed SSv2 despawns `npc_rear`
+     before the ego, so the last frame's contact, drained by the ego's `finish_run`, came
+     out as actor `unknown` (G2 high, 5 of 5).
+   - **N7 -- `rear_contact` declares the bodies it gets.** Item (a)'s option (i): both
+     entities declare the Model 3's box (4.792 x 2.163 x 1.488, centre 1.532 / 0 / 0.744, as
+     the AWF copies' ego), which removes the 0.292 m the pair's CARLA boxes reached past
+     SSv2's -- the constant part of the onset's `d_ssv2 - d_carla` -- and leaves the lag term
+     (0.05-0.10 m) inside the band. Option (ii) (an oracle `contact_edge`) is not applied: it
+     would hide a geometric disagreement instead of removing it, and is not needed once the
+     scenario is honest; it stays the fallback if the onset G1 survives (i). The origin
+     offset moves 1.5 -> 1.532 m (3 cm). Accept: on the same 5 runs, the approach frames'
+     `d_ssv2 - d_carla` inside the band and no onset G1.
+   - **N6 -- `motorbike_body`'s hold is a linear deceleration.** The step-7 trace: the hold
+     fires at SSv2 freespace 0.76 m with the bike at 8.0 and the ego at 1.7 m/s, and the
+     `step` sets the bike to 1.74 m/s in one frame; the body brakes 0.43 m/s per frame
+     (8.6 m/s2), so it runs on. `linear` dynamics at a rate the body can follow (6 m/s2, 0.3
+     m/s per frame, under the bike's `maxDeceleration` 8 and the 10 m/s2 force bound) needs
+     ~v_rel^2 / 2(a - a_ego) = 6.3^2 / 2(6 - 0.9) ~ 3.9 m to close the speed gap, so the hold
+     triggers at freespace **4.5 m** instead of 0.9 and settles ~0.6-1.0 m behind the ego;
+     the success condition (held 5 s) keeps its distance test, widened 0.9 -> **1.3 m**, still
+     short of the 1.4 m a Model 3 body reaches past the bike's declared front (so
+     `MotorbikeBody=vehicle.tesla.model3` still reproduces 022's contact). The two numbers are
+     tuned on the first run if the settled gap is off. Accept: `motorbike_body` x3, PASS,
+     G1 0, no speed-step G3, G4 agree. *As built:* SSv2's blind NPC ramps a `linear` change
+     at its 3 m/s3 jerk limit, so closing from 8 m/s takes ~10 m, not 3.9, and depends on
+     the ego's speed when the bike arrives (settled 0.14 m and 1.9 m on two tries); so the
+     hold is two `linear` steps -- relative +1 m/s at freespace < 12.5 m, relative 0 at
+     < 1.0 m -- and the start (`go`) is `linear` 5 m/s2 too: it was a step from the ~4.5 m/s
+     SSv2's default behaviour had reached before the storyboard ran, to 8, the run's other
+     G3 (024 rows 7-8's kind).
+   - Regression: starters 6/6, incidents 1-5 (`incident_judge`) 5/5; `just test`, `just check`.
 
 ## Acceptance
 
@@ -168,6 +217,56 @@ within 1 m of its centre, clear of level obstacles.
   (E's sensors included, or E opt-in).
 
 ### Results
+
+**2026-10-16, step 9 -- N4, N6, N7 done: `rear_contact` ends 13.6-16.4 m short of the pole
+with honest boxes and no G1 or G2 (6/6 on the final build and scenario, 11/11 PASS at 1 s), `motorbike_body` has no speed step
+(max 0.30 m/s per frame, was 6.26) and no G1/G3 (5/5); starters 6/6, incidents 5/5.**
+**N7** (`town01_rear_contact.xosc`): both cars declare the Model 3's box (4.792 x 2.163 x
+1.488, centre 1.532 / 0 / 0.744). The oracle's largest `d_ssv2 - d_carla` over a run (an
+approach frame) was **0.321 m** on every step-8 run; now **0.029** on every run (0.013 once),
+inside every band; the contact onset is no G1 in 16 runs (`lag_band` info, SSv2's side first
+by 0.05-0.11 m against bands 0.10-0.16, in 3). Option (ii) not needed. **N4**: the exit
+delay 3 s -> **1 s**. Old: ego's closest box distance to the pole (CARLA 163.9, -127.1)
+0.53-0.64 m on passing runs, 0.08-0.11 m on the failing ones (r4-r6, static hits), the run
+ending at x 162-169. Now the run ends 18-19 frames after the first contact at x 179.8-182.6,
+closest **13.6-16.4 m**, no static contact. The first try, 1.5 s (rc 2-6, 5/5 PASS, closest
+9.3-10.3 m), ended on the frame after csb's `contact_hold` lets go of `npc_rear` (contacts
+run first +0..+26, the hold to +27, the end +28/+29), where SSv2's blind NPC overlaps the
+ego by 0.43-0.55 m in SSv2's world -- 0.29 m more than before because of N7's longer boxes --
+against CARLA's touching bodies: a 1-frame SSv2-side G1 (margin difference 0.50-0.56 vs band
+0.50) in 3 of 5. At 1 s the run ends inside the hold. That exposed a bridge defect (5/5 on
+the old build): SSv2 despawns `npc_rear` before the ego, so the last frame's ego contact,
+drained by the ego's `finish_run`, found no entity for actor `npc_rear` and was traced as
+`other_kind: unknown` -> G2 high `C2:unknown` (`physical_verdict` still passed). Fix:
+`EntityManager` keeps despawned entities' names by actor id until `clear()` (the next
+`Initialize`), and `name_of_actor_this_episode` (live first, then departed) names drained
+contacts (`drain_collisions`, `finish_collision_monitor`); test first-written with the code
+(`a_despawned_entity_keeps_its_name_for_contacts_until_clear`). The drift of a long-lived
+ego stack (N4's trigger) is not traced; with 13.6 m of margin it no longer matters here.
+**N6** (`scenarios/gap/town01_motorbike_body.xosc`): `go` `linear` 5 m/s2; `approach`
+(new) relative +1 m/s, `linear` 6 m/s2 at freespace < 12.5 m; `hold` relative 0, `linear`
+6 m/s2 at < 1.0 m; success: held 5 s under 1.3 m (was 0.9). Tuning (all PASS but mb_1/mb_3):
+one `linear` hold at 4.5 m collided in SSv2 (mb_1, the jerk-limited ramp), at 10.5 m settled
+0.14 m (mb_2, and `go`'s 4.5 -> 8 m/s step left a G3 0.51 m), at 11.2 m settled 1.89 m and
+timed out (mb_3). Two steps: SSv2's largest speed change per frame **0.28-0.30 m/s** (step 7:
+6.26), settled freespace **0.63-0.71 m** (1.00 at the first, 1.3 m hold threshold; step 7: 0.60),
+CARLA's closest box distance 0.56-0.95 m (step 7: overlap), G1 0 G2 0 G3 0, G4 agree, in
+mb_4-mb_8. `MotorbikeBody=vehicle.tesla.model3` (scratch copy) still reproduces 022:
+`carla_contact` FAIL, ego hit 'motorbike', G1 `C1:vehicle:carla`.
+**Runs** (CARLA pid 3833630, Town01, simulation side restarted traced, one fresh ego stack per
+build, `run_suite --physical-verdict` per scenario, `gap_oracle` on every trace; host load
+1-min 11-70, 15-35 for most runs, I/O not a factor; no run failed for load). Old build
+(before the naming fix): rc_1 (malformed comment: `--` in the XML comment, fixed), rc 2-6 (1.5
+s), rc 7-11 (1 s): PASS each, 7-11 each G2 `unknown` as above; mb 1-7. New build
+(`just build`, bridge 14:37): rc 12-16 **PASS 5/5, G1 0 G2 0 G3 0**, info `contact_hold` (+
+`lag_band` in 2), 30-32 contacts, none `unknown`. Regression on the new build: starters
+**6/6** PASS (`ego_drive` 610 frames, `engage_state` 680, `pedestrian` 2292, `rear_contact`
+264 -- closest to the pole 12.7 m, max difference 0.013 --, `simulator_autopilot` 750 with
+its known G3, `npc_route` 134-136 0.655 m, 024 row 9, `traffic_light` 3438; all G4 agree),
+`motorbike_body` mb_8 as above, incidents **5/5** `incident_judge` PASS (1909 / 1340 / 1613 /
+1494 / 1243 frames; oracle clean but i2's known walker start-up G3 x2, 033). `just test`:
+329 Rust run, 329 passed / 1 skipped, 174 pytest; `just check` clean.
+**Rows N4, N6, N7 closed.** Still open from step 8: `town02_episode_change` (Town02 load).
 
 **2026-10-14, step 8 -- N2, N3, N5 done: contacts labelled by CARLA frame, no fallback next to
 a body, `gap_oracle` judges run 3, every tick bounded; `rear_contact` 5/5, `simulator_autopilot`
@@ -375,10 +474,10 @@ signature is `C2:static` instead of `C2:unknown`; both fail, both G2 high.
 | N1 | bench generator read `local_x`/`local_y`, SSv2 reads lat/lon | **tool bug** (fixed, step 6) | `npc_05`: generator point y -326.65 (CARLA driving lane, so its check passed), SSv2's pose -324.33 = the TM-projected lanelet centre to 0.01 m (CARLA's shoulder); offset 0.709 % of y (0.95 m at y -134, 2.3 at -326) | done here. Open question for whoever owns map consumers: anything else that reads the tags as SSv2's geometry is up to 2.3 m off SSv2's world in Town01 |
 | N2 | `rear_contact` r3: `npc_rear` falls back to kinematic against the ego | **real gap** (bridge: blocked rule relies on the collision stream's timing) | impact at CARLA frame 21787317 = SSv2 265 (ego -1.23 -> -5.27 m/s), contacts labelled 269 (4 late; `ssv2_frame` is the counter when the callback runs, not the event's frame), tick 245 ms at 269; `blocked -- moving -1.56 m/s along 7.95, 0.59 m off` at 269 -> kinematic; ego to 14 m/s, z 4.6 m, pitch -88 deg, rolled; static road/pole/sidewalk hits 269-302; SSv2 error. r1: same 2-frame lateness (183 -> 185), harmless: G3 184-186 0.61 m before `contact_hold` started. no late label in the other 17 traces of 032 with a contact | csb: (1) label a contact by its CARLA frame (map CARLA frame -> SSv2 frame at each tick); (2) the blocked rule must not depend on the stream alone: no fallback while the body's CARLA box is within a margin of the ego's (or of any physics vehicle); (3) a fallback that would teleport into the ego is the worst case of A and should be impossible |
 | N3 | `gap_oracle` crashes on r3 | **oracle bug** | `_g1`: `max()` of an empty sequence -- a G1 interval made of frames where CARLA's boxes are height-gated (`d` None, ego airborne) but promoted to overlap by the contact rule | `gap_oracle`: take the penetration over known margins only (`None` when none); a scratch copy patched that way judged r3 |
-| N4 | `rear_contact` r4-r6: ego shoved into lamp pole `CityLamp121` | **scenario artefact** (near miss in every run), triggered by an ego-stack state that drifted | after the hit the ego is pushed to 8.6-9.2 m/s and yaws left; its max ROS y passing x 163.5-166.6 decides: passing runs -128.59..-129.03 (min yaw 169.8-172.6 deg), failing -128.18..-128.40 (min yaw 168.0-168.3); the pole base is at CARLA (163.9, ~127.1). r3-r6 came after ~75 min of the same ego stack; restarted, r7-r9 PASS (-129.03 / -128.89 / -128.96) | csb_examples: end `rear_contact` sooner after the hit (or start it where the shove has no pole within 1 m); the yaw drift of a long-lived ego stack is unexplained -- acb/Autoware, not traced here |
+| N4 | `rear_contact` r4-r6: ego shoved into lamp pole `CityLamp121` | **scenario artefact** (near miss in every run), triggered by an ego-stack state that drifted | after the hit the ego is pushed to 8.6-9.2 m/s and yaws left; its max ROS y passing x 163.5-166.6 decides: passing runs -128.59..-129.03 (min yaw 169.8-172.6 deg), failing -128.18..-128.40 (min yaw 168.0-168.3); the pole base is at CARLA (163.9, ~127.1). r3-r6 came after ~75 min of the same ego stack; restarted, r7-r9 PASS (-129.03 / -128.89 / -128.96) | csb_examples: end `rear_contact` sooner after the hit (or start it where the shove has no pole within 1 m); the yaw drift of a long-lived ego stack is unexplained -- acb/Autoware, not traced here. **Done 2026-10-16 (step 9)**: exit delay 1 s, ends 13.6-16.4 m short of the pole |
 | N5 | bridge hang in `simulator_autopilot` (r1) | **real gap** (bridge: an unbounded wait), intermittent | last line: `Body 'npc_autopilot'` at 18:54:01, i.e. inside the settling `world.tick()` after spawning the simulator-driven vehicle, 0.2 s after `Traffic Manager on port 8000: synchronous=true`; 12 min with no line, every thread in futex/epoll wait, CARLA answering RPC; SSv2 timed out ("No response from the simulator"), the next scenario failed the same way. No stack (ptrace_scope 1). Fresh bridge: PASS; 024 and step 4 passed it | csb: bound the settling tick (and every tick) under a TM in synchronous mode with a watchdog, so a stuck tick fails the request instead of the bridge |
-| N6 | `motorbike_body` G1 208 (1 frame, CARLA geometry, 0.05 m) + G3 206-208 (0.72 m) | **scenario artefact** (speed step), as 024 rows 7-8 | the hold steps the bike from 8 to ~1.6 m/s in one frame; the tracked body brakes ~0.43 m/s per frame, runs 1.3 m past and its CARLA box reaches the ego's for one frame (no contact), then the snap at 209. G4 becomes PASS+overlap-only-in-CARLA | scenario: `linear` dynamics on the hold |
-| N7 | the contact-onset G1 | **real gap** (modelling: declared 4.5 m vs 4.792 m), sampling-dependent | see (a) | see (a) |
+| N6 | `motorbike_body` G1 208 (1 frame, CARLA geometry, 0.05 m) + G3 206-208 (0.72 m) | **scenario artefact** (speed step), as 024 rows 7-8 | the hold steps the bike from 8 to ~1.6 m/s in one frame; the tracked body brakes ~0.43 m/s per frame, runs 1.3 m past and its CARLA box reaches the ego's for one frame (no contact), then the snap at 209. G4 becomes PASS+overlap-only-in-CARLA | scenario: `linear` dynamics on the hold. **Done 2026-10-16 (step 9)**: `linear` start and a two-step `linear` hold |
+| N7 | the contact-onset G1 | **real gap** (modelling: declared 4.5 m vs 4.792 m), sampling-dependent | see (a) | see (a). **Done 2026-10-16 (step 9)**: option (i), the Model 3 box declared |
 
 Not done: `town02_episode_change` has no trace this session (two Town02 load timeouts); its
 024 result stands.

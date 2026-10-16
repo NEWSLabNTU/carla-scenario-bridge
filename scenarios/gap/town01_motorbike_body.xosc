@@ -3,9 +3,15 @@
 	Roadmap 022 step 6: the regression reproducer for a body longer than its declared box.
 	The ego drives west as in town01_rear_contact.xosc (a parked ego is not possible: the
 	interpreter holds the storyboard until the managed ego is engaged, which needs a route).
-	A blind motorbike starts 25 m behind it at 8 m/s and, once SSv2's freespace gap to the ego
-	is under 0.9 m, holds the ego's speed (relative target 0, continuous). SSv2 fails on a
-	collision between them; otherwise it passes 5 s after the motorbike closed up.
+	A blind motorbike starts 25 m behind it, speeds up to 8 m/s at 5 m/s2, slows to 1 m/s
+	above the ego's speed once SSv2's freespace gap to the ego is under 12.5 m, and to the
+	ego's speed (relative target 0, continuous) once it is under 1.0 m, settling ~0.5-1 m
+	behind; SSv2 ramps each change at its 3 m/s3 jerk limit, up to 6 m/s2. SSv2 fails on a
+	collision between them; otherwise it passes 5 s after the motorbike closed to under
+	1.3 m. (Until 2026-10-16 the hold was one `step` at 0.9 m: SSv2 set the bike from 8 to
+	~1.7 m/s in one frame, the CARLA body, braking at most ~0.43 m/s per frame, ran 1.3 m on
+	and its box reached the ego's for a frame; the start was a step too, from the ~4.5 m/s
+	SSv2's default behaviour had reached before the storyboard ran, to 8. Roadmap 032 N6.)
 
 	Before 022 every NPC got the Model 3 (4.79 m), which reaches 1.4 m past a 2.0 m
 	motorbike's declared front: CARLA's ego was touched while SSv2 saw clearance (SSv2 PASS,
@@ -112,7 +118,7 @@
 								<PrivateAction>
 									<LongitudinalAction>
 										<SpeedAction>
-											<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+											<SpeedActionDynamics dynamicsShape="linear" value="5.0" dynamicsDimension="rate" />
 											<SpeedActionTarget>
 												<AbsoluteTargetSpeed value="8.0" />
 											</SpeedActionTarget>
@@ -130,12 +136,43 @@
 								</ConditionGroup>
 							</StartTrigger>
 						</Event>
+						<!-- Slow to 1 m/s faster than the ego well back, then close the last metre at
+						     that speed and match it: the gap the hold settles at then depends on a
+						     1 m/s change, not on the ego's speed when the bike arrived. -->
+						<Event name="approach" priority="parallel">
+							<Action name="approach_speed">
+								<PrivateAction>
+									<LongitudinalAction>
+										<SpeedAction>
+											<SpeedActionDynamics dynamicsShape="linear" value="6.0" dynamicsDimension="rate" />
+											<SpeedActionTarget>
+												<RelativeTargetSpeed entityRef="ego" value="1.0" speedTargetValueType="delta" continuous="true" />
+											</SpeedActionTarget>
+										</SpeedAction>
+									</LongitudinalAction>
+								</PrivateAction>
+							</Action>
+							<StartTrigger>
+								<ConditionGroup>
+									<Condition name="near" delay="0" conditionEdge="none">
+										<ByEntityCondition>
+											<TriggeringEntities triggeringEntitiesRule="any">
+												<EntityRef entityRef="motorbike" />
+											</TriggeringEntities>
+											<EntityCondition>
+												<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="true" rule="lessThan" value="12.5" />
+											</EntityCondition>
+										</ByEntityCondition>
+									</Condition>
+								</ConditionGroup>
+							</StartTrigger>
+						</Event>
 						<Event name="hold" priority="parallel">
 							<Action name="hold_speed">
 								<PrivateAction>
 									<LongitudinalAction>
 										<SpeedAction>
-											<SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time" />
+											<SpeedActionDynamics dynamicsShape="linear" value="6.0" dynamicsDimension="rate" />
 											<SpeedActionTarget>
 												<RelativeTargetSpeed entityRef="ego" value="0" speedTargetValueType="delta" continuous="true" />
 											</SpeedActionTarget>
@@ -151,7 +188,7 @@
 												<EntityRef entityRef="motorbike" />
 											</TriggeringEntities>
 											<EntityCondition>
-												<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="true" rule="lessThan" value="0.9" />
+												<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="true" rule="lessThan" value="1.0" />
 											</EntityCondition>
 										</ByEntityCondition>
 									</Condition>
@@ -179,7 +216,7 @@
 													<EntityRef entityRef="motorbike" />
 												</TriggeringEntities>
 												<EntityCondition>
-													<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="true" rule="lessThan" value="0.9" />
+													<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="true" rule="lessThan" value="1.3" />
 												</EntityCondition>
 											</ByEntityCondition>
 									</Condition>

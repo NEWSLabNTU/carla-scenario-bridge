@@ -27,6 +27,10 @@ pub struct Entity {
 #[derive(Debug, Default)]
 pub struct EntityManager {
     entities: HashMap<String, Entity>,
+    /// Actors despawned since the last [`clear`](Self::clear), by CARLA id: a contact CARLA
+    /// reported on an entity's last frame can reach csb after SSv2 has despawned it, and
+    /// must still be named (roadmap 032 N4).
+    departed: HashMap<u32, String>,
 }
 
 impl EntityManager {
@@ -41,6 +45,7 @@ impl EntityManager {
         carla_actor_id: u32,
         origin_offset: OriginOffset,
     ) {
+        self.departed.remove(&carla_actor_id);
         self.entities.insert(
             name,
             Entity {
@@ -52,7 +57,9 @@ impl EntityManager {
     }
 
     pub fn remove(&mut self, name: &str) -> Option<u32> {
-        self.entities.remove(name).map(|e| e.carla_actor_id)
+        let id = self.entities.remove(name)?.carla_actor_id;
+        self.departed.insert(id, name.to_owned());
+        Some(id)
     }
 
     pub fn get(&self, name: &str) -> Option<&Entity> {
@@ -68,12 +75,20 @@ impl EntityManager {
             .map(|(name, _)| name.as_str())
     }
 
+    /// [`name_of_actor`](Self::name_of_actor), or the name of an entity this episode
+    /// despawned: for naming contacts, which can be drained after their entity is gone.
+    pub fn name_of_actor_this_episode(&self, carla_actor_id: u32) -> Option<&str> {
+        self.name_of_actor(carla_actor_id)
+            .or_else(|| self.departed.get(&carla_actor_id).map(String::as_str))
+    }
+
     pub fn count(&self) -> usize {
         self.entities.len()
     }
 
     pub fn clear(&mut self) {
         self.entities.clear();
+        self.departed.clear();
     }
 
     /// The name of the ego entity, if one is registered.
@@ -110,5 +125,39 @@ mod tests {
         assert_eq!(m.ego_name(), Some("Ego"));
         m.remove("Ego");
         assert_eq!(m.ego_name(), None);
+    }
+
+    #[test]
+    fn a_despawned_entity_keeps_its_name_for_contacts_until_clear() {
+        let mut m = EntityManager::new();
+        m.insert("ego".into(), EntityType::Ego, 1, OriginOffset::default());
+        m.insert(
+            "npc_rear".into(),
+            EntityType::Vehicle,
+            2,
+            OriginOffset::default(),
+        );
+        assert_eq!(m.remove("npc_rear"), Some(2));
+        // Gone for everything else...
+        assert_eq!(m.name_of_actor(2), None);
+        assert!(m.get("npc_rear").is_none());
+        assert_eq!(m.count(), 1);
+        // ...but a late contact with actor 2 is still npc_rear's.
+        assert_eq!(m.name_of_actor_this_episode(2), Some("npc_rear"));
+        assert_eq!(m.name_of_actor_this_episode(1), Some("ego"));
+        assert_eq!(m.name_of_actor_this_episode(3), None);
+        // A live entity on the same id wins over the departed one.
+        m.insert(
+            "other".into(),
+            EntityType::Vehicle,
+            2,
+            OriginOffset::default(),
+        );
+        assert_eq!(m.name_of_actor_this_episode(2), Some("other"));
+        m.remove("other");
+        // A new episode forgets them.
+        m.clear();
+        assert_eq!(m.name_of_actor_this_episode(2), None);
+        assert_eq!(m.name_of_actor_this_episode(1), None);
     }
 }

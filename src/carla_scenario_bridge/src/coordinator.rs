@@ -1688,7 +1688,7 @@ impl Coordinator {
     fn drain_collisions(&mut self) {
         let entities = &self.entities;
         self.collision_monitor
-            .drain(|id| entities.name_of_actor(id).map(str::to_owned));
+            .drain(|id| entities.name_of_actor_this_episode(id).map(str::to_owned));
     }
 
     /// Stop and destroy the ego's collision sensor and log the run's summary. A no-op when
@@ -1697,7 +1697,7 @@ impl Coordinator {
     fn finish_collision_monitor(&mut self) {
         let entities = &self.entities;
         self.collision_monitor
-            .finish_run(|id| entities.name_of_actor(id).map(str::to_owned));
+            .finish_run(|id| entities.name_of_actor_this_episode(id).map(str::to_owned));
         self.trace_contacts();
     }
 

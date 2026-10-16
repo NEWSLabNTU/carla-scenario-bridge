@@ -5,9 +5,18 @@
 	truth"). Town01 has one lane per direction, so a lateral cut-in is not possible; a rear
 	contact exercises the same comparison. The ego starts as in town01_ego_drive.xosc
 	(westbound, y = -130); the NPC starts 25 m behind it and runs at 8 m/s against the ego's
-	~4 m/s, and brakes at 8 m/s2 once it has hit the ego. Success = SSv2 saw the collision (the exit waits 3 s so the bodies stay in contact
-	long enough for CARLA to tick with them touching; ending on the first frame of overlap
-	ended the run before csb had applied the overlapping pose); failure = 120 s with none.
+	~4 m/s, and brakes at 8 m/s2 once it has hit the ego. Success = SSv2 saw the collision (the
+	exit waits 1 s so the bodies stay in contact long enough for CARLA to tick with them
+	touching (ending on the first frame of overlap ended the run before csb had applied the
+	overlapping pose), and no longer: the hit shoves the ego to ~9 m/s, and the 3 s this
+	waited until 2026-10-16 carried it 23 m down the road to lamp pole CityLamp121, which it
+	hit whenever it yawed a little left (roadmap 032 N4). 1 s ends the run while CARLA still
+	reports the contact (it does for ~1.3 s), so csb is still holding npc_rear back on the
+	last frame; an end just after that hold, where SSv2's blind NPC still overlaps the ego
+	by ~0.5 m, is a one-frame G1 of its own. Failure = 120 s with no collision.
+	Both cars declare the box of the body they get, vehicle.tesla.model3 (4.792 x 2.163 x
+	1.488 m, centre 1.532 m ahead of the rear axle): with the old 4.5 m boxes CARLA's bodies
+	met ~0.3 m before SSv2's did, a one-frame G1 at the contact onset (roadmap 032 N7).
 	The contact is the point, so csbExpectedContacts declares it: run_suite
 	physical-verdict accepts the contact with npc_rear, and fails on any other contact.
 -->
@@ -24,8 +33,8 @@
 		<ScenarioObject name="ego">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.532" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
 				<Axles>
@@ -46,8 +55,8 @@
 		<ScenarioObject name="npc_rear">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.532" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
@@ -177,7 +186,7 @@
 							</Action>
 							<StartTrigger>
 								<ConditionGroup>
-									<Condition name="ssv2_collision" delay="3" conditionEdge="none">
+									<Condition name="ssv2_collision" delay="1.0" conditionEdge="none">
 										<ByEntityCondition>
 											<TriggeringEntities triggeringEntitiesRule="any">
 												<EntityRef entityRef="npc_rear" />
