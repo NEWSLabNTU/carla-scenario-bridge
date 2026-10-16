@@ -111,7 +111,7 @@ tr '\0' '\n' < /proc/$(pgrep -f 'acb_bridge/acb_bridge' | head -1)/cmdline | hea
 carla-rust exposes a **different API per CARLA version**. Under 0.9.x a wheel's position is
 `WheelPhysicsControl::position`; under 0.10 the same field is `offset`. The version is now
 pinned in both workspaces' `Cargo.toml` by `features = ["carla-0916"]` on the `carla`
-dependency (carla 0.15.0 from crates.io in both, no git patch; roadmap 018), so a bare
+dependency (carla 0.15.1 from crates.io in both, no git patch; roadmap 018), so a bare
 `cargo build`/`cargo check` and a plain `colcon build` compile the 0.9.16 API with no
 environment at all. Bump both workspaces to the same release together.
 

@@ -14,8 +14,11 @@ members = [
 # stopped before destroy_with_children destroys them (an orphaned 0.9.16 sensor stream logs
 # "Invalid session" at ~10 MB/s and eventually segfaults the server; acb docs/issues/015),
 # the carla-rust/0.9.16-3 prebuilt with worker-thread exception containment, empty FFI
-# containers that no longer abort, and the version selected by this feature.
-carla = { version = "0.15.0", features = ["carla-0916"] }
+# containers that no longer abort, and the version selected by this feature. 0.15.1 moves
+# to the carla-rust/0.9.16-4 prebuilt, which backports upstream CARLA e7e076f: the
+# synchronous Traffic Manager runs Step() inline, so World::tick can no longer hang on its
+# lost wakeup (roadmap 034 step 6).
+carla = { version = "0.15.1", features = ["carla-0916"] }
 
 [profile.dev-release]
 inherits = "release"

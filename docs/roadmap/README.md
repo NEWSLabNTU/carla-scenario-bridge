@@ -137,4 +137,5 @@ Per-phase state:
 10. **032 NPC tracking fixes** -- phase doc 2026-10-13, from 024's baseline triage; before 025.
 11. **033 Demo tour** -- phase doc 2026-10-14; Town01, continuous, 5-8 min.
 12. **034 Bridge failure paths** -- phase doc 2026-10-15; steps 1-5 before 033 step 5, then
-    step 6 (LibCarla rebuild in carla-rust).
+    step 6 (LibCarla rebuild in carla-rust). Steps 1-5 done 2026-10-15, step 6 2026-10-16
+    (carla 0.15.1, prebuilt 0.9.16-4).

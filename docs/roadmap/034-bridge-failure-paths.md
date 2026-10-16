@@ -145,7 +145,7 @@ async when the bridge dies, and `apply_settings` is not a single silent frame wa
 in a frame, finding 8), so they see actors created or destroyed since the last
    tick (no phantom "Destroyed orphaned" lines). Test: unit tests; live, the reaper's log
    after T1 lists exactly the dead process's actors.
-6. [ ] **Fix the cause in LibCarla: carla-rust's prebuilt `libcarla_client`.** Backport
+6. [x] **Fix the cause in LibCarla: carla-rust's prebuilt `libcarla_client`.** Backport
    upstream `e7e076f` (inline `Step()` in synchronous mode, no handshake) onto 0.9.16,
    rebuild the prebuilt client library carla-sys downloads (`carla-sys build.rs` prebuilt
    path; `build-prebuilt` with `CARLA_DIR` on a patched tree), publish it from the
@@ -236,5 +236,64 @@ the runs.
 *Acceptance* (sim side without hooks, the same ego stack, load 25-48): starters 6/6 PASS
 (ego_drive 42 s, engage_state 45, pedestrian 128, rear_contact 25, simulator_autopilot 47,
 traffic_light 184); incidents 5/5 PASS (i1 112 s, i2 81, i3 89, i4 122, i5 85). Step 6 (the
-LibCarla rebuild) is not done.
+LibCarla rebuild) was not done then; see below.
+
+**2026-10-16 -- step 6 done: upstream's TM fix is in carla-rust's prebuilt LibCarla, csb and
+acb on carla 0.15.1; the stress run shows no hang (0 in 248,795 ticks, where stock 0.9.16
+hung 12 times in ~323k).** The fix:
+
+- *Fork.* `jerry73204/carla` branch `0.9.16-for-carla-rust` @ `5fa188e`: upstream CARLA
+  `e7e076f` ("Removed TM mutex": in synchronous mode `TrafficManagerLocal::SynchronousTick`
+  runs `Step()` inline instead of signalling the worker thread and waiting on
+  `step_end_trigger`) cherry-picked onto 0.9.16, plus `5fa188e` initialising the
+  `last_frame` member that the backport turned from a zeroed local of `Run()` into an
+  uninitialised field.
+- *Prebuilt.* GitHub release `carla-rust/0.9.16-4` on that fork,
+  `libcarla_client.0.9.16-x86_64-unknown-linux-gnu.tar.zstd`, sha256 `a399d7d7b474293b
+  dda6b723cd82e78b7e774349f2f0a816a244f65ba81cf357`.
+- *carla-rust.* `84112ab` and `d184948` on `main` (the prebuilt index points carla-sys at
+  0.9.16-4; the release bump); `carla` and `carla-sys` 0.15.1 on crates.io.
+- *Here.* `carla = { version = "0.15.1", features = ["carla-0916"] }` in both workspaces
+  (csb `Cargo.toml`, acb `Cargo.toml`), both `Cargo.lock`s at carla/carla-sys 0.15.1, built
+  with no `CARLA_DIR`/`CARLA_VERSION` in the environment so carla-sys took the crates.io
+  download path; both build directories hold the 0.9.16-4 tarball (sha256 above).
+
+*Toolchain caveat.* 0.9.16-4 was built with the system clang 14; 0.9.16-3 and earlier with
+UE 4.26's bundled clang 10. The C++ ABI the bridges link against is libstdc++ either way and
+everything builds and passes below, but a crash inside `libcarla_client` that does not
+reproduce on 0.9.16-3 should consider the compiler change first.
+
+*Binary check.* In all three installed bridges (`install/carla_scenario_bridge/...`,
+`install/acb_bridge/...` here, and acb's own `install/acb_bridge/...`) the disassembly of
+`TrafficManagerLocal::SynchronousTick()` calls only `Parameters::GetSynchronousMode()` and
+`TrafficManagerLocal::Step()`; the 0.9.16-3 builds called `condition_variable::wait`,
+`notify_one` and the mutex pair there, and had no out-of-line `Step()` at all.
+
+*Stress* (a second CARLA 0.9.16 server on port 3000, `tmstress` client: three slots, each
+in a loop of synchronous TMs with two autopilot vehicles per TM and a tight `World::tick`
+loop, CPU hogs pinned to the same cores, a tick that does not return in 30 s counted as a
+hang): stock 0.9.16-3 hung **12 times in ~323k ticks over 45 min** (two runs); the patched
+library **0 times in 248,795 ticks over 30 min** (~46 ticks/s a slot). gdb stacks of the
+stock hangs match the lost wakeup this phase studied: the client in `SynchronousTick`
+waiting on `step_end_trigger` (`TrafficManagerLocal.cpp:257`) while the worker waits on
+`step_begin_trigger` (`:158`). Scratch: `/tmp/claude-1000005/-home-aeon-repos-carla-scenario-
+bridge/f372598a-d329-483b-9e38-80a742b40cbd/scratchpad/s034_6` (`runs/`, `drive.sh`,
+`patches/`, `tmstress/`).
+
+*Regression* (the new build, CARLA 0.9.16 Epic Town01 (the same server), the simulation side
+restarted after the build, one ego stack, the host loaded by other work on it (an nros cargo
+build matrix, `FVP_BaseR_AEMv8`) and this repo's `just check` alongside): starters **6/6
+PASS**, 01:46-01:59 UTC, 1/5/15-min load 95/128/142 at start and 125/124/132 at end (ego_drive 219 s -- the first
+run on a stack just up, 42 s on 10-15 -- engage_state 47, pedestrian 132, rear_contact 27,
+simulator_autopilot 49, traffic_light 187); incidents **5/5 PASS**, 02:07-02:17 UTC, load 96/100/117 at
+start and 92/99/109 at end (i1 168 s, i2 86, i3 95,
+i4 119, i5 76). `simulator_autopilot` ran the patched synchronous TM (`Traffic Manager on
+port 8000: synchronous=true` at its spawn, shut down at its despawn); no hung call, drain or
+restart in the bridge log, one bridge process throughout. `just test` 328 nextest + 174
+pytest pass; `just check` clean. acb's own `just test` and
+`just check` did not run to completion: `/home` filled to 0 bytes during them (another job's
+build matrix on the same disk), failing the link with ENOSPC -- acb's build and the
+bridges' scenarios above are its evidence for now; re-run both when the disk has room. Scratch:
+`/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-80a742b40cbd/scratchpad/s034_6b`
+(`runs/starters`, `runs/incidents`, build and test logs).
 
