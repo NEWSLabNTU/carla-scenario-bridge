@@ -81,10 +81,58 @@ from the package list, bump the pin, rebuild.
   incident 5 runs `blind_spot` (a left turn): ordered intervals as on stock, `Safe ->
   OverPassJudge`, 3/3 PASS. **Starters 6/6 PASS** (ego_drive 51 s, engage_state 46,
   pedestrian 130, rear_contact 28, simulator_autopilot 57, traffic_light 192).
-- Not fixed, recorded: in `i3 ov_2` the ego kept accelerating (to ~15 m/s, x 347 -> 378 m in
-  2 s) while `behavior_path_planner` reloaded, i.e. control followed a stale or default
-  trajectory without a stop; worth its own look (acb/Autoware), independent of this phase.
+- The `i3 ov_2` runaway (the ego accelerated to 16.7 m/s while `behavior_path_planner`
+  reloaded) is fixed in acb, not here: see "Follow-up: the runaway in `i3 ov_2`" below.
+
+## Follow-up: the runaway in `i3 ov_2`
+
+Full record: acb `docs/issues/024-a-silent-stack-keeps-the-ego-driving.md`. In short, from
+the ego stack's `play_log/ego/2026-10-17_07-30-36/` (diagnostics.csv, node logs) and the
+run's CARLA trace (sim = wall - 1792194834.8 s):
+
+- `behavior_path_planner` aborted 100 ms after the route was set (wall 839.09) and took 20 s
+  to construct again. 90 ms later the agent engaged: autonomous mode was still available.
+- The commands never stopped. `/control/command/control_cmd` and the trajectory follower's
+  ran at 20 Hz throughout; the controller went STOPPED -> DRIVE (`control_state` 2 -> 0) and
+  tracked the previous episode's last trajectory, ~260 m away and at right angles, commanding
+  a steady ~+1 m/s^2. `control_validator`: over-velocity ERROR from sim 8.3 s on,
+  acceleration error OK (the ego did what it was told). The gate passed it; acb applied it.
+- What should have stopped it did not: `topic_state_monitor_scenario_planning_trajectory`
+  had a 30 s timeout (acb 6fefaa6 relaxed every monitored topic for a sub-realtime host,
+  but these monitors run on sim time), and `trajectory_follower` has no input timeout of its
+  own. The only reaction was a 1 Hz, 100 ms MRM flicker: `planning_validator` re-publishes
+  its last OK diagnosis once a second and the diagnostic graph's 1 s timeout races it.
+- acb had a second, unexercised gap: CARLA holds the last applied control, and the bridge
+  had no command timeout, so a dead `vehicle_cmd_gate` would hold the last throttle forever.
+
+**Fix (acb)**: planning trajectory and both control-command monitors back to 2.5 s (error
+floor 0.5 Hz for the trajectory, 1 Hz for the commands; the rest stay relaxed), and an
+`acb_bridge` command watchdog: past `control_cmd_timeout_s` (1.0 s of sim time) without a
+control command, brake at 2.5 m/s^2 through the pedal maps, hazards on, handbrake once
+stopped, until commands resume. The config change is acb's (`acb_launch`), not the
+autoware_launch fork's: `autoware_launch` ships 2.5 s itself.
+
+**Reproduced** on a healthy stack (town01_i3, the recorder in the scratch dir below logging
+control, trajectory, MRM and operation-mode topics), by stopping processes of a stack started
+for the purpose -- `SIGSTOP` to `behavior_path_planner`'s isolated component process stands
+in for the 20 s reload (a `SIGABRT` here reloads in 3 s on an idle host), `SIGSTOP` to
+`vehicle_cmd_gate`'s for a dead gate:
+
+| case | before (30 s monitors, no watchdog) | after |
+|---|---|---|
+| planner stopped at `set_goal`, 30 s | engaged on the stale trajectory 0.04 s later; MRM flickered for the whole 30 s (54 transitions); never a sustained stop | engaged likewise, then a sustained MRM 2.6 s after the planner stopped (7 transitions in 33 s) |
+| planner stopped 3 s into the drive, 40 s | no MRM; the ego followed the frozen trajectory to its end and stopped there at -3.4 m/s^2, ~10 s later | MRM emergency stop 2.6 s after: gate -2.5 m/s^2, 3.4 m/s to rest by 5.5 s |
+| `vehicle_cmd_gate` stopped 15 s, ego starting | last command (+0.49 m/s^2) held by CARLA: 0 -> 3.55 m/s with no command at all | watchdog tripped 1.0 s after the last command; ego held at rest; Autoware back on SIGCONT (16.1 s gap logged) |
+| `vehicle_cmd_gate` stopped 15 s at 4.1 m/s | (held throttle, as above) | watchdog trip at 1.0 s; 4.1 m/s to rest in ~2 s; back on SIGCONT (16.2 s logged) |
+
+The `i3 ov_2` runaway itself -- the PID accelerating toward a far stale trajectory -- depends
+on what the previous episode left behind and did not recur in three tries with other
+previous trajectories (the controller held the ego at rest each time); the fix does not
+depend on it, since the stop now comes from the trajectory going stale, not from where it
+points.
 
 Scratch: `/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-
 80a742b40cbd/scratchpad/s_bsfix` (`au/` the fork checkout, `ws_048/` and `main_check/` the
-test builds, `test_*_{before,after}.log`, `runs/i<N>/{cp,ov}_*`, `starters/`, `drafts.md`).
+test builds, `test_*_{before,after}.log`, `runs/i<N>/{cp,ov}_*`, `starters/`, `drafts.md`);
+`.../s_runaway` for the follow-up (`rec.py` the recorder, `repro.sh` the process stops,
+`runs/b*` before the fix, `runs/a*` after, `starters/`).
