@@ -43,10 +43,12 @@ just test     # Run tests
 │   │   ├── backend/            # The simulator seam (035)
 │   │   │   ├── mod.rs          # SimBackend trait and its types
 │   │   │   ├── fake.rs         # In-memory backend for coordinator tests
-│   │   │   └── carla/          # CarlaBackend: the only code that uses carla-rust
-│   │   │       ├── backend.rs  # SSv2 handlers → CARLA API calls
-│   │   │       ├── collision_monitor.rs, gap_trace.rs, traffic_light_mapper.rs,
-│   │   │       └── resolved_signals.rs, version.rs, weather.rs
+│   │   │   ├── carla/          # CarlaBackend: the only code that uses carla-rust
+│   │   │   │   ├── backend.rs  # SSv2 handlers → CARLA API calls
+│   │   │   │   ├── collision_monitor.rs, traffic_light_mapper.rs,
+│   │   │   │   └── resolved_signals.rs, version.rs, weather.rs
+│   │   │   └── isaac/          # IsaacBackend: csb_world.proto to the world server (037)
+│   │   ├── gap_trace.rs        # Both worlds per frame, for the gap oracle (024)
 │   │   ├── entity_manager.rs   # SSv2 name ↔ CARLA actor ID mapping
 │   │   ├── coordinate_conversion.rs  # ROS ↔ CARLA frame conversion
 │   │   ├── weather.rs          # Weather presets, kept across map loads (018)
@@ -57,7 +59,8 @@ just test     # Run tests
 │   ├── Cargo.toml
 │   └── package.xml
 ├── src/csb_interfaces/     # rosidl: Weather.msg, SetWeather.srv, GetWeather.srv
-├── proto/                  # SSv2 protobuf definitions (8 .proto files)
+├── src/csb_isaac/          # Isaac Sim world server (Python, Isaac's venv; `just isaac-world`)
+├── proto/                  # SSv2 protobuf definitions, and csb_world.proto (Isaac, 037)
 ├── src/csb_examples/       # Starter scenarios (basic/, multi_av/, awf/), installed
 ├── scenarios/              # Benchmark scenarios (bench/), goal-pose files
 ├── docs/

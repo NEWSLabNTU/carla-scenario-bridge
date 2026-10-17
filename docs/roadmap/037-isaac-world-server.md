@@ -45,18 +45,76 @@ step model).
   `ros2 run csb_isaac world_server` (wrapping `python.sh`) starts the server, headless by
   default, `display:=:N` for VNC.
 
+## As built (2026-10-17)
+
+What changed from the design above, and why:
+
+1. **One round trip per frame, poses in the `Step`.** `UpdateEntityStatus` keeps the poses
+   SSv2 sends and answers from the states of the last step; `UpdateFrame` sends them in one
+   `Step`, which replies with every state and the contacts. The protocol has no separate
+   pose request.
+2. **Messages from a descriptor set, not generated Python.** The host's protoc (3.12) writes
+   `_pb2` files Isaac's protobuf runtime (7.x) refuses; `csb_isaac/protocol.py` builds the
+   classes from `csb_world.desc`, which every runtime reads
+   (`scripts/gen_world_proto.sh`; a test checks it is current).
+3. **The map origin stays in csb.** csb subtracts it, so `LoadWorld` carries the USD and the
+   ground prims only; `<map dir>/isaac/world.yaml` (`usd`, `ground_paths`, `map_origin`)
+   chooses the world, and without it a map gets a flat ground plane with map frame = world
+   frame.
+4. **Test world: Town01's own Lanelet2 map over the flat plane**, not a generated
+   straight-and-loop map. Town01's roads lie at z = 0, so the existing scenarios run
+   unchanged (the 20-NPC benchmark as is); a generator earns its keep with real terrain,
+   which is 040's.
+5. **Bodies are boxes** at the declared box (colour by kind); USD assets by subtype wait for
+   the sensors that would see them (038).
+6. **Contacts are the ego's, per frame and other body**, ground excluded (the plane or the
+   world's `ground_paths`); the scene reports kinematic pairs, every body being kinematic.
+   They feed the shared contact report (021) and gap trace (024): `gap_trace.rs` is back in
+   `src/`, `RawCollision` in `contact_report.rs`, CARLA's trace unchanged.
+7. **Rendering is off by default** (`isaac.render`): nothing needs a picture before the
+   sensors, and a render cost 3-5 ms of each frame (p95 6-7 ms with it, 1.9 ms without, 20
+   bodies). On to watch on VNC; 038 turns it on with its sensors.
+8. **Unmanaged ego.** `scenario.launch.xml` gains `managed_ego` (default true) so an ego with
+   no Autoware can stand, or follow an SSv2 trajectory (`overwrite_ego_status`); such a
+   scenario runs with `run_suite --no-preflight -- managed_ego:=false`.
+9. **Launch** is `just isaac-world [port] [display]`, not `ros2 run csb_isaac world_server`:
+   the server runs under Isaac's venv Python, not the ROS workspace's.
+10. **Unsupported** (failed replies, 006): `simulator_autopilot` and `agent` vehicles, commanded
+    traffic lights (an empty `UpdateTrafficLights` is fine: SSv2 sends one every frame),
+    weather, SSv2's sensors, `UpdateEntityGoal`.
+
 ## Steps
 
-- [ ] `csb_world.proto` and both ends (prost in csb, protobuf in Python).
-- [ ] World server: load, spawn, despawn, step, reset; unit tests on the protocol layer.
-- [ ] `IsaacBackend` implementing `SimBackend`; coordinator unit tests on the fake backend
-      still pass; `backend:=isaac` accepted at startup (035 refuses it).
-- [ ] Gap trace and contact reports out of `backend/carla/` into shared modules (035 left
-      them there), the CARLA trace unchanged in content.
-- [ ] Test world + Lanelet2 map generator; starter scenarios that need no traffic lights
-      adapted to it (`csb_examples/isaac/`).
-- [ ] Gap trace on Isaac: SSv2 vs Isaac pose per frame within 1 mm for puppeteered NPCs.
-- [ ] Frame budget: csb + server round trip with 20 NPCs, p95.
+- [x] `csb_world.proto` and both ends (prost in csb, a descriptor set in Python).
+- [x] World server: load, spawn, despawn, step, reset (a load empties the world);
+      `test/test_server.py` on a fake world (7 tests, in `just test`).
+- [x] `IsaacBackend` implementing `SimBackend` (`backend/isaac/`, 9 tests against an
+      in-process server: frames, read-back, contacts, honest failures, a hung server, the
+      world file); coordinator tests on the fake still pass; `backend:=isaac` accepted.
+- [x] Gap trace and contact reports out of `backend/carla/` into shared modules, the CARLA
+      trace unchanged in content (the 20-NPC benchmark on CARLA, record for record against
+      035's baseline).
+- [x] Test world: Town01's Lanelet2 map on the flat plane (as built, 4);
+      `csb_examples/scenarios/isaac/town01_rear_contact.xosc`.
+- [x] Gap trace on Isaac: SSv2 vs Isaac pose per frame within 1 mm for puppeteered NPCs.
+- [x] Frame budget: csb + server round trip with 20 NPCs, p95.
+
+## Results (2026-10-17)
+
+Isaac Sim 6.1.0 (Kit 110.3.0), headless, RTX 5090, driver 580; world server up in 6.7 s.
+
+- **20-NPC benchmark** (`scenarios/bench/town01_npc_20.xosc`, unchanged): PASS, 1201 frames.
+  Gap: SSv2 vs Isaac **0.04 mm** at most over 24,020 NPC poses, yaw within 3e-7 rad
+  (float32 in PhysX); `gap_oracle`: 0 findings.
+- **Round trip** (csb's `tick`, a `Step` with 20 poses, 3 physics steps of 1/60 s): p50 3.02,
+  **p95 3.73 ms**, max 7.78 ms; csb's own processing p95 0.08 ms. With rendering on it was
+  p95 9.3 ms in csb (6-7 ms from a bare client), hence 7.
+- **`isaac/town01_rear_contact.xosc` three times in a row, unattended: PASS each, 16 s;
+  the same contact each time** -- ego and `npc_rear` from frame 83, 21 contact frames;
+  `gap_oracle` 0 findings each (SSv2 and Isaac agree on the contact); a fourth run with
+  `--physical-verdict` PASS (the declared contact).
+- CARLA after the lift: the 20-NPC benchmark PASS, its trace identical to 035's baseline.
+- `just test`: 350 Rust tests, 174 + 7 Python.
 
 ## Acceptance
 

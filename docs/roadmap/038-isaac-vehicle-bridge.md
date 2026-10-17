@@ -41,7 +41,8 @@ the ego's domain, and the unchanged agent (`acb_pilot`) registered with the rela
 - [ ] Vehicle USD from the Autoware vehicle parameters; step response and steering sweep
       against CARLA's vehicle on flat ground.
 - [ ] Control and status interface; acb's tracking measurement script run against Isaac.
-- [ ] Sensor set and `/clock`; Autoware's sensing and localization come up on the test
+- [ ] Sensor set and `/clock` (with `isaac.render` on: 037 turns rendering off by default,
+      which the sensors need back); Autoware's sensing and localization come up on the test
       world's PCD (generated with the test world in 037).
 - [ ] One ego through a starter scenario: route, engage, drive, arrive; SSv2 verdict.
 - [ ] Document the Isaac ego launch alongside `just ego-av`.
