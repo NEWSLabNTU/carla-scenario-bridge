@@ -203,7 +203,7 @@ the next two PASS (48 s, 42 s); acb dropped the reaped `hero` and bound the new 
 (`Found vehicle: ID=9443`). A first T1 run (ego_drive hung, then engage_state; the 45 s
 build) gave the same timeline and PASS, but play_launch truncated the node's `out` on
 respawn, so its dead-process log was lost; the later runs tailed it. **Fixed in play_launch
-`90c253bc`** (main, after 0.18.2; play_launch issue #0075): a respawn keeps the previous
+`90c253bc`, released in 0.18.3** (2026-10-17; play_launch issue #0075; installed here, starter `ego_drive` PASS on it): a respawn keeps the previous
 process's `out`/`err`/`pid`/`status` as `out.N`/`err.N`/`pid.N`/`status.N` (start order),
 the plain names stay the live process's. Verified 2026-10-16 with that build on the
 simulation side and this hook (pedestrian hung at frame 40): `node/carla_scenario_bridge/`
