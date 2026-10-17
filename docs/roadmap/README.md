@@ -59,6 +59,7 @@ borrowed from greybox fuzzing.
 - [032: NPC Tracking Fixes](032-npc-tracking-fixes.md) — the five tracking gaps 024's baseline found: no snap into the static world (kinematic fall-back, upright on the ground), curvature feed-forward in corners, standing walkers still, spawn at speed, NPC contact sensors; before 025
 - [033: Demo Tour](033-demo-tour.md) — one continuous 5-8 min Town01 drive through six incidents (hard brake ahead, pedestrian dart-out, red light, blocked lane, crossing traffic at a turn, cyclist on the inside), captioned, never stalling; ramp merge and a multi-lane tour later
 - [034: Bridge Failure Paths](034-bridge-failure-paths.md) — a hung tick (a lost wakeup in CARLA 0.9.16's Traffic Manager) ends in an error, a drain and a restart inside SSv2's timeouts; no TM unless a scenario needs one; a timed-out spawn's late actor adopted, actors looked up by id; then upstream's TM fix backported into carla-rust's prebuilt LibCarla
+- [042: Autoware Fixes Carried as an Overlay](042-autoware-overlay.md) — upstream fixes Autoware 1.5.0 lacks, built one package at a time from the NEWSLabNTU fork at a pinned commit (`just build-autoware-overlay`) and sourced by `just ego-av` by default; first: `blind_spot`'s right-turn ego passage interval (autoware_universe#13509, from 033)
 
 ## Simulator backends and Isaac Sim (035-041)
 

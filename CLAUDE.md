@@ -106,6 +106,19 @@ ls -l install/acb_bridge/lib/acb_bridge/acb_bridge \
 tr '\0' '\n' < /proc/$(pgrep -f 'acb_bridge/acb_bridge' | head -1)/cmdline | head -1
 ```
 
+### Autoware fixes ride in an overlay
+
+Autoware 1.5.0 is a binary install we do not rebuild. Fixes it lacks are carried per package
+(roadmap 042): `just build-autoware-overlay` fetches the NEWSLabNTU `autoware_universe` fork
+at the commit pinned in `scripts/autoware_overlay.bash` (sparse: only the listed package
+dirs), builds them against `/opt/autoware/1.5.0` into `third_party/autoware_overlay/`
+(git-ignored), and `just ego-av` / `bg-av` / the scenario precheck source it right after
+Autoware. On by default when built; `AUTOWARE_OVERLAY=0` runs stock. Today it holds one
+package, `blind_spot`, with the right-turn ego passage fix (autoware_universe#13509, branch
+`csb/blind-spot-right-turn-0.48.0` = tag 0.48.0 + the fix). To carry another fix: commit on
+a `csb/*` branch of the fork from the release tag, push, move the pin, add the dir, rebuild.
+Check what a stack loaded: `grep blind_spot /proc/<behavior_velocity_planner pid>/maps`.
+
 ### The CARLA version is a Cargo feature
 
 carla-rust exposes a **different API per CARLA version**. Under 0.9.x a wheel's position is

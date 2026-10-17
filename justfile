@@ -21,6 +21,9 @@ acb_src := justfile_directory() + '/src/autoware_carla_bridge'
 # /opt/autoware/1.5.0; other hosts install the same packages straight into the ROS
 # prefix (/opt/ros/humble). Override with AUTOWARE_SETUP when yours is elsewhere.
 autoware_setup := env_var_or_default('AUTOWARE_SETUP', '/opt/autoware/1.5.0/setup.bash')
+# Autoware packages carried with fixes 1.5.0 lacks (roadmap 042), built by
+# `just build-autoware-overlay` from the commit pinned in scripts/autoware_overlay.bash.
+autoware_overlay_dir := justfile_directory() + '/third_party/autoware_overlay'
 
 # List available recipes
 default:
@@ -128,6 +131,20 @@ build: _check-setuptools
             git -C src/autoware_carla_bridge checkout -- Cargo.lock
         fi
     fi
+
+# Fetch the Autoware fixes 1.5.0 lacks (the fork commit pinned in
+# scripts/autoware_overlay.bash, only the packages listed there) and build them into
+# third_party/autoware_overlay against Autoware alone (roadmap 042). `just ego-av`, `just
+# bg-av` and the scenario precheck source the result after Autoware (AUTOWARE_OVERLAY=0: off).
+# Stop the ego stack first if it runs: it has the old libraries loaded.
+#
+# Build the Autoware fix overlay (blind_spot, autoware_universe#13509)
+build-autoware-overlay:
+    #!/usr/bin/env bash
+    set -e
+    PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/\.venv/bin$' | paste -sd:)
+    source "{{project}}/scripts/autoware_overlay.bash"
+    csb_autoware_overlay_build "{{autoware_overlay_dir}}" "{{autoware_setup}}"
 
 # Remove build artifacts
 clean:
@@ -462,6 +479,8 @@ _require-ego-stack:
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
+    source "{{project}}/scripts/autoware_overlay.bash"
+    csb_autoware_overlay_source "{{autoware_overlay_dir}}"
     if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
@@ -498,10 +517,14 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     set -e
     # Three overlaid workspaces: base Autoware, then acb (acb_launch, sensor kit,
     # vehicle description, acb_bridge), then this one (csb_launch). The ego stack
-    # resolves packages from all three. EGO_OVERLAY, when set, is a fourth sourced
-    # between Autoware and acb, so its packages shadow Autoware's but not acb's: e.g. a
-    # tier4_system_launch with the stock MRM nodes removed (a safety island's).
+    # resolves packages from all three. Right after Autoware comes the Autoware fix
+    # overlay (`just build-autoware-overlay`, roadmap 042; AUTOWARE_OVERLAY=0 skips it).
+    # EGO_OVERLAY, when set, is sourced next, between Autoware and acb, so its packages
+    # shadow Autoware's but not acb's: e.g. a tier4_system_launch with the stock MRM
+    # nodes removed (a safety island's).
     source "{{autoware_setup}}"
+    source "{{project}}/scripts/autoware_overlay.bash"
+    csb_autoware_overlay_source "{{autoware_overlay_dir}}"
     if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
@@ -613,6 +636,9 @@ bg-av entity="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-a
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
+    # The same Autoware fix overlay as the ego's (roadmap 042)
+    source "{{project}}/scripts/autoware_overlay.bash"
+    csb_autoware_overlay_source "{{autoware_overlay_dir}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain

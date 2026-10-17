@@ -28,6 +28,7 @@ recipes. The ones you will use most:
 | `just carla-start` / `carla-status` / `carla-stop` / `carla-health` | CARLA as a background service, and whether it is fit to run a scenario |
 | `just run` | the simulation side (bridge + agent relay), play_launch, web UI on 8084 |
 | `just ego-av` | the vehicle side for the ego, web UI on 8082 (`LAUNCH_RVIZ=true` for RViz) |
+| `just build-autoware-overlay` | Autoware fixes 1.5.0 lacks, built from a pinned fork commit into `third_party/autoware_overlay/`; `ego-av` / `bg-av` source it by default (`AUTOWARE_OVERLAY=0`: off; roadmap 042) |
 | `just scenario <file>` | one scenario (web UI on 8081); verdict in `$OUTPUT_DIR/scenario_test_runner/` |
 | `just two-av` | two Autoware stacks, one scenario; `RECORD=1` records a screencast |
 | `just acceptance <file> <runs>` | repeat a scenario and summarise |
@@ -47,6 +48,9 @@ under `play_log/`, a web UI per stack); everything they start is also startable 
   sources this workspace last, so the `acb_bridge` a stack executes is
   `install/acb_bridge/...` in *this* repo. After an acb change, rebuild acb's workspace and
   then this one; after `git pull` moves a submodule, rebuild both.
+- **Build the Autoware overlay once** (`just build-autoware-overlay`, again when its pin in
+  `scripts/autoware_overlay.bash` moves). Without it `just ego-av` warns and runs stock
+  Autoware, whose `blind_spot` never yields on a right turn (autoware_universe#13509).
 - **Restart the simulation side after a build.** It is long-lived and keeps running the old
   binary.
 - **The CARLA version is a Cargo feature** (`carla-0916` in both workspaces' `Cargo.toml`);

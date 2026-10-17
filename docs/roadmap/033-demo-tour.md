@@ -500,7 +500,8 @@ clustering) **and** a fixed `blind_spot`. Incident 6 stays out of the tour and o
 judged set, generated to `scenarios/demo/town01_i6_cyclist_inside.xosc` as the reproducer
 of both; the upstream report (Autoware universe, `blind_spot`: right-turn ego passage
 interval uses the lines in left-turn-mirrored order) is a separate step, not filed from
-here. Found on the way, not fixed: acb's ground-truth object path labels every `vehicle.*`
+here (filed since as autoware_universe#13509; the fix is carried by [042](042-autoware-overlay.md),
+on by default, 3/3 PASS on centerpoint). Found on the way, not fixed: acb's ground-truth object path labels every `vehicle.*`
 CAR, bicycles and motorbikes included (`ground_truth_objects.rs`; CARLA's `base_type`
 attribute would give BICYCLE / MOTORCYCLE / TRUCK / BUS) -- irrelevant to the demo stack,
 which runs real perception, but the same filter would drop a ground-truth cyclist.

@@ -38,3 +38,6 @@ src/generated/
 tmp/
 play_log/
 record.json
+
+# Autoware fix overlay (roadmap 042): fetched and built by `just build-autoware-overlay`
+third_party/autoware_overlay/

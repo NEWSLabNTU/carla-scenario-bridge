@@ -394,6 +394,14 @@ The lidar detector defaults to `clustering` because it is the one that passes on
 `awf/` standing-pedestrian use case went 9/9 with it and 2/9 with `centerpoint`
 (2026-10-10, same host and build). `lidar_detection_model:=centerpoint` selects the other.
 
+Autoware 1.5.0's `blind_spot` module never stops for a cyclist on the inside of a **right**
+turn (autoware_universe#13509: its ego passage interval comes out reversed). The fix is one
+package, built from source over your Autoware: the developer workflow does it with `just
+build-autoware-overlay` (roadmap 042); by hand, build
+`autoware_behavior_velocity_blind_spot_module` from branch `csb/blind-spot-right-turn-0.48.0`
+of github.com/NEWSLabNTU/autoware_universe in a workspace of its own and source that
+workspace's `install/local_setup.bash` right after Autoware's setup.
+
 ### Timeouts
 
 A broken setup should fail in a minute or two, naming the cause, and a healthy run should
