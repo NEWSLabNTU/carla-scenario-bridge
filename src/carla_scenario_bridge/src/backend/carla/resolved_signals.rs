@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 use eyre::{Result, WrapErr};
 use serde::Serialize;
 
+use super::traffic_light_mapper::{CarlaSignal, SignalMap};
 use crate::lanelet_map::TrafficLightElement;
-use crate::traffic_light_mapper::{CarlaSignal, SignalMap};
 
 /// Where the table lives, relative to the map directory.
 pub const TABLE_SUBPATH: &str = "carla/traffic_lights.yaml";

@@ -1,12 +1,12 @@
 //! CARLA weather as the bridge configures it: presets by name, and the values the
-//! `/carla/set_weather` and `/carla/get_weather` services carry (roadmap 018).
+//! `/carla/set_weather` and `/carla/get_weather` services carry (roadmap 018). Plain data:
+//! the conversion to and from carla-rust's `WeatherParameters` is the CARLA backend's
+//! (`backend::carla::weather`), which also checks the presets below against carla-rust's.
 //!
 //! Weather is world state, not scenario state: SSv2 does not command it (its
 //! `EnvironmentAction` is parse-only), and every `load_world` resets it to the new town's
 //! default. So the bridge holds the weather the user asked for -- the `weather` parameter,
 //! then the last `set_weather` -- and applies it again after every map load and reconnect.
-
-use carla::rpc::{weather as presets, WeatherParameters};
 
 /// Every field of CARLA 0.9.16's `WeatherParameters`, as plain data.
 ///
@@ -30,47 +30,7 @@ pub struct Weather {
     pub dust_storm: f32,
 }
 
-impl From<&WeatherParameters> for Weather {
-    fn from(w: &WeatherParameters) -> Self {
-        Self {
-            cloudiness: w.cloudiness,
-            precipitation: w.precipitation,
-            precipitation_deposits: w.precipitation_deposits,
-            wind_intensity: w.wind_intensity,
-            fog_density: w.fog_density,
-            fog_distance: w.fog_distance,
-            wetness: w.wetness,
-            sun_azimuth_angle: w.sun_azimuth_angle,
-            sun_altitude_angle: w.sun_altitude_angle,
-            fog_falloff: w.fog_falloff,
-            scattering_intensity: w.scattering_intensity,
-            mie_scattering_scale: w.mie_scattering_scale,
-            rayleigh_scattering_scale: w.rayleigh_scattering_scale,
-            dust_storm: w.dust_storm,
-        }
-    }
-}
-
 impl Weather {
-    pub fn to_carla(self) -> WeatherParameters {
-        WeatherParameters {
-            cloudiness: self.cloudiness,
-            precipitation: self.precipitation,
-            precipitation_deposits: self.precipitation_deposits,
-            wind_intensity: self.wind_intensity,
-            sun_azimuth_angle: self.sun_azimuth_angle,
-            sun_altitude_angle: self.sun_altitude_angle,
-            fog_density: self.fog_density,
-            fog_distance: self.fog_distance,
-            fog_falloff: self.fog_falloff,
-            wetness: self.wetness,
-            scattering_intensity: self.scattering_intensity,
-            mie_scattering_scale: self.mie_scattering_scale,
-            rayleigh_scattering_scale: self.rayleigh_scattering_scale,
-            dust_storm: self.dust_storm,
-        }
-    }
-
     /// The nine user-settable fields, in `csb_interfaces/msg/Weather` order.
     pub fn user_fields(&self) -> [f32; 9] {
         [
@@ -128,35 +88,75 @@ impl Weather {
     }
 }
 
+/// One preset's values in carla-rust's field order (`rpc::weather::wp`), so the rows below
+/// read like its table.
+#[allow(clippy::too_many_arguments)]
+const fn w(
+    cloudiness: f32,
+    precipitation: f32,
+    precipitation_deposits: f32,
+    wind_intensity: f32,
+    sun_azimuth_angle: f32,
+    sun_altitude_angle: f32,
+    fog_density: f32,
+    fog_distance: f32,
+    fog_falloff: f32,
+    wetness: f32,
+    scattering_intensity: f32,
+    mie_scattering_scale: f32,
+    rayleigh_scattering_scale: f32,
+    dust_storm: f32,
+) -> Weather {
+    Weather {
+        cloudiness,
+        precipitation,
+        precipitation_deposits,
+        wind_intensity,
+        fog_density,
+        fog_distance,
+        wetness,
+        sun_azimuth_angle,
+        sun_altitude_angle,
+        fog_falloff,
+        scattering_intensity,
+        mie_scattering_scale,
+        rayleigh_scattering_scale,
+        dust_storm,
+    }
+}
+
 /// CARLA's weather presets, under their Python API names (`carla.WeatherParameters.<Name>`).
 ///
 /// Values from carla-rust's `rpc::weather`, which reproduces the static presets of CARLA's
-/// C++ `WeatherParameters` (LibCarla/source/carla/rpc/WeatherParameters.cpp). The names keep
-/// CARLA's own inconsistencies (`MidRainyNoon` but `MidRainSunset`). `Default` is left out:
-/// its all-`-1` values mean "the map's own", which is what an empty `weather` already does.
-const PRESETS: &[(&str, WeatherParameters)] = &[
-    ("ClearNoon", presets::CLEAR_NOON),
-    ("CloudyNoon", presets::CLOUDY_NOON),
-    ("WetNoon", presets::WET_NOON),
-    ("WetCloudyNoon", presets::WET_CLOUDY_NOON),
-    ("SoftRainNoon", presets::SOFT_RAIN_NOON),
-    ("MidRainyNoon", presets::MID_RAIN_NOON),
-    ("HardRainNoon", presets::HARD_RAIN_NOON),
-    ("ClearSunset", presets::CLEAR_SUNSET),
-    ("CloudySunset", presets::CLOUDY_SUNSET),
-    ("WetSunset", presets::WET_SUNSET),
-    ("WetCloudySunset", presets::WET_CLOUDY_SUNSET),
-    ("SoftRainSunset", presets::SOFT_RAIN_SUNSET),
-    ("MidRainSunset", presets::MID_RAIN_SUNSET),
-    ("HardRainSunset", presets::HARD_RAIN_SUNSET),
-    ("ClearNight", presets::CLEAR_NIGHT),
-    ("CloudyNight", presets::CLOUDY_NIGHT),
-    ("WetNight", presets::WET_NIGHT),
-    ("WetCloudyNight", presets::WET_CLOUDY_NIGHT),
-    ("SoftRainNight", presets::SOFT_RAIN_NIGHT),
-    ("MidRainyNight", presets::MID_RAIN_NIGHT),
-    ("HardRainNight", presets::HARD_RAIN_NIGHT),
-    ("DustStorm", presets::DUST_STORM),
+/// C++ `WeatherParameters` (LibCarla/source/carla/rpc/WeatherParameters.cpp); the CARLA
+/// backend's tests compare every row with carla-rust's. The names keep CARLA's own
+/// inconsistencies (`MidRainyNoon` but `MidRainSunset`). `Default` is left out: its all-`-1`
+/// values mean "the map's own", which is what an empty `weather` already does.
+#[rustfmt::skip]
+pub(crate) const PRESETS: &[(&str, Weather)] = &[
+    //                                cloud  precip dep   wind   azim  alt    fogD   fogDist fogF wet    scatI mieS  raylS   dust
+    ("ClearNoon",        w(  5.0,   0.0,  0.0,  10.0, -1.0,  45.0,   2.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("CloudyNoon",       w( 60.0,   0.0,  0.0,  10.0, -1.0,  45.0,   3.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("WetNoon",          w(  5.0,   0.0, 50.0,  10.0, -1.0,  45.0,   3.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("WetCloudyNoon",    w( 60.0,   0.0, 50.0,  10.0, -1.0,  45.0,   3.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("SoftRainNoon",     w( 20.0,  30.0, 50.0,  30.0, -1.0,  45.0,   3.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("MidRainyNoon",     w( 60.0,  60.0, 60.0,  60.0, -1.0,  45.0,   3.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("HardRainNoon",     w(100.0, 100.0, 90.0, 100.0, -1.0,  45.0,   7.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("ClearSunset",      w(  5.0,   0.0,  0.0,  10.0, -1.0,  15.0,   2.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("CloudySunset",     w( 60.0,   0.0,  0.0,  10.0, -1.0,  15.0,   3.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("WetSunset",        w(  5.0,   0.0, 50.0,  10.0, -1.0,  15.0,   2.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("WetCloudySunset",  w( 60.0,   0.0, 50.0,  10.0, -1.0,  15.0,   2.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("SoftRainSunset",   w( 20.0,  30.0, 50.0,  30.0, -1.0,  15.0,   2.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("MidRainSunset",    w( 60.0,  60.0, 60.0,  60.0, -1.0,  15.0,   3.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("HardRainSunset",   w(100.0, 100.0, 90.0, 100.0, -1.0,  15.0,   7.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("ClearNight",       w(  5.0,   0.0,  0.0,  10.0, -1.0, -90.0,  60.0, 75.0,  1.0,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("CloudyNight",      w( 60.0,   0.0,  0.0,  10.0, -1.0, -90.0,  60.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("WetNight",         w(  5.0,   0.0, 50.0,  10.0, -1.0, -90.0,  60.0, 75.0,  1.0,  60.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("WetCloudyNight",   w( 60.0,   0.0, 50.0,  10.0, -1.0, -90.0,  60.0,  0.75, 0.1,  60.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("SoftRainNight",    w( 60.0,  30.0, 50.0,  30.0, -1.0, -90.0,  60.0,  0.75, 0.1,  60.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("MidRainyNight",    w( 80.0,  60.0, 60.0,  60.0, -1.0, -90.0,  60.0,  0.75, 0.1,  80.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("HardRainNight",    w(100.0, 100.0, 90.0, 100.0, -1.0, -90.0, 100.0,  0.75, 0.1, 100.0, 1.0, 0.03, 0.0331,   0.0)),
+    ("DustStorm",        w(100.0,   0.0,  0.0, 100.0, -1.0,  45.0,   2.0,  0.75, 0.1,   0.0, 1.0, 0.03, 0.0331, 100.0)),
 ];
 
 /// Every preset name, in CARLA's order.
@@ -171,7 +171,7 @@ pub fn preset(name: &str) -> Option<(&'static str, Weather)> {
     PRESETS
         .iter()
         .find(|(n, _)| normalise(n) == key)
-        .map(|(n, w)| (*n, Weather::from(w)))
+        .map(|(n, w)| (*n, *w))
 }
 
 /// [`preset`], or an error listing the valid names.
@@ -188,7 +188,7 @@ pub fn preset_or_err(name: &str) -> Result<(&'static str, Weather), String> {
 pub fn matching_preset(w: &Weather) -> Option<&'static str> {
     PRESETS
         .iter()
-        .find(|(_, p)| Weather::from(p).approx_eq(w))
+        .find(|(_, p)| p.approx_eq(w))
         .map(|(n, _)| *n)
 }
 
@@ -261,12 +261,6 @@ mod tests {
         assert_eq!(matching_preset(&w), Some("CloudySunset"));
         w.cloudiness += 1.0;
         assert_eq!(matching_preset(&w), None);
-    }
-
-    #[test]
-    fn carla_round_trip_keeps_every_field() {
-        let (_, w) = preset("WetCloudyNight").unwrap();
-        assert_eq!(Weather::from(&w.to_carla()), w);
     }
 
     #[test]

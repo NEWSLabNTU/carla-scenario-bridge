@@ -151,6 +151,8 @@ impl Default for TrafficManagerConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct BridgeConfig {
+    /// The simulator csb drives (roadmap 035): `carla` (the default) or `isaac`.
+    pub backend: Backend,
     pub carla: CarlaConfig,
     pub ssv2: Ssv2Config,
     pub ego: EgoConfig,
@@ -199,6 +201,33 @@ pub struct BridgeConfig {
     /// Where each episode's gap trace is written for the oracle (roadmap 024); empty = no
     /// trace (the default). Read it through [`BridgeConfig::gap_trace_dir`].
     pub gap_trace_dir: String,
+}
+
+/// The simulator csb drives (roadmap 035, `docs/design/simulator-backends.md`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    #[default]
+    Carla,
+    /// Isaac Sim through csb's world server (roadmap 037); not built yet.
+    Isaac,
+}
+
+impl Backend {
+    pub fn parse(name: &str) -> Result<Self> {
+        match name.trim() {
+            "carla" => Ok(Self::Carla),
+            "isaac" => Ok(Self::Isaac),
+            other => bail!("backend {other:?}: expected `carla` or `isaac`"),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Carla => "carla",
+            Self::Isaac => "isaac",
+        }
+    }
 }
 
 /// How SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023).
@@ -298,12 +327,15 @@ impl BridgeConfig {
         Ok(config)
     }
 
-    /// Apply ROS parameters (`carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
+    /// Apply ROS parameters (`backend`, `carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
     /// `reconnect_wait_seconds`, `weather`, `npc_motion`, `gap_trace_dir`, `contact_report_dir`,
     /// `npc_contact_sensors`) over the file and the environment: a launch file's explicit
     /// value is the most specific statement of intent. A malformed number is an error, not
     /// a silent default.
     pub fn apply_ros_params(&mut self, params: &crate::ros_args::RosParams) -> Result<()> {
+        if let Some(backend) = params.get("backend").filter(|v| !v.trim().is_empty()) {
+            self.backend = Backend::parse(backend).wrap_err("parameter backend")?;
+        }
         if let Some(host) = params.get("carla_host").filter(|h| !h.is_empty()) {
             self.carla.host = host.to_string();
         }
@@ -632,6 +664,29 @@ mod tests {
         // An empty parameter keeps the file's.
         config.apply_ros_params(&params("")).expect("applies");
         assert!(!config.npc_contact_sensors_enabled());
+    }
+
+    #[test]
+    fn the_backend_defaults_to_carla_and_an_unknown_one_is_refused() {
+        let params = |v: &str| {
+            crate::ros_args::RosParams::from_args([
+                "--ros-args".to_string(),
+                "-p".to_string(),
+                format!("backend:={v}"),
+            ])
+            .expect("parses")
+        };
+        let mut config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        assert_eq!(config.backend, Backend::Carla);
+        config.apply_ros_params(&params("")).expect("applies");
+        assert_eq!(config.backend, Backend::Carla);
+        config.apply_ros_params(&params("isaac")).expect("applies");
+        assert_eq!(config.backend, Backend::Isaac);
+        let err = config.apply_ros_params(&params("gazebo")).unwrap_err();
+        assert!(format!("{err:#}").contains("\"gazebo\""), "{err:#}");
+        let config: BridgeConfig = serde_yaml::from_str("backend: isaac\n").expect("parses");
+        assert_eq!(config.backend, Backend::Isaac);
+        assert!(serde_yaml::from_str::<BridgeConfig>("backend: gazebo\n").is_err());
     }
 
     #[test]

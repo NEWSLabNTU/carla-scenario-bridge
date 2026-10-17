@@ -70,7 +70,7 @@ pub const INITIALIZE_BUDGET: Duration = Duration::from_secs(280);
 pub const SPAWN_REQUEST_BUDGET: Duration = Duration::from_secs(75);
 
 /// Between scenarios, how long without a request before the bridge checks its CARLA
-/// connection ([`crate::coordinator::Coordinator::probe_connection_idle`]), and how often.
+/// connection ([`crate::backend::SimBackend::probe_connection_idle`]), and how often.
 /// Frames come every 50 ms during a scenario, so 5 s of quiet means none is running.
 pub const IDLE_PROBE_AFTER: Duration = Duration::from_secs(5);
 pub const IDLE_PROBE_EVERY: Duration = Duration::from_secs(2);

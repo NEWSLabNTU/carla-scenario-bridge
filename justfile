@@ -379,6 +379,7 @@ run:
         csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
         ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"} \
+        ${CSB_BACKEND:+backend:="$CSB_BACKEND"} \
         ${WEATHER:+weather:="$WEATHER"} \
         ${GAP_TRACE_DIR:+gap_trace_dir:="$GAP_TRACE_DIR"} \
         ${NPC_CONTACT_SENSORS:+npc_contact_sensors:="$NPC_CONTACT_SENSORS"}

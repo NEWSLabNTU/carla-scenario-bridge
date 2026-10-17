@@ -5,7 +5,7 @@
   run any number of scenarios (scenario.launch.xml) and start vehicle sides in any domain.
 
     play_launch launch FLAGS \
-        csb_launch simulation.launch.xml [config_file:=...] [carla_host:=...] \
+        csb_launch simulation.launch.xml [backend:=carla] [config_file:=...] [carla_host:=...] \
         [weather:=ClearNoon] [gap_trace_dir:=DIR] [npc_contact_sensors:=false]
 
     FLAGS are the play_launch option web-addr 127.0.0.1:8084
@@ -15,6 +15,8 @@
   The bridge serves /carla/set_weather and /carla/get_weather (csb_interfaces/srv) here.
 -->
 <launch>
+  <arg name="backend" default=""
+       description="carla | isaac: the simulator csb drives (roadmap 035); empty keeps the config file's (default carla)"/>
   <arg name="config_file" default="$(find-pkg-share carla_scenario_bridge)/config/bridge_config.yaml"/>
   <arg name="carla_host" default=""/>
   <arg name="carla_port" default=""/>
@@ -33,6 +35,7 @@
        description="where each ego run's CARLA contacts are written for physical_verdict (roadmap 021); 'off' disables; empty keeps the config file's (default ~/.ros/csb/contacts)"/>
 
   <include file="$(find-pkg-share carla_scenario_bridge)/launch/bridge.launch.xml">
+    <arg name="backend" value="$(var backend)"/>
     <arg name="config_file" value="$(var config_file)"/>
     <arg name="carla_host" value="$(var carla_host)"/>
     <arg name="carla_port" value="$(var carla_port)"/>

@@ -7,6 +7,10 @@
 # A missing file is fine -- everything has a default. A malformed one is fatal, so that a
 # typo cannot silently run the scenario with settings you believe you changed.
 
+# The simulator csb drives (roadmap 035): carla, or isaac once roadmap 037 builds it. The
+# ROS parameter / launch arg `backend` overrides it; an unknown name fails at startup.
+backend: carla
+
 # CARLA connection. Overridden by CARLA_HOST / CARLA_PORT.
 carla:
   host: "localhost"

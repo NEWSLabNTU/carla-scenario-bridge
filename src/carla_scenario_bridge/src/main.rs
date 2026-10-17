@@ -1,12 +1,11 @@
 mod actor_census;
 mod agent_link;
 mod autopilot;
+mod backend;
 mod blueprint_boxes;
 mod body_clearance;
 mod budgets;
-mod carla_version;
 mod clock_store;
-mod collision_monitor;
 mod config;
 mod contact_report;
 mod coordinate_conversion;
@@ -15,26 +14,23 @@ mod entity_manager;
 mod episode_clock;
 mod epoch_marker;
 mod frame_stats;
-mod gap_trace;
 mod lanelet_map;
 mod map_resolver;
 mod npc_tracking;
 mod proto;
-mod resolved_signals;
 mod ros_args;
 mod sensor_release;
 mod spawn_ladder;
 mod tick_watchdog;
-mod traffic_light_mapper;
 mod weather;
 mod world_services;
 mod zmq_server;
 
-use carla::client::Client;
 use color_eyre::eyre::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+
+use backend::SimBackend;
 
 /// Exit status after a hung tick (`EX_TEMPFAIL`): not a clean exit, so the supervisor
 /// restarts the bridge.
@@ -79,6 +75,7 @@ fn main() -> Result<()> {
     let ssv2_port = config.ssv2.port;
 
     tracing::info!("carla-scenario-bridge starting");
+    tracing::info!("  Backend: {}", config.backend.name());
     tracing::info!("  CARLA:  {carla_host}:{carla_port}");
     tracing::info!("  SSv2:   tcp://*:{ssv2_port}");
     tracing::info!("  Config: {}", config_file.display());
@@ -105,38 +102,29 @@ fn main() -> Result<()> {
         })?;
     }
 
-    // Connect to CARLA with infinite retry
-    let client = match connect_to_carla(&carla_host, carla_port, &shutdown) {
-        Some(c) => c,
-        None => {
-            tracing::info!("Shutdown before CARLA connection");
-            return Ok(());
+    let mut backend: Box<dyn SimBackend> = match config.backend {
+        config::Backend::Carla => {
+            // Connect to CARLA with infinite retry.
+            let generate = generate_signal_table_arg();
+            let Some(mut carla) = backend::carla::connect(config, config_dir, &shutdown)? else {
+                tracing::info!("Shutdown before CARLA connection");
+                return Ok(());
+            };
+            // Generator mode: write a map dir's CARLA traffic light table, then leave CARLA
+            // as found.
+            if let Some(map_dir) = generate {
+                let result = carla.generate_signal_table(&map_dir);
+                carla.shutdown();
+                return result;
+            }
+            Box::new(carla)
         }
+        config::Backend::Isaac => eyre::bail!(
+            "backend isaac: the Isaac Sim backend is not built yet (roadmap 037); use carla"
+        ),
     };
-
-    let world = client.world()?;
-    tracing::info!("CARLA world acquired");
-
-    // The coordinator keeps the client so it can rebuild the world after a CARLA outage.
-    let mut coord = coordinator::Coordinator::new(
-        client,
-        world,
-        carla_host.clone(),
-        carla_port,
-        config_dir,
-        config,
-    );
-    // Generator mode: write a map dir's CARLA traffic light table, then leave CARLA as found.
-    if let Some(map_dir) = generate_signal_table_arg() {
-        let result = coord.generate_signal_table(&map_dir);
-        coord.shutdown();
-        return result;
-    }
-
-    // The configured weather, now that there is a world to apply it to.
-    coord.reapply_weather("connect");
-    // The episode's epoch, for a vehicle side started before the first scenario.
-    coord.write_epoch_marker_at_connect();
+    backend.before_serving();
+    let coord = coordinator::Coordinator::new(backend);
 
     // World configuration services. Served from their own thread, applied on this one.
     // Without them the bridge still serves SSv2, so a ROS failure is loud but not fatal.
@@ -206,53 +194,4 @@ fn generate_signal_table_arg() -> Option<std::path::PathBuf> {
         }
     }
     None
-}
-
-fn connect_to_carla(host: &str, port: u16, shutdown: &AtomicBool) -> Option<Client> {
-    loop {
-        if shutdown.load(Ordering::SeqCst) {
-            return None;
-        }
-
-        match Client::connect(host, port, None) {
-            Ok(mut client) => {
-                if let Err(e) = client.set_timeout(Duration::from_secs(30)) {
-                    tracing::warn!("Failed to set timeout: {e}, retrying in 5s...");
-                    std::thread::sleep(Duration::from_secs(5));
-                    continue;
-                }
-                // A server of another CARLA release is refused like an unreachable one.
-                match carla_version::verify(&client) {
-                    Ok(server) => tracing::info!(
-                        "CARLA server version {server} matches this build ({})",
-                        carla_version::BUILT_FOR
-                    ),
-                    Err(e) => {
-                        tracing::error!("Refusing CARLA at {host}:{port}: {e}; retrying in 5s...");
-                        std::thread::sleep(Duration::from_secs(5));
-                        continue;
-                    }
-                }
-                match client.world() {
-                    // A starting CARLA serves RPC before its first map is loaded (empty map
-                    // name); anything sent to it then can wedge it. Wait for the map.
-                    Ok(world) if world.map().map(|m| m.name()).unwrap_or_default().is_empty() => {
-                        tracing::warn!("CARLA is still loading its first map, retrying in 5s...");
-                    }
-                    Ok(_) => {
-                        tracing::info!("Connected to CARLA at {host}:{port}");
-                        return Some(client);
-                    }
-                    Err(e) => {
-                        tracing::warn!("CARLA not ready: {e}, retrying in 5s...");
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("CARLA connection failed: {e}, retrying in 5s...");
-            }
-        }
-
-        std::thread::sleep(Duration::from_secs(5));
-    }
 }

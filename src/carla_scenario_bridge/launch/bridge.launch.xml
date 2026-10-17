@@ -13,6 +13,8 @@
   (docs/design/failure-and-frame-budget.md). Empty arguments keep the config file's value.
 -->
 <launch>
+  <arg name="backend" default=""
+       description="carla | isaac: the simulator csb drives (roadmap 035); empty keeps the config file's (default carla; isaac is roadmap 037)"/>
   <arg name="config_file" default="$(find-pkg-share carla_scenario_bridge)/config/bridge_config.yaml"
        description="bridge_config.yaml (CARLA, blueprint and map aliases, Traffic Manager, agent relay)"/>
   <arg name="carla_host" default="" description="CARLA host; empty keeps the config file's"/>
@@ -35,6 +37,7 @@
         output="screen" respawn="true" respawn_delay="2.0">
     <!-- respawn_delay is a literal: stock `ros2 launch` (Humble) compares it as a float and
          rejects a substitution ('<' not supported between 'str' and 'float'). -->
+    <param name="backend" value="$(var backend)"/>
     <param name="config_file" value="$(var config_file)"/>
     <param name="carla_host" value="$(var carla_host)"/>
     <param name="carla_port" value="$(var carla_port)"/>
