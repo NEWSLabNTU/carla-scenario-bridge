@@ -67,7 +67,7 @@ SSv2 on more than one simulator, CARLA and Isaac Sim, chosen per run; the reposi
 its name ([design/simulator-backends.md](../design/simulator-backends.md)). Driven by a
 sponsor's off-road competition on Isaac Sim (user direction 2026-10-16).
 
-- [035: Backend Seam](035-backend-seam.md) — every carla-rust call behind a `SimBackend` trait, CARLA the only implementation, no behaviour change
+- [035: Backend Seam](035-backend-seam.md) — every carla-rust call behind a `SimBackend` trait, CARLA the only implementation, no behaviour change (done 2026-10-17: gap trace identical, frame budget not worse)
 - [036: Isaac Sim Bring-up and the Domain Spike](036-isaac-bringup.md) — Isaac Sim 6.1 on this host (VNC and headless); several ROS domains in one process, Cyclone, lockstep, GPU cost per sensor set
 - [037: Isaac World Server and `IsaacBackend`](037-isaac-world-server.md) — SSv2 scenarios on Isaac through a lockstep world server and a small batched protocol; puppeteered NPCs, contacts, no Autoware yet
 - [038: Isaac Vehicle Bridge](038-isaac-vehicle-bridge.md) — Autoware drives a PhysX vehicle: sensors, vehicle interface, `/clock` on its domain; agent unchanged

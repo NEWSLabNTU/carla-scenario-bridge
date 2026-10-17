@@ -37,12 +37,18 @@ just test     # Run tests
 .
 ├── src/carla_scenario_bridge/  # Rust crate (ament_cargo package)
 │   ├── src/
-│   │   ├── main.rs             # Entry point, CARLA retry loop, shutdown
+│   │   ├── main.rs             # Entry point: config, backend choice, shutdown
 │   │   ├── zmq_server.rs       # ZMQ REP socket, protobuf dispatch
-│   │   ├── coordinator.rs      # 14 SSv2 handlers → CARLA API calls
+│   │   ├── coordinator.rs      # SSv2 requests → SimBackend calls (no simulator)
+│   │   ├── backend/            # The simulator seam (035)
+│   │   │   ├── mod.rs          # SimBackend trait and its types
+│   │   │   ├── fake.rs         # In-memory backend for coordinator tests
+│   │   │   └── carla/          # CarlaBackend: the only code that uses carla-rust
+│   │   │       ├── backend.rs  # SSv2 handlers → CARLA API calls
+│   │   │       ├── collision_monitor.rs, gap_trace.rs, traffic_light_mapper.rs,
+│   │   │       └── resolved_signals.rs, version.rs, weather.rs
 │   │   ├── entity_manager.rs   # SSv2 name ↔ CARLA actor ID mapping
 │   │   ├── coordinate_conversion.rs  # ROS ↔ CARLA frame conversion
-│   │   ├── traffic_light_mapper.rs   # Lanelet signal ID ↔ CARLA actor (Phase 4)
 │   │   ├── weather.rs          # Weather presets, kept across map loads (018)
 │   │   ├── world_services.rs   # rclrs node: /carla/set_weather, /carla/get_weather
 │   │   └── proto.rs            # Generated protobuf type re-exports

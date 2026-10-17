@@ -23,6 +23,9 @@ traffic_simulator (NPC behavior, Lanelet2 routing)
 |  carla-scenario-bridge                                    |
 |                                                           |
 |  ZMQ Server (REP socket)                                  |
+|  Coordinator (protobuf <-> SimBackend calls, no simulator)|
+|  ---- SimBackend trait (roadmap 035) -------------------  |
+|  CarlaBackend (src/backend/carla/)                        |
 |  +-- Entity Manager (SSv2 name <-> CARLA actor ID)        |
 |  +-- Traffic Light Mapper (lanelet signal ID <-> actor)   |
 |  +-- Coordinate Converter (ROS <-> CARLA frames)          |
@@ -96,6 +99,28 @@ controller chooses the driver: SSv2 (default), CARLA's Traffic Manager
 the swap audit: [user-workflow.md](user-workflow.md).
 
 SSv2's `AutowareUniverse` (concealer) must be **disabled** for vehicle status topics, since `autoware_carla_bridge` publishes them from real CARLA state. The `simulate_localization` parameter must be `false` so Autoware runs its real GNSS->NDT pipeline.
+
+## The simulator seam (roadmap 035)
+
+csb drives SSv2 scenarios on a simulator behind one Rust trait,
+`backend::SimBackend` (`src/carla_scenario_bridge/src/backend/mod.rs`); the ROS parameter
+`backend` (`carla`, the default) chooses it, and Isaac Sim is the second implementation
+([simulator-backends.md](simulator-backends.md), roadmap 037). The layers:
+
+- **`zmq_server`**: the REP socket, the frame budget, panics, the drain after a hang.
+- **`coordinator`**: decodes each protobuf request into the trait's terms -- an
+  `Episode`, a `SpawnRequest` with who drives it (`Driver`, from `is_ego` and the
+  controller), a `StatusBatch` of every entity's pose, a `Goal` -- and turns the result into
+  SSv2's reply. Every `BackendError` (`Failed`, `Unsupported`, `Disconnected`) is a failed
+  reply carrying the backend's reason (roadmap 006). It knows no simulator; its tests run on
+  an in-memory fake (`backend/fake.rs`).
+- **`backend::carla::CarlaBackend`**: everything below, through carla-rust. `carla::`
+  appears nowhere outside `src/backend/carla/`, which a unit test checks.
+
+The trait speaks SSv2's model: entities by scenario name, poses in the map frame (ROS:
+right-handed, metres, radians) at the entity origin, SSv2's own messages for poses, motion
+and signals. One call per SSv2 request, each batched as SSv2 sends it, so a backend behind a
+socket makes one round trip per request.
 
 ## ZMQ Protocol: 14 Message Handlers
 

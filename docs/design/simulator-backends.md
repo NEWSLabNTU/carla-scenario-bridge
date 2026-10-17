@@ -1,7 +1,7 @@
 # Simulator Backends: SSv2 on CARLA and on Isaac Sim
 
-**Date**: 2026-10-16. **Status**: design; phase 036 (bring-up) done 2026-10-17, nothing else
-built. Phases [035](../roadmap/035-backend-seam.md)-[041](../roadmap/041-competition-director.md)
+**Date**: 2026-10-16. **Status**: design; phases 036 (bring-up) and 035 (the seam) done
+2026-10-17. Phases [035](../roadmap/035-backend-seam.md)-[041](../roadmap/041-competition-director.md)
 implement it. Background: [survey-isaac-sim-and-digital-twin.md](survey-isaac-sim-and-digital-twin.md)
 (2026-10-09) and the Isaac Sim 6.1 study of 2026-10-16 (summarized under "Study notes").
 
@@ -53,20 +53,34 @@ csb  ── SSv2 handlers, entity table, episode clock, gap trace, contacts (sim
 agent relay (5560) ◀── agent protocol ──▶ acb_pilot per ego (unchanged)
 ```
 
-### The seam in csb (phase 035)
+### The seam in csb (phase 035, built 2026-10-17)
 
-A Rust trait, `SimBackend`, owns everything the coordinator now does through carla-rust:
-connect and version check, load world, spawn and destroy (entity kind, subtype, declared box,
-initial pose), set poses for a batch of puppeteered entities, advance one frame, read back
-ego and NPC states, contacts since the last frame, signal control, weather. The coordinator
-keeps SSv2 semantics: names, the episode clock, frame accounting, honest failures (006),
-entity geometry (022), the gap trace (024). The backend is chosen by a ROS parameter,
-`backend` (`carla` default, `isaac`). `CarlaBackend` is today's code moved, with no behaviour
-change; the existing tests and a starter-scenario run are the check.
+A Rust trait, `backend::SimBackend` (`src/backend/mod.rs`), is everything csb asks of a
+simulator, one method per SSv2 request: `initialize(Episode)`, `update_frame`,
+`update_step_time`, `spawn(SpawnRequest)`, `despawn(name)`,
+`update_entity_status(StatusBatch) -> StatusOutcome`, `update_entity_goal(name, Goal)`,
+`update_traffic_lights`, `attach_sensor`, the weather services, and the lifecycle
+(`before_serving`, `probe_connection_idle`, `wedged`, `server_lost`, `abandon_after_hang`,
+`shutdown`). Entities cross it by their SSv2 name; poses are map-frame, at the entity
+origin, in SSv2's own message types. `BackendError::{Failed, Unsupported, Disconnected}`
+each become a failed reply with the backend's text (006).
 
-Calls are **per frame and batched**: one `Step` carries every puppeteered pose and returns
-every state. CARLA already works this way (one snapshot per tick, 024's cost rule); Isaac
-must, because a per-entity round trip would cost more than the frame.
+`coordinator.rs` decodes the protobuf requests into those calls -- including who drives a
+vehicle (`Driver`: ego, scenario, `simulator_autopilot`, `agent`) -- and knows no simulator;
+its tests run on an in-memory fake. `CarlaBackend` (`src/backend/carla/`) is the former
+coordinator moved, with no behaviour change, and the only code that uses carla-rust (a test
+checks). The backend is chosen by the ROS parameter `backend` (`carla` default, `isaac`
+refused until 037).
+
+Calls are **per request and batched**: `UpdateEntityStatus` carries every puppeteered pose
+in and every state out, `UpdateFrame` advances one frame, as SSv2 sends them. CARLA works
+this way already (one snapshot per frame, 024's cost rule); Isaac must, because a per-entity
+round trip would cost more than the frame.
+
+What 035 left in `CarlaBackend` because it is built on CARLA specifics -- the episode clock
+and acb's epoch marker, contact reports from CARLA's collision sensors, the gap trace on
+CARLA's snapshots, blueprint geometry -- is 037's to lift where the Isaac backend needs the
+same (roadmap 035, "As built").
 
 ### The Isaac world server (phase 037)
 
