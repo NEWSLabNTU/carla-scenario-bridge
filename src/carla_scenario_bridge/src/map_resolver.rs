@@ -15,7 +15,7 @@
 //! guessing.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Filenames that sit inside a town directory rather than naming it.
 ///
@@ -74,6 +74,19 @@ pub fn lanelet_map_file(map_path: &str) -> std::path::PathBuf {
         path.to_path_buf()
     } else {
         path.join("lanelet2_map.osm")
+    }
+}
+
+/// The map directory a Lanelet2 map path names: the path itself if it is a directory,
+/// else the file's parent.
+pub fn map_dir_of(lanelet2_map_path: &Path) -> PathBuf {
+    if lanelet2_map_path.is_dir() {
+        lanelet2_map_path.to_path_buf()
+    } else {
+        lanelet2_map_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
     }
 }
 

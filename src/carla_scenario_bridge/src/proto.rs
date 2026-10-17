@@ -85,3 +85,10 @@ mod tests {
         }
     }
 }
+
+/// csb's world protocol with the Isaac Sim world server (`proto/csb_world.proto`, roadmap
+/// 037): csb's own, not SSv2's.
+#[allow(clippy::all, dead_code)]
+pub mod csb_world {
+    include!(concat!(env!("OUT_DIR"), "/csb_world.rs"));
+}

@@ -14,6 +14,7 @@ mod entity_manager;
 mod episode_clock;
 mod epoch_marker;
 mod frame_stats;
+mod gap_trace;
 mod lanelet_map;
 mod map_resolver;
 mod npc_tracking;
@@ -119,9 +120,17 @@ fn main() -> Result<()> {
             }
             Box::new(carla)
         }
-        config::Backend::Isaac => eyre::bail!(
-            "backend isaac: the Isaac Sim backend is not built yet (roadmap 037); use carla"
-        ),
+        config::Backend::Isaac => {
+            if generate_signal_table_arg().is_some() {
+                eyre::bail!("--generate-signal-table is CARLA's: run it with backend carla");
+            }
+            tracing::info!("  Isaac world server: {}", config.isaac.endpoint);
+            let Some(isaac) = backend::isaac::connect(config, &shutdown)? else {
+                tracing::info!("Shutdown before the Isaac world server answered");
+                return Ok(());
+            };
+            Box::new(isaac)
+        }
     };
     backend.before_serving();
     let coord = coordinator::Coordinator::new(backend);

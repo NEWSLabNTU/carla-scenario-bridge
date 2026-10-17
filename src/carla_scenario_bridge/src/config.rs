@@ -49,6 +49,34 @@ impl Default for CarlaConfig {
     }
 }
 
+/// The Isaac Sim world server csb drives under `backend: isaac` (roadmap 037).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct IsaacConfig {
+    /// The world server's REP socket (`just isaac-world` binds 127.0.0.1:5590).
+    pub endpoint: String,
+    /// How long a request may take before the server counts as hung, s: the bridge then
+    /// exits for its supervisor to restart, as after a CARLA tick that never returned.
+    pub request_timeout_seconds: u64,
+    /// The same for `LoadWorld`, which may open a large USD stage.
+    pub load_timeout_seconds: u64,
+    /// Render once per frame. Off by default: nothing in the world needs a picture until the
+    /// vehicle bridge's sensors (roadmap 038), and a render costs 3-5 ms of the frame (037).
+    /// On to watch the world on a display (`just isaac-world 5590 :8`).
+    pub render: bool,
+}
+
+impl Default for IsaacConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "tcp://127.0.0.1:5590".to_string(),
+            request_timeout_seconds: 10,
+            load_timeout_seconds: 120,
+            render: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct Ssv2Config {
@@ -154,6 +182,8 @@ pub struct BridgeConfig {
     /// The simulator csb drives (roadmap 035): `carla` (the default) or `isaac`.
     pub backend: Backend,
     pub carla: CarlaConfig,
+    /// The world server, under `backend: isaac`.
+    pub isaac: IsaacConfig,
     pub ssv2: Ssv2Config,
     pub ego: EgoConfig,
     /// SSv2 asset key to CARLA blueprint, for keys that are not blueprint names.
@@ -209,7 +239,7 @@ pub struct BridgeConfig {
 pub enum Backend {
     #[default]
     Carla,
-    /// Isaac Sim through csb's world server (roadmap 037); not built yet.
+    /// Isaac Sim through csb's world server (roadmap 037).
     Isaac,
 }
 
@@ -327,7 +357,7 @@ impl BridgeConfig {
         Ok(config)
     }
 
-    /// Apply ROS parameters (`backend`, `carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
+    /// Apply ROS parameters (`backend`, `isaac_endpoint`, `isaac_render`, `carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
     /// `reconnect_wait_seconds`, `weather`, `npc_motion`, `gap_trace_dir`, `contact_report_dir`,
     /// `npc_contact_sensors`) over the file and the environment: a launch file's explicit
     /// value is the most specific statement of intent. A malformed number is an error, not
@@ -335,6 +365,19 @@ impl BridgeConfig {
     pub fn apply_ros_params(&mut self, params: &crate::ros_args::RosParams) -> Result<()> {
         if let Some(backend) = params.get("backend").filter(|v| !v.trim().is_empty()) {
             self.backend = Backend::parse(backend).wrap_err("parameter backend")?;
+        }
+        if let Some(endpoint) = params
+            .get("isaac_endpoint")
+            .filter(|v| !v.trim().is_empty())
+        {
+            self.isaac.endpoint = endpoint.trim().to_string();
+        }
+        if let Some(v) = params.get("isaac_render").filter(|v| !v.trim().is_empty()) {
+            self.isaac.render = match v.trim().to_ascii_lowercase().as_str() {
+                "true" | "on" | "1" => true,
+                "false" | "off" | "0" => false,
+                other => bail!("parameter isaac_render:={other}: expected true or false"),
+            };
         }
         if let Some(host) = params.get("carla_host").filter(|h| !h.is_empty()) {
             self.carla.host = host.to_string();

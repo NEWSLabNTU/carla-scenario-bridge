@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use super::gap_trace::{self, GapTrace};
 use super::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
 use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::autopilot;
@@ -17,6 +16,7 @@ use crate::blueprint_boxes::{self, BoxTable, Dimensions, SizeClass};
 use crate::body_clearance::{self, BodyBox};
 use crate::budgets::{self, Deadline, HUNG_STATE_READ_WAIT};
 use crate::config::{BridgeConfig, NpcMotion, SensorReleaseConfig};
+use crate::gap_trace::{self, GapTrace};
 use crate::map_resolver::{lanelet_map_file, load_map_origin, town_from_map_path};
 use crate::tick_watchdog::{HangHook, WatchError, Watchdog};
 

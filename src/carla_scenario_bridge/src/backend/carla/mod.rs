@@ -2,12 +2,11 @@
 //!
 //! Everything that knows CARLA lives under this module -- its left-handed frame, actor ids,
 //! blueprints, towns, synchronous mode and the Traffic Manager, the lights and their table
-//! for acb, the collision sensors and the gap trace built on its snapshots. The rest of csb
+//! for acb, the collision sensors, and the gap trace's CARLA half from its snapshots. The rest of csb
 //! sees it through [`crate::backend::SimBackend`].
 
 mod backend;
 pub mod collision_monitor;
-pub mod gap_trace;
 pub mod resolved_signals;
 pub mod traffic_light_mapper;
 pub mod version;

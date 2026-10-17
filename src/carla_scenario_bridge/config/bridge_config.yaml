@@ -7,9 +7,19 @@
 # A missing file is fine -- everything has a default. A malformed one is fatal, so that a
 # typo cannot silently run the scenario with settings you believe you changed.
 
-# The simulator csb drives (roadmap 035): carla, or isaac once roadmap 037 builds it. The
-# ROS parameter / launch arg `backend` overrides it; an unknown name fails at startup.
+# The simulator csb drives (roadmap 035): carla, or isaac (roadmap 037). The ROS parameter /
+# launch arg `backend` overrides it; an unknown name fails at startup.
 backend: carla
+
+# The Isaac Sim world server, under backend: isaac (`just isaac-world`). A request it does
+# not answer within its timeout ends the bridge for a fresh one, as a hung CARLA tick does.
+# render: off until something needs pictures (the sensors, roadmap 038), or to watch the
+# world on a display; a render costs 3-5 ms of every frame.
+isaac:
+  endpoint: "tcp://127.0.0.1:5590"
+  request_timeout_seconds: 10
+  load_timeout_seconds: 120
+  render: false
 
 # CARLA connection. Overridden by CARLA_HOST / CARLA_PORT.
 carla:

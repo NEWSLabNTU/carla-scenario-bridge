@@ -33,8 +33,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 
 use serde::Serialize;
 
-use super::collision_monitor::RawCollision;
-use crate::contact_report;
+use crate::contact_report::{self, RawCollision};
 
 /// The trace format version (`docs/design/gap-campaign.md`, appendix).
 pub const SCHEMA: u32 = 1;

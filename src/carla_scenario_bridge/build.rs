@@ -12,6 +12,8 @@ fn main() -> Result<()> {
         format!("{proto_dir}/autoware_vehicle_msgs.proto"),
         format!("{proto_dir}/rosgraph_msgs.proto"),
         format!("{proto_dir}/std_msgs.proto"),
+        // csb's own: the Isaac world server's protocol (roadmap 037).
+        format!("{proto_dir}/csb_world.proto"),
     ];
 
     prost_build::compile_protos(protos, &[proto_dir])?;

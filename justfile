@@ -172,6 +172,8 @@ test:
     cargo nextest run --no-tests pass --no-fail-fast
     # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)
     python3 -m pytest -q src/csb_launch/test
+    # The Isaac world server's protocol side, on a fake world (roadmap 037; protobuf only)
+    python3 -m unittest discover -s src/csb_isaac/test
 
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
@@ -395,6 +397,18 @@ isaac_display := env_var_or_default("ISAAC_DISPLAY", ":8")
 # Isaac Sim smoke test: version, start time, step time (headless; DISPLAY set = windowed)
 isaac-check:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/csb_isaac/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
+
+# Headless by default; `just isaac-world 5590 :8` opens Isaac's window on the VNC display
+# (`just isaac-vnc`). Stop it with Ctrl-C or SIGTERM; csb only empties its world.
+#
+# Isaac Sim world server for `CSB_BACKEND=isaac just run` (roadmap 037), on 127.0.0.1:<port>
+isaac-world port="5590" display="":
+    #!/usr/bin/env bash
+    set -e
+    export ISAAC_ROOT={{isaac_root}}
+    source "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_env.sh"
+    cd "{{justfile_directory()}}/src/csb_isaac"
+    exec python -m csb_isaac.world_server --port {{port}} {{ if display != "" { "--display " + display } else { "" } }}
 
 # TurboVNC display for Isaac's window, localhost only (reach it through an SSH tunnel)
 isaac-vnc:

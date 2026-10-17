@@ -135,18 +135,7 @@ impl ResolvedTable {
     }
 }
 
-/// The map directory a Lanelet2 map path names: the path itself if it is a directory,
-/// else the file's parent.
-pub fn map_dir_of(lanelet2_map_path: &Path) -> PathBuf {
-    if lanelet2_map_path.is_dir() {
-        lanelet2_map_path.to_path_buf()
-    } else {
-        lanelet2_map_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."))
-    }
-}
+pub use crate::map_resolver::map_dir_of;
 
 pub fn table_path(map_dir: &Path) -> PathBuf {
     map_dir.join(TABLE_SUBPATH)

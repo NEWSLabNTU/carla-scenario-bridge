@@ -24,6 +24,29 @@ pub const KEEP: usize = 500;
 /// The value of `contact_report_dir` that turns reports off.
 pub const OFF: &str = "off";
 
+/// One contact, as the sensor callback saw it. Plain data so it can cross threads and be
+/// constructed in tests.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RawCollision {
+    /// SSv2 frame: how many `UpdateFrame`s this bridge had received since `Initialize`
+    /// when the event arrived; from `CollisionMonitor::drain` (CARLA) on, the SSv2 frame whose tick
+    /// produced `carla_frame` (see the module docs).
+    pub ssv2_frame: u64,
+    /// The simulator's own frame number for the event (named for CARLA, which came first).
+    pub carla_frame: u64,
+    /// Simulation time of the event, in seconds.
+    pub sim_time: f64,
+    /// The other actor's simulator id, or `None` for a static part of the world.
+    pub other_id: Option<u32>,
+    /// The other actor's blueprint id (`vehicle.tesla.model3`, `walker...`), or empty.
+    pub other_type: String,
+    /// Magnitude of the normal impulse, N·s.
+    pub impulse: f64,
+    /// SSv2 name of the tracked NPC whose own sensor saw this (roadmap 032 step 5); `None`
+    /// for the ego's sensor.
+    pub subject: Option<String>,
+}
+
 /// One other actor the ego touched during the run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReportContact {

@@ -16,6 +16,7 @@
 pub mod carla;
 #[cfg(test)]
 pub mod fake;
+pub mod isaac;
 
 use std::time::Duration;
 

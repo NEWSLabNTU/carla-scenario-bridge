@@ -47,6 +47,10 @@
        time acb publishes on /clock. Useful to reproduce an overloaded host
        deterministically. -->
   <arg name="global_real_time_factor" default="1.0" description="SSv2 real-time factor" />
+  <!-- false: an ego no Autoware drives (it stands, or follows a trajectory SSv2 drives),
+       with no agent behind the relay (roadmap 037, Isaac before its vehicle bridge); its
+       scenario must not use ego autonomy actions (RoutingAction and the like). -->
+  <arg name="managed_ego" default="true" description="Whether the concealer drives the ego's Autoware through the agent relay" />
   <arg name="clock_source" default="simulator"
        description="SSv2's ROS time: simulator (CARLA time, phase 015), follows_simulation_time (014) or frames (stock); see below" />
 
@@ -109,8 +113,9 @@
     <!-- The concealer always drives the ego's autonomy, through scenario_agent_relay: the
          relay serves the ADAPI subset it calls, in this domain, and forwards to the vehicle
          agent wherever the ego's Autoware runs (roadmap 017). The fork's managed_ego:=false
-         (phase 013) is retired; the relay replaces the domain split it existed for. -->
-    <arg name="managed_ego" value="true" />
+         (phase 013) is retired; the relay replaces the domain split it existed for. It is
+         kept as an argument for an ego with no Autoware at all (see its declaration). -->
+    <arg name="managed_ego" value="$(var managed_ego)" />
     <arg name="launch_rviz" value="false" />
     <arg name="record" value="false" />
     <!-- play_launch serializes empty-string parameters as "-p name:=", which rcl

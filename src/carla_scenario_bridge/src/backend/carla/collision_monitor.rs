@@ -64,6 +64,7 @@ use carla::sensor::data::CollisionEvent;
 use carla::sensor::SensorDataBase;
 use eyre::{eyre, Result};
 
+pub use crate::contact_report::RawCollision;
 use crate::contact_report::{
     self, ContactReport, ReportContact, ReportGeometry, ReportNpcContact, ReportTracking,
 };
@@ -92,29 +93,6 @@ fn label_frame(ticks: &BTreeMap<u64, u64>, carla_frame: u64, stamped: u64) -> u6
         (Some(_), Some((_, &frame))) => frame,
         _ => stamped,
     }
-}
-
-/// One contact, as the sensor callback saw it. Plain data so it can cross threads and be
-/// constructed in tests.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RawCollision {
-    /// SSv2 frame: how many `UpdateFrame`s this bridge had received since `Initialize`
-    /// when the event arrived; from [`CollisionMonitor::drain`] on, the SSv2 frame whose tick
-    /// produced `carla_frame` (see the module docs).
-    pub ssv2_frame: u64,
-    /// CARLA's own frame number for the event.
-    pub carla_frame: u64,
-    /// CARLA simulation time of the event, in seconds.
-    pub sim_time: f64,
-    /// The other actor's CARLA id, or `None` for a static part of the world.
-    pub other_id: Option<u32>,
-    /// The other actor's blueprint id (`vehicle.tesla.model3`, `walker...`), or empty.
-    pub other_type: String,
-    /// Magnitude of the normal impulse, N·s.
-    pub impulse: f64,
-    /// SSv2 name of the tracked NPC whose own sensor saw this (roadmap 032 step 5); `None`
-    /// for the ego's sensor.
-    pub subject: Option<String>,
 }
 
 /// Everything recorded about one other actor over a run.

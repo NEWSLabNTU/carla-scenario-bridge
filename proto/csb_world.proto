@@ -1,0 +1,147 @@
+// csb's world protocol (roadmap 037): carla-scenario-bridge (`IsaacBackend`, REQ) and the
+// Isaac Sim world server (`src/csb_isaac`, REP), ZMQ on localhost, one Request and one Reply
+// per round trip.
+//
+// Frames: the server's world frame is right-handed and Z-up, metres and radians (ROS's); csb
+// subtracts the map origin, so the server never sees map coordinates. Poses are at the SSv2
+// entity origin; the declared box sits around it.
+//
+// Lockstep: nothing advances between requests. `Step` applies the poses it carries, runs
+// `substeps` physics steps of `dt` (rendering on the last when `render`), and replies with
+// every entity's state after them and the contacts they had.
+//
+// Bump PROTOCOL_VERSION (csb `backend/isaac`, server `csb_isaac/protocol.py`) on any change a
+// peer of the other version would misread; `Hello` refuses a mismatch with both versions.
+
+syntax = "proto3";
+
+package csb_world;
+
+message Vec3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Quat {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+message Pose {
+  Vec3 position = 1;
+  Quat orientation = 2;
+}
+
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  EGO = 1;
+  VEHICLE = 2;
+  PEDESTRIAN = 3;
+  MISC_OBJECT = 4;
+}
+
+message Hello {
+  uint32 protocol_version = 1;
+}
+
+message HelloReply {
+  uint32 protocol_version = 1;
+  // Isaac Sim's version, for the log.
+  string isaac_version = 2;
+}
+
+// Replace the world: every entity is gone after it, the clock goes on.
+message LoadWorld {
+  // A USD stage to reference as the environment; empty is a flat ground plane at z = 0.
+  string usd = 1;
+  // Prims of the environment a body rests on (terrain, road surface). Contacts with them
+  // are not reported; the flat ground plane is always one.
+  repeated string ground_paths = 2;
+}
+
+// One entity: a kinematic body at `pose` with a box collider. The ego reports contacts.
+message Spawn {
+  string name = 1;
+  Kind kind = 2;
+  // SSv2's subtype (`car`, `truck`, ...), for the body's look; empty when unknown.
+  string subtype = 3;
+  // The declared box: its centre from the entity origin, and its length, width, height.
+  Vec3 box_center = 4;
+  Vec3 box_dimensions = 5;
+  Pose pose = 6;
+}
+
+message SpawnReply {
+  // Nonzero, unique for the server's lifetime.
+  uint32 handle = 1;
+}
+
+message Despawn {
+  uint32 handle = 1;
+}
+
+message EntityPose {
+  uint32 handle = 1;
+  Pose pose = 2;
+}
+
+message Step {
+  repeated EntityPose poses = 1;
+  uint32 substeps = 2;
+  // Physics step, s.
+  double dt = 3;
+  bool render = 4;
+}
+
+message EntityState {
+  uint32 handle = 1;
+  // The physics engine's pose of the body after the step.
+  Pose pose = 2;
+}
+
+// A body touching another at any substep of the step, once per pair.
+message Contact {
+  uint32 handle = 1;
+  // The other entity's handle; 0 for the environment.
+  uint32 other = 2;
+  // The other prim's path (the environment's, when `other` is 0).
+  string other_path = 3;
+  // Total normal impulse over the step, N s.
+  double impulse = 4;
+}
+
+message StepReply {
+  // Simulation time after the step, s: monotonic over the server's lifetime.
+  double sim_time = 1;
+  // Steps served, over the server's lifetime.
+  uint64 frame = 2;
+  repeated EntityState states = 3;
+  repeated Contact contacts = 4;
+}
+
+message Shutdown {}
+
+message Request {
+  oneof request {
+    Hello hello = 1;
+    LoadWorld load_world = 2;
+    Spawn spawn = 3;
+    Despawn despawn = 4;
+    Step step = 5;
+    Shutdown shutdown = 6;
+  }
+}
+
+message Reply {
+  bool ok = 1;
+  // Why not, when `ok` is false: csb's reply to SSv2 carries it.
+  string error = 2;
+  oneof reply {
+    HelloReply hello = 3;
+    SpawnReply spawn = 4;
+    StepReply step = 5;
+  }
+}
