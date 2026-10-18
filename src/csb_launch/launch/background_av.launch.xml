@@ -33,14 +33,15 @@
     soon as it registers). publish_clock is true: acb publishes CARLA's time as /clock in
     this domain, as in every domain (roadmap 015).
 
-    Without a relay (relay left unset; an empty relay:= is rejected by launch) the agent instead drives once to `goal_poses_file` (local
-    mode, acb_pilot poses format): a check that the stack and CARLA work, no scenario.
+    With relay:=none (an empty relay:= is rejected by launch) the agent instead drives once
+    to `goal_poses_file` (local mode, acb_pilot poses format): a check that the stack and
+    CARLA work, no scenario.
   -->
   <arg name="entity" default="bg_av_1" description="the scenario entity this vehicle is (controller `agent`)" />
   <arg name="vehicle_name" default="$(var entity)"
        description="CARLA role_name of the vehicle; the bridge names an agent-driven vehicle after its entity" />
-  <arg name="relay" default="tcp://localhost:5560" description="the scenario's agent relay; empty = local mode" />
-  <arg name="goal_poses_file" default="" description="local mode's goal when relay is empty" />
+  <arg name="relay" default="tcp://localhost:5560" description="the scenario's agent relay; none = local mode" />
+  <arg name="goal_poses_file" default="" description="local mode's goal when relay is none" />
   <arg name="map_path" description="Directory with lanelet2_map.osm and pointcloud_map.pcd" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
@@ -67,7 +68,7 @@
     <arg name="lidar_detection_model" value="$(var lidar_detection_model)" />
     <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)" />
     <!-- The vehicle agent, started by the profile: registers with the relay as `entity`. -->
-    <arg name="relay" value="$(var relay)" />
+    <arg name="relay" value="$(eval '&quot;&quot; if &quot;$(var relay)&quot; == &quot;none&quot; else &quot;$(var relay)&quot;')" />
     <arg name="entity" value="$(var entity)" />
     <arg name="goal_poses_file" value="$(var goal_poses_file)" />
     <!-- acb_bridge for this vehicle, started by the profile. -->

@@ -390,7 +390,7 @@ three components with CARLA settings. Turn any of those off to keep your own:
 | `carla_localization:=false` | CARLA-tuned NDT/EKF/pose-initializer parameters |
 | `carla_perception:=false` | selectable `lidar_detection_model` (default `clustering`, CPU; `centerpoint` is TensorRT), fusion-only traffic lights (signals arrive from CARLA over V2X) |
 | `carla_system:=false` | component-state topics, MRM parameters and diagnostic graph matching CARLA's sensors |
-| `carla_planning:=false` | `max_velocity:=<m/s>`, Autoware's `max_vel` (default 4.17, upstream's 15 km/h, at which planning is exactly upstream's); under `just ego-av`, `EGO_LAUNCH_ARGS="max_velocity:=11.11"` for 40 km/h |
+| `carla_planning:=false` | `max_velocity:=<m/s>`, Autoware's `max_vel` (default 4.17, upstream's 15 km/h, at which planning is exactly upstream's); under `just ego-av`, `just ego-av max_velocity:=11.11` for 40 km/h |
 | `launch_deprecated_api:=false` | Autoware's deprecated API, which serves the velocity limit a scenario's absolute `SpeedAction` sets (the `awf/` use cases fail without it) |
 
 The lidar detector defaults to `clustering` because it is the one that passes on CARLA: the
@@ -487,10 +487,10 @@ so it holds across scenarios on different towns. Empty (the default) leaves CARL
   stalled and the first switch of CARLA to Town05 outran the bridge's 120 s timeout. A map
   load that times out can leave CARLA holding the town without its traffic-light actors;
   load it again with a long client timeout and regenerate the town's signal table
-  (section 2). Under `just ego-av`, `EGO_CONTAINER_MODE=observable` selects the shared mode.
+  (section 2). Under `just ego-av`, `container_mode:=observable` selects the shared mode.
   On a host with several GPUs, `gpu:=<index>` on a vehicle side's launch pins its CUDA
   nodes to one card (`CUDA_VISIBLE_DEVICES`; empty, the default, inherits the
-  environment's); under `just ego-av`, `EGO_LAUNCH_ARGS="gpu:=1"`. `extra_launch:=<file>`
+  environment's); under `just ego-av`, `just ego-av gpu:=1`. `extra_launch:=<file>`
   starts a launch file of your own beside a vehicle side, in its domain (a V2X node, a
   recorder); it receives `vehicle_name`, `entity`, `map_path` and `use_sim_time`.
 - **CARLA dies**: the running scenario fails within ~30 s; restart CARLA; the next scenario

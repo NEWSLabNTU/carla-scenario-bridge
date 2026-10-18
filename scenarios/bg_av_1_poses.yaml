@@ -1,6 +1,5 @@
 # Local-mode goal for bg_av_1's vehicle agent (acb_pilot poses format), for testing its
-# stack with no scenario: BG_RELAY= BG_GOAL_POSES_FILE=$PWD/scenarios/bg_av_1_poses.yaml
-# just bg-av. In a scenario the goal comes from town01_two_av.xosc (bg_av_1, controller
+# stack with no scenario: just bg-av relay:=none goal_poses_file:=$PWD/scenarios/bg_av_1_poses.yaml. In a scenario the goal comes from town01_two_av.xosc (bg_av_1, controller
 # `agent`), which uses the same pose: west along lanelet 6583 of Town01, from x=230 to
 # x=110 at y=-129.8 (ROS frame, yaw 180 deg). The agent needs the vehicle in CARLA, which
 # only a scenario spawns, so local mode needs one placed by hand (role_name bg_av_1).

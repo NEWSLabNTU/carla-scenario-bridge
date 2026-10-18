@@ -48,13 +48,16 @@ csb_autoware_overlay_build() {
 }
 
 # Source the overlay into the calling shell, after Autoware's setup. On by default when
-# built; AUTOWARE_OVERLAY=0 runs the stock packages. $1: overlay dir
+# built. $1: overlay dir; $2: true (default) or false, a recipe's autoware_overlay:= argument
+# (false runs the stock packages).
 csb_autoware_overlay_source() {
     local dir="$1"
-    case "${AUTOWARE_OVERLAY:-1}" in
+    case "${2:-true}" in
         0|false|off)
-            echo "[just] AUTOWARE_OVERLAY=0: stock Autoware packages, no overlay" >&2
+            echo "[just] autoware_overlay:=false: stock Autoware packages, no overlay" >&2
             return 0 ;;
+        1|true|on) ;;
+        *) echo "[just] autoware_overlay:=$2 is not true or false" >&2; exit 2 ;;
     esac
     if [ ! -f "$dir/install/local_setup.bash" ]; then
         echo "[just] WARNING: Autoware overlay not built; running stock Autoware, which has" >&2

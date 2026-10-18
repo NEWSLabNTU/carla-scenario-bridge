@@ -163,9 +163,9 @@ def main() -> int:
             print(f"--- run {run}/{args.runs}", flush=True)
             started = time.time()
             with open(run_dir / "scenario.log", "w") as log:
-                child = subprocess.Popen(["just", "scenario", scenario, *extra], cwd=PROJECT,
+                child = subprocess.Popen(["just", "scenario", scenario, *extra,
+                                          f"output_directory:={run_dir}"], cwd=PROJECT,
                                          stdout=log, stderr=subprocess.STDOUT,
-                                         env=dict(os.environ, OUTPUT_DIR=str(run_dir)),
                                          start_new_session=True)
                 try:
                     child.wait(timeout=args.run_timeout)

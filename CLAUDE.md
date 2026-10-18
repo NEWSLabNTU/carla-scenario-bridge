@@ -77,6 +77,23 @@ just test     # Run tests
 ### Use play_launch instead of ros2 launch
 All launch commands use `play_launch launch` (with `--web-addr` for the web UI), not `ros2 launch` directly.
 
+### Project settings are arguments, host settings are environment
+
+Recipes take project settings -- map, rviz, vehicle and launch choices, scenario output,
+`keep_stacks`, `record` -- as `name:=value` arguments, as a launch file does (`just ego-av
+map_path:=<dir> rviz:=true`, `just scenario <xosc> output_directory:=<dir>`); `ego-av`,
+`ego-isaac` and `bg-av` hand any argument they do not know to the launch file. Host
+settings come from the environment, made permanent in `.env` (just's `dotenv-load`) or
+`.envrc`: ports (`CARLA_PORT`, `SSV2_PORT`, `AGENT_PORT`, `ISAAC_PORT`), displays
+(`DISPLAY`, `ISAAC_DISPLAY`, `RECORD_DISPLAY`), install and data paths (`AUTOWARE_SETUP`,
+`ISAAC_ROOT`, `CARLA_DIR`, `DATA_DIR`, `CARLA_MAPS`), the ROS domains
+(`EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`) and the ego's RMW (`EGO_RMW_IMPLEMENTATION`),
+and the Isaac bring-up waits
+(`ISAAC_READY_TIMEOUT`, `EGO_READY_TIMEOUT`). The variables that used to carry project
+settings (`MAP_NAME`, `LAUNCH_RVIZ`, `EGO_LAUNCH_ARGS`, `OUTPUT_DIR`, `KEEP_STACKS`, ...;
+the list is `CSB_RETIRED_ENV` in `scripts/just_lib.bash`) make a recipe refuse to start,
+naming the argument to pass instead. Do not add new ones.
+
 ### Use just build
 Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).
 
@@ -123,7 +140,7 @@ Autoware 1.5.0 is a binary install we do not rebuild. Fixes it lacks are carried
 at the commit pinned in `scripts/autoware_overlay.bash` (sparse: only the listed package
 dirs), builds them against `/opt/autoware/1.5.0` into `third_party/autoware_overlay/`
 (git-ignored), and `just ego-av` / `bg-av` / the scenario precheck source it right after
-Autoware. On by default when built; `AUTOWARE_OVERLAY=0` runs stock. Today it holds one
+Autoware. On by default when built; `autoware_overlay:=false` runs stock. Today it holds one
 package, `blind_spot`, with the right-turn ego passage fix (autoware_universe#13509, branch
 `csb/blind-spot-right-turn-0.48.0` = tag 0.48.0 + the fix). To carry another fix: commit on
 a `csb/*` branch of the fork from the release tag, push, move the pin, add the dir, rebuild.

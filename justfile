@@ -1,9 +1,14 @@
 # carla-scenario-bridge -- SSv2 ZMQ backend for CARLA
 set dotenv-load
 
+# Host settings come from the environment (or .env / .envrc): ports, displays, install and
+# data paths. Project settings -- map, vehicle, rviz, scenario output, ... --
+# are recipe arguments, name:=value as for a launch file; the environment variables that
+# used to carry them are refused by name (scripts/just_lib.bash, CSB_RETIRED_ENV).
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 ssv2_port := env_var_or_default('SSV2_PORT', '5555')
-map_name := env_var_or_default('MAP_NAME', 'Town01')
+# The town a recipe uses when no map is given
+default_map := 'Town01'
 # ROS domain for the ego stack, which is also SSv2's: the concealer reaches the ego over
 # plain ROS, so `just ego-av` and `just scenario` must agree on this. Domain 0 is left
 # free deliberately -- it is where every unconfigured ROS process on the host lands, and
@@ -17,7 +22,11 @@ agent_port := env_var_or_default('AGENT_PORT', '5560')
 # The Isaac world server's REP port on 127.0.0.1 (`just isaac-world`, and csb's backend:=isaac)
 isaac_port := env_var_or_default('ISAAC_PORT', '5590')
 data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
+# The converted CARLA maps, one directory per town; the repo's scenarios name theirs as
+# $(env CARLA_MAPS)/<Town>.
+maps_dir := env_var_or_default('CARLA_MAPS', data_dir + '/carla-autoware-bridge')
 project := justfile_directory()
+lib := justfile_directory() + '/scripts/just_lib.bash'
 acb_src := justfile_directory() + '/src/autoware_carla_bridge'
 # Where Autoware's own setup.bash lives. The NEWSLabNTU 1.5.0 Debian installs under
 # /opt/autoware/1.5.0; other hosts install the same packages straight into the ROS
@@ -180,10 +189,12 @@ test:
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
 
-# Two Autoware stacks, one scenario, end to end. RECORD=1 for a screencast.
-two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two_av.xosc"): _require-carla
+# Two Autoware stacks, one scenario, end to end. record:=true for a screencast.
+[positional-arguments]
+two-av *args: _require-carla
     #!/usr/bin/env bash
     set -u
+    source "{{lib}}"; csb_reject_env
     # What "two Autoware" means here: the ego's stack and one background AV's, each a full
     # Autoware in its OWN ROS domain with its own acb_bridge, /clock and vehicle agent. Both
     # are scenario entities (roadmap 017): the ego by isEgo, bg_av_1 by its controller
@@ -191,20 +202,36 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
     # relay -- teleported, then the scenario's goal -- so SSv2 sees it (collisions, reach
     # conditions) and the ego's Autoware perceives real, Autoware-driven traffic.
     #
-    # Usage: just two-av [scenario_file]
-    #        KEEP_STACKS=1 just two-av        # leave the stacks this run started up afterwards
-    #        RECORD=1 just two-av             # screencast to play_log/two-av/two-av.mp4,
-    #            both stacks' RViz on $RECORD_DISPLAY (default $DISPLAY); EGO_RVIZ_CONFIG and
-    #            BG_RVIZ_CONFIG choose their configs (window layouts)
+    # Usage: just two-av [scenario_file] [keep_stacks:=true] [record:=true]
+    #            [ego_rviz_config:=<file>] [bg_rviz_config:=<file>] [output_directory:=<dir>]
+    #   keep_stacks:=true  leave the stacks this run started up afterwards
+    #   record:=true       screencast to play_log/two-av/two-av.mp4, both stacks' RViz on
+    #                      $RECORD_DISPLAY (a host setting; default $DISPLAY);
+    #                      ego_rviz_config / bg_rviz_config choose their configs (layouts)
+    #   output_directory   where the scenario writes its verdict (default /tmp)
     #
     # Stacks already running are reused and left running: the simulation side (`just run`),
     # the ego stack (`just ego-av`, web 8082) and the background AV stack (`just bg-av`, web
     # 8083). Only stacks this recipe starts are stopped at the end.
+    scenario_file="{{project}}/src/csb_examples/scenarios/multi_av/town01_two_av.xosc"
+    keep_stacks=false; record=false; ego_rviz=(); bg_rviz=(); output_directory=/tmp; n=0
+    for a in "$@"; do
+        case "$a" in
+            keep_stacks:=*) keep_stacks="${a#*:=}" ;;
+            record:=*) record="${a#*:=}" ;;
+            ego_rviz_config:=?*) ego_rviz=("rviz_config:=${a#*:=}") ;;
+            bg_rviz_config:=?*) bg_rviz=("rviz_config:=${a#*:=}") ;;
+            output_directory:=?*) output_directory="${a#*:=}" ;;
+            *:=*) echo "two-av: unknown argument '$a' (keep_stacks:=, record:=, ego_rviz_config:=, bg_rviz_config:=, output_directory:=)" >&2; exit 2 ;;
+            *) n=$((n + 1)); [ $n = 1 ] || { echo "two-av: too many arguments" >&2; exit 2; }
+               scenario_file="$a" ;;
+        esac
+    done
     ego_dom={{ego_domain}}
     logs="{{project}}/play_log/two-av"
     mkdir -p "$logs"
     rec_display="${RECORD_DISPLAY:-${DISPLAY:-:1}}"
-    launch_rviz=$([ "${RECORD:-0}" = "1" ] && echo true || echo false)
+    launch_rviz=$([ "$record" = true ] && echo true || echo false)
     echo "[two-av] scenario domain {{scenario_domain}}, ego domain $ego_dom, background AV domain 2"
 
     # The play_launch serving web port $1, if any (stacks are told apart by their port).
@@ -221,8 +248,8 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
     ego_pg=""; bg_pg=""
     cleanup() {
         [ -z "$bg_pg$ego_pg" ] && return
-        if [ "${KEEP_STACKS:-0}" = "1" ]; then
-            echo "[two-av] KEEP_STACKS=1, leaving the stacks this run started up"
+        if [ "$keep_stacks" = true ]; then
+            echo "[two-av] keep_stacks:=true, leaving the stacks this run started up"
             return
         fi
         echo "[two-av] stopping the stacks this run started"
@@ -270,9 +297,8 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
         echo "[two-av] reusing the running ego stack (web 8082)"
     else
         echo "[two-av] starting the ego stack (several minutes)"
-        setsid env LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
-            ${EGO_RVIZ_CONFIG:+RVIZ_CONFIG="$EGO_RVIZ_CONFIG"} \
-            just ego-av > "$logs/ego.log" 2>&1 &
+        setsid env DISPLAY="$rec_display" \
+            just ego-av rviz:="$launch_rviz" "${ego_rviz[@]}" > "$logs/ego.log" 2>&1 &
         ego_pg=$!
         wait_for_stack ego "$ego_pg" || exit 1
     fi
@@ -281,11 +307,10 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
         echo "[two-av] reusing the running background AV stack (web 8083)"
     else
         echo "[two-av] starting the background AV stack"
-        # With RECORD=1 the background AV gets an RViz too, on the same display: two
-        # Autoware windows, one per vehicle (BG_RVIZ_CONFIG / EGO_RVIZ_CONFIG place them).
-        setsid env LAUNCH_RVIZ="$launch_rviz" DISPLAY="$rec_display" \
-            ${BG_RVIZ_CONFIG:+RVIZ_CONFIG="$BG_RVIZ_CONFIG"} \
-            just bg-av > "$logs/bg.log" 2>&1 &
+        # With record:=true the background AV gets an RViz too, on the same display: two
+        # Autoware windows, one per vehicle (bg_rviz_config / ego_rviz_config place them).
+        setsid env DISPLAY="$rec_display" \
+            just bg-av launch_rviz:="$launch_rviz" "${bg_rviz[@]}" > "$logs/bg.log" 2>&1 &
         bg_pg=$!
         wait_for_stack bg "$bg_pg" || exit 1
     fi
@@ -295,7 +320,7 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
     just _require-ego-stack || exit 1
     just _require-agent bg_av_1 || exit 1
 
-    # RECORD=1 grabs the display both stacks' RViz are drawing on (LAUNCH_RVIZ above; a
+    # record:=true grabs the display both stacks' RViz are drawing on (rviz above; a
     # standalone rviz2 cannot load autoware.rviz without the stack's vehicle parameters).
     # RECORDING CHANGES THE RESULT ON THIS MACHINE (RViz on llvmpipe costs ~4 cores): do
     # not record a run you intend to judge.
@@ -305,10 +330,10 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
         [ -n "$rec_pid" ] && kill -INT -"$rec_pid" 2>/dev/null && sleep 5
         [ -n "$rec_pid" ] && echo "[two-av] screencast: $logs/two-av.mp4"
     }
-    if [ "${RECORD:-0}" = "1" ]; then
+    if [ "$record" = true ]; then
         geom=$(DISPLAY="$rec_display" xdpyinfo 2>/dev/null | awk '/dimensions:/ {print $2; exit}')
         if [ -z "$geom" ]; then
-            echo "[two-av] RECORD=1 but display $rec_display is not usable; skipping the screencast"
+            echo "[two-av] record:=true but display $rec_display is not usable; skipping the screencast"
         else
             echo "[two-av] recording $rec_display ($geom) to $logs/two-av.mp4"
             setsid ffmpeg -y -f x11grab -video_size "$geom" -framerate 8 -i "$rec_display.0" \
@@ -318,12 +343,10 @@ two-av scenario_file=(project + "/src/csb_examples/scenarios/multi_av/town01_two
         fi
     fi
 
-    echo "[two-av] running $(basename "{{scenario_file}}")"
-    # `just scenario` writes under OUTPUT_DIR (default /tmp), like scenario.launch.xml's
-    # output_directory:=.
-    junit="${OUTPUT_DIR:-/tmp}/scenario_test_runner/result.junit.xml"
+    echo "[two-av] running $(basename "$scenario_file")"
+    junit="$output_directory/scenario_test_runner/result.junit.xml"
     rm -f "$junit"
-    just scenario "{{scenario_file}}" 2>&1 | tail -5 || true
+    just scenario "$scenario_file" output_directory:="$output_directory" 2>&1 | tail -5 || true
 
     stop_recording
     if [ -f "$junit" ]; then
@@ -370,9 +393,11 @@ run *args:
     # As users start it (roadmap 017): csb_launch simulation.launch.xml under play_launch,
     # which restarts the bridge on a crash (respawn="true"). `just build` after changes.
     # Arguments are the launch file's, name:=value (`just run backend:=isaac
-    # isaac_request_timeout_seconds:=60`); the older environment variables (CSB_BACKEND,
-    # CSB_CONFIG_DIR, WEATHER, ...) still work, and an argument given here wins.
+    # isaac_request_timeout_seconds:=60`, config_file:=, weather:=, gap_trace_dir:=,
+    # npc_contact_sensors:=). The host's CARLA, SSV2 and agent ports and CARLA_HOST come from
+    # the environment.
     set -e
+    source "{{lib}}"; csb_reject_env
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
@@ -383,15 +408,10 @@ run *args:
     export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
     export ROS_DOMAIN_ID={{scenario_domain}}
     exec play_launch launch --web-addr 0.0.0.0:8084 \
-        --log-dir play_log/bridge \
+        --log-dir "play_log/bridge" \
         csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
         isaac_endpoint:="tcp://127.0.0.1:{{isaac_port}}" \
-        ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"} \
-        ${CSB_BACKEND:+backend:="$CSB_BACKEND"} \
-        ${WEATHER:+weather:="$WEATHER"} \
-        ${GAP_TRACE_DIR:+gap_trace_dir:="$GAP_TRACE_DIR"} \
-        ${NPC_CONTACT_SENSORS:+npc_contact_sensors:="$NPC_CONTACT_SENSORS"} \
         "$@"
 
 # Start CARLA simulator as a background service
@@ -450,7 +470,7 @@ isaac-world *args:
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     # Built beside this checkout's csb_isaac; a moved checkout points it here again.
     export CSB_ISAAC_DIR="{{project}}/src/csb_isaac"
-    exec play_launch launch --web-addr 0.0.0.0:8085 --log-dir play_log/isaac \
+    exec play_launch launch --web-addr 0.0.0.0:8085 --log-dir "play_log/isaac" \
         csb_launch isaac_world.launch.xml "${args[@]}"
 
 # Is the world server up? One Hello round trip on ISAAC_PORT; wait:=SECS retries that long.
@@ -493,7 +513,8 @@ isaac-town town *args:
 isaac-world-gen *args:
     #!/usr/bin/env bash
     set -e
-    map_path="{{data_dir}}/carla-autoware-bridge/{{map_name}}"; usd=""
+    source "{{lib}}"; csb_reject_env
+    map_path="{{maps_dir}}/{{default_map}}"; usd=""
     for a in "$@"; do
         case "$a" in
             map_path:=*) map_path="${a#map_path:=}" ;;
@@ -568,6 +589,7 @@ acceptance *args:
     #!/usr/bin/env bash
     set -e
     scenario="{{project}}/src/csb_examples/scenarios/basic/town01_ego_drive.xosc"
+    source "{{lib}}"; csb_reject_env
     runs=1; domain=""; backend=carla; worlds=""; n=0
     for a in "$@"; do
         case "$a" in
@@ -637,8 +659,7 @@ _require-ego-stack:
     set -e
     source "{{autoware_setup}}"
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_source "{{autoware_overlay_dir}}"
-    if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
+    csb_autoware_overlay_source "{{autoware_overlay_dir}}" true
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
@@ -666,81 +687,82 @@ _require-carla:
 
 # Launch the ego's Autoware + acb_bridge + vehicle agent in the ego domain
 # (`ego_domain`). Long-lived: start it once and reuse it across scenario runs; it reaches
-# the scenario through the agent relay `just run` starts (EGO_RELAY, default
-# tcp://localhost:<agent_port>; empty with EGO_GOAL_POSES_FILE drives to a local goal).
-# Usage: just ego-av [map_path]
-ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carla
+# the scenario through the agent relay `just run` starts.
+#
+# Arguments are acb_launch carla_simulator.launch.xml's, name:=value, and win over the
+# defaults here: map_path:=<dir> (default the Town01 map; a bare directory as the first
+# argument is the same), rviz:=true, rviz_config:=<file>, relay:=<endpoint> (relay:= for
+# none, with goal_poses_file:=<file> to drive to a local goal), publish_clock:=,
+# control_trace_path:=, lidar_detection_model:=, steering_multiplier:=, ... ;
+# accel_map_path:=, brake_map_path:= and traffic_light_map_path:= with no value turn that
+# input off. The recipe's own:
+#   overlay:=<setup.bash>         a workspace sourced between Autoware and acb, so its
+#                                 packages shadow Autoware's but not acb's
+#   autoware_overlay:=false       stock Autoware, without `just build-autoware-overlay`'s fixes
+#   container_mode:=<mode>        play_launch's, default isolated
+#   play_launch_args:="<opts>"    further play_launch options, split on whitespace
+#
+# Usage: just ego-av [map_path:=<dir>] [rviz:=true] [name:=value ...]
+[positional-arguments]
+ego-av *args: _require-carla
     #!/usr/bin/env bash
     set -e
+    source "{{lib}}"; csb_reject_env
+    overlay=""; autoware_overlay=true; container_mode=isolated; play_launch_args=""
+    given=()
+    for a in "$@"; do
+        case "$a" in
+            overlay:=*) overlay="${a#*:=}" ;;
+            autoware_overlay:=*) autoware_overlay="${a#*:=}" ;;
+            container_mode:=?*) container_mode="${a#*:=}" ;;
+            play_launch_args:=*) play_launch_args="${a#*:=}" ;;
+            # The bridge spells "off" as `none`: an empty map path means that.
+            accel_map_path:=|brake_map_path:=|traffic_light_map_path:=) given+=("${a}none") ;;
+            relay:=none) given+=("relay:=") ;;
+            *:=*) given+=("$a") ;;
+            *) [ ${#given[@]} = 0 ] || { echo "ego-av: '$a' is not name:=value" >&2; exit 2; }
+               given+=("map_path:=$a") ;;
+        esac
+    done
     # Three overlaid workspaces: base Autoware, then acb (acb_launch, sensor kit,
     # vehicle description, acb_bridge), then this one (csb_launch). The ego stack
     # resolves packages from all three. Right after Autoware comes the Autoware fix
-    # overlay (`just build-autoware-overlay`, roadmap 042; AUTOWARE_OVERLAY=0 skips it).
-    # EGO_OVERLAY, when set, is sourced next, between Autoware and acb, so its packages
-    # shadow Autoware's but not acb's: e.g. a tier4_system_launch with the stock MRM
-    # nodes removed (a safety island's).
+    # overlay (`just build-autoware-overlay`, roadmap 042), then overlay:=, when given, so
+    # its packages shadow Autoware's but not acb's: e.g. a tier4_system_launch with the
+    # stock MRM nodes removed (a safety island's).
     source "{{autoware_setup}}"
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_source "{{autoware_overlay_dir}}"
-    if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
+    csb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
+    if [ -n "$overlay" ]; then source "$overlay"; fi
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    goal_poses_file="${EGO_GOAL_POSES_FILE:-}"
-    relay="${EGO_RELAY-tcp://localhost:{{agent_port}}}"
-    clock="${ACB_PUBLISH_CLOCK:-true}"
     # Any domain works since roadmap 017: the scenario reaches this ego through the agent
     # relay (TCP), not over ROS. Kept apart from the scenario domain on purpose.
     export ROS_DOMAIN_ID={{ego_domain}}
-    # EGO_RMW_IMPLEMENTATION puts the ego on another RMW (e.g. rmw_zenoh_cpp, which then
-    # needs its router up). Only the ego: the scenario side stays on Cyclone, since the
-    # two meet over the relay's TCP socket. Exported after the setups, which on some
-    # Autoware installs export RMW_IMPLEMENTATION themselves. `_require-ego-stack` reads
-    # the same variable, so `just scenario` finds the ego where it is.
+    # EGO_RMW_IMPLEMENTATION (a host setting, like the domain) puts the ego on another RMW
+    # (e.g. rmw_zenoh_cpp, which then needs its router up). Only the ego: the scenario side
+    # stays on Cyclone, since the two meet over the relay's TCP socket. Exported after the
+    # setups, which on some Autoware installs export RMW_IMPLEMENTATION themselves.
+    # `_require-ego-stack` reads the same variable, so `just scenario` finds the ego.
     if [ -n "${EGO_RMW_IMPLEMENTATION:-}" ]; then export RMW_IMPLEMENTATION="$EGO_RMW_IMPLEMENTATION"; fi
-    # A ROS launch argument cannot carry an empty value -- `goal_poses_file:=` is rejected
-    # as "malformed launch argument", and the failure comes minutes in, after the whole
-    # parse. The launch file already declares a default for it, so pass the argument only
-    # when there is something to pass.
-    optional_args=()
-    if [ -n "$goal_poses_file" ]; then
-        optional_args+=(goal_poses_file:="$goal_poses_file")
-    fi
-    # The agent initializes localization at the scenario's start pose (teleported); seeding
-    # from CARLA on attach as well would race it.
-    seed_default=false
-    # CONTROL_TRACE_PATH writes per-stage control latency as CSV; see acb's control_trace.
-    if [ -n "${CONTROL_TRACE_PATH:-}" ]; then
-        optional_args+=(control_trace_path:="$CONTROL_TRACE_PATH")
-    fi
-    # EGO_LAUNCH_ARGS: further name:=value launch arguments, split on whitespace (so no
-    # spaces inside a value), appended last; an argument the launch tree does not declare
-    # reaches any included file that declares it, e.g. one EGO_OVERLAY provides.
-    # RVIZ_CONFIG replaces Autoware's autoware.rviz (window size and docks), with LAUNCH_RVIZ=true.
-    if [ -n "${RVIZ_CONFIG:-}" ]; then
-        optional_args+=(rviz_config:="$RVIZ_CONFIG")
-    fi
-    # The pedal maps have the same trap from the other direction: these use ${VAR-default}
-    # rather than ${VAR:-default}, so `ACCEL_MAP_PATH= just ego-av` passes an empty value
-    # and fails the same way. The bridge spells "off" as `none`, so map empty onto that.
-    accel_map="${ACCEL_MAP_PATH-$(ros2 pkg prefix --share acb_vehicle_description)/config/accel_map.csv}"
-    brake_map="${BRAKE_MAP_PATH-$(ros2 pkg prefix --share acb_vehicle_description)/config/brake_map.csv}"
-    accel_map="${accel_map:-none}"
-    brake_map="${brake_map:-none}"
-    # acb publishes signal state from CARLA's lights (roadmap 015) from the table csb writes
-    # beside the Lanelet2 map at every Initialize: this map_path's real directory, the one
-    # the scenario's map symlinks resolve to. TRAFFIC_LIGHT_MAP_PATH overrides it (csb logs
-    # where it wrote, e.g. its fallback for a read-only map dir); empty turns it off.
-    tl_map="${TRAFFIC_LIGHT_MAP_PATH-{{map_path}}/carla/traffic_lights.yaml}"
-    tl_map="${tl_map:-none}"
     # The user's vehicle side, exactly (docs/user-guide.md section 4, Terminal 3):
     # acb_launch carla_simulator.launch.xml under play_launch with the guide's flags, so a
-    # dev run proves what users get. Everything below is a launch argument, visible here;
-    # nothing runs beside the launch (the deprecated API the agent's velocity limit needs is
-    # in it: launch_deprecated_api, default true).
+    # dev run proves what users get. Defaults that differ from the launch file's: no RViz,
+    # the relay `just run` starts, and no localization seed on attach (the agent
+    # initializes localization at the scenario's start pose, teleported; seeding from CARLA
+    # as well would race it). acb publishes signal state from CARLA's lights (roadmap 015)
+    # from the table csb writes beside the Lanelet2 map at every Initialize, which the
+    # launch file's traffic_light_map_path default (<map_path>/carla/traffic_lights.yaml)
+    # finds. A ROS launch argument cannot carry an empty value, so an empty one given here
+    # drops the default and is not passed (csb_with_defaults).
+    csb_with_defaults launch_args \
+        map_path:="{{maps_dir}}/{{default_map}}" vehicle_name:=hero carla_port:={{carla_port}} \
+        relay:="tcp://localhost:{{agent_port}}" rviz:=false seed_localization_on_attach:=false \
+        -- "${given[@]}"
     #
     # --container-mode isolated --composable-respawn on-crash: Autoware 1.5.0's
     # behavior_path_planner aborts now and then on a new route (autoware_universe#12460, once
@@ -748,35 +770,14 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
     # reload the stack never plans again. A composable can only be reloaded alone when it is
     # a process of its own, which is play_launch's isolated mode (0.15 defaults to observable,
     # one process per container, as ros2 launch). The guide's command carries both.
-    # EGO_PLAY_LAUNCH_ARGS: further play_launch options (e.g. `-c <runtime config>`),
-    # split on whitespace, placed before the launch file. EGO_CONTAINER_MODE overrides
-    # isolated: on rmw_zenoh_cpp every process is a zenoh peer and the peers mesh, so
-    # isolated's ~200 processes cost far more than observable's ~80 (one per container);
-    # observable gives up reloading one crashed composable alone.
+    # container_mode:=observable: on rmw_zenoh_cpp every process is a zenoh peer and the
+    # peers mesh, so isolated's ~200 processes cost far more than observable's ~80 (one per
+    # container); observable gives up reloading one crashed composable alone.
     exec play_launch launch --web-addr 0.0.0.0:8082 \
-        --container-mode "${EGO_CONTAINER_MODE:-isolated}" --composable-respawn on-crash \
-        --log-dir play_log/ego \
-        ${EGO_PLAY_LAUNCH_ARGS:-} \
-        acb_launch carla_simulator.launch.xml \
-        map_path:="{{map_path}}" \
-        vehicle_name:=hero \
-        carla_port:={{carla_port}} \
-        ${relay:+relay:="$relay"} \
-        publish_clock:=$clock \
-        rviz:="${LAUNCH_RVIZ:-false}" \
-        report_measured_steering:="${REPORT_MEASURED_STEERING:-false}" \
-        steering_multiplier:="${STEERING_MULTIPLIER:-1.0}" \
-        steer_rate_limit_deg_s:="${STEER_RATE_LIMIT_DEG_S:-0.0}" \
-        steer_time_constant_s:="${STEER_TIME_CONSTANT_S:-0.0}" \
-        publish_ground_truth_objects:="${GROUND_TRUTH_OBJECTS:-false}" \
-        seed_localization_on_attach:="${SEED_LOCALIZATION:-$seed_default}" \
-        ground_truth_range_m:="${GROUND_TRUTH_RANGE_M:-100.0}" \
-        traffic_light_map_path:="$tl_map" \
-        accel_map_path:="$accel_map" \
-        brake_map_path:="$brake_map" \
-        ${LIDAR_DETECTION_MODEL:+lidar_detection_model:="$LIDAR_DETECTION_MODEL"} \
-        "${optional_args[@]}" \
-        ${EGO_LAUNCH_ARGS:-}
+        --container-mode "$container_mode" --composable-respawn on-crash \
+        --log-dir "play_log/ego" \
+        $play_launch_args \
+        acb_launch carla_simulator.launch.xml "${launch_args[@]}"
 
 # The ego's Autoware on Isaac Sim (roadmap 038): `just ego-av`'s stack with no acb_bridge --
 # the world server (`just isaac-world`) is the vehicle interface, the sensors and /clock on
@@ -787,33 +788,45 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
 # win: map_path:=<dir> (default the Town01 map), rviz:=true, rviz_config:=<file>,
 # relay:=tcp://host:port, goal_poses_file:=<file>, ... launch_vehicle_interface is false
 # (no acb_bridge: nothing CARLA in the stack, no V2X signals; Isaac has no lights, 037).
+# overlay:=, autoware_overlay:=, container_mode:= and play_launch_args:= as for `just ego-av`.
 #
 # Usage: just ego-isaac [map_path:=<dir>] [rviz:=true] [name:=value ...]
 [positional-arguments]
 ego-isaac *args:
     #!/usr/bin/env bash
     set -e
+    source "{{lib}}"; csb_reject_env
+    overlay=""; autoware_overlay=true; container_mode=isolated; play_launch_args=""
+    given=()
+    for a in "$@"; do
+        case "$a" in
+            overlay:=*) overlay="${a#*:=}" ;;
+            autoware_overlay:=*) autoware_overlay="${a#*:=}" ;;
+            container_mode:=?*) container_mode="${a#*:=}" ;;
+            play_launch_args:=*) play_launch_args="${a#*:=}" ;;
+            relay:=none) given+=("relay:=") ;;
+            *:=*) given+=("$a") ;;
+            *) echo "ego-isaac: '$a' is not name:=value" >&2; exit 2 ;;
+        esac
+    done
     source "{{autoware_setup}}"
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_source "{{autoware_overlay_dir}}"
-    if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
+    csb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
+    if [ -n "$overlay" ]; then source "$overlay"; fi
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
     # Defaults, each dropped when an argument names the same launch argument.
-    launch_args=()
-    for d in map_path:="{{data_dir}}/carla-autoware-bridge/{{map_name}}" \
-             launch_vehicle_interface:=false relay:="tcp://localhost:{{agent_port}}" rviz:=false; do
-        given=false
-        for a in "$@"; do [ "${a%%:=*}" = "${d%%:=*}" ] && given=true; done
-        $given || launch_args+=("$d")
-    done
+    csb_with_defaults launch_args \
+        map_path:="{{maps_dir}}/{{default_map}}" launch_vehicle_interface:=false \
+        relay:="tcp://localhost:{{agent_port}}" rviz:=false \
+        -- "${given[@]}"
     exec play_launch launch --web-addr 0.0.0.0:8082 \
-        --container-mode "${EGO_CONTAINER_MODE:-isolated}" --composable-respawn on-crash \
-        --log-dir play_log/ego \
-        ${EGO_PLAY_LAUNCH_ARGS:-} \
-        acb_launch carla_simulator.launch.xml "${launch_args[@]}" "$@"
+        --container-mode "$container_mode" --composable-respawn on-crash \
+        --log-dir "play_log/ego" \
+        $play_launch_args \
+        acb_launch carla_simulator.launch.xml "${launch_args[@]}"
 
 # Launch one background AV's vehicle side -- Autoware + acb_bridge + vehicle agent -- in its
 # own ROS domain. The background AV is a scenario entity whose controller is `agent`
@@ -823,39 +836,50 @@ ego-isaac *args:
 #
 # Domains start at 2: 9 is the scenario's, 1 the ego's, and 0 is left free so that a stray
 # unconfigured ROS process cannot join a run's graph. A second background AV goes on 3 with
-# its own web port: `just bg-av bg_av_2 3 8085`.
+# its own web port: `just bg-av bg_av_2 3 8086` (8085 is the Isaac world server's).
 #
-# Usage: just bg-av [entity] [domain] [web_port] [map_path]
-bg-av entity="bg_av_1" domain="2" web_port="8083" map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carla
+# Up to three positional arguments, then background_av.launch.xml's as name:=value:
+# map_path:=<dir> (default the Town01 map), launch_rviz:=true, rviz_config:=<file>,
+# relay:=<endpoint> (relay:=none with goal_poses_file:=<file> drives once to a local goal, no
+# scenario), ...; autoware_overlay:=false runs stock Autoware.
+#
+# Usage: just bg-av [entity] [domain] [web_port] [map_path:=<dir>] [name:=value ...]
+[positional-arguments]
+bg-av *args: _require-carla
     #!/usr/bin/env bash
     set -e
+    source "{{lib}}"; csb_reject_env
+    entity=bg_av_1; domain=2; web_port=8083; autoware_overlay=true; given=(); n=0
+    for a in "$@"; do
+        case "$a" in
+            autoware_overlay:=*) autoware_overlay="${a#*:=}" ;;
+            relay:=) given+=("relay:=none") ;;
+            *:=*) given+=("$a") ;;
+            *) n=$((n + 1))
+               case $n in 1) entity="$a" ;; 2) domain="$a" ;; 3) web_port="$a" ;;
+                   *) echo "bg-av: too many positional arguments (entity domain web_port)" >&2; exit 2 ;; esac ;;
+        esac
+    done
     source "{{autoware_setup}}"
     # The same Autoware fix overlay as the ego's (roadmap 042)
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_source "{{autoware_overlay_dir}}"
+    csb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain
     # 1000 in it is what keeps domain 1's unicast ports out of domain 0's range.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    export ROS_DOMAIN_ID={{domain}}
-    # BG_RELAY empty with BG_GOAL_POSES_FILE drives once to a local goal (no scenario).
-    # play_launch rejects an empty `name:=`, so optional arguments go in only when set.
-    optional_args=()
-    [ -n "${BG_GOAL_POSES_FILE:-}" ] && optional_args+=(goal_poses_file:="$BG_GOAL_POSES_FILE")
-    [ -n "${RVIZ_CONFIG:-}" ] && optional_args+=(rviz_config:="$RVIZ_CONFIG")
-    exec play_launch launch --web-addr 0.0.0.0:{{web_port}} \
+    export ROS_DOMAIN_ID="$domain"
+    csb_with_defaults launch_args \
+        entity:="$entity" relay:="tcp://localhost:{{agent_port}}" \
+        map_path:="{{maps_dir}}/{{default_map}}" carla_port:={{carla_port}} launch_rviz:=false \
+        -- "${given[@]}"
+    exec play_launch launch --web-addr 0.0.0.0:"$web_port" \
         --container-mode isolated --composable-respawn on-crash \
         --load-node-timeout 120 \
         --load-total-budget 180 \
-        --log-dir play_log/bg-{{entity}} \
-        csb_launch background_av.launch.xml \
-        entity:={{entity}} \
-        relay:="${BG_RELAY-tcp://localhost:{{agent_port}}}" \
-        map_path:="{{map_path}}" \
-        carla_port:={{carla_port}} \
-        launch_rviz:="${LAUNCH_RVIZ:-false}" \
-        "${optional_args[@]}"
+        --log-dir "play_log/bg-$entity" \
+        csb_launch background_av.launch.xml "${launch_args[@]}"
 
 # Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already
 # be up; SSv2 no longer launches Autoware)
@@ -905,24 +929,27 @@ _clear-stale-scenario:
 # (scripts/isaac_up.sh: the world server, `just run backend:=isaac`, `just ego-isaac`, each
 # waited for) and leaves it up for the next run. worlds:=<map>[,<map>] (Isaac): what a world
 # server started here preloads, map names under CARLA_MAPS or paths (default: the scenario's map).
+# output_directory:=<dir> (default /tmp): the verdict is
+# <dir>/scenario_test_runner/result.junit.xml.
 #
-# Usage: just scenario /path/to/scenario.xosc [backend:=carla|isaac] [worlds:=Town01,Town02]
-#        OUTPUT_DIR=/tmp/run1 just scenario ...   # verdict: $OUTPUT_DIR/scenario_test_runner/result.junit.xml
+# Usage: just scenario <xosc> [backend:=carla|isaac] [worlds:=Town01,..] [output_directory:=<dir>]
 [positional-arguments]
 scenario scenario_file *args:
     #!/usr/bin/env bash
     set -e
     shift
-    backend=carla; worlds=""
+    source "{{lib}}"; csb_reject_env
+    backend=carla; worlds=""; output_directory=/tmp
     for a in "$@"; do
         case "$a" in
             backend:=*) backend="${a#backend:=}" ;;
             worlds:=*) worlds="${a#worlds:=}" ;;
-            *) echo "scenario: unknown argument '$a' (backend:=carla|isaac, worlds:=)" >&2; exit 2 ;;
+            output_directory:=?*) output_directory="${a#*:=}" ;;
+            *) echo "scenario: unknown argument '$a' (backend:=carla|isaac, worlds:=, output_directory:=)" >&2; exit 2 ;;
         esac
     done
     # The repo's scenarios name their map as $(env CARLA_MAPS)/<Town>.
-    export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
+    export CARLA_MAPS="{{maps_dir}}"
     case "$backend" in
         carla) just _require-carla; just _require-ego-stack ;;
         isaac)
@@ -950,21 +977,21 @@ scenario scenario_file *args:
     # The scenario file is read, never modified: SSv2's runner preprocesses a copy in its
     # output directory (fork, roadmap 017).
     exec play_launch launch --web-addr 0.0.0.0:8081 \
-        --log-dir play_log/scenario \
+        --log-dir "play_log/scenario" \
         csb_launch scenario.launch.xml \
         scenario:="$(realpath "{{scenario_file}}")" \
-        output_directory:="${OUTPUT_DIR:-/tmp}" \
+        output_directory:="$output_directory" \
         port:={{ssv2_port}}
 
 # The map directory a scenario names (its LogicFile, $(env CARLA_MAPS) expanded); the
 # default map when it names none.
 _scenario-map scenario_file:
     #!/usr/bin/env bash
-    maps="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
+    maps="{{maps_dir}}"
     f=$(grep -oE 'LogicFile filepath="[^"]*"|filepath: *.*' "{{scenario_file}}" | head -1 \
         | sed -E 's/^LogicFile filepath="//; s/"$//; s/^filepath: *//')
     f="${f//\$(env CARLA_MAPS)/$maps}"
-    echo "${f:-$maps/{{map_name}}}"
+    echo "${f:-$maps/{{default_map}}}"
 
 # Run the full stack and one scenario, then take down what it started.
 #
@@ -972,32 +999,36 @@ _scenario-map scenario_file:
 # launch (CARLA must be running). backend:=isaac: the stacks `just scenario backend:=isaac`
 # brings up (world server, simulation side, ego-isaac; those already running are reused and
 # left), the scenario, its verdict, then the stacks this run started are stopped
-# (KEEP_STACKS=1 leaves them).
+# (keep_stacks:=true leaves them). output_directory:=<dir> (Isaac; default
+# play_log/e2e/<time>) gets the scenario's output.
 #
-# Usage: just e2e [scenario_file] [map_name] [backend:=carla|isaac] [worlds:=...]
+# Usage: just e2e [xosc] [map] [backend:=carla|isaac] [worlds:=..] [keep_stacks:=true] [output_directory:=<dir>]
 [positional-arguments]
 e2e *args:
     #!/usr/bin/env bash
     set -e
+    source "{{lib}}"; csb_reject_env
     scenario="{{project}}/src/csb_examples/scenarios/basic/town01_ego_drive.xosc"
-    map="{{map_name}}"; backend=carla; extra=(); n=0
+    map="{{default_map}}"; backend=carla; extra=(); keep_stacks=false; out=""; n=0
     for a in "$@"; do
         case "$a" in
             backend:=*) backend="${a#backend:=}" ;;
             worlds:=*) extra+=("$a") ;;
-            *:=*) echo "e2e: unknown argument '$a' (backend:=, worlds:=)" >&2; exit 2 ;;
+            keep_stacks:=*) keep_stacks="${a#*:=}" ;;
+            output_directory:=?*) out="${a#*:=}" ;;
+            *:=*) echo "e2e: unknown argument '$a' (backend:=, worlds:=, keep_stacks:=, output_directory:=)" >&2; exit 2 ;;
             *) n=$((n + 1)); case $n in 1) scenario="$a" ;; 2) map="$a" ;;
                    *) echo "e2e: too many arguments" >&2; exit 2 ;; esac ;;
         esac
     done
-    export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
+    export CARLA_MAPS="{{maps_dir}}"
     if [ "$backend" = isaac ]; then
         started=$(mktemp)
-        out="${OUTPUT_DIR:-{{project}}/play_log/e2e/$(date +%Y-%m-%d_%H-%M-%S)}"
+        [ -n "$out" ] || out="{{project}}/play_log/e2e/$(date +%Y-%m-%d_%H-%M-%S)"
         mkdir -p "$out"
         teardown() {
-            if [ "${KEEP_STACKS:-0}" = 1 ]; then
-                echo "[e2e] KEEP_STACKS=1: leaving the stacks this run started up"
+            if [ "$keep_stacks" = true ]; then
+                echo "[e2e] keep_stacks:=true: leaving the stacks this run started up"
             elif [ -s "$started" ]; then
                 echo "[e2e] stopping the stacks this run started"
                 for pg in $(tac "$started"); do kill -TERM -"$pg" 2>/dev/null || true; done
@@ -1013,7 +1044,7 @@ e2e *args:
         ISAAC_UP_STARTED="$started" ISAAC_PORT={{isaac_port}} SSV2_PORT={{ssv2_port}} \
             AGENT_PORT={{agent_port}} "{{project}}/scripts/isaac_up.sh" "$CARLA_MAPS/$map" \
             "$CARLA_MAPS/$map"
-        OUTPUT_DIR="$out" just scenario "$scenario" backend:=isaac "${extra[@]}" || true
+        just scenario "$scenario" backend:=isaac output_directory:="$out" "${extra[@]}" || true
         junit="$out/scenario_test_runner/result.junit.xml"
         if [ ! -f "$junit" ]; then echo "[e2e] no verdict: $junit not written"; exit 1; fi
         if grep -q 'failures="0"' "$junit" && grep -q 'errors="0"' "$junit"; then

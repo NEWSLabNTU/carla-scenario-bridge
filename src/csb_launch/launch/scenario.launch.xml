@@ -104,7 +104,7 @@
          one may be on: two publishers interleave their messages on the arbiter's V2X input,
          and a group present in one and absent in the other flickers between a colour and
          nothing. The switch stays for a backend without acb; turn acb's off
-         (`TRAFFIC_LIGHT_MAP_PATH= just ego-av`) before turning this on. -->
+         (`just ego-av traffic_light_map_path:=`) before turning this on. -->
     <arg name="publish_conventional_traffic_signals" value="false" />
 
 

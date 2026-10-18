@@ -27,15 +27,22 @@ recipes. The ones you will use most:
 | `just format` | format the Rust code |
 | `just carla-start` / `carla-status` / `carla-stop` / `carla-health` | CARLA as a background service, and whether it is fit to run a scenario |
 | `just run` | the simulation side (bridge + agent relay), play_launch, web UI on 8084 |
-| `just ego-av` | the vehicle side for the ego, web UI on 8082 (`LAUNCH_RVIZ=true` for RViz) |
-| `just build-autoware-overlay` | Autoware fixes 1.5.0 lacks, built from a pinned fork commit into `third_party/autoware_overlay/`; `ego-av` / `bg-av` source it by default (`AUTOWARE_OVERLAY=0`: off; roadmap 042) |
-| `just scenario <file>` | one scenario (web UI on 8081); verdict in `$OUTPUT_DIR/scenario_test_runner/` |
-| `just two-av` | two Autoware stacks, one scenario; `RECORD=1` records a screencast |
+| `just ego-av` | the vehicle side for the ego, web UI on 8082 (`just ego-av rviz:=true` for RViz; any acb_launch argument as `name:=value`) |
+| `just build-autoware-overlay` | Autoware fixes 1.5.0 lacks, built from a pinned fork commit into `third_party/autoware_overlay/`; `ego-av` / `bg-av` source it by default (`autoware_overlay:=false`: off; roadmap 042) |
+| `just scenario <file>` | one scenario (web UI on 8081); verdict in `<output_directory>/scenario_test_runner/` (`output_directory:=`, default `/tmp`) |
+| `just two-av` | two Autoware stacks, one scenario; `record:=true` records a screencast |
 | `just acceptance <file> <runs>` | repeat a scenario and summarise |
 
 The `just` recipes use [play_launch](https://pypi.org/project/play-launch/) (per-node logs
 under `play_log/`, a web UI per stack); everything they start is also startable with plain
 `ros2 launch`, as the README shows.
+
+Project settings (map, rviz, vehicle and launch choices, scenario output) are recipe
+arguments, `name:=value` as for a launch file; host settings (ports, displays, install and
+data paths such as `CARLA_MAPS`) come from the environment, made
+permanent in `.env` or `.envrc`. The recipes refuse to run while one of the environment
+variables that used to carry a project setting is set, naming the argument that replaced it
+(`scripts/just_lib.bash`).
 
 ### Rules that cost hours when broken
 
