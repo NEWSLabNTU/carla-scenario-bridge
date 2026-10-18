@@ -97,15 +97,16 @@ class IsaacWorld:
         self.vehicle_assets = vehicle_assets.VehicleAssets()
         self.ego_params = None
         if self.ego_config is not None:
-            # The ego's physics from its blueprint, checked against the vehicle description
-            # Autoware plans with: a mismatch stops the server here, not a drive later (043).
+            # The ego's parameters (a real Model 3 on vehicle_info's geometry), and the check
+            # that the body it wears is the car Autoware plans with: a mismatch stops the
+            # server here, not a drive later (043).
             from .ego import ego_params
 
             model = self.ego_config.model or EGO_DEFAULT_MODEL
             physics = self.vehicle_assets.physics(model)
             if physics is None:
                 log.warning("no CARLA physics for the ego's %s in the catalogue (run "
-                            "scripts/dump_vehicle_physics.py): the built-in Tesla defaults", model)
+                            "scripts/dump_vehicle_physics.py): its geometry is not checked", model)
             self.ego_params = ego_params(self.ego_config, physics)
             log.info("ego vehicle: %s", self.ego_params)
         self.world.scene.add_default_ground_plane(prim_path=GROUND_PLANE)

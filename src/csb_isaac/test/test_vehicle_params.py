@@ -60,16 +60,11 @@ class PhysicsTest(unittest.TestCase):
         self.assertAlmostEqual(math.degrees(inner), 70.0, places=6)
         self.assertEqual(bicycle_limit(0.0, 3.0, 1.6), 0.0)
 
-    def test_defaults_are_the_tesla(self):
-        # VehicleParams() with no catalogue is what the catalogue gives for the Tesla.
-        resolved = VehicleParams.resolve("vehicle.tesla.model3", TESLA, INFO)
-        default = VehicleParams(model="vehicle.tesla.model3")
-        for k in ("mass", "max_brake_torque", "tire_friction", "max_drive_torque",
-                  "wheel_base", "wheel_tread", "wheel_radius"):
-            self.assertAlmostEqual(getattr(resolved, k), getattr(default, k), places=3, msg=k)
-        self.assertAlmostEqual(resolved.max_steer_angle, default.max_steer_angle, places=3)
-        for a, b in zip(resolved.com, default.com):
-            self.assertAlmostEqual(a, b, places=3)
+    def test_the_catalogue_is_reference_only(self):
+        # The ego is a real Model 3, not CARLA's: the catalogue's physics is not applied.
+        p = VehicleParams.resolve("vehicle.tesla.model3", TESLA, INFO)
+        self.assertEqual(p.tire_friction, 1.0)
+        self.assertGreater(p.max_brake_torque, 700.0)
 
 
 class ResolveTest(unittest.TestCase):
@@ -108,6 +103,19 @@ class ResolveTest(unittest.TestCase):
         p = VehicleParams.resolve("vehicle.tesla.model3", None, INFO)
         self.assertEqual(p.mass, VehicleParams().mass)
         self.assertEqual(p.wheel_base, 3.005)
+
+    def test_a_hard_stop_can_reach_the_tire_limit(self):
+        # Brake torque is not the limit: ~1 g at friction 1.0 needs less than the cap.
+        p = VehicleParams()
+        need = p.mass * 9.81 * p.tire_friction * p.wheel_radius
+        front = p.brake_split(9.81)
+        self.assertLess(need * front / 2, p.max_brake_torque)
+
+    def test_braking_moves_load_and_brake_force_forward(self):
+        p = VehicleParams()
+        static = p.brake_split(0.0)
+        self.assertAlmostEqual(static, p.com[0] / p.wheel_base)
+        self.assertGreater(p.brake_split(8.0), static + 0.1)
 
     def test_axle_loads_split_by_the_centre_of_mass(self):
         p = VehicleParams(mass=2000.0, wheel_base=3.0, com=(1.5, 0.0, 0.5))

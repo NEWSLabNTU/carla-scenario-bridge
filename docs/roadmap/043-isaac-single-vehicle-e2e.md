@@ -106,36 +106,29 @@ boxes are this phase.
 
 ### As built: vehicle
 
-**CARLA's physics in the catalogue.** `src/csb_isaac/scripts/dump_vehicle_physics.py` (also
-`/mnt/disk1/carla-usd/vehicles/tools/dump_physics.py`) connects to a running CARLA 0.9.16,
-spawns every blueprint in `vehicles.json`, reads `get_physics_control()` and writes it into the
-entry's `physics` and into `physics.json` beside it (`make_assets.py` rewrites `vehicles.json`
-without it; `vehicle_assets.py` falls back to the sidecar). Frame: the actor origin, metres,
-CARLA's Y flipped; wheel positions come back from CARLA in world centimetres and are made
-actor-relative. All 41 blueprints dumped in ~1 min. CARLA 0.9.16 exposes no suspension, and
-its `center_of_mass` is a nudge from the centre UE computes from the collision bodies, not
-the centre itself: `com_estimate` adds it to the bounding box centre, an estimate.
+**Basis: a plausible real car, not CARLA parity.** The Isaac ego is meant to be realistic, not
+to reproduce CARLA's vehicle (CARLA's grips at 3.5 g and brakes at 700 N m per wheel). A real
+powertrain is a separate, later piece; the actuation stays "drive none" (acb's contract: the
+requested acceleration and tire angle are realized, `vehicle.py`). `csb_isaac/vehicle_params.py`
+(unit-tested in `test/test_vehicle_params.py`) holds the car:
 
-vehicle.tesla.model3, CARLA against what the ego had before:
-
-| | CARLA blueprint | before (hand-typed / vehicle.py) |
+| | value | basis |
 |---|---|---|
-| mass | 1845 kg | 1845 kg |
-| centre of mass (base_link) | (1.866, 0, 0.498) m, estimated (nudge (0.45, 0, -0.30)) | (1.45, 0, 0.55) m |
-| wheel base / tread / radius | 3.0046 / 1.6668 / 0.370 m | vehicle_info 3.005 / 1.667 / 0.370 |
-| steering limit | 70 deg inner wheel = 1.000 rad bicycle | 0.70 rad (vehicle_info's planning limit) |
-| brake torque | 700 N m per wheel (handbrake 1400 rear) | 4000 N m |
-| drive torque | 743 N m peak x final drive 9 = 1672 N m per wheel | 2500 N m |
-| tire friction | 3.5 | 1.0 |
-| tire stiffness | lateral 20 x rest load at 3 rest loads; longitudinal 3000 kg x g | 17 x rest load at 2; 10 x rest load |
-| wheel damping | 0.25 | 0.25 |
-| drag coefficient | 0.15 | (not modelled: the actuation realizes the requested force) |
+| geometry | wheel base 3.005, tread 1.667, wheel radius 0.370 m, steer limit 0.70 rad | acb's `vehicle_info` = the CARLA Model 3 body the ego wears. A real Model 3 is 2.875 / 1.58 / 0.334 m (235/45R18); kept the description's so Autoware, the body and the physics are one car |
+| mass | 1845 kg | Model 3 Long Range AWD curb mass 1830-1851 kg by model year ([evspecifications](https://www.evspecifications.com/en/model/9f3b3db)) |
+| centre of mass | 48/52 front/rear, 0.46 m high: (1.442, 0, 0.46) in base_link | assumption: road-test weight splits around 47-48 % front; a floor battery pack puts the CoM low |
+| tires | friction 1.0; lateral stiffness 17 x rest load at 2 rest loads; longitudinal 10 x rest load | dry asphalt; the PhysX vehicle's usual passenger-car tire |
+| brakes | 3000 N m per wheel, split by the dynamic axle load (ideal distribution) | a stop is limited by the tires (~1 g), as on a real car, not by brake torque |
+| drive | 1500 N m per wheel cap | ~8 m/s^2, beyond what Autoware asks |
+| suspension | 1.6 Hz, damping ratio 0.45, 0.2 m travel, per axle on its sprung mass | a sedan's ride; each axle at one frequency, so the car sits level |
+| inertia | box of the body, mass/12 x (l^2 + w^2) etc.: yaw 4097 kg m^2 | close to m a b = 4155 kg m^2, the usual estimate for a sedan |
 
-**The ego from the catalogue.** `acb_ego.yaml` names the car (`model: vehicle.tesla.model3`);
-`vehicle_params.py` (pure, unit-tested in `test/test_vehicle_params.py`) takes geometry from
-`vehicle_info` and physics from the model's `physics`, then the YAML's `vehicle:` overrides by
-field name (documented in the YAML; empty in the shipped one). `IsaacWorld` resolves this at
-start and refuses a wheel base, tread or radius more than 5 cm apart, naming both numbers:
+The YAML's `vehicle:` overrides any field by name (empty in the shipped one).
+
+**One car, two descriptions that must agree.** `acb_ego.yaml` names the body (`model:
+vehicle.tesla.model3`). `IsaacWorld` compares vehicle_info's wheel base, tread and radius with
+the catalogue's (CARLA's wheels, `physics` below) at start, and refuses more than 5 cm with
+both numbers:
 
 ```
 VehicleMismatch: the ego's vehicle description is not vehicle.lincoln.mkz_2020: wheel_base
@@ -144,42 +137,65 @@ in vehicle_info, 1.593 m in vehicle.lincoln.mkz_2020's physics (tolerance 5 cm).
 ```
 
 The ego wears the YAML's model whatever body the scenario names (a warning says so).
-Suspension stays ours, now per axle: each spring on its own sprung mass (the mass split at
-the centre of mass) at the same frequency, so the car sits level and base_link on the ground.
 
-**A braking bug found on the way.** PhysX's vehicle at 1 substep above 5 m/s (and a 0.1 m/s
-active slip denominator) went unstable under brake torque: the wheels locked and the car
-stopped at the tire friction limit. A -3 m/s^2 request from 7.4 m/s stopped it in 0.7 s
-(about -11 m/s^2) with the old friction of 1.0, and in 0.25 s (about -30) at CARLA's 3.5.
-So every Autoware braking command on Isaac before this was realized several times harder
-than asked. Now 8 vehicle substeps at every speed and an active slip denominator of 4 m/s
-(`physx_substeps`, `min_active_slip_denominator`): -3.02 m/s^2, stopping when CARLA does.
+**A braking bug, fixed.** PhysX's vehicle at 1 substep above 5 m/s and a 0.1 m/s active slip
+denominator (UE's settings too) went unstable under brake torque: the wheels locked and the car
+stopped at the friction limit. A -3 m/s^2 request from 7.4 m/s stopped it in 0.7 s (about
+-11 m/s^2). Every Autoware braking command on Isaac before this was realized several times
+harder than asked. Now 8 vehicle substeps at every speed and a 4 m/s active slip denominator
+(`physx_substeps`, `min_active_slip_denominator`).
 
-**Same car, same response.** `src/csb_isaac/scripts/step_response/`: the same command
-sequences, 0.05 s frames, on CARLA (Town06's straight; acb_bridge's actuation replicated:
-pedal maps, Ackermann inverse, steering-curve compensation, handbrake hold; ticks with
-physics substeps of 0.05/16 as csb runs them) and on Isaac (`IsaacWorld` with the ego YAML,
-flat ground, commands into the ego's command slot, 3 PhysX steps per frame as csb steps it).
-Speed is a P loop on the commanded acceleration where held, the same on both. Data and
-plots: `/mnt/disk1/csb-043-vehicle/out/`. Windows start a second after the step they measure;
-the error is the largest difference over the window, against CARLA's peak there:
+**Step responses** (`src/csb_isaac/scripts/step_response/`, Isaac: `IsaacWorld` with the ego
+YAML, flat ground, 0.05 s frames of 3 PhysX steps as csb steps it, commands into the ego's
+command slot; data in `/mnt/disk1/csb-043-vehicle/out/isaac_real_*`):
 
-| test | window | CARLA | Isaac now | error now | Isaac before | error before |
-|---|---|---|---|---|---|---|
-| +1.5 m/s^2 for 5 s: slope | 2-6 s | 1.446 m/s^2 | 1.481 | 2.3 % (speed) | 1.468 | 3.1 % |
-| -3 m/s^2 to a stop: slope, stop | 6.5-7.5 s | -2.962, stops 8.55 s | -3.021, 8.50 s | 8.8 % (speed) | ~-11, 6.80 s | 100 % |
-| 5 m/s, steer 0.2 rad: yaw rate | 9-12 s | 0.333 rad/s | 0.332 | 0.6 % | 0.329 | 1.8 % |
-| 10 m/s, steer 0.1 rad: yaw rate | 9-11 s | 0.329 rad/s | 0.326 | 0.7 % | 0.274 | 18.8 % |
-| speed held under steer (5 / 10 m/s) | | 4.96 / 9.82 m/s | 4.93 / 9.77 | 1.7 / 0.5 % | 4.92 / 9.72 | 3.6 / 2.8 % |
+| test | asked | Isaac |
+|---|---|---|
+| accelerate | +1.5 m/s^2 | +1.48 m/s^2 |
+| brake from 7.4 m/s | -3 m/s^2 | -3.02 m/s^2, stopped at 8.50 s (CARLA 8.55 s) |
+| AEB-like from 15 m/s | -8 m/s^2 | -8.05 m/s^2 (-7.86 mean to a stop in 1.9 s), no lock-up |
+| beyond the tires from 15 m/s | -12 m/s^2 | -9.7 m/s^2: friction-limited at ~0.99 g |
+| 5 m/s, steer 0.2 rad | yaw rate | 0.332 rad/s; kinematic 0.334; CARLA 0.333 |
+| 10 m/s, steer 0.1 rad | yaw rate | 0.326 rad/s; kinematic 0.328; CARLA 0.329 |
+| 15 m/s, steer 0.05 rad (3.6 m/s^2 lateral) | yaw rate | 0.245 rad/s; kinematic 0.247 |
 
-All within 10 % now. The braking error left is CARLA's: its speed goes on rising for one
-tick after the brake command and the deceleration builds over ~0.15 s; Isaac's brake acts
-at once. "Before" is the pre-043 vehicle (hand-typed mass and centre of mass, the old tires,
-1 substep at speed). Its 10 m/s understeer (yaw rate 17 % short) went with CARLA's tires.
+The car is close to neutral steer up to 3.6 m/s^2 lateral (0.7 % short of kinematic): a real
+Model 3 understeers a little more. Its tires are the stiff end of plausible.
 
-Open: the centre of mass is estimated (CARLA does not expose it; the steady-state yaw rates
-agree, so the front/rear split is not visibly wrong); the brake authority is now CARLA's 700
-N m per wheel, about 4 m/s^2 on its own, where CARLA adds engine braking at speed (8.8 m/s^2
-coasting at 24 m/s) -- Isaac realizes a hard request at speed with the brakes alone and tops
-out near 4 m/s^2, so an AEB-strength stop is weaker than on CARLA (override
-`max_brake_torque` if a scenario needs it); not yet measured with Autoware driving.
+**CARLA's vehicle, for reference** (CARLA 0.9.16 and its UE 4.26 under `/mnt/disk1/carla-src`).
+`scripts/dump_vehicle_physics.py` writes `get_physics_control()` for all 41 blueprints into the
+catalogue's `physics` and `physics.json` (actor frame, m, Y flipped; wheel positions come back
+in world cm). `scripts/ue_vehicle_physics.py`, an editor commandlet script, dumps what the API
+does not return (`/mnt/disk1/csb-043-vehicle/ue/ue_physics_all.json`, all 41). What it found,
+traced through the source:
+
+- Centre of mass: UE computes the chassis body's from its PhysicsAsset shapes at uniform
+  density, then adds `COMNudge` (`Engine/Source/Runtime/Engine/Private/PhysicsEngine/BodyUtils.cpp:159`),
+  and `get_physics_control().center_of_mass` is only that nudge
+  (`carla/.../Vehicle/CarlaWheeledVehicle.cpp:464`). The Tesla's actual CoM, read from the body:
+  (0.336, 0, 0.412) m from the actor origin, nudge (0.45, 0, -0.30) included = 1.72 m ahead of
+  the rear axle (57 % front) and 0.47 m above the ground. Yaw inertia 2415 kg m^2 (the body's,
+  scaled to 1845 kg).
+- Suspension: sprung masses from `PxVehicleComputeSprungMasses`, spring = w^2 m_sprung
+  (`PhysXVehicles/.../WheeledVehicleMovementComponent.cpp:449,460`); the Tesla's wheels: natural
+  frequency 9.5 rad/s (1.5 Hz), damping ratio 1.0, 7.5 cm raise and drop, 20 kg.
+- Tires: friction = surface friction x the tire config's scale (`TireConfig.cpp:122`); CARLA sets
+  the scale to 3.5 on every vehicle (`CarlaWheeledVehicle.cpp:158`) on UE's default 0.7: 2.45.
+  Lateral stiffness at rest is 20 x 0.70 = 14 x rest load per rad, longitudinal 3000 kg x g.
+- Braking beyond 700 N m: engine braking through the clutch. PhysX solves wheels, clutch
+  (strength 10) and engine (damping 2.0 at zero throttle, MOI 1) implicitly
+  (`PhysX_3.4/.../PxVehicleUpdate.cpp:3850`); through the 9:1 drive the engine's inertia adds
+  ~590 kg to the car. Coasting is ~0.35 m/s^2 per m/s, full brake ~9 m/s^2 at 15 m/s (acb's maps
+  agree). Aerodynamic drag is 0.5 rho v^2 Cd w h with Cd 0.15 (`...MovementComponent.cpp:992`):
+  ~0.1 m/s^2 at 24 m/s, negligible.
+- The ~0.15 s brake onset on CARLA: two rate limiters in series (UE's `InterpInputValue`, PhysX's
+  pad smoothing: throttle and brake rise 6/s, fall 10/s; `...MovementComponent.cpp:116`) and the
+  engine side's time constant I/(K + D) = 1/12 s after a lift-off.
+- Steering: inner wheel = command x 70 deg x steering curve(speed), outer by Ackermann
+  (accuracy 1, `PxVehicleUpdate.cpp:1797`); steering input rises 2.5/s and falls 5/s
+  (`...MovementComponent.cpp:120`), ~175 deg/s at the wheel. acb inverts the Ackermann mean and
+  divides by the curve.
+
+Open: the CoM (48/52, 0.46 m) and the tires are assumptions; a real Model 3's measured weight
+split, CoM height and tire data would replace them. The wheel base and radius are the CARLA
+body's, 13 cm and 3.6 cm off a real Model 3. Not yet measured with Autoware driving.

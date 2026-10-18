@@ -5,9 +5,8 @@ x forward, z up, so the pose csb reads back is the SSv2 ego origin and the pose 
 status reports is the one Autoware expects. Geometry comes from the Autoware vehicle
 description (`vehicle_info.param.yaml`: wheel base, tread, wheel radius and width), so the
 model Autoware plans with and the one Isaac drives are the same one; the physics (mass, centre
-of mass, steering limit, brake and drive torque, tires) is CARLA's blueprint's, from the
-vehicle catalogue (roadmap 043, `vehicle_params.py`); suspension is ours (CARLA does not expose
-it), tuned per axle to the same frequency so the car sits level on its sprung masses.
+of mass, tires, brakes, suspension) is a plausible real Tesla Model 3's (roadmap 043,
+`vehicle_params.py`), the suspension tuned per axle to one frequency so the car sits level.
 
 PhysX drives it with no engine model ("drive none"): each wheel's drive torque, brake torque
 and steer angle are set directly. The actuation follows acb's contract on CARLA: Autoware's
@@ -171,7 +170,7 @@ class Vehicle:
             wheel.CreateMassAttr(WHEEL_MASS)
             wheel.CreateMoiAttr(0.5 * WHEEL_MASS * r * r)
             wheel.CreateDampingRateAttr(params.wheel_damping_rate)
-            # CARLA's PhysX 4 tire, in PhysX 5's terms: lateral stiffness rises with load up
+            # PhysX tire: lateral stiffness rises with load up
             # to lat_stiff_max_load rest loads, where it is lat_stiff_value per N of rest
             # load; longitudinal stiffness is given per g.
             tire = PhysxSchema.PhysxVehicleTireAPI.Apply(wprim)
@@ -266,11 +265,12 @@ class Vehicle:
         # Longitudinal
         v = state.velocity[0]
         r = p.wheel_radius
-        drive = brake = 0.0
+        drive = 0.0
+        brakes = (0.0, 0.0)  # per wheel: front, rear
         hold = (cmd.gear == GEAR_PARK
                 or (abs(cmd.velocity) < 0.01 and cmd.acceleration <= 0.01 and abs(v) < 0.1))
         if hold:
-            brake = p.hold_brake_torque
+            brakes = (p.hold_brake_torque, p.hold_brake_torque)
         elif cmd.gear != GEAR_NEUTRAL:
             direction = -1.0 if cmd.gear == GEAR_REVERSE else 1.0
             # Along the gear's direction: positive pushes that way, negative slows it down.
@@ -281,10 +281,15 @@ class Vehicle:
                 drive = direction * min(p.max_drive_torque, push * r / 4)
             else:
                 # Brakes, never the motor: decelerating to a stop does not drive it backwards.
-                brake = min(-push * r / 4, p.max_brake_torque)
+                # Split by the dynamic axle loads, so a hard stop reaches the tires' limit on
+                # all four together instead of locking the unloaded rear first.
+                front = p.brake_split(-cmd.acceleration)
+                total = -push * r
+                brakes = (min(total * front / 2, p.max_brake_torque),
+                          min(total * (1 - front) / 2, p.max_brake_torque))
         for i, (d, b, s) in enumerate(self.wheels):
             d.Set(drive)
-            b.Set(brake)
+            b.Set(brakes[0] if i < 2 else brakes[1])
             s.Set(left if i == 0 else right if i == 1 else 0.0)
 
     # --- State -----------------------------------------------------------------------------

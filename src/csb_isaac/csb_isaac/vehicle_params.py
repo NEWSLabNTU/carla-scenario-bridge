@@ -1,16 +1,15 @@
 """What the ego's PhysX vehicle is (roadmap 038, 043): pure data, no Isaac.
 
-Two descriptions of the one car meet here. Autoware plans with acb's `vehicle_info`
-(`vehicle_info.param.yaml`: wheel base, tread, wheel radius and width); CARLA's blueprint has
-the physics (`get_physics_control()`, dumped into the vehicle catalogue's `physics` by
-`scripts/dump_vehicle_physics.py`: mass, centre of mass, wheel radius and steering limit, brake
-torque, tire friction and stiffness, the engine's peak torque). `VehicleParams.resolve` takes
-the geometry from the first and the physics from the second, and refuses the pair when they
-describe different cars (`GEOMETRY_TOLERANCE`), so a different model is never driven with the
-Tesla's description by accident. CARLA 0.9.16 does not expose suspension: that stays ours.
+Geometry is what Autoware plans with, acb's `vehicle_info` (`vehicle_info.param.yaml`: wheel
+base, tread, wheel radius and width, steering limit), which is also the car the ego wears
+(CARLA's vehicle.tesla.model3 body from the vehicle catalogue). The physics is not CARLA's:
+the aim is a plausible real Tesla Model 3 (roadmap 043, "As built: vehicle"), so the defaults
+below are a real car's where known and a stated assumption where not. CARLA's own numbers
+(`get_physics_control()`, dumped into the catalogue's `physics` by
+`scripts/dump_vehicle_physics.py`) are kept as reference; `resolve` uses the catalogue only to
+check that vehicle_info and the body describe one car (`GEOMETRY_TOLERANCE`).
 
-The ego YAML's `vehicle:` mapping overrides any field afterwards (by its name here), for an
-experiment; the check is on what the two sources say, not on the overrides.
+The ego YAML's `vehicle:` mapping overrides any field afterwards (by its name here).
 """
 import math
 from dataclasses import dataclass, fields
@@ -29,24 +28,28 @@ class VehicleMismatch(ValueError):
 class VehicleParams:
     """Defaults are CARLA 0.9.16's vehicle.tesla.model3 and acb's vehicle_info for it."""
 
-    model: str = ""  # the CARLA blueprint the physics came from
-    # Geometry: vehicle_info
+    model: str = ""  # the catalogue body (CARLA blueprint) the geometry is checked against
+    # Geometry: vehicle_info (the CARLA Model 3 body: a real one has 2.875 m / 1.58 m / 0.334 m)
     wheel_base: float = 3.005
     wheel_tread: float = 1.667
     wheel_radius: float = 0.370
     wheel_width: float = 0.235
-    # Physics: CARLA's blueprint
-    max_steer_angle: float = 1.0005  # bicycle tire angle at the inner wheel's 70 deg, rad
-    mass: float = 1845.0
-    com: tuple = (1.8656, 0.0, 0.4980)  # centre of mass in base_link, m (an estimate)
-    tire_friction: float = 3.5
-    lat_stiff_max_load: float = 3.0  # in rest loads: where lateral stiffness stops growing
-    lat_stiff_value: float = 20.0  # lateral stiffness there, N/rad per N of rest load
-    long_stiff_value: float = 3000.0  # longitudinal stiffness per g, kg (x g: N per unit slip)
+    max_steer_angle: float = 0.70  # bicycle tire angle, rad: vehicle_info's, about a real car's
+    # A real Model 3 Long Range AWD
+    mass: float = 1845.0  # kg, curb: 1830-1851 kg by model year
+    # Centre of mass in base_link: 48/52 front/rear (assumed from road-test figures), 0.46 m
+    # high (assumed: a floor battery pack)
+    com: tuple = (0.48 * 3.005, 0.0, 0.46)
+    tire_friction: float = 1.0  # dry asphalt
+    lat_stiff_max_load: float = 2.0  # in rest loads: where lateral stiffness stops growing
+    lat_stiff_value: float = 17.0  # lateral stiffness there, N/rad per N of rest load
+    long_stiff_value: float = 4612.5  # kg (x g: N per unit slip): 10 x a quarter-car rest load
     wheel_damping_rate: float = 0.25
-    max_drive_torque: float = 1671.75  # per wheel, N m: peak engine torque x final drive / 4
-    max_brake_torque: float = 700.0  # per wheel, N m
-    # Ours: CARLA 0.9.16 does not expose these
+    max_drive_torque: float = 1500.0  # per wheel, N m: ~8 m/s^2, past the 0-100 km/h 4.4 s
+    # Per wheel, N m: well past the tires, so a stop is friction-limited (~1 g) as on a real
+    # car, not torque-limited
+    max_brake_torque: float = 3000.0
+    # Chassis and actuation
     suspension_frequency: float = 1.6  # Hz
     suspension_damping_ratio: float = 0.45
     suspension_travel: float = 0.2  # m
@@ -70,14 +73,14 @@ class VehicleParams:
     @classmethod
     def resolve(cls, model, physics, vehicle_info=None, overrides=None):
         """The ego's parameters: geometry from `vehicle_info` (a dict, as `read_vehicle_info`
-        gives it), physics from the catalogue's `physics` for `model`, then `overrides`.
+        gives it), the real-car defaults, then `overrides`. `physics`, the catalogue's for
+        `model`, is only checked against vehicle_info.
 
         Raises `VehicleMismatch` when the two disagree on wheel base, tread or radius by more
         than `GEOMETRY_TOLERANCE`, naming both numbers."""
         values = {"model": model or ""}
         if physics:
             check_geometry(model, physics, vehicle_info)
-            values.update(physics_params(physics))
         if vehicle_info:
             values.update(vehicle_info)
         known = {f.name for f in fields(cls)}
@@ -88,6 +91,13 @@ class VehicleParams:
                              f"{sorted(known)}")
         values.update({k: (tuple(v) if isinstance(v, list) else v) for k, v in overrides.items()})
         return cls(**values)
+
+    def brake_split(self, decel):
+        """The front axle's share of a braking force at `decel` (m/s^2): the dynamic front
+        load's, so all four tires reach their limit together (ideal distribution / EBD)."""
+        a, h = self.com[0], self.com[2]
+        front = (a + h * max(decel, 0.0) / G) / self.wheel_base
+        return min(max(front, 0.05), 0.95)
 
     def axle_loads(self):
         """Sprung mass per wheel (front, rear), kg: the mass split by the centre of mass."""
@@ -102,7 +112,8 @@ def read_vehicle_info(path):
     with open(path) as f:
         doc = yaml.safe_load(f)
     p = next(iter(doc.values()))["ros__parameters"]
-    return {k: float(p[k]) for k in (*GEOMETRY_KEYS, "wheel_width")}
+    return {k: float(p[k]) for k in (*GEOMETRY_KEYS, "wheel_width", "max_steer_angle")
+            if k in p}
 
 
 def catalogue_geometry(physics):
@@ -137,7 +148,8 @@ def bicycle_limit(inner_limit, wheel_base, wheel_tread):
 
 
 def physics_params(physics):
-    """VehicleParams fields from a catalogue entry's `physics` (dump_vehicle_physics.py)."""
+    """What CARLA's blueprint would give as VehicleParams fields (dump_vehicle_physics.py):
+    reference only, for comparing the ego with CARLA's car; `resolve` does not apply it."""
     out = {"mass": float(physics["mass"])}
     wheels = physics.get("wheels") or []
     front = [w for w in wheels if w.get("max_steer_angle_deg", 0) > 0] or wheels[:2]

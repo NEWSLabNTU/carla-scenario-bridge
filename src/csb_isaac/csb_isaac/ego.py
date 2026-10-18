@@ -52,7 +52,7 @@ WARM_UP_FRAMES = 60
 @dataclass
 class EgoConfig:
     domain: int = 1
-    # The CARLA blueprint the ego is: its physics (the vehicle catalogue's `physics`) and body.
+    # The CARLA blueprint whose body the ego wears (its geometry is checked against vehicle_info).
     model: str = "vehicle.tesla.model3"
     vehicle_info: str = ""
     sensors_calibration: str = ""
