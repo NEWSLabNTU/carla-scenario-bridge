@@ -26,7 +26,9 @@ clears its TF buffers and its EKF, and then never drives again (seen in 038). It
 the clock clear of zero, where Autoware misbehaves (acb holds `/clock` back below 60 s).
 Everything is published once per frame from the world server's loop, after the frame's
 physics steps and render, and the commands that arrived before a frame drive it: lockstep,
-as acb follows CARLA's ticks.
+as acb follows CARLA's ticks. The lidar scan alone goes out one frame late, after the next
+frame's `/clock`, with its own stamp: sent with its frame's `/clock` it raced the EKF pose of
+that stamp and NDT could not interpolate, which flapped MRM all through a drive (038).
 """
 import array
 import logging
@@ -216,6 +218,8 @@ class Ego:
         self.ros = ros
         ros.reset()
         self.prev_vel = None
+        # The lidar scan of the last frame, sent one frame late (see `publish`).
+        self.pending_cloud = None
 
     def _kit_tf(self, link):
         if self.cfg.sensors_calibration and self.cfg.sensor_kit_calibration:
@@ -298,7 +302,15 @@ class Ego:
             self._publish_gnss(stamp)
             self.next_gnss = sim_time + self.gnss_period
         if self.lidar is not None:
-            self._publish_lidar(stamp)
+            # One frame of sensor latency, stamp unchanged (the scan's capture time). Sent in
+            # the same instant as `/clock` of its own frame, a scan races the EKF pose of that
+            # stamp to ndt_scan_matcher, whose pose buffer then holds one pose and cannot
+            # interpolate ("Couldn't interpolate pose": WARN -> /autoware/localization not OK
+            # -> autonomous unavailable -> MRM emergency_stop for a cycle). On CARLA the scan
+            # arrives after the tick's /clock; on a vehicle, 50-100 ms after capture.
+            if self.pending_cloud is not None:
+                self.ros.pub["lidar"].publish(self.pending_cloud)
+            self.pending_cloud = self._lidar_msg(stamp)
 
     def _publish_imu(self, stamp):
         s = self.state
@@ -331,13 +343,13 @@ class Ego:
         msg.position_covariance_type = 0
         self.ros.pub["gnss"].publish(msg)
 
-    def _publish_lidar(self, stamp):
+    def _lidar_msg(self, stamp):
         d = self.lidar.get_data()
         if not isinstance(d, dict):
-            return
+            return None
         xyz = np.asarray(d["data"], dtype=np.float32).reshape(-1, 3)
         if not len(xyz):
-            return
+            return None
         info = d.get("info", {})
         n = len(xyz)
         cloud = np.zeros(n, dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("intensity", "u1"),
@@ -371,7 +383,7 @@ class Ego:
         msg.is_dense = True
         # array.array, not bytes: rclpy copies an array in C, bytes element by element (40 ms)
         msg.data = array.array("B", cloud.tobytes())
-        self.ros.pub["lidar"].publish(msg)
+        return msg
 
     def close(self):
         if self.lidar is not None:
