@@ -8,7 +8,11 @@ each, for an audience watching the CARLA view and Autoware's RViz side by side.
 **Source**: user direction 2026-10-14: a demo run "going through many scenarios so the
 audience can see many incidents and handling"; decisions the same day: **one continuous
 tour** (not a playlist of scenarios), **Town01 only** for now, **ramp merge deferred**
-(needs a highway town, [031](031-maps-for-scenarios.md)), **5-8 minutes**.
+(needs a highway town, [031](031-maps-for-scenarios.md)), **5-8 minutes**. Revised
+2026-10-18 (user, after options A/B/C): **route C**, **40 km/h** cruise, **cyclist kept**
+(CenterPoint + the [042](042-autoware-overlay.md) overlay), **one weather for the whole run
+(ClearNoon)**, and **ambient traffic and walkers, dense** -- see "The tour, revised" below,
+which supersedes the route, clock and empty-town parts of the sections after it.
 **Depends on**: [020](020-starter-scenarios-and-suites.md) (starter scenarios the incidents
 grow from), [023](023-npc-motion-parity.md) / [032](032-npc-tracking-fixes.md) (tracked NPCs
 that move like vehicles on camera), [024](024-gap-trace-and-oracle.md) (rehearsal judged by
@@ -31,6 +35,86 @@ and two-lane roads, but **no crosswalk lanelets and no multi-lane same-direction
 cut-ins and lane changes wait for a multi-lane town (a later tour). Ramp merge needs a
 highway town (CARLA Town04 / Town06) that the map pack lacks -- deferred with 031.
 
+## The tour, revised (2026-10-18)
+
+![Revised tour: route, incidents, ambient actors](img/033-tour-design.png)
+
+Design sketch (scratch `tour_opts/design2.py`); sidewalk offsets are approximate and are
+fitted to CARLA's sidewalks in step 8.
+
+**Route C, 1438 m.** Start on the west road at (-2, -20) heading south (the step 3 route
+began at y -150), then the step 3 lanelets unchanged: round the bottom-left corner, east
+along the bottom road, north up the east road, left at the top-right T, left into the x 337
+road, right at y -198 to the goal (175.67, -195.15). The pedestrian dart moves to the west
+road, so the tour opens on an incident ~25 s in.
+
+| Route order | Incident | Site | Incident at (route m) | Ego trigger (route m) |
+|---|---|---|---|---|
+| 1 | 2 pedestrian dart | west road; a van and a second car parked at the ego-side kerb, the walker steps out from behind the van, stands, then crosses to the far side | 190 | 130 |
+| 2 | 1 lead car brakes | lead merges from the x 90 stem, brakes 6 m/s^2 near x 200 | 508 | 329 |
+| 3 | 3 red light | signal 43757, stop line x 325.7 | 633 | 558 (75 m before) |
+| 4 | 4 blocked lane | east road at y -175, broken car in the ego's lane, oncoming pair | 855 | 775 |
+| 5 | 5 crossing traffic, left turn | two cars eastbound on y -2, 15 m apart | 1075 | 1007 |
+| 6 | 6 cyclist inside the right turn | cyclist from (333.2, -125.8) south in the ego's lane, 1.4 m right of centre, straight on | 1272 | 1172 |
+
+Triggers are rescaled for 40 km/h: from 11.1 m/s at 2.5 m/s^2 the ego needs ~25 m plus
+latency to stop, against ~4 m at 15 km/h. Gaps between incidents are 125-318 m.
+
+**Clock.** ~3.2 min of driving (corners still ~3-4 m/s) plus ~2 min of handling: **~5-5.5 min
+of simulation time**, inside 5-8; wall time longer on a loaded host (step 3).
+
+**40 km/h.** The 15 km/h cap is Autoware's `max_vel: 4.17` in autoware_launch's
+`common.param.yaml` (the external velocity limit cannot exceed it; Town01's Lanelet2 map has
+no `speed_limit` tags). acb gets a `max_velocity` launch argument through a generated copy of
+that file (the sync-script pattern of `carla_control` / `object_recognition` / the tracker
+param), **default 4.17**, so every suite keeps 15 km/h; the tour passes 11.11, and the ego's
+`Performance maxSpeed` in the scenario matches.
+
+**Perception: CenterPoint + the 042 overlay, for the whole tour** (user decision): clustering
+labels everything UNKNOWN, which `blind_spot` ignores, so incident 6 needs CenterPoint.
+CenterPoint lost 7 of 9 UC-AEB variants on this host, so incidents 1-5 are rehearsed again
+on it, at 40 km/h; ground-truth objects (`perception:=false`, acb labels BICYCLE) are the
+fallback if they do not hold, decided then with the user.
+
+**Weather: ClearNoon**, the bridge's `weather` parameter, for the whole run (no change
+mid-tour).
+
+### Ambient traffic and walkers
+
+The town is no longer empty between incidents: about 18 moving vehicles, 17 parked cars and
+27 walkers over the tour, with ~10-15 actors in CARLA at any time. All are **SSv2 NPCs
+scripted in the tour** (no CARLA autopilot, no Traffic Manager): deterministic, tracked
+(`npc_motion: tracked`), each with a name of its own, added before its segment and deleted
+after it, like the incident actors. None may make the ego stop outside an incident; step 8
+checks that.
+
+| Group | Who | Where / path (route m) | Role |
+|---|---|---|---|
+| a1-a4 | oncoming cars, two pairs | west road, 175 -> 15 early, 330 -> 205 after incident 1 | traffic in the other lane |
+| a5-a7 | oncoming cars | bottom road, 610 -> 360, after the lead clears | |
+| w1 | oncoming car | waits at its own red across the junction (incident 3) | the light holds both sides |
+| s1-s2 | cars from the x 337 stem | turn east on the ego's red, drive ahead, deleted at 740 (before incident 4's trigger) | the green phase is visible |
+| f1-f2 | followers | join behind the ego at ~545, queue behind it at the red light and the blocked lane, deleted at ~1035 | a queue forms on camera |
+| b1-b2 | oncoming cars | east road, 1035 -> 990, after incident 4 | |
+| n1-n2 | oncoming cars | x 337 road, 1250 -> 1110, clear before the cyclist's trigger | |
+| g1-g2 | oncoming cars | closing road, goal -> 1290 | |
+| cross | 8 cars, 4 pairs | inner-block roads y -57 / -54 / -129.5 / -133, past the x 337 junctions before the ego reaches them | |
+| parked | ~17 static cars | kerbs: west road (incl. incident 1's two), bottom road, east road, x 337 road, closing road | clutter for perception |
+| p1-p8 | walkers | west road: two on the far sidewalk with the ego, two on the ego side towards it, a group of three waiting near the start, one after incident 1 | sidewalk walkers do not stop the ego |
+| p9-p10 | walkers | bottom road ego-side sidewalk, 440 -> 590 | |
+| p11-p14 | walkers | cross the ego's road just past its stop line **on the ego's red**, clear before green | |
+| p15-p17 | walkers | east road sidewalks; p17 passes the broken car | |
+| p18-p20 | walkers | a group waiting at the top-right T corner, not crossing | |
+| p21-p22 | walkers | x 337 road, oncoming-side sidewalk only | |
+| p23-p27 | walkers | closing road, both sidewalks | closing scene |
+
+Town01 has no sidewalk or crosswalk lanelets, so walkers follow fixed polylines
+(`FollowTrajectoryAction`, as `town01_pedestrian` does), and cars off the route follow
+lanelet routes. The **inside of the cyclist's right turn stays clear** of walkers (green strip
+in the sketch), and the stem cars s1-s2 only turn east, away from p11-p14. This is the most
+CenterPoint has to see in one run; if perception or the frame budget suffers, density goes
+down group by group (parked cars and far-side walkers first).
+
 ## Incidents
 
 Numbers are ids; along the step 3 route they come in the order 1, 3, 2, 4, 5, 6. Each is a
@@ -44,17 +128,20 @@ self-contained **incident template** (a short `.xosc` that runs on its own under
 | 3 | **Red light** | the signal at the next junction turns red as the ego approaches | stops at the light, goes on green (`traffic_light`); as `town01_traffic_light` already does | stops before the junction; resumes on green |
 | 4 | **Blocked lane** | a broken-down vehicle stands in the ego's lane (hazards not commanded: no light action on this path), oncoming traffic in the other lane | waits behind it (`obstacle_stop`; no avoidance attempted) -- after 12 s standing the tow truck "clears" it (the watchdog, on camera) | no contact; waits, then proceeds |
 | 5 | **Crossing traffic at a turn** | two NPCs, 15 m apart, cross the junction the ego turns into | yields to both, then turns (module not observable: `intersection` RTC safe throughout, no planning factor; step 4b) | no contact; turns after them |
-| 6 | **Cyclist on the inside** | a cyclist rides alongside on the inside as the ego turns | waits for the cyclist (`blind_spot`) -- **dropped (step 4b)**: the bicycle tracks, but Autoware turns across it; why (step 4c): clustering perception reports it UNKNOWN and static, and Autoware's `blind_spot` misjudges right turns -- kept as a reproducer | no contact |
+| 6 | **Cyclist on the inside** | a cyclist rides alongside on the inside as the ego turns | waits for the cyclist (`blind_spot`) -- dropped in step 4b (clustering reports it UNKNOWN; `blind_spot` misjudged right turns, step 4c); **back in the tour 2026-10-18**: CenterPoint + the 042 overlay, 3/3 PASS | no contact |
 
 Each incident is triggered by the ego's arrival at a point on the route (OpenSCENARIO
 `ReachPositionCondition` / `DistanceCondition`), so its timing holds whatever the ego's
 speed was on the way. Its actors are added when it starts (`AddEntityAction`, proven by
 UC-ACC / UC-AEB on this bridge) and removed when it is over (`DeleteEntityAction`), so the
-town stays empty between incidents and CARLA is never carrying a crowd. **Every actor gets a
+town stays empty between incidents and CARLA is never carrying a crowd (revised 2026-10-18:
+ambient actors fill the gaps, added and deleted the same way; see above). **Every actor gets a
 name of its own** (`i1_lead`, `i2_ped`, ...): SSv2 never lets a deleted name be added again
 (step 2 spike), so no name is reused across incidents.
 
 ## The route and the clock
+
+*As first planned (15 km/h, step 3's route); superseded by "The tour, revised" above.*
 
 - One route through Town01, picked with `carla_poses` and the Lanelet2 map, passing the six
   incident sites: about 5-6 min of driving plus ~1-2 min of incident handling -- inside
@@ -136,6 +223,14 @@ recording picks them up.
    `src/csb_examples/scenarios/demo/incidents/` (generated by `scripts/gen_demo_incidents.py`),
    5/5 each, judged by `csb_launch incident_judge`; **6 dropped** -- the bicycle tracks, but
    Autoware turns across it (Results).
+4d. [ ] **Revised design (2026-10-18).** This doc section ("The tour, revised"); then
+   - acb: `max_velocity` launch argument (generated `common.param.yaml` copy, default 4.17,
+     sync-script check), pushed and pinned;
+   - sites: `scripts/demo_town01_sites.yaml` re-cut for route C (incident 2 on the west road,
+     incident 4 alone on the east road), triggers rescaled for 40 km/h, templates regenerated;
+   - each template 5/5 on **CenterPoint + overlay at 40 km/h**, ClearNoon; incident 6 back in
+     the judged set. If CenterPoint does not hold 1-5, stop and take the fallback question to
+     the user.
 5. [ ] **Compose the tour** (`src/csb_examples/scenarios/demo/town01_tour.xosc`): route,
    triggers, add / delete, watchdogs, the single stop trigger. One ManeuverGroup per
    incident holding its add, delete and watchdog events: a `StoryboardElementStateCondition`
@@ -151,6 +246,11 @@ recording picks them up.
    `demo` launch / justfile recipe bringing up the layout. Per-incident numbers from the
    bridge: see the step 2 results for what it has and what it would need.
 7. [ ] **Rehearsal**: 3 full tours; one recorded take; README / tutorial 4 updated.
+8. [ ] **Ambient layer** (between 5 and 7): the groups in "Ambient traffic and walkers" as
+   their own ManeuverGroups in the tour (generated, unique names), walker polylines fitted to
+   CARLA's sidewalks (`get_waypoint(..., lane_type=Sidewalk)`), each segment checked to cause
+   no ego stop or slowdown outside an incident (planning factors), and the bridge's frame
+   time at the densest point within budget. Rehearsal (7) runs with it.
 
 ## Later
 
