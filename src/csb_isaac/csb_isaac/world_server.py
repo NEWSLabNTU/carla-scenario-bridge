@@ -5,6 +5,7 @@ protocol on a ZMQ REP socket bound to localhost until csb sends `Shutdown` or th
 gets SIGINT/SIGTERM. Run it through `just isaac-world`, which sets Isaac's environment.
 
     python -m csb_isaac.world_server --port 5590 [--display :8] [--ego config/acb_ego.yaml]
+        [--world <usd>] [--follow]
 """
 import argparse
 import logging
@@ -22,6 +23,9 @@ def main(argv=None):
     ap.add_argument("--follow", action="store_true",
                     help="with --display: the viewport follows the ego from behind, no UI "
                          "(for watching or recording a run)")
+    ap.add_argument("--world", default="",
+                    help="USD world to load and render before serving (its first render compiles "
+                         "its materials); csb's LoadWorld of the same file keeps it")
     ap.add_argument("--ego", default="",
                     help="ego YAML: the ego is a PhysX vehicle driven by Autoware (038); "
                          "empty: a kinematic box (037)")
@@ -51,6 +55,8 @@ def main(argv=None):
     from .world import IsaacWorld
 
     world = IsaacWorld(ego_config=args.ego or None, follow=bool(args.display and args.follow))
+    if args.world:
+        world.preload(args.world)
     server = WorldServer(world)
     socket = zmq.Context.instance().socket(zmq.REP)
     socket.bind(f"tcp://127.0.0.1:{args.port}")

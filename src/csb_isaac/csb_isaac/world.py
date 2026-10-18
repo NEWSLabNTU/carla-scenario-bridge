@@ -15,6 +15,7 @@ teleport. Rendering is then on every frame, whatever the request asks: the lidar
 """
 import logging
 import math
+import os
 import time
 
 import omni.kit.app
@@ -22,7 +23,7 @@ import omni.physx
 import omni.usd
 from isaacsim.core.api import World
 from isaacsim.core.utils.stage import add_reference_to_stage
-from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, UsdGeom, UsdLux, UsdPhysics
+from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics
 
 log = logging.getLogger("csb_isaac")
 
@@ -30,6 +31,12 @@ log = logging.getLogger("csb_isaac")
 SLOW_STEP_S = 0.5
 ENTITIES = "/World/entities"
 CHASE_CAMERA = "/World/chaseCamera"
+SUN = "/World/sun"
+SKY = "/World/sky"
+# Renders after a preload: the first compiles the world's materials, the rest settle it.
+PRELOAD_RENDERS = 5
+# A handle the server never gives out (they start at 1): the preload's throwaway ego.
+WARM_UP_HANDLE = 0
 ENVIRONMENT = "/World/env"
 GROUND_PLANE = "/World/defaultGroundPlane"
 # Kind -> display colour (sRGB): what an operator watching on VNC tells apart.
@@ -86,11 +93,12 @@ class IsaacWorld:
         UsdGeom.Xform.Define(self.stage, ENTITIES)
         # Light for cameras (a viewport, 038's watching; the lidar needs none): a loaded world
         # replaces the default ground plane, and with it the only light.
-        sun = UsdLux.DistantLight.Define(self.stage, "/World/sun")
+        sun = UsdLux.DistantLight.Define(self.stage, SUN)
         sun.CreateIntensityAttr(2500.0)
         sun.CreateAngleAttr(1.0)
         UsdGeom.XformCommonAPI(sun.GetPrim()).SetRotate(Gf.Vec3f(-50.0, 20.0, 30.0))
-        UsdLux.DomeLight.Define(self.stage, "/World/sky").CreateIntensityAttr(600.0)
+        UsdLux.DomeLight.Define(self.stage, SKY).CreateIntensityAttr(600.0)
+        self.loaded_usd = None
         for prim in self.stage.Traverse():
             if prim.IsA(UsdPhysics.Scene):
                 PhysxSchema.PhysxSceneAPI.Apply(prim)
@@ -118,18 +126,47 @@ class IsaacWorld:
     # --- World -----------------------------------------------------------------------------
 
     def load(self, usd, ground_paths):
+        usd = os.path.realpath(usd) if usd else usd
         for handle in list(self.entities):
             self.despawn(handle)
+        plane = self.stage.GetPrimAtPath(GROUND_PLANE)
+        if usd and usd == self.loaded_usd and self.stage.GetPrimAtPath(ENVIRONMENT):
+            # The same world (preloaded, or the last episode's): keep it, shaders and all.
+            self.ground = list(ground_paths)
+            return
         if self.stage.GetPrimAtPath(ENVIRONMENT):
             self.stage.RemovePrim(ENVIRONMENT)
-        plane = self.stage.GetPrimAtPath(GROUND_PLANE)
+        self.loaded_usd = None
         if usd:
             add_reference_to_stage(usd_path=usd, prim_path=ENVIRONMENT)
             plane.SetActive(False)
             self.ground = list(ground_paths)
+            self.loaded_usd = usd
         else:
             plane.SetActive(True)
             self.ground = [GROUND_PLANE, *ground_paths]
+        # Our sun and sky only where the world brings no light of its own (a CARLA town
+        # exported with SimReady has its sky and sun; doubling them washes the picture out).
+        env = self.stage.GetPrimAtPath(ENVIRONMENT)
+        own = bool(env) and any(p.HasAPI(UsdLux.LightAPI) for p in Usd.PrimRange(env))
+        for path in (SUN, SKY):
+            self.stage.GetPrimAtPath(path).SetActive(not own)
+
+    def preload(self, usd, renders=PRELOAD_RENDERS):
+        """Load `usd` and render it before csb asks for it: the first render of a large world
+        compiles its materials (about 9 minutes for CARLA's Town01), which no request timeout
+        should have to cover. csb's `LoadWorld` of the same path then keeps it."""
+        t = time.perf_counter()
+        self.load(usd, [])
+        for _ in range(renders):
+            self.world.render()
+        if self.ego_config is not None:
+            # The lidar's first frames in a large world trace every material once (90 s for
+            # CARLA's Town01, past SSv2's own request timeout): a throwaway ego takes them.
+            self.spawn(WARM_UP_HANDLE, "preload", "EGO", "", (1.5, 0.0, 0.9), (4.5, 2.1, 1.8),
+                       ((0.0, 0.0, 0.5), (1.0, 0.0, 0.0, 0.0)))
+            self.despawn(WARM_UP_HANDLE)
+        log.info("preloaded %s in %.0f s", usd, time.perf_counter() - t)
 
     def spawn(self, handle, name, kind, subtype, center, dims, pose):
         path = f"{ENTITIES}/e{handle}"
@@ -145,7 +182,11 @@ class IsaacWorld:
             self.entities[handle] = (path, None, None)
             self.by_path[path] = handle
             t = time.perf_counter()
-            frames = ego.warm_up(self.world.render)
+            def warm_step():
+                ego.before_substep(self.dt)  # no command yet: the hold brake
+                self.world.step(render=True)
+
+            frames = ego.warm_up(warm_step)
             log.info("spawned ego %r as PhysX vehicle %s (box %s at %s); sensors warm after %d "
                      "render(s), %.1f s", name, path, dims, center, frames, time.perf_counter() - t)
             return

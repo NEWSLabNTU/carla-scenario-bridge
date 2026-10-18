@@ -243,14 +243,16 @@ class Ego:
         self.channels = int(self.cfg.lidar.get("channels", 128))
         log.info("ego %r: lidar %s at %s in base_link", self.name, lidar.paths[0], t)
 
-    def warm_up(self, render, frames=WARM_UP_FRAMES):
-        """Render (no physics) until the lidar delivers: its first frames compile and set up
-        the RTX sensor pipeline, seconds on a loaded host, which belong in the spawn rather
-        than in the first frame's step (csb times a step out at 10 s)."""
+    def warm_up(self, step, frames=WARM_UP_FRAMES):
+        """Step (physics and a render) until the lidar delivers: its first frames set up the
+        RTX sensor pipeline, seconds on a loaded host, which belong in the spawn rather than
+        in the first frame's step (csb times a step out). Rendering alone produces no scan:
+        the lidar fires on simulation time. The vehicle stands on its hold brake meanwhile
+        (no command yet), which also lets its suspension settle."""
         if self.lidar is None:
             return 0
         for i in range(frames):
-            render()
+            step()
             d = self.lidar.get_data()
             if isinstance(d, dict) and len(d.get("data", [])):
                 return i + 1

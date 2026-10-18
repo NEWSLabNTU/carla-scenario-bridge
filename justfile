@@ -417,20 +417,24 @@ isaac-check:
 #                     vehicle with Autoware's sensors and vehicle interface on its domain);
 #                     ego:= (empty) keeps 037's kinematic box
 #   follow:=true      with a window: no UI, the full-window viewport chases the ego
+#   world:=<usd>      load and render this world before serving: a large world's first render
+#                     compiles its materials (CARLA Town01: ~9 min), which no request timeout
+#                     covers; csb's LoadWorld of the same file then keeps it
 # DDS as the ego stack's: Cyclone with the localhost config (036: both sides must match).
 # Stop it with Ctrl-C or SIGTERM; csb only empties its world.
 #
-# Usage: [DISPLAY=:8] just isaac-world [ego:=<yaml>] [follow:=true]
+# Usage: [DISPLAY=:8] just isaac-world [ego:=<yaml>] [follow:=true] [world:=<usd>]
 [positional-arguments]
 isaac-world *args:
     #!/usr/bin/env bash
     set -e
-    ego="{{project}}/src/csb_isaac/config/acb_ego.yaml"; follow=""
+    ego="{{project}}/src/csb_isaac/config/acb_ego.yaml"; follow=""; world=""
     for a in "$@"; do
         case "$a" in
             ego:=*) ego="${a#ego:=}" ;;
+            world:=*) world="${a#world:=}" ;;
             follow:=*) follow="${a#follow:=}" ;;
-            *) echo "isaac-world: unknown argument '$a' (ego:=, follow:=; the port and display are ISAAC_PORT and DISPLAY)" >&2; exit 2 ;;
+            *) echo "isaac-world: unknown argument '$a' (ego:=, follow:=, world:=; the port and display are ISAAC_PORT and DISPLAY)" >&2; exit 2 ;;
         esac
     done
     case "$follow" in ""|false|0) follow="" ;; *) follow=1 ;; esac
@@ -442,20 +446,36 @@ isaac-world *args:
     source "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_env.sh"
     cd "{{justfile_directory()}}/src/csb_isaac"
     exec python -m csb_isaac.world_server --port {{isaac_port}} ${display:+--display "$display"} \
-        ${ego:+--ego "$ego"} ${follow:+--follow}
+        ${ego:+--ego "$ego"} ${follow:+--follow} ${world:+--world "$world"}
 
 # Build Autoware's message bindings for Isaac's Python (once per Isaac install; roadmap 038)
 isaac-msgs:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/build_msgs.sh"
 
-# The Isaac test world for a map, from its point cloud (roadmap 038): <map>/isaac/world.{usd,yaml}
-isaac-world-gen map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
+# <map>/isaac/world.yaml: from the map's point cloud as voxels (default), or usd:=<file> -- a
+# USD world in the map frame, e.g. CARLA's SimReady export with its physics layer, ground
+# from its semantic labels. Either replaces the other.
+#
+# Usage: just isaac-world-gen [map_path:=<dir>] [usd:=<file>]
+#
+# The Isaac world for a map (roadmap 038): <map>/isaac/world.yaml
+[positional-arguments]
+isaac-world-gen *args:
     #!/usr/bin/env bash
     set -e
+    map_path="{{data_dir}}/carla-autoware-bridge/{{map_name}}"; usd=""
+    for a in "$@"; do
+        case "$a" in
+            map_path:=*) map_path="${a#map_path:=}" ;;
+            usd:=*) usd="${a#usd:=}" ;;
+            *) echo "isaac-world-gen: unknown argument '$a' (map_path:=, usd:=)" >&2; exit 2 ;;
+        esac
+    done
     export ISAAC_ROOT={{isaac_root}}
     source "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_env.sh"
     cd "{{justfile_directory()}}/src/csb_isaac"
-    python -m csb_isaac.pcd_world "{{map_path}}"
+    if [ -n "$usd" ]; then python -m csb_isaac.usd_world "$map_path" "$usd"
+    else python -m csb_isaac.pcd_world "$map_path"; fi
 
 # GNOME with 3 static workspaces (Ctrl+Alt+1/2/3), OpenGL on the NVIDIA GPU through
 # VirtualGL (-vgl; scripts/vnc_xstartup.sh). A GL app started from a terminal in the
