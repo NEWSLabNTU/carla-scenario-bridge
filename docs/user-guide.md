@@ -388,6 +388,7 @@ three components with CARLA settings. Turn any of those off to keep your own:
 | `carla_localization:=false` | CARLA-tuned NDT/EKF/pose-initializer parameters |
 | `carla_perception:=false` | selectable `lidar_detection_model` (default `clustering`, CPU; `centerpoint` is TensorRT), fusion-only traffic lights (signals arrive from CARLA over V2X) |
 | `carla_system:=false` | component-state topics, MRM parameters and diagnostic graph matching CARLA's sensors |
+| `carla_planning:=false` | `max_velocity:=<m/s>`, Autoware's `max_vel` (default 4.17, upstream's 15 km/h, at which planning is exactly upstream's); under `just ego-av`, `EGO_LAUNCH_ARGS="max_velocity:=11.11"` for 40 km/h |
 | `launch_deprecated_api:=false` | Autoware's deprecated API, which serves the velocity limit a scenario's absolute `SpeedAction` sets (the `awf/` use cases fail without it) |
 
 The lidar detector defaults to `clustering` because it is the one that passes on CARLA: the

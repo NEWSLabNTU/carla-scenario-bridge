@@ -224,8 +224,13 @@ recording picks them up.
    5/5 each, judged by `csb_launch incident_judge`; **6 dropped** -- the bicycle tracks, but
    Autoware turns across it (Results).
 4d. [ ] **Revised design (2026-10-18).** This doc section ("The tour, revised"); then
-   - acb: `max_velocity` launch argument (generated `common.param.yaml` copy, default 4.17,
-     sync-script check), pushed and pinned;
+   - [x] acb: `max_velocity` launch argument (generated `common.param.yaml` copy, default 4.17,
+     sync-script check), pushed and pinned. acb `7d1b1ce`: planning from a generated component
+     copy (`sync_planning_component.sh`) whose common parameter file `planning_common_param`
+     picks: upstream's own at 4.17 (default dump 207/207 nodes as before), a max_vel-only copy
+     otherwise; `ros2 param get` 11.11 / 4.17. Still binding at 11.11: corner lateral
+     acceleration (1.0 m/s^2), `obstacle_slow_down` (at most 8 m/s past an obstacle beside the
+     path), `obstacle_velocity_limiter`;
    - sites: `scripts/demo_town01_sites.yaml` re-cut for route C (incident 2 on the west road,
      incident 4 alone on the east road), triggers rescaled for 40 km/h, templates regenerated;
    - each template 5/5 on **CenterPoint + overlay at 40 km/h**, ClearNoon; incident 6 back in
