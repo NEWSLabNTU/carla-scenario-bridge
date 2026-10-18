@@ -455,6 +455,26 @@ still in the lane flickers in and out; a walking one does not). That failure mod
 for any timing in which the pedestrian stands in the ego's lane while it approaches; it is
 the incident's residual risk and is recorded here, not fixed (Autoware perception).
 
+*Results A, the flicker (2026-10-18): Autoware's tracker parameters, fixed in acb.* Traced
+stage by stage on live runs (bag in the ego domain, the walker's CARLA body per tick): the
+lidar, ground removal, map filter, clustering and the obstacle pointcloud validator have the
+standing walker in **every** frame; `multi_object_tracker` drops it. Its overlap pruning
+merges two UNKNOWN trackers within 9 m when their generalized IoU (over the footprints'
+convex hull) exceeds `pruning_generalized_iou_thresholds[UNKNOWN]`, -0.3 in Autoware 1.5.0
+-- so pairs that do not overlap at all. The walker stands 1.4 m from the parked car's front
+corner; GIoU of the car's track and the walker's detection hovers at -0.27..-0.37, and the
+walker's track is published exactly when it is below -0.30: each crossing merges the young
+walker track into the settled car track, and the next detection starts a new one -- the
+flicker. Not CARLA (points on the walker 544 per frame), not the cluster size or the
+validator. `obstacle_stop` stops for objects only (`check_inside.pointcloud: false`) and
+holds a lost one 1 s, so a gap longer than that releases the stop. Upstream moved the
+threshold to 0.1 itself (autoware_launch #1885, then #1907). Fix: acb 7429bbc (acb issue
+027), acb_launch's generated copy of the tracker's parameters with UNKNOWN at 0.1, no code
+change. Walker present while standing in the lane 2-30 m ahead: **0.30 before (69/230
+frames, five bagged runs at 0.22-0.35; one contact in six runs) -> 1.00 after (276/276, six
+runs, no contact, the ego stood 4.9-5.2 m short)**. AEB 9/9, starters 6/6, incident 6
+unchanged (contact 2/2, as before).
+
 *Results B (2026-10-17): Autoware, twice over; i6 stays a documented reproducer.*
 1. **The cyclist never reaches `blind_spot` as a cyclist.** Live (`probe_1`, the stock
    stack): every object on `/perception/object_recognition/objects` is label 0
