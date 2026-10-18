@@ -57,6 +57,31 @@ anyway. A graceful csb shutdown still restores async; after a csb crash CARLA st
 until the next csb takes it (which runs it synchronous anyway). Any other CARLA client that
 waits for ticks will wait while no scenario runs.
 
+## Followers: the served Traffic Manager and the tick gate
+
+A process that drives vehicles without ticking (2026-vehicle-consensus' junction harness,
+which follows csb's frames) needs two things from the ticker.
+
+**The Traffic Manager has to live here.** LibCarla steps a synchronous TM only from the
+tick of the process that hosts it: `Simulator::Tick` → `SynchronizeFrame` →
+`TrafficManager::Tick`, which calls `SynchronousTick` on the TMs in that process's
+`_tm_map`; a TM-Client's `SynchronousTick` (`TrafficManagerRemote`) returns at once. A TM
+hosted by a follower is never stepped by csb's tick and has to run asynchronously, on
+whatever frames its own thread catches (the harness's cars swerved off their lanes after
+a junction that way). With `traffic_manager.serve` (or `CSB_TM_SERVE=1`) csb starts its TM
+with the synchronous world, seeded and hybrid physics off, and keeps it for its lifetime;
+the follower connects to `traffic_manager.port` as a TM-Client and leaves the mode alone
+(only the TM-Server is set synchronous). csb sets it asynchronous and shuts it down when it
+shuts down. A TM-Client exists only for a port CARLA has registered: a client that comes
+too early gets a bind error from LibCarla trying to start a server of its own, so it retries.
+
+**The tick gate** (`tick_gate`, or `CSB_TICK_GATE=host:port`, see `tick_gate.rs`). A
+follower whose round takes longer than a frame skips frames. A follower that joins the gate
+(`HELLO`, then `DONE <frame>` after each frame, `BYE`) is waited for before every tick, at
+most `tick_gate_timeout_ms` (1 s), after which the tick goes ahead and the miss is counted.
+A follower silent for 5 s has left. The wait is in csb's request path before
+`world.tick()`, never inside a callback, and is bounded well inside SSv2's reply timeout.
+
 ## Tick granularity
 
 ```

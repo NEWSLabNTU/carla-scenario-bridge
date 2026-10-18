@@ -1087,6 +1087,9 @@ pub struct CarlaBackend {
     highest_actor_id: Option<u32>,
     /// The test-only fault hook (034 step 2, [`HangHook`]); `None` in every product run.
     hang_hook: Option<HangHook>,
+    /// The tick gate (`tick_gate`, [`crate::tick_gate`]): a follower that joined it is
+    /// waited for before every tick.
+    tick_gate: Option<crate::tick_gate::TickGate>,
     /// Test-only: every spawn RPC's timeout (`CSB_TEST_SPAWN_TIMEOUT_MS`, 034 step 4), to
     /// force the timed-out spawn that is then adopted. `None` in every product run.
     spawn_timeout_hook: Option<Duration>,
@@ -1191,6 +1194,26 @@ impl CarlaBackend {
         config_dir: PathBuf,
         config: BridgeConfig,
     ) -> Self {
+        let tick_gate = {
+            let addr = config.tick_gate.trim().to_string();
+            let timeout = Duration::from_millis(config.tick_gate_timeout_ms.unwrap_or(1000));
+            (!addr.is_empty())
+                .then(|| match crate::tick_gate::TickGate::bind(&addr, timeout) {
+                    Ok(g) => {
+                        tracing::info!(
+                            "tick gate on {addr}: a follower that joins is waited for \
+                             before every tick, at most {} ms",
+                            timeout.as_millis()
+                        );
+                        Some(g)
+                    }
+                    Err(e) => {
+                        tracing::error!("tick gate on {addr}: {e}; running without it");
+                        None
+                    }
+                })
+                .flatten()
+        };
         let config_for_release = config.sensor_release.clone();
         let substeps =
             crate::config::ticks_per_frame(0.05, config.substeps, config.carla_tick_seconds);
@@ -1257,6 +1280,7 @@ impl CarlaBackend {
                 }
                 hook
             },
+            tick_gate,
             highest_actor_id: None,
             spawn_timeout_hook: {
                 let hook = spawn_timeout_hook_from_env();
@@ -1875,6 +1899,14 @@ impl CarlaBackend {
         self.restore_traffic_lights();
         self.restore_async_mode();
         self.shut_down_traffic_manager("bridge shutdown");
+        if let Some(g) = &self.tick_gate {
+            tracing::info!(
+                "tick gate: {} wait(s), {:.1} s waited, {} tick(s) went ahead of the follower",
+                g.waits,
+                g.waited.as_secs_f64(),
+                g.missed
+            );
+        }
     }
 
     // --- Map and traffic lights ------------------------------------------------------
@@ -3221,6 +3253,14 @@ impl CarlaBackend {
         self.apply_settings_watched("synchronous mode", settings)?;
         self.sync_mode_enabled = true;
         self.set_traffic_manager_synchronous(true)?;
+        // A served TM starts with the synchronous world, before any TM-Client connects.
+        if self.config.traffic_manager.serve && self.traffic_manager.is_none() {
+            self.traffic_manager()?;
+            tracing::info!(
+                "Traffic Manager served on port {} for other clients",
+                self.config.traffic_manager.port
+            );
+        }
         tracing::info!(
             "CARLA sync mode enabled, fixed_delta_seconds={delta} ({} substep(s) per {}s \
              SSv2 frame), physics max_substep_delta_time={} x max_substeps={}",
@@ -3306,6 +3346,9 @@ impl CarlaBackend {
     /// ([`CarlaBackend::wedged`]): CARLA's frame and settings are logged, and this and every
     /// later tick fail without touching CARLA.
     fn watched_tick(&mut self, step: &str) -> std::result::Result<u64, TickFailure> {
+        if let (Some(gate), Some(frame)) = (self.tick_gate.as_mut(), self.last_tick_frame) {
+            gate.wait_for(frame);
+        }
         let mut world = self.world.clone();
         let bound = self.bound(budgets::TICK_WATCHDOG);
         match self.watched("world.tick()", step, bound, move || {
@@ -4633,6 +4676,11 @@ impl CarlaBackend {
     /// one. `why` names the occasion for the log. Under the watchdog: `Stop()` joins the TM's
     /// worker through the same unsynchronized handshake as its tick.
     fn retire_traffic_manager(&mut self, why: &str) {
+        // A served TM (`traffic_manager.serve`) has TM-Clients in other processes: it
+        // stays until the bridge shuts down.
+        if self.config.traffic_manager.serve {
+            return;
+        }
         let action =
             autopilot::traffic_manager_action(self.traffic_manager.is_some(), self.autopilot.len());
         if action == autopilot::TmAction::ShutDown {

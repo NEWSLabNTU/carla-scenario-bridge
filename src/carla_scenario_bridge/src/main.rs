@@ -22,6 +22,7 @@ mod proto;
 mod ros_args;
 mod sensor_release;
 mod spawn_ladder;
+mod tick_gate;
 mod tick_watchdog;
 mod weather;
 mod world_services;

@@ -182,6 +182,10 @@ carla_tick_seconds: 0.05
 # `simulator_autopilot` (docs/design/scenario-authoring.md). csb runs it in its own process
 # and ticks it with the world, synchronously; `seed` is applied at every Initialize so the
 # simulator-driven traffic repeats run to run.
+# `serve: true` (or CSB_TM_SERVE=1) also serves it to other clients: it starts with the
+# synchronous world and stays for the bridge's lifetime, so a process that follows csb's
+# frames can drive vehicles through it as a TM-Client, stepped by csb's tick.
 traffic_manager:
   port: 8000
   seed: 2017
+  serve: false

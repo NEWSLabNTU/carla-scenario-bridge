@@ -165,6 +165,12 @@ pub struct TrafficManagerConfig {
     /// Seed for TM's random choices (lane changes, roaming turns), set at every
     /// Initialize, so a scenario's simulator-driven traffic repeats run to run.
     pub seed: u64,
+    /// Serve the TM for other clients too: start it with synchronous mode and keep it for
+    /// the bridge's lifetime, even with no `simulator_autopilot` entity. Another process
+    /// that drives vehicles through the TM (a harness following csb's frames) connects to
+    /// `port` as a TM-Client; csb's `world.tick()` steps the TM once per tick, which a TM
+    /// hosted by a process that never ticks cannot have (`CSB_TM_SERVE=1` overrides).
+    pub serve: bool,
 }
 
 impl Default for TrafficManagerConfig {
@@ -172,6 +178,7 @@ impl Default for TrafficManagerConfig {
         Self {
             port: 8000,
             seed: 2017,
+            serve: false,
         }
     }
 }
@@ -231,6 +238,12 @@ pub struct BridgeConfig {
     /// Where each episode's gap trace is written for the oracle (roadmap 024); empty = no
     /// trace (the default). Read it through [`BridgeConfig::gap_trace_dir`].
     pub gap_trace_dir: String,
+    /// The tick gate's UDP address (`host:port`, [`crate::tick_gate`]): a process that
+    /// follows csb's frames and joins the gate is waited for before every tick. Empty (the
+    /// default) = no gate. `CSB_TICK_GATE` overrides.
+    pub tick_gate: String,
+    /// How long one tick waits for the gate's follower at most (ms); unset = 1000.
+    pub tick_gate_timeout_ms: Option<u64>,
 }
 
 /// The simulator csb drives (roadmap 035, `docs/design/simulator-backends.md`).
@@ -458,6 +471,16 @@ impl BridgeConfig {
         if let Some(port) = env_port("SSV2_PORT") {
             self.ssv2.port = port;
         }
+        if let Ok(v) = std::env::var("CSB_TICK_GATE") {
+            self.tick_gate = v.trim().to_string();
+        }
+        if let Ok(v) = std::env::var("CSB_TM_SERVE") {
+            match v.trim() {
+                "1" | "true" | "on" => self.traffic_manager.serve = true,
+                "0" | "false" | "off" | "" => self.traffic_manager.serve = false,
+                other => tracing::warn!("Ignoring CSB_TM_SERVE='{other}': not 0/1"),
+            }
+        }
         if std::env::var("CSB_BACKGROUND_AVS").is_ok_and(|v| !v.trim().is_empty()) {
             tracing::warn!("CSB_BACKGROUND_AVS is ignored: {REMOVED_BACKGROUND_AVS}");
         }
@@ -561,6 +584,20 @@ mod tests {
         assert_eq!(config.carla.port, 3000);
         assert_eq!(config.carla.host, "localhost", "host must keep its default");
         assert_eq!(config.ssv2.port, 5555);
+    }
+
+    /// The served TM (a harness drives vehicles through it as a TM-Client) is off unless
+    /// asked for, and keeps the port and seed it is given.
+    #[test]
+    fn the_traffic_manager_is_served_only_when_asked() {
+        let config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        assert!(!config.traffic_manager.serve);
+        let config: BridgeConfig =
+            serde_yaml::from_str("traffic_manager:\n  port: 8100\n  serve: true\n")
+                .expect("parses");
+        assert!(config.traffic_manager.serve);
+        assert_eq!(config.traffic_manager.port, 8100);
+        assert_eq!(config.traffic_manager.seed, 2017);
     }
 
     #[test]
