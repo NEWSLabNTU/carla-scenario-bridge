@@ -13,7 +13,7 @@
 CSB_AUTOWARE_OVERLAY_REPO=https://github.com/NEWSLabNTU/autoware_universe.git
 # Branch csb/blind-spot-right-turn-0.48.0: tag 0.48.0 (Autoware 1.5.0's package versions)
 # plus the blind_spot right-turn fix, autoware_universe#13509.
-CSB_AUTOWARE_OVERLAY_REV=e35db1ab3e6071f0b7f88a591f7932182367950a
+CSB_AUTOWARE_OVERLAY_REV=5c617b0a11df1854667563357fb04bd488bd8ce9
 CSB_AUTOWARE_OVERLAY_PACKAGES=(
     planning/behavior_velocity_planner/autoware_behavior_velocity_blind_spot_module
 )

@@ -52,11 +52,17 @@ from the package list, bump the pin, rebuild.
 
 ## Results
 
-*2026-10-17: steps 1-4 done; step 5 drafted (in the session report, not posted).*
+*2026-10-17: steps 1-4 done. 2026-10-18: step 5 done -- upstream PR
+[#13511](https://github.com/autowarefoundation/autoware_universe/pull/13511), linked from #13509;
+both disclose that Claude wrote them.*
 
 - **Fork branches** (pushed): `fix/blind-spot-right-turn-ego-passage` on upstream `main`
-  f81a3bf089 (`6244a3f79` test, `1c761ab4a` fix) and `csb/blind-spot-right-turn-0.48.0` on tag
-  0.48.0 (`68af89e4c` test, `e35db1ab3` fix, the overlay pin). Both commits DCO-signed.
+  f81a3bf089 (`cf7b2df71` test, `a578ab406` fix; the PR's head) and
+  `csb/blind-spot-right-turn-0.48.0` on tag 0.48.0 (`68af89e4c` test, `e35db1ab3` fix,
+  `5c617b0a1` the test's copyright header, the overlay pin). The test file carries
+  `Copyright 2026 The Autoware Contributors`, what non-TIER IV files upstream use; the PR branch
+  was rewritten for it (no PR yet then), the overlay branch got a commit on top so the old pin
+  stays reachable.
 - **Unit test** `test/test_ego_passage_interval.cpp` (legacy and experimental): on the test
   commit, i.e. the stock line order, both cases fail -- left turn `[3.08, 5.60]` s, mirrored
   right turn `[4.56, 4.40]` s; with the fix both pass, on 0.48.0 (full module build against
