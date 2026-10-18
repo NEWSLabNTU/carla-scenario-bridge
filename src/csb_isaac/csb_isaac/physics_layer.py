@@ -14,8 +14,12 @@ Left without a collider:
 - whatever sits under a `PointInstancer`: SimReady writes CARLA's foliage (grass, bushes,
   trees placed with the foliage tool) as instancers, and CARLA does not collide with them
   either; a triangle mesh per blade of grass would also cost PhysX more than the town.
-- the far scenery: `BackgroundPlanes` (the skyline cards around the map) and `Lake` tiles,
-  which nothing drives on and whose huge flat triangles only slow the broad phase.
+- the far scenery and water: `BackgroundPlanes` (the skyline cards around the map), Town01's
+  `Lake` tiles and Town10HD's sea (`SM_seaM`, `SM_sea2M`), which nothing drives on and whose
+  huge flat triangles only slow the broad phase.
+- invisible meshes: CARLA's crosswalk areas (2 mm planes over the road that its pedestrian
+  navigation is generated from) and the like. What the lidar cannot see should not hold a
+  car up either.
 
 The layer is the file the Isaac world names (`csb_isaac.usd_world`).
 
@@ -27,7 +31,7 @@ import sys
 
 # Scenery left without colliders: prims of these names, and of names with these prefixes.
 SKIPPED_NAMES = {"Lake"}
-SKIPPED_PREFIXES = ("BackgroundPlanes",)
+SKIPPED_PREFIXES = ("BackgroundPlanes", "SM_sea")
 
 
 def skipped(path):
@@ -62,7 +66,9 @@ def write_layer(src, out):
             it.PruneChildren()
             instancers += 1
             continue
-        if skipped(prim.GetPath()):
+        if skipped(prim.GetPath()) or (
+                prim.IsA(UsdGeom.Imageable)
+                and UsdGeom.Imageable(prim).ComputeVisibility() == UsdGeom.Tokens.invisible):
             it.PruneChildren()
             continue
         if prim.IsA(UsdGeom.Mesh):

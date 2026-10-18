@@ -24,6 +24,7 @@ class SkippedTest(unittest.TestCase):
     def test_scenery_by_path_component(self):
         self.assertTrue(physics_layer.skipped("/Root/Lake/SM_TileLake3/Section0"))
         self.assertTrue(physics_layer.skipped("/Root/BackgroundPlanes_Tow01_2/x"))
+        self.assertTrue(physics_layer.skipped("/Root/SM_sea2M/SM_sea2M"))
         self.assertFalse(physics_layer.skipped("/Root/Buildings/Bl_Lakeside_House/Section0"))
         self.assertFalse(physics_layer.skipped("/Root/Roads/Road_12/Section0"))
 
@@ -43,6 +44,7 @@ class LayerTest(unittest.TestCase):
                      "/Root/Foliage/Grass/Blade"):
             UsdGeom.Mesh.Define(stage, path)
         UsdGeom.PointInstancer.Define(stage, "/Root/Foliage")
+        UsdGeom.Mesh.Define(stage, "/Root/Crosswalk/Plane").MakeInvisible()
         stage.GetRootLayer().Save()
 
     def tearDown(self):

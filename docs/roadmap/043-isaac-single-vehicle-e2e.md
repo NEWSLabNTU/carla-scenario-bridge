@@ -199,3 +199,52 @@ traced through the source:
 Open: the CoM (48/52, 0.46 m) and the tires are assumptions; a real Model 3's measured weight
 split, CoM height and tire data would replace them. The wheel base and radius are the CARLA
 body's, 13 cm and 3.6 cm off a real Model 3. Not yet measured with Autoware driving.
+
+### As built: towns
+
+`src/csb_isaac/scripts/isaac_town.sh <Town>` (2026-10-18): exports with SimReady when
+`$CARLA_USD/<Town>/<Town>.usd` is missing (log `$CARLA_USD/<Town>/export.log`; done when the
+log says "exported to USD!", the commandlet exits 1 on material warnings regardless), then
+`csb_isaac.physics_layer` writes `<Town>_physics.usda` and `csb_isaac.usd_world` the world
+file for the map (`Town10HD` -> `data/carla-autoware-bridge/Town10`). The layer: static
+triangle-mesh colliders on every mesh except foliage `PointInstancer`s, invisible meshes
+(CARLA's 2 mm crosswalk planes), the background cards and the water (Town01's `Lake`,
+Town10HD's `SM_sea*`). Town01's regenerated world file is identical to the hand-made one
+(1718 ground prims); its layer differs from `add_physics.py`'s only by the 40 crosswalk
+planes.
+
+Checks: a world server per town (headless, `--world` preload, an Autoware ego from
+`acb_ego.yaml`), then six egos one after another on straight road lanelets (>= 30 m, spread
+over the map, pcd ground flat across 2.4 m), each dropped from 0.3 m and stepped 4 s at 60
+Hz; z of `base_link` at rest against the lanelet's `ele` and against the town's
+`pointcloud_map.pcd` (median z within 1 m), which is CARLA's own surface.
+
+| town | export | colliders | ground prims | preload (first render) | ego - pcd | ego - lanelet ele |
+|---|---|---|---|---|---|---|
+| Town01 | 17.5 min | 5965 | 1718 | 104 s (materials cached) | <= 0.3 cm | <= 0.3 cm |
+| Town02 | 9.2 min | 3732 | 703 | 428 s | 0.0 cm (5 of 6) | +22.0 cm |
+| Town03 | 16.3 min | 7258 | 1497 | 474 s | <= 0.1 cm | up to 83 cm |
+| Town05 | 10.8 min | 7355 | 1585 | 207 s | <= 0.1 cm | <= 5.4 cm |
+| Town10HD | 25.4 min | 3651 | 443 | 283 s | <= 1.1 cm | 0.0 cm |
+
+Exports 0.9-1.9 GB each on /mnt/disk1. Preload times are with a CARLA server and two other
+Isaac instances on the GPU, Town03 and Town05 also beside another town's export; a first
+load compiles materials (Town01's first was about 9 min). Town01 and Town02 were checked
+with their crosswalk planes still colliding (the rule came with Town03).
+
+The USD and the pcd agree everywhere sampled (curb edges too: Town01's curb at y = -332.8 is
+at the same place in both). Where the ego misses the lanelet's elevation, the lanelet map is
+what is off:
+
+- Town02's lanelets say `ele` 0; CARLA's road there is at z = 0.22 (pcd and USD alike).
+- Town03's lanelet map has no elevation at all (every node `ele` 0) though the town has
+  slopes: the ego rests at -0.83 and +0.80 on two of the six lanelets, on the pcd's surface.
+- Some `subtype=road` lanelets are not on CARLA's road: Town01 has outer lanelets about 2 m
+  off the carriageway, half on the 10 cm sidewalk (lanelet 7768 at y -334.8..-330.8, road
+  edge at -332.7), and 16 of 59 candidates there have sidewalk-height or no pcd ground; Town02
+  lanelet 11983 (198.0, -150.6) lies on a planted sidewalk (the ego lands on plant pots and
+  a cypress). Town03 has 18 straight lanelets with no pcd points under them.
+
+So the 5 cm criterion holds against CARLA's surface in every town, and against the lanelet
+`ele` only where the lanelet map carries the true height (Town01, Town05, Town10HD). Not
+yet checked: NDT on each town's pcd from the Isaac lidar.
