@@ -73,9 +73,14 @@ braking, the brake hydraulic lag and ABS.
       + 60 ms lag, ABS per wheel and traction control on PhysX slip; road loads (Crr 0.0095,
       Cd 0.23 x 2.2 m^2) as a body force for every model. Unit-tested (93 tests, system and
       Isaac Python); point-mass 0-100 km/h 5.9 s against the published 5.8-6.1 s.
-- [ ] `ev` validated in Isaac (`just isaac-steptest` in aib: 0-100, 100-0, regen at 60 km/h,
-      step lags, ABS at friction 1.0), then closed-loop with Autoware; only then the default
-      for tesla_model3 (`ideal` until then).
+- [x] `ev` validated in Isaac and the default for tesla_model3 (aib `54cace1`, 2026-10-19;
+      aib docs/design.md, Validation). `just isaac-steptest`: 0-100 km/h 6.45 s (Tesla 6.1 s;
+      0.27 s of it the hold release), 100-0 km/h 42.9 m with ABS, no lock (44.1 m locked; ~40 m
+      published), regen at most ~0.20 g at 55 km/h, -1.5 m/s^2 all regen, brake step t63
+      0.10 s, coast-down matching the road-load model. Closed loop on Town01 (Autoware +
+      acb's pilot, town01_ego_drive's route): median longitudinal error 0.018 m/s^2 (`ideal`
+      0.016; limit 0.35), one run each. The tyre grip now falls to 0.8 at lock (user
+      decision), for `ideal` too: csb's 043 numbers were taken on the flat curve.
 
 The other options (`physx` DriveStandard, an FMU,
 Project Chrono for rough or deformable ground) wait until a need shows.
@@ -97,8 +102,11 @@ Project Chrono for rough or deformable ground) wait until a need shows.
 
 - [x] aib repository: library, spec, generator with check mode, Autoware packages, unit
       tests without Isaac, docs; builds with colcon against Autoware 1.5.0 (2026-10-18).
-- [ ] aib's Isaac code run once from aib itself: `just isaac-ego` on Town01 with `just
-      autoware`, a drive to a goal (standalone, no csb).
+- [x] aib's Isaac code run once from aib itself: `just isaac-ego` on Town01 with `just
+      autoware`, a drive to a goal (standalone, no csb) (2026-10-19, aib `54cace1`): arrived,
+      `ev` and `ideal`. Needed: the chassis box hidden from the lidar (Autoware stopped for
+      the ego's own roof), `just autoware` keeping the caller's CYCLONEDDS_URI, and
+      `realtime:=true` (unpaced, the world ran 3x real time and localization never started).
 - [ ] Integration: aib as a submodule at `src/autoware_isaac_bridge` (pushed first, then the
       pin); `csb_isaac` imports `aib` (world server's `PYTHONPATH` gets
       `src/autoware_isaac_bridge/src/aib`); `IsaacWorld` builds `aib.isaac.ego.Ego` from an
