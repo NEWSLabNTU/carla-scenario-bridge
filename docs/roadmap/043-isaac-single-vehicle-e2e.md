@@ -96,7 +96,7 @@ boxes are this phase.
 - [x] World server under play_launch with respawn; backend-aware `scenario`, `acceptance`,
       `e2e`; acb initialize timeout.
 - [x] Exit runs ("Exit runs" at the end), recorded.
-- [ ] Screencast of the demo.
+- [x] Screencast of the demo (2026-10-19, `town02_ego_drive`, PASS; "Exit runs").
 
 ## Acceptance
 
@@ -355,6 +355,15 @@ World server up from cold (Hello answering, first town rendered): Town01 + Town0
 Town05 148 s, Town10HD 173 s, Town02 110 s. The Town03 and Town05 frame times are with
 another session compiling Rust beside them (load 70-150 on 32 cores); Town10HD's ~50 ms is
 the whole 50 ms frame on a quiet host, so it runs at real time with no headroom.
+
+**Screencast** (2026-10-19): `/mnt/disk1/csb-043-screencast/csb_043_isaac_town02_ego_drive.mp4`
+(1:37, 1920x1080, H.264; raw take `raw_town02_ego_drive.mp4` beside it). One `just scenario
+src/csb_examples/scenarios/basic/town02_ego_drive.xosc backend:=isaac` to SSv2's PASS, on VNC :8
+tiled by `just vnc-layout`: Isaac Sim windowed (`just isaac-world world:=<Town02> follow:=true
+render:=window`) top left, Autoware's RViz (`autoware_cast.rviz`, `vglrun`) top right, the world
+server, ego stack and scenario terminals along the bottom. The stacks were started before the
+recording (world server answering in 30 s with Town02's materials cached); 949 frames, 41.5 ms
+mean step with the window rendering.
 
 **The routes.** `src/csb_examples/scenarios/basic/town{02,03,05,10}_ego_drive.xosc`, modelled
 on `town01_ego_drive`: start and goal in the middle of straight `road` lanelets, 100-145 m
