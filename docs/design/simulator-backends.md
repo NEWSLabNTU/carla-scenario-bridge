@@ -1,7 +1,7 @@
 # Simulator Backends: SSv2 on CARLA and on Isaac Sim
 
 **Date**: 2026-10-16. **Status**: design; phases 036 (bring-up), 035 (the seam) and 037
-(world server, `IsaacBackend`) done 2026-10-17. Phases [035](../roadmap/035-backend-seam.md)-[041](../roadmap/041-competition-director.md)
+(world server, `IsaacBackend`) done 2026-10-17, 038 (Autoware drives on Isaac) 2026-10-18. Phases [035](../roadmap/035-backend-seam.md)-[041](../roadmap/041-competition-director.md)
 implement it. Background: [survey-isaac-sim-and-digital-twin.md](survey-isaac-sim-and-digital-twin.md)
 (2026-10-09) and the Isaac Sim 6.1 study of 2026-10-16 (summarized under "Study notes").
 
@@ -109,14 +109,20 @@ material). Contacts come from PhysX contact reports on the ego.
 
 ### The Isaac vehicle bridge (phases 036, 038)
 
-Lives inside the world server, because the sensors are rendered there. Per ego it creates a
-ROS 2 context on that ego's domain and publishes what acb publishes for CARLA: lidar, cameras,
-IMU, GNSS, `/vehicle/status/*` (velocity, steering, gear, control mode, turn indicators),
-`/clock`; it subscribes to `/control/command/*`. Isaac's `ROS2 Context` node takes a
-`domain_id` per context, and several contexts coexist in one stage: verified in 036 (each
-domain sees only its own vehicle, with Cyclone under the stack's localhost config and with
-Fast DDS). The rclpy fallback (an rclpy context per ego) was not needed. Isaac bundles ROS 2
-Humble libraries built for its Python 3.12; the system Humble is not sourced into it.
+Lives inside the world server, because the sensors are rendered there. As built (038,
+`csb_isaac/ego.py`): one rclpy context on the ego's domain (036's mechanism, `domain_id`
+explicit), made with the world server and kept across egos, publishes what acb publishes for
+CARLA -- the lidar as `PointXYZIRC`, IMU, GNSS, `/vehicle/status/*` (velocity, steering,
+gear, control mode, turn indicators, hazard lights), `/clock` -- and takes
+`/control/command/*` and `/control/control_mode_request`, once per frame in lockstep.
+Autoware's message bindings are rebuilt for Isaac's Python 3.12 from the C sources Humble
+ships (`just isaac-msgs`), since Isaac bundles only the common packages; OmniGraph's ROS 2
+nodes are not used. The ego is a PhysX vehicle built from Autoware's vehicle description,
+driven by torques and steer angles set directly from Autoware's acceleration and tire angle
+(`csb_isaac/vehicle.py`). Autoware runs as on CARLA minus acb_bridge (`just ego-isaac`); the
+test world is the map's point cloud as voxels, so NDT localizes as it does on CARLA
+(`just isaac-world-gen`). `/clock` is offset by the wall clock at server start, so a server
+restart never sends a long-lived stack's time backwards.
 
 ### What Isaac does not have, and how csb answers it
 

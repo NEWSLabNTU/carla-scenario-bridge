@@ -18,6 +18,11 @@ domain").
   `agent` (017); each is spawned physics driven through `IsaacBackend` with its vehicle YAML.
 - **Autoware stacks**: one per ego, launched as on CARLA (`just ego-av` with a domain); each
   needs the map dir and the vehicle's sensor kit.
+- **Per-ego cost, from 038**: one ego frame costs 20-22 ms p50 at the world server (physics
+  and render 9 ms, its ROS side 5, lidar 2, the Python vehicle the rest), not 036's 5 ms per
+  bare sensor set: size the ego count on that, and move the per-ego ROS work off the loop if
+  it binds. 038 makes the ego's rclpy context once, at server start, for its one domain
+  (`EgoRos`): 039 makes one per configured ego, keyed by the ego YAML's domain.
 - **GPU budget**: from 036, the number of full sensor sets one 5090 holds at real time. Beyond
   it: reduced sensor sets for background AVs (lidar only, or none: a background AV that only
   needs to drive can run on ground-truth localization), or a second host with the world server

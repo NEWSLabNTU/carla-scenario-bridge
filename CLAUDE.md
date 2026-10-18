@@ -59,7 +59,8 @@ just test     # Run tests
 │   ├── Cargo.toml
 │   └── package.xml
 ├── src/csb_interfaces/     # rosidl: Weather.msg, SetWeather.srv, GetWeather.srv
-├── src/csb_isaac/          # Isaac Sim world server (Python, Isaac's venv; `just isaac-world`)
+├── src/csb_isaac/          # Isaac Sim world server (Python, Isaac's venv; `just isaac-world`):
+│                           #   lockstep world, the ego's PhysX vehicle and ROS side (038, `just ego-isaac`)
 ├── proto/                  # SSv2 protobuf definitions, and csb_world.proto (Isaac, 037)
 ├── src/csb_examples/       # Starter scenarios (basic/, multi_av/, awf/), installed
 ├── scenarios/              # Benchmark scenarios (bench/), goal-pose files

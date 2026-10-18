@@ -45,16 +45,31 @@ SSv2 start-up and the ego's engage, which is most of a short scenario.
 | --- | --- | --- |
 | `town01_follow_to_goal.xosc` | Town01 | The ego drives 80 m to a goal behind a slower SSv2-driven car (`leadSpeed`, 4 m/s) and must not touch it. Every pose comes from `ros2 run csb_launch carla_poses`; written step by step in [Tutorial 2](../../docs/tutorials/02-prepare-a-scenario.md). |
 
-## isaac/ -- Isaac Sim before its vehicle bridge (roadmap 037)
+## isaac/ -- Isaac Sim (roadmaps 037, 038)
 
-On Isaac Sim (`backend: isaac`) every entity is a kinematic box SSv2 poses, the ego included:
-no Autoware drives yet (038 brings the PhysX vehicle and the sensors). These scenarios use
-Town01's Lanelet2 map over Isaac's flat ground plane (the map needs no `isaac/world.yaml`;
-Town01's roads lie at z = 0), and an ego no Autoware drives, so they run with
-`managed_ego:=false` and without run_suite's agent pre-flight:
+**Autoware on Isaac (038).** The starter `basic/town01_ego_drive.xosc` runs on Isaac
+unchanged: the world server's ego is a PhysX vehicle with acb's sensors and vehicle
+interface on domain 1, and `just ego-isaac` is `just ego-av` without acb_bridge. The world is
+Town01's point-cloud map as voxels, generated once per host:
 
 ```bash
-just isaac-world &                      # the world server (Isaac Sim, headless)
+just isaac-msgs && just isaac-world-gen # once: Autoware's messages for Isaac, the Town01 world
+just isaac-world &                      # the world server (headless; `5590 :8 <ego yaml> 1` to watch on VNC)
+CSB_BACKEND=isaac just run &            # csb on it
+just ego-isaac &                        # Autoware, domain 1
+ros2 run csb_launch run_suite basic/town01_ego_drive.xosc --output <dir>
+```
+
+Scenarios needing traffic lights, `simulator_autopilot` or `agent` vehicles are refused on
+Isaac (037), as is a second ego.
+
+**Without Autoware (037).** The scenarios below have an ego no Autoware drives, a kinematic
+box SSv2 poses or leaves standing, so they need the world server without the ego vehicle
+(`ego=""`, which keeps 037's box: a kinematic NPC shoving a dynamic ego breaks SSv2's motion
+limits) and run with `managed_ego:=false` and no agent pre-flight:
+
+```bash
+just isaac-world 5590 "" "" &           # the world server, kinematic ego
 CSB_BACKEND=isaac just run &            # csb on it
 ros2 run csb_launch run_suite isaac/ --output <dir> --no-preflight -- managed_ego:=false
 ```
