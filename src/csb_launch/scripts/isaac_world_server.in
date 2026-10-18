@@ -7,13 +7,16 @@
 # The world server is Python 3.12 in Isaac's venv with Isaac's own ROS 2 libraries
 # (src/csb_isaac/scripts/isaac_env.sh); the system Humble a launch runs under must not leak
 # into it, so its paths are dropped here first. The launch's --ros-args (node name, remaps)
-# mean nothing to it and are dropped too.
+# mean nothing to it and are dropped too. The ego is aib's (autoware_isaac_bridge, the
+# submodule beside csb_isaac; roadmap 045): isaac_env.sh puts its package on PYTHONPATH, and
+# --ego default is its config/ego.yaml.
 #
 # Environment: CSB_ISAAC_DIR (default: the csb_isaac this package was built beside),
 # ISAAC_ROOT, DISPLAY (render auto/window), ISAAC_HEADLESS=1 (render auto: headless),
 # CYCLONEDDS_URI (passed through: the ego stack's DDS).
 set -e
 csb_isaac="${CSB_ISAAC_DIR:-@CSB_ISAAC_DIR@}"
+aib_ego="$csb_isaac/../autoware_isaac_bridge/src/aib/config/ego.yaml"
 port=5590; ego=default; world=none; follow=false; render=auto
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -29,7 +32,7 @@ done
 
 args=(--port "$port")
 case "$ego" in
-    default) args+=(--ego "$csb_isaac/config/acb_ego.yaml") ;;
+    default) args+=(--ego "$aib_ego") ;;
     none|"") ;;
     *) args+=(--ego "$ego") ;;
 esac

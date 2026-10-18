@@ -60,7 +60,10 @@ just test     # Run tests
 │   └── package.xml
 ├── src/csb_interfaces/     # rosidl: Weather.msg, SetWeather.srv, GetWeather.srv
 ├── src/csb_isaac/          # Isaac Sim world server (Python, Isaac's venv; `just isaac-world`):
-│                           #   lockstep world, the ego's PhysX vehicle and ROS side (038, `just ego-isaac`)
+│                           #   lockstep world, NPCs, contacts, the CARLA vehicle catalogue
+├── src/autoware_isaac_bridge/  # aib submodule (045): the Isaac ego the world server imports
+│                           #   (PhysX vehicle, sensors, vehicle interface; vehicle spec ->
+│                           #   Autoware vehicle/sensor kit + rig), aib_launch for `just ego-isaac`
 ├── proto/                  # SSv2 protobuf definitions, and csb_world.proto (Isaac, 037)
 ├── src/csb_examples/       # Starter scenarios (basic/, multi_av/, awf/), installed
 ├── scenarios/              # Benchmark scenarios (bench/), goal-pose files

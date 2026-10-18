@@ -117,8 +117,11 @@ material). Contacts come from PhysX contact reports on the ego.
 
 ### The Isaac vehicle bridge (phases 036, 038)
 
-Lives inside the world server, because the sensors are rendered there. As built (038,
-`csb_isaac/ego.py`): one rclpy context on the ego's domain (036's mechanism, `domain_id`
+Lives inside the world server, because the sensors are rendered there, and since 045 is
+[autoware_isaac_bridge](https://github.com/NEWSLabNTU/autoware_isaac_bridge) (aib, the
+submodule at `src/autoware_isaac_bridge`), which the world server imports: `aib.isaac.ego`,
+built from an aib ego config and the rig its vehicle spec generates. As built (038, now
+`aib.ros` and `aib.isaac.sensors`): one rclpy context on the ego's domain (036's mechanism, `domain_id`
 explicit), made with the world server and kept across egos, publishes what acb publishes for
 CARLA -- the lidar as `PointXYZIRC`, IMU, GNSS, `/vehicle/status/*` (velocity, steering,
 gear, control mode, turn indicators, hazard lights), `/clock` -- and takes
@@ -127,7 +130,9 @@ Autoware's message bindings are rebuilt for Isaac's Python 3.12 from the C sourc
 ships (`just isaac-msgs`), since Isaac bundles only the common packages; OmniGraph's ROS 2
 nodes are not used. The ego is a PhysX vehicle built from Autoware's vehicle description,
 driven by torques and steer angles set directly from Autoware's acceleration and tire angle
-(`csb_isaac/vehicle.py`). Autoware runs as on CARLA minus acb_bridge (`just ego-isaac`); the
+(`aib.isaac.vehicle`, its powertrain `aib.powertrain`). Autoware runs as on CARLA minus
+acb_bridge, with aib's vehicle and sensor kit (`just ego-isaac`: `aib_launch
+isaac_simulator.launch.xml`); the
 test world is the map's point cloud as voxels, so NDT localizes as it does on CARLA
 (`just isaac-world-gen`). `/clock` is offset by the wall clock at server start, so a server
 restart never sends a long-lived stack's time backwards.

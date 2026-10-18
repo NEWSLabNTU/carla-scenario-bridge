@@ -8,10 +8,11 @@ reports contacts; the scene reports kinematic pairs (NPCs against NPCs and the g
 Contacts with the ground (the flat plane, or a world's `ground_paths`) are not reported: a
 body resting on its road is not a contact.
 
-With an ego YAML (`--ego`, roadmap 038) the ego is not a box but a PhysX vehicle with
-Autoware's sensors and vehicle interface on its own ROS domain (`ego.py`): physics moves it,
-from Autoware's commands, and SSv2 reads its pose back; a pose csb sends for it is a
-teleport. Rendering is then on every frame, whatever the request asks: the lidar needs it.
+With an ego config (`--ego`, roadmaps 038, 045) the ego is not a box but aib's ego
+(autoware_isaac_bridge: `aib.isaac.ego.Ego`, built from the config's rig): a PhysX vehicle
+with Autoware's sensors and vehicle interface on its own ROS domain. Physics moves it, from
+Autoware's commands, and SSv2 reads its pose back; a pose csb sends for it is a teleport.
+Rendering is then on every frame its sensors need, whatever the request asks.
 """
 import logging
 import math
@@ -26,6 +27,7 @@ from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics
 
 from . import vehicle_assets
+from .catalogue import check_ego, ego_model, load_ego
 
 log = logging.getLogger("csb_isaac")
 
@@ -34,7 +36,6 @@ SLOW_STEP_S = 0.5
 ENTITIES = "/World/entities"
 CHASE_CAMERA = "/World/chaseCamera"
 SUN = "/World/sun"
-EGO_DEFAULT_MODEL = "vehicle.tesla.model3"
 SKY = "/World/sky"
 # Renders after a preload: the first compiles the world's materials, the rest settle it.
 PRELOAD_RENDERS = 5
@@ -73,21 +74,22 @@ class IsaacWorld:
         self.isaac_version = _isaac_version()
         self.follow = follow
         self.ego_config = None
+        self.ego_rig = None
         self.ego_ros = None
         if ego_config:
             from isaacsim.core.utils.extensions import enable_extension
 
-            from .ego import EgoConfig
-
-            self.ego_config = EgoConfig.load(ego_config)
+            # aib's ego config and the rig it names (the vehicle, generated from aib's spec).
+            self.ego_config, self.ego_rig = load_ego(ego_config)
             for ext in ("isaacsim.sensors.experimental.rtx", "isaacsim.sensors.rtx.nodes"):
                 enable_extension(ext)
             omni.kit.app.get_app().update()
-            from .ego import EgoRos
+            from aib.ros import EgoRos
 
-            self.ego_ros = EgoRos(self.ego_config)
+            self.ego_ros = EgoRos.from_config(self.ego_config, self.ego_rig)
             self.ego_ros.publish_clock(0.0)
-            log.info("egos are PhysX vehicles with Autoware's interface (%s)", ego_config)
+            log.info("egos are aib's %s (%s, rig %s)", self.ego_rig.name, ego_config,
+                     self.ego_rig.path)
         self.world = World(stage_units_in_meters=1.0, physics_dt=physics_dt,
                            rendering_dt=physics_dt)
         self.dt = physics_dt
@@ -95,20 +97,17 @@ class IsaacWorld:
         # CARLA's vehicles exported to USD (CSB_VEHICLE_USD): an entity whose Spawn names one
         # wears it; any other stays the box.
         self.vehicle_assets = vehicle_assets.VehicleAssets()
-        self.ego_params = None
-        if self.ego_config is not None:
-            # The ego's parameters (a real Model 3 on vehicle_info's geometry), and the check
-            # that the body it wears is the car Autoware plans with: a mismatch stops the
+        if self.ego_rig is not None:
+            # The check that the body the ego wears is the car the rig (and Autoware's
+            # vehicle_info, generated from the same spec) describes: a mismatch stops the
             # server here, not a drive later (043).
-            from .ego import ego_params
-
-            model = self.ego_config.model or EGO_DEFAULT_MODEL
+            model = ego_model(self.ego_rig)
             physics = self.vehicle_assets.physics(model)
             if physics is None:
                 log.warning("no CARLA physics for the ego's %s in the catalogue (run "
                             "scripts/dump_vehicle_physics.py): its geometry is not checked", model)
-            self.ego_params = ego_params(self.ego_config, physics)
-            log.info("ego vehicle: %s", self.ego_params)
+            check_ego(self.ego_rig, physics)
+            log.info("ego vehicle: %s", self.ego_rig.vehicle)
         self.world.scene.add_default_ground_plane(prim_path=GROUND_PLANE)
         UsdGeom.Xform.Define(self.stage, ENTITIES)
         # Light for cameras (a viewport, 038's watching; the lidar needs none): a loaded world
@@ -137,7 +136,7 @@ class IsaacWorld:
         if self.ego_config is not None:
             # Vehicle context, collision groups, friction table: before the simulation starts
             # (PhysX ignores the vehicle context's axes once it runs).
-            from .vehicle import ensure_vehicle_scene
+            from aib.isaac.vehicle import ensure_vehicle_scene
 
             ensure_vehicle_scene(self.stage)
         self.world.reset()
@@ -191,16 +190,17 @@ class IsaacWorld:
     def spawn(self, handle, name, kind, subtype, center, dims, pose, model=""):
         path = f"{ENTITIES}/e{handle}"
         if kind == "EGO" and self.ego_config is not None:
-            from .ego import Ego
+            from aib.isaac.ego import Ego
 
-            ego = Ego(self.ego_config, self.ego_ros, self.stage, path, name, center, dims, pose,
-                      params=self.ego_params)
-            # The ego is the ego YAML's car (acb's Tesla Model 3), the one its physics, vehicle
-            # description and sensor kit are of, as the CARLA backend spawns it, whatever body
-            # the scenario names.
-            own_model = self.ego_config.model or EGO_DEFAULT_MODEL
+            # The scenario's declared box is the ego's chassis collider, as for any entity.
+            ego = Ego(self.ego_rig, self.ego_ros, self.stage, path, pose, name=name,
+                      box_center=center, box_dims=dims)
+            # The ego is the rig's car (the Tesla Model 3 of aib's spec), the one its physics,
+            # vehicle description and sensor kit are of, as the CARLA backend spawns it,
+            # whatever body the scenario names.
+            own_model = ego_model(self.ego_rig)
             if model and model != own_model and self.vehicle_assets.by_id.get(model):
-                log.warning("ego %r: the scenario names %s, the ego YAML's car is %s: it wears "
+                log.warning("ego %r: the scenario names %s, the ego's rig is %s: it wears "
                             "%s", name, model, own_model, own_model)
             asset = self.vehicle_assets.get(own_model)
             if asset is not None:
@@ -223,6 +223,7 @@ class IsaacWorld:
             def warm_step():
                 ego.before_substep(self.dt)  # no command yet: the hold brake
                 self.world.step(render=True)
+                ego.after_substep(self.physx, self.dt)
 
             frames = ego.warm_up(warm_step)
             log.info("spawned ego %r as PhysX vehicle %s (box %s at %s); sensors warm after %d "
@@ -279,13 +280,13 @@ class IsaacWorld:
                 orient.Set(_quat(quat))
         for handle, pose in poses.items():
             if handle in self.egos:
-                self.egos[handle].vehicle.teleport(pose, self.physx)
+                self.egos[handle].teleport(pose, self.physx)
         egos = list(self.egos.values())
         t0 = time.perf_counter()
         for ego in egos:
-            ego.ros.take_commands()
+            ego.take_commands()
         t1 = time.perf_counter()
-        render = render or any(e.lidar is not None for e in egos)
+        render = render or any(e.renders for e in egos)
         touching = {}  # (handle, other, other path) -> impulse
         for s in range(substeps):
             for ego in egos:

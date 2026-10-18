@@ -24,7 +24,7 @@
 -->
 <launch>
   <arg name="ego" default="default"
-       description="the ego's YAML: default (src/csb_isaac/config/acb_ego.yaml, a PhysX vehicle with Autoware's sensors and vehicle interface), none (037's kinematic box) or a path"/>
+       description="the ego's YAML: default (aib's src/autoware_isaac_bridge/src/aib/config/ego.yaml: aib's Tesla Model 3, a PhysX vehicle with Autoware's sensors and vehicle interface), none (037's kinematic box) or a path to an aib ego config"/>
   <arg name="world" default="none"
        description="worlds to preload, comma separated: world files (map/isaac/world.yaml), map directories or USD files; the first stays loaded; none: nothing"/>
   <arg name="follow" default="false"

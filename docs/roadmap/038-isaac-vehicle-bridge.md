@@ -10,6 +10,15 @@ the ego's domain, and the unchanged agent (`acb_pilot`) registered with the rela
 **Feeds**: [039](039-isaac-multi-autoware.md), [040](040-ntu-offroad-field.md),
 [041](041-competition-director.md).
 
+> **Since [045](045-autoware-isaac-bridge.md)** the ego described here lives in
+> [autoware_isaac_bridge](https://github.com/NEWSLabNTU/autoware_isaac_bridge) (aib, the
+> submodule at `src/autoware_isaac_bridge`): `csb_isaac/{vehicle,ego,vehicle_params,frames}.py`
+> are `aib.isaac.vehicle`, `aib.isaac.ego`/`aib.isaac.sensors`/`aib.ros`, `aib.params` and
+> `aib.frames`; `config/acb_ego.yaml` is aib's `config/ego.yaml` plus the rig generated from
+> its vehicle spec (`vehicles/tesla_model3.yaml`); `just ego-isaac` runs `aib_launch
+> isaac_simulator.launch.xml` (aib's vehicle and sensor kit). The steps below are as built
+> in 038, with the paths of the time.
+
 ## Design
 
 - **Vehicle**: a USD vehicle with PhysX vehicle schemas (drive, Ackermann steering,
@@ -129,7 +138,7 @@ Run like this (CLAUDE.md's process rules apply; the world server first):
 
 ```bash
 just isaac-msgs && just isaac-world-gen        # once per host
-just isaac-world &                             # world server, ego = acb_ego.yaml (ISAAC_PORT, DISPLAY from env)
+just isaac-world &                             # world server, ego = aib's config/ego.yaml since 045 (acb_ego.yaml then)
 just run backend:=isaac &                      # csb on Isaac, agent relay
 just ego-isaac &                               # Autoware, domain 1 (rviz:=true to watch)
 ros2 run csb_launch run_suite src/csb_examples/scenarios/basic/town01_ego_drive.xosc --output <dir>

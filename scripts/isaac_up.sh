@@ -118,7 +118,7 @@ done
 #    the ADAPI answers (`_require-ego-stack`), then its agent registered with the relay.
 if pid=$(stack_on_port 8082); then
     line=$(cmdline "$pid")
-    if ! grep -q "launch_vehicle_interface:=false" <<< "$line"; then
+    if ! grep -q "aib_launch isaac_simulator.launch.xml" <<< "$line"; then
         say "the ego stack on 8082 (pid $pid) is not the Isaac one (just ego-av?): stop it first"
         exit 1
     fi

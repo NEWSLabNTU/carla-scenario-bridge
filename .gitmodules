@@ -8,3 +8,6 @@
 [submodule "src/color_names"]
 	path = src/color_names
 	url = https://github.com/OUXT-Polaris/color_names.git
+[submodule "src/autoware_isaac_bridge"]
+	path = src/autoware_isaac_bridge
+	url = https://github.com/NEWSLabNTU/autoware_isaac_bridge.git

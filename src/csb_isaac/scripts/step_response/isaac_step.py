@@ -1,4 +1,4 @@
-"""Step responses of the Isaac ego (csb_isaac's PhysX vehicle and actuation) for the same
+"""Step responses of the Isaac ego (aib's PhysX vehicle and actuation, roadmap 045) for the same
 command sequences as carla_step.py: the world as the world server builds it (flat ground),
 the ego spawned as csb spawns it, commands put straight into the ego's command slot (what its
 /control/command/control_cmd subscriber does), 0.05 s frames of 3 PhysX steps as csb steps it.
@@ -6,9 +6,10 @@ the ego spawned as csb spawns it, commands put straight into the ego's command s
     source src/csb_isaac/scripts/isaac_env.sh
     python isaac_step.py EGO_YAML OUT_DIR LABEL
 
-EGO_YAML: an ego YAML with `lidar: {enabled: false}` and a private `domain`. Experiments:
-HI_SUB / LO_SUB (PhysX vehicle substeps), ACT_DEN (active slip denominator), THRESH,
-ONLY=test,... override what vehicle.py sets.
+EGO_YAML: an aib ego config (src/autoware_isaac_bridge/src/aib/config/ego.yaml's form) with
+`sensors: {top: {enabled: false}}` (the lidar) and a private `domain`. Experiments: HI_SUB / LO_SUB
+(PhysX vehicle substeps), ACT_DEN (active slip denominator), THRESH, ONLY=test,... override
+what aib's vehicle sets. aib's own open-loop tests are `just isaac-steptest` in aib.
 """
 import csv
 import logging
@@ -28,7 +29,7 @@ os.environ.pop("DISPLAY", None)
 from isaacsim import SimulationApp  # noqa: E402
 
 app = SimulationApp({"headless": True})
-from csb_isaac.vehicle import GEAR_DRIVE  # noqa: E402
+from aib.control import GEAR_DRIVE  # noqa: E402
 from csb_isaac.world import IsaacWorld  # noqa: E402
 
 world = IsaacWorld(ego_config=EGO)

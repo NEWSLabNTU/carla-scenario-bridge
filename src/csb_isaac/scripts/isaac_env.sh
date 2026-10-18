@@ -1,14 +1,14 @@
-# Isaac Sim 6.1 environment (roadmap 036): the pip install's venv and Isaac's bundled ROS 2
-# Humble libraries (built for its Python 3.12; do not source the system Humble into it).
-# RMW_IMPLEMENTATION and CYCLONEDDS_URI pass through, so the stack's DDS settings apply.
-I=${ISAAC_ROOT:-/mnt/disk1/isaac-sim}
-source $I/venv/bin/activate
-export OMNI_KIT_ACCEPT_EULA=YES
-export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
-export ROS_DISTRO=humble
-export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
-export LD_LIBRARY_PATH=$I/venv/lib/python3.12/site-packages/isaacsim/exts/isaacsim.ros2.core/humble/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-# Isaac's rclpy, and Autoware's messages rebuilt for it (`build_msgs.sh`, roadmap 038)
-H=$I/venv/lib/python3.12/site-packages/isaacsim/exts/isaacsim.ros2.core/humble
-export PYTHONPATH=$I/msgs:$H/rclpy${PYTHONPATH:+:$PYTHONPATH}
-export LD_LIBRARY_PATH=$I/msgs/lib:$LD_LIBRARY_PATH
+# Isaac Sim 6.1 environment (roadmap 036), for csb's Isaac side: aib's (autoware_isaac_bridge,
+# the submodule at src/autoware_isaac_bridge; roadmap 045) -- the pip install's venv, Isaac's
+# bundled ROS 2 Humble libraries, Autoware's messages rebuilt for it ($ISAAC_ROOT/msgs, shared
+# by both repositories) -- plus aib's Python package on PYTHONPATH, which the world server
+# imports for its ego. Do not source the system Humble into it. RMW_IMPLEMENTATION and
+# CYCLONEDDS_URI pass through, so the stack's DDS settings apply.
+_csb_aib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../autoware_isaac_bridge/src/aib" && pwd)" || {
+    echo "isaac_env.sh: no aib at src/autoware_isaac_bridge (git submodule update --init)" >&2
+    return 1 2>/dev/null || exit 1
+}
+# shellcheck source=/dev/null
+source "$_csb_aib/scripts/isaac_env.sh"
+export PYTHONPATH="$_csb_aib:$PYTHONPATH"
+unset _csb_aib

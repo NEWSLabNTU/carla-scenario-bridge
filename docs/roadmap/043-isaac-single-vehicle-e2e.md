@@ -15,6 +15,15 @@ CARLA's vehicles in Isaac).
 **Feeds**: [044](044-isaac-npcs-and-traffic-lights.md), [039](039-isaac-multi-autoware.md),
 [040](040-ntu-offroad-field.md).
 
+> **Since [045](045-autoware-isaac-bridge.md)** the ego is aib's
+> ([autoware_isaac_bridge](https://github.com/NEWSLabNTU/autoware_isaac_bridge), the submodule
+> at `src/autoware_isaac_bridge`): the car below is its vehicle spec
+> (`vehicles/tesla_model3.yaml`, which generates Autoware's vehicle and sensor kit files and
+> the Isaac rig), `vehicle_params.py`/`vehicle.py`/`ego.py` are `aib.params`/`aib.isaac.vehicle`/
+> `aib.isaac.ego`, `acb_ego.yaml` is aib's `config/ego.yaml`, and the catalogue check compares
+> the rig's geometry (`csb_isaac/catalogue.py`). The tables are as built in 043; 045 records
+> the exit runs again with aib's vehicle.
+
 ![Target stack](../design/isaac-stack.svg)
 
 Source of the diagram: `docs/design/isaac-stack.typ` (`typst compile` it to the SVG). Blue

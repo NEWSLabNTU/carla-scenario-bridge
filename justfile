@@ -440,9 +440,10 @@ isaac-check:
 #   DISPLAY=:8        Isaac opens its window there (the VNC display); unset: headless.
 #                     ISAAC_HEADLESS=1 forces headless with DISPLAY set.
 # What it simulates is arguments, name:=value as for a launch file:
-#   ego:=<yaml>       the ego vehicle's YAML (default src/csb_isaac/config/acb_ego.yaml: a PhysX
-#                     vehicle with Autoware's sensors and vehicle interface on its domain);
-#                     ego:=none (or empty) keeps 037's kinematic box
+#   ego:=<yaml>       an aib ego config (default src/autoware_isaac_bridge/src/aib/config/ego.yaml:
+#                     aib's Tesla Model 3, a PhysX vehicle with Autoware's sensors and vehicle
+#                     interface on its domain; roadmap 045); ego:=none (or empty) keeps 037's
+#                     kinematic box
 #   follow:=true      with a window: no UI, the full-window viewport chases the ego
 #   render:=auto      window | headless; auto: a window when DISPLAY is set (see above)
 #   world:=<w>[,<w>]  worlds to load and render before serving: world files
@@ -786,15 +787,17 @@ ego-av *args: _require-carla
         $play_launch_args \
         acb_launch carla_simulator.launch.xml "${launch_args[@]}"
 
-# The ego's Autoware on Isaac Sim (roadmap 038): `just ego-av`'s stack with no acb_bridge --
-# the world server (`just isaac-world`) is the vehicle interface, the sensors and /clock on
-# the ego's domain -- and the same vehicle agent registered with the relay. Long-lived like
-# `just ego-av`; start it once the world server is up.
+# The ego's Autoware on Isaac Sim (roadmaps 038, 045): aib_launch isaac_simulator.launch.xml,
+# which is `just ego-av`'s stack (acb's carla_simulator.launch.xml) with aib's vehicle and
+# sensor kit (aib_vehicle, aib_sensor_kit) and no acb_bridge -- the world server (`just
+# isaac-world`) is the vehicle interface, the sensors and /clock on the ego's domain -- and
+# the same vehicle agent registered with the relay. Long-lived like `just ego-av`; start it
+# once the world server is up.
 #
-# Arguments are acb_launch carla_simulator.launch.xml's, name:=value, appended last so they
+# Arguments pass through to carla_simulator.launch.xml, name:=value, appended last so they
 # win: map_path:=<dir> (default the Town01 map), rviz:=true, rviz_config:=<file>,
-# relay:=tcp://host:port, goal_poses_file:=<file>, ... launch_vehicle_interface is false
-# (no acb_bridge: nothing CARLA in the stack, no V2X signals; Isaac has no lights, 037).
+# relay:=tcp://host:port, goal_poses_file:=<file>, ... (no acb_bridge: nothing CARLA in the
+# stack, no V2X signals; Isaac has no lights, 037).
 # overlay:=, autoware_overlay:=, container_mode:= and play_launch_args:= as for `just ego-av`.
 #
 # Usage: just ego-isaac [map_path:=<dir>] [rviz:=true] [name:=value ...]
@@ -826,7 +829,7 @@ ego-isaac *args:
     export ROS_DOMAIN_ID={{ego_domain}}
     # Defaults, each dropped when an argument names the same launch argument.
     csb_with_defaults launch_args \
-        map_path:="{{maps_dir}}/{{default_map}}" launch_vehicle_interface:=false \
+        map_path:="{{maps_dir}}/{{default_map}}" \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false \
         -- "${given[@]}"
     log_dir=$(csb_log_dir "{{project}}" ego)
@@ -834,7 +837,7 @@ ego-isaac *args:
         --container-mode "$container_mode" --composable-respawn on-crash \
         --log-dir "$log_dir" \
         $play_launch_args \
-        acb_launch carla_simulator.launch.xml "${launch_args[@]}"
+        aib_launch isaac_simulator.launch.xml "${launch_args[@]}"
 
 # Launch one background AV's vehicle side -- Autoware + acb_bridge + vehicle agent -- in its
 # own ROS domain. The background AV is a scenario entity whose controller is `agent`

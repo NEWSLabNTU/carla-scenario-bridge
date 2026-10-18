@@ -4,7 +4,7 @@ Starts Isaac Sim (headless unless `--display`), builds the world, and serves csb
 protocol on a ZMQ REP socket bound to localhost until csb sends `Shutdown` or the process
 gets SIGINT/SIGTERM. Run it through `just isaac-world`, which sets Isaac's environment.
 
-    python -m csb_isaac.world_server --port 5590 [--display :8] [--ego config/acb_ego.yaml]
+    python -m csb_isaac.world_server --port 5590 [--display :8] [--ego <aib ego config>]
         [--world <world>[,<world>...]] [--follow]
 
 A world is a world file (`<map>/isaac/world.yaml`, as csb's `LoadWorld` reads it), a map
@@ -63,8 +63,9 @@ def main(argv=None):
                          "world's materials); the first stays loaded, and csb's LoadWorld of "
                          "it keeps it")
     ap.add_argument("--ego", default="",
-                    help="ego YAML: the ego is a PhysX vehicle driven by Autoware (038); "
-                         "empty: a kinematic box (037)")
+                    help="aib ego config (autoware_isaac_bridge's config/ego.yaml): the ego "
+                         "is aib's PhysX vehicle driven by Autoware (038, 045); empty: a "
+                         "kinematic box (037). aib must be on PYTHONPATH")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
