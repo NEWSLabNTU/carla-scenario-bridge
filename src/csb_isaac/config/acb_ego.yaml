@@ -1,0 +1,35 @@
+# The ego on Isaac (roadmap 038): acb's vehicle and sensor kit, as acb_bridge gives them to
+# Autoware on CARLA (acb_bridge config/vehicle_config.yaml, acb_sensor_kit_description).
+# Paths are relative to this file.
+
+# The ego's ROS domain (`just ego-isaac` runs Autoware there; the scenario is on 9).
+domain: 1
+# Geometry Autoware plans with: wheel base, tread, wheel radius and width, steering limit.
+vehicle_info: ../../autoware_carla_bridge/src/acb_vehicle_launch/acb_vehicle_description/config/vehicle_info.param.yaml
+# Where the sensors sit: base_link -> sensor_kit_base_link, and the kit's links.
+sensors_calibration: ../../autoware_carla_bridge/src/individual_params/config/default/acb_sensor_kit/sensors_calibration.yaml
+sensor_kit_calibration: ../../autoware_carla_bridge/src/individual_params/config/default/acb_sensor_kit/sensor_kit_calibration.yaml
+# Added to Isaac's sim time on every stamp and on /clock, s; "wall": the wall clock when the
+# world server starts, so a restarted server never sends the ego stack's time backwards.
+clock_offset: wall
+# Physics the vehicle description does not have (vehicle.py VehicleParams); CARLA's model3.
+vehicle:
+  mass: 1845.0
+  com: [1.45, 0.0, 0.55]
+lidar:
+  # 128 channels at 20 Hz, 1024 columns: 2.6 M points/s, acb's CARLA lidar rate.
+  config: OS1
+  variant: OS1_REV7_128ch20hz1024res
+  channels: 128
+  link: velodyne_top_base_link
+  frame: top
+  topic: /sensing/lidar/top/pointcloud_before_sync
+imu:
+  link: carla/imu_link
+  frame: carla/imu_link
+  topic: /sensing/imu/carla/imu_link/imu_raw
+gnss:
+  link: carla/gnss_link
+  frame: carla/gnss_link
+  topic: /sensing/gnss/carla/gnss_link/nav_sat_fix
+  period: 0.1

@@ -35,8 +35,8 @@ class FakeWorld:
     def despawn(self, handle):
         del self.bodies[handle]
 
-    def step(self, poses, substeps, dt, render):
-        self.steps.append((dict(poses), substeps, dt, render))
+    def step(self, poses, substeps, dt, render, sim_time):
+        self.steps.append((dict(poses), substeps, dt, render, sim_time))
         for h, p in poses.items():
             self.bodies[h]["pose"] = p
         states = [(h, b["pose"]) for h, b in self.bodies.items()]
@@ -148,6 +148,18 @@ class ServerTest(unittest.TestCase):
         self.assertAlmostEqual(r.step.sim_time, 0.1)
         # Handles stay unique over the server's lifetime.
         self.assertEqual(spawn(self.server, "npc", "VEHICLE", 0.0).spawn.handle, 2)
+
+    def test_steps_get_the_clock_at_their_start_and_are_timed(self):
+        hello(self.server)
+        call(self.server, load_world=pb.LoadWorld())
+        npc = spawn(self.server, "npc", "VEHICLE", 0.0).spawn.handle
+        for _ in range(3):
+            call(self.server, step=pb.Step(substeps=2, dt=0.025))
+        self.assertEqual([s[4] for s in self.world.steps], [0.0, 0.05, 0.1])
+        self.assertEqual(len(self.server.step_ms), 3)
+        # Despawning the last entity ends the scenario: the step times are summarized.
+        call(self.server, despawn=pb.Despawn(handle=npc))
+        self.assertEqual(self.server.step_ms, [])
 
     def test_shutdown_stops_the_loop(self):
         hello(self.server)

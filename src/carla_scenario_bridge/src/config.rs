@@ -58,7 +58,8 @@ pub struct IsaacConfig {
     /// How long a request may take before the server counts as hung, s: the bridge then
     /// exits for its supervisor to restart, as after a CARLA tick that never returned.
     pub request_timeout_seconds: u64,
-    /// The same for `LoadWorld`, which may open a large USD stage.
+    /// The same for `LoadWorld`, which may open a large USD stage, and for an ego's `Spawn`,
+    /// which waits for its sensors' first frames (038).
     pub load_timeout_seconds: u64,
     /// Render once per frame. Off by default: nothing in the world needs a picture until the
     /// vehicle bridge's sensors (roadmap 038), and a render costs 3-5 ms of the frame (037).

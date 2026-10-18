@@ -826,7 +826,13 @@ impl SimBackend for IsaacBackend {
                 box_dimensions: v3(dims),
                 pose: Some(to_world(&pose, self.map_origin)),
             }),
-            self.request_timeout,
+            // An ego brings its vehicle and sensors (038): the world server warms the sensors
+            // up before it answers, seconds on a loaded host.
+            if entity_type == EntityType::Ego {
+                self.load_timeout
+            } else {
+                self.request_timeout
+            },
         )?;
         let handle = match reply.reply {
             Some(wire::reply::Reply::Spawn(s)) if s.handle != 0 => s.handle,

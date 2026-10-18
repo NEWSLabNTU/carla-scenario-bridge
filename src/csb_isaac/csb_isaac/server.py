@@ -9,13 +9,15 @@ A `World` provides:
 - ``load(usd, ground_paths)``: replace the environment, remove every entity
 - ``spawn(handle, name, kind, subtype, center, dims, pose)``: one kinematic body
 - ``despawn(handle)``
-- ``step(poses, substeps, dt, render)`` -> ``(states, contacts)``: apply ``{handle: pose}``,
-  run the physics steps, and return ``[(handle, pose)]`` for every entity and
+- ``step(poses, substeps, dt, render, sim_time)`` -> ``(states, contacts)``: apply
+  ``{handle: pose}`` (``sim_time`` is the clock at the step's start), run the physics steps,
+  and return ``[(handle, pose)]`` for every entity and
   ``[(handle, other, other_path, impulse)]`` for the contacts (``other`` 0: environment)
 
 Poses are ``((x, y, z), (qw, qx, qy, qz))`` in the world frame.
 """
 import logging
+import time
 
 from . import protocol as pb
 
@@ -35,6 +37,7 @@ class WorldServer:
         self.frame = 0
         self.greeted = False
         self.stopped = False
+        self.step_ms = []  # wall time of each step since the last summary (038)
 
     def handle(self, data: bytes) -> bytes:
         """One request's bytes to its reply's bytes. Never raises."""
@@ -86,9 +89,22 @@ class WorldServer:
         self.entities[handle] = req.name
         return pb.Reply(ok=True, spawn=pb.SpawnReply(handle=handle))
 
+    def step_summary(self):
+        """Wall time per step since the last summary, logged and returned (p50, p95, max ms)."""
+        if not self.step_ms:
+            return None
+        t = sorted(self.step_ms)
+        p50, p95, top = t[len(t) // 2], t[min(len(t) - 1, int(0.95 * len(t)))], t[-1]
+        log.info("%d step(s): wall time per step p50 %.1f ms, p95 %.1f ms, max %.0f ms",
+                 len(t), p50, p95, top)
+        self.step_ms.clear()
+        return p50, p95, top
+
     def _despawn(self, req):
         if req.handle not in self.entities:
             raise RequestError(f"no entity with handle {req.handle}")
+        if len(self.entities) == 1:  # the last one: SSv2 ends its scenario this way
+            self.step_summary()
         self.world.despawn(req.handle)
         del self.entities[req.handle]
         return pb.Reply(ok=True)
@@ -100,7 +116,9 @@ class WorldServer:
         if unknown:
             raise RequestError(f"poses for unknown handle(s) {unknown}")
         poses = {p.handle: pb.pose_tuple(p.pose) for p in req.poses}
-        states, contacts = self.world.step(poses, req.substeps, req.dt, req.render)
+        started = time.perf_counter()
+        states, contacts = self.world.step(poses, req.substeps, req.dt, req.render, self.sim_time)
+        self.step_ms.append(1e3 * (time.perf_counter() - started))
         self.sim_time += req.substeps * req.dt
         self.frame += 1
         reply = pb.StepReply(sim_time=self.sim_time, frame=self.frame)

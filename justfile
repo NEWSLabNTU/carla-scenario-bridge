@@ -400,15 +400,34 @@ isaac-check:
 
 # Headless by default; `just isaac-world 5590 :8` opens Isaac's window on the VNC display
 # (`just isaac-vnc`). Stop it with Ctrl-C or SIGTERM; csb only empties its world.
+# The ego is a PhysX vehicle with Autoware's vehicle interface and sensors on its domain
+# (roadmap 038, `src/csb_isaac/config/acb_ego.yaml`); `ego=""` keeps 037's kinematic box.
+# `follow=1` with a display: no UI, the full-window viewport chases the ego (for recording).
+# DDS as the ego stack's: Cyclone with the localhost config (036: both sides must match).
 #
 # Isaac Sim world server for `CSB_BACKEND=isaac just run` (roadmap 037), on 127.0.0.1:<port>
-isaac-world port="5590" display="":
+isaac-world port="5590" display="" ego=(project + "/src/csb_isaac/config/acb_ego.yaml") follow="":
+    #!/usr/bin/env bash
+    set -e
+    export ISAAC_ROOT={{isaac_root}}
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    source "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_env.sh"
+    cd "{{justfile_directory()}}/src/csb_isaac"
+    exec python -m csb_isaac.world_server --port {{port}} {{ if display != "" { "--display " + display } else { "" } }} {{ if ego != "" { "--ego " + ego } else { "" } }} {{ if follow != "" { "--follow" } else { "" } }}
+
+# Build Autoware's message bindings for Isaac's Python (once per Isaac install; roadmap 038)
+isaac-msgs:
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/build_msgs.sh"
+
+# The Isaac test world for a map, from its point cloud (roadmap 038): <map>/isaac/world.{usd,yaml}
+isaac-world-gen map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     #!/usr/bin/env bash
     set -e
     export ISAAC_ROOT={{isaac_root}}
     source "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_env.sh"
     cd "{{justfile_directory()}}/src/csb_isaac"
-    exec python -m csb_isaac.world_server --port {{port}} {{ if display != "" { "--display " + display } else { "" } }}
+    python -m csb_isaac.pcd_world "{{map_path}}"
 
 # TurboVNC display for Isaac's window, localhost only (reach it through an SSH tunnel)
 isaac-vnc:
@@ -633,6 +652,40 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
         accel_map_path:="$accel_map" \
         brake_map_path:="$brake_map" \
         ${LIDAR_DETECTION_MODEL:+lidar_detection_model:="$LIDAR_DETECTION_MODEL"} \
+        "${optional_args[@]}" \
+        ${EGO_LAUNCH_ARGS:-}
+
+# The ego's Autoware on Isaac Sim (roadmap 038): `just ego-av`'s stack with no acb_bridge --
+# the world server (`just isaac-world`) is the vehicle interface, the sensors and /clock on
+# the ego's domain -- and the same vehicle agent registered with the relay. Long-lived like
+# `just ego-av`; start it once the world server is up.
+# Usage: just ego-isaac [map_path]
+ego-isaac map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
+    #!/usr/bin/env bash
+    set -e
+    source "{{autoware_setup}}"
+    source "{{project}}/scripts/autoware_overlay.bash"
+    csb_autoware_overlay_source "{{autoware_overlay_dir}}"
+    if [ -n "${EGO_OVERLAY:-}" ]; then source "$EGO_OVERLAY"; fi
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
+    source "{{project}}/install/setup.bash"
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    export ROS_DOMAIN_ID={{ego_domain}}
+    relay="${EGO_RELAY-tcp://localhost:{{agent_port}}}"
+    optional_args=()
+    [ -n "${EGO_GOAL_POSES_FILE:-}" ] && optional_args+=(goal_poses_file:="$EGO_GOAL_POSES_FILE")
+    [ -n "${RVIZ_CONFIG:-}" ] && optional_args+=(rviz_config:="$RVIZ_CONFIG")
+    # launch_vehicle_interface:=false: no acb_bridge, so nothing CARLA in the stack, and no
+    # V2X signals (Isaac has no traffic lights, 037).
+    exec play_launch launch --web-addr 0.0.0.0:8082 \
+        --container-mode "${EGO_CONTAINER_MODE:-isolated}" --composable-respawn on-crash \
+        --log-dir play_log/ego \
+        ${EGO_PLAY_LAUNCH_ARGS:-} \
+        acb_launch carla_simulator.launch.xml \
+        map_path:="{{map_path}}" \
+        launch_vehicle_interface:=false \
+        ${relay:+relay:="$relay"} \
+        rviz:="${LAUNCH_RVIZ:-false}" \
         "${optional_args[@]}" \
         ${EGO_LAUNCH_ARGS:-}
 

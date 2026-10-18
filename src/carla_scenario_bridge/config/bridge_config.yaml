@@ -13,8 +13,9 @@ backend: carla
 
 # The Isaac Sim world server, under backend: isaac (`just isaac-world`). A request it does
 # not answer within its timeout ends the bridge for a fresh one, as a hung CARLA tick does.
-# render: off until something needs pictures (the sensors, roadmap 038), or to watch the
-# world on a display; a render costs 3-5 ms of every frame.
+# load_timeout_seconds also covers an ego's Spawn, which waits for its sensors (038).
+# render: off unless you watch the world on a display (a render costs 3-5 ms of every
+# frame); a world server with an Autoware ego renders every frame anyway, for its lidar.
 isaac:
   endpoint: "tcp://127.0.0.1:5590"
   request_timeout_seconds: 10

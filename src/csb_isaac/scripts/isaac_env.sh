@@ -8,3 +8,7 @@ export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 export ROS_DISTRO=humble
 export RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
 export LD_LIBRARY_PATH=$I/venv/lib/python3.12/site-packages/isaacsim/exts/isaacsim.ros2.core/humble/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+# Isaac's rclpy, and Autoware's messages rebuilt for it (`build_msgs.sh`, roadmap 038)
+H=$I/venv/lib/python3.12/site-packages/isaacsim/exts/isaacsim.ros2.core/humble
+export PYTHONPATH=$I/msgs:$H/rclpy${PYTHONPATH:+:$PYTHONPATH}
+export LD_LIBRARY_PATH=$I/msgs/lib:$LD_LIBRARY_PATH

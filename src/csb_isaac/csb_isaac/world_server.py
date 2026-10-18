@@ -4,7 +4,7 @@ Starts Isaac Sim (headless unless `--display`), builds the world, and serves csb
 protocol on a ZMQ REP socket bound to localhost until csb sends `Shutdown` or the process
 gets SIGINT/SIGTERM. Run it through `just isaac-world`, which sets Isaac's environment.
 
-    python -m csb_isaac.world_server --port 5590 [--display :8]
+    python -m csb_isaac.world_server --port 5590 [--display :8] [--ego config/acb_ego.yaml]
 """
 import argparse
 import logging
@@ -19,6 +19,12 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=5590, help="REP port on 127.0.0.1")
     ap.add_argument("--display", default="",
                     help="X display for Isaac's window (e.g. :8, the VNC one); empty: headless")
+    ap.add_argument("--follow", action="store_true",
+                    help="with --display: the viewport follows the ego from behind, no UI "
+                         "(for watching or recording a run)")
+    ap.add_argument("--ego", default="",
+                    help="ego YAML: the ego is a PhysX vehicle driven by Autoware (038); "
+                         "empty: a kinematic box (037)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -31,14 +37,20 @@ def main(argv=None):
     started = time.monotonic()
     from isaacsim import SimulationApp
 
-    app = SimulationApp({"headless": not args.display})
+    config = {"headless": not args.display}
+    if args.display and args.follow:
+        # A small render keeps the frame inside its 50 ms beside the lidar (1080p: 49.5 ms
+        # p50 on a loaded host, 720p: 52); the window scales it up.
+        config.update(hide_ui=True, width=854, height=480, window_width=1920,
+                      window_height=1080)
+    app = SimulationApp(config)
 
     import zmq
 
     from .server import WorldServer, serve
     from .world import IsaacWorld
 
-    world = IsaacWorld()
+    world = IsaacWorld(ego_config=args.ego or None, follow=bool(args.display and args.follow))
     server = WorldServer(world)
     socket = zmq.Context.instance().socket(zmq.REP)
     socket.bind(f"tcp://127.0.0.1:{args.port}")
