@@ -1,0 +1,91 @@
+# Phase 045: autoware_isaac_bridge (aib)
+
+The Isaac ego as its own repository, the way acb is CARLA's: the PhysX vehicle, its sensors
+and Autoware's vehicle interface, with the vehicle described once in a spec that generates
+Autoware's vehicle and sensor kit files and the Isaac rig. csb's world server then imports
+it instead of carrying its own copy in `src/csb_isaac`.
+
+**Source**: user direction 2026-10-18 (a standalone public repository in NEWSLabNTU; the
+single source of truth for the vehicle lives in aib).
+**Depends on**: [043](043-isaac-single-vehicle-e2e.md) (the plausible real Model 3, the
+supervised world server, the exit runs).
+**Feeds**: [044](044-isaac-npcs-and-traffic-lights.md), [039](039-isaac-multi-autoware.md)
+(several egos, one rig each), [040](040-ntu-offroad-field.md) (another vehicle is another
+spec).
+
+Repository: [NEWSLabNTU/autoware_isaac_bridge](https://github.com/NEWSLabNTU/autoware_isaac_bridge)
+(its `docs/design.md` and `docs/spec-format.md` are the reference; this phase is csb's side).
+
+## Design
+
+### What moves, what stays
+
+| moves to aib | stays in csb |
+|---|---|
+| `csb_isaac/vehicle.py`: the PhysX vehicle (`aib.isaac.vehicle`), its actuation split into `aib.control` (steering, Ackermann) and `aib.powertrain` (pure) | `world.py`, `world_server.py`, `server.py`, `protocol.py`, `csb_world.proto`: the lockstep world, NPCs, contacts, the world protocol |
+| `csb_isaac/vehicle_params.py`: `VehicleParams` (`aib.params`, same field names, so `vehicle:` overrides still apply) | `physics_params` and the CARLA catalogue (`vehicle_assets.py`, `dump_vehicle_physics.py`): CARLA's blueprints are csb's |
+| `csb_isaac/ego.py`: `EgoRos` (`aib.ros`), `Ego` and the sensors (`aib.isaac.ego`, `aib.isaac.sensors`; IMU and GNSS maths pure in `aib.sensing`) | the body the ego wears (`vehicle_assets.add_ego_body`) and the vehicle_info-vs-catalogue check, now against the rig |
+| `csb_isaac/frames.py` (`aib.frames`) | `physics_layer.py`, `usd_world.py`, `pcd_world.py`, `isaac_town.sh`: worlds |
+| `scripts/isaac_env.sh`, `scripts/build_msgs.sh` (aib carries copies; csb can source aib's) | the step-response scripts (they compare CARLA and Isaac; they can import aib) |
+| `config/acb_ego.yaml`: the vehicle part becomes aib's spec and rig; the run part (domain, clock offset) aib's `config/ego.yaml` | `isaac_world.launch.xml`, `just isaac-world`, `scripts/isaac_up.sh` |
+
+### The single source of truth
+
+`vehicles/tesla_model3.yaml` in aib is the car: geometry, mass and centre of mass, wheels,
+tires, brakes, powertrain, steering, suspension, PhysX settings, the sensor mounts and
+intrinsics, and a provenance entry per number (`assumed: true` on the centre of mass, the
+inertia box, the wheel mass, the tires and the suspension). The values are 043's "As built:
+vehicle" table. `aib.gen` writes from it, each file headed "generated from ..., do not edit":
+
+- `aib_vehicle_description/config/vehicle_info.param.yaml`, `mirror.param.yaml`
+- `aib_sensor_kit_description/config/{sensors,sensor_kit}_calibration.yaml`, `urdf/sensor_kit.xacro`,
+  and the same calibration under `aib_individual_params/config/default/aib_sensor_kit/`
+- `src/aib/config/tesla_model3.rig.yaml`: the flat `VehicleParams`, the chassis box, each
+  sensor with its base_link transform
+
+`just check-generated` (and a unit test, and aib's CI) fails when any is stale. Later, acb's
+`vehicle_config.yaml` and vehicle description can be generated from the same spec, so CARLA
+and Isaac drive one car description; not part of this phase.
+
+### Autoware side
+
+`aib_launch isaac_simulator.launch.xml` includes acb's `carla_simulator.launch.xml` with
+`vehicle_model:=aib_vehicle sensor_model:=aib_sensor_kit launch_vehicle_interface:=false`;
+every other argument passes through (`relay`, `map_path`, `rviz`, ...). The agent is acb's
+`acb_pilot`, unchanged. A `play_launch dump` of it resolves the same 205 nodes as
+`carla_simulator.launch.xml launch_vehicle_interface:=false`, with every vehicle_info
+reference aib's. Topics and frames are acb's (`top`, `carla/imu_link`, `carla/gnss_link`),
+as csb_isaac publishes them today.
+
+### Powertrain
+
+A seam (`aib.powertrain`): `ideal` is today's behaviour (the requested acceleration as
+per-wheel torque from m a, braking split by dynamic axle load). `physx` (DriveStandard),
+`ev` and `fmu` are reserved names that fail at load; realistic powertrain physics is a
+later phase.
+
+## Steps
+
+- [x] aib repository: library, spec, generator with check mode, Autoware packages, unit
+      tests without Isaac, docs; builds with colcon against Autoware 1.5.0 (2026-10-18).
+- [ ] aib's Isaac code run once from aib itself: `just isaac-ego` on Town01 with `just
+      autoware`, a drive to a goal (standalone, no csb).
+- [ ] Integration: aib as a submodule at `src/autoware_isaac_bridge` (pushed first, then the
+      pin); `csb_isaac` imports `aib` (world server's `PYTHONPATH` gets
+      `src/autoware_isaac_bridge/src/aib`); `IsaacWorld` builds `aib.isaac.ego.Ego` from an
+      aib ego config (`ego:=` names one; default aib's `config/ego.yaml`); the catalogue
+      check runs against the rig's geometry; `just ego-isaac` runs `aib_launch
+      isaac_simulator.launch.xml`.
+- [ ] Remove the duplicated code from csb: `csb_isaac/{ego,vehicle,vehicle_params,frames}.py`,
+      `config/acb_ego.yaml`, their tests (aib has them), and point docs (038, 043, the user
+      guide) at aib.
+- [ ] Exit runs through aib.
+
+## Acceptance
+
+- 043's exit runs (`town01_ego_drive`, `town01_engage_state`, `town02_episode_change`, one
+  route per exported town) still pass on Isaac with the ego built by aib: 5/5 each, 0 MRM,
+  tracking within acceptance.py's limits, and of the same order as 043's recorded numbers.
+- csb carries no copy of the ego: `grep -r PhysxVehicleAPI src/csb_isaac` finds nothing.
+- A change to the vehicle is one edit to aib's spec plus `just generate`; aib's
+  `check-generated` fails if the generated files were not refreshed.
