@@ -7,7 +7,7 @@
 #
 # The display is the machine's: $ISAAC_DISPLAY (default :8), as `just isaac-vnc`.
 #
-#   tile  one workspace: Isaac Sim top-left (3/5 x 2/3), RViz top-right, terminals along
+#   tile  one workspace: Isaac Sim top-left (15/32 x 2/3), RViz top-right, terminals along
 #         the bottom -- everything in one frame for an x11grab recording
 #   ws    one window per workspace: 1 Isaac Sim, 2 RViz, 3 terminals (grid); switch with
 #         Ctrl+Alt+1/2/3 (send a window: Ctrl+Alt+Shift+N). x11grab records only the
@@ -73,7 +73,9 @@ read -r WX WY WW WH < <("$WMCTRL" -d | awk '$2=="*" {split($8,o,","); split($9,s
 place() {  # id desktop x y w h
     # Mutter maximizes a window as wide as the screen (Isaac opens at 1920x1080) and
     # ignores a resize until the un-maximize has landed.
-    "$WMCTRL" -i -r "$1" -b remove,maximized_vert,maximized_horz,fullscreen
+    # wmctrl -b takes at most two properties: a third makes it change none of them.
+    "$WMCTRL" -i -r "$1" -b remove,maximized_vert,maximized_horz
+    "$WMCTRL" -i -r "$1" -b remove,fullscreen
     sleep 0.3
     "$WMCTRL" -i -r "$1" -t "$2"
     "$WMCTRL" -i -r "$1" -e "0,$3,$4,$5,$6"
@@ -82,14 +84,17 @@ place() {  # id desktop x y w h
 arrange() {
     local list isaac rviz terms n i
     list=$("$WMCTRL" -lx)
-    isaac=$(awk '/Isaac Sim/ {print $1; exit}' <<< "$list")
-    rviz=$(awk 'tolower($3) ~ /rviz/ || /RViz/ {print $1; exit}' <<< "$list")
+    # A terminal titled after what it runs ("csb: Isaac Sim world server") is not the window.
+    isaac=$(awk 'tolower($3) !~ /gnome-terminal/ && /Isaac Sim/ {print $1; exit}' <<< "$list")
+    rviz=$(awk 'tolower($3) !~ /gnome-terminal/ && (tolower($3) ~ /rviz/ || /RViz/) {print $1; exit}' <<< "$list")
     mapfile -t terms < <(awk -v a="$isaac" -v b="$rviz" \
         'tolower($3) ~ /gnome-terminal/ && $1 != a && $1 != b {print $1}' <<< "$list")
     n=${#terms[@]}
     case $mode in
     tile)
-        local ih=$(( WH * 2 / 3 )) iw=$(( WW * 3 / 5 ))  # RViz is at least ~750 px wide
+        # Isaac 15/32 of the width (900 of 1920): RViz below ~1000 px squeezes its 3D view
+        # to nothing beside the Autoware panels.
+        local ih=$(( WH * 2 / 3 )) iw=$(( WW * 15 / 32 ))
         [ -n "$isaac" ] && place "$isaac" 0 "$WX" "$WY" "$iw" "$ih"
         [ -n "$rviz" ] && place "$rviz" 0 $(( WX + iw )) "$WY" $(( WW - iw )) "$ih"
         for ((i = 0; i < n; i++)); do
