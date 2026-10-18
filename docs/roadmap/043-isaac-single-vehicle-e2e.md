@@ -95,16 +95,20 @@ boxes are this phase.
       step-response comparison CARLA vs Isaac.
 - [x] World server under play_launch with respawn; backend-aware `scenario`, `acceptance`,
       `e2e`; acb initialize timeout.
-- [ ] Exit runs (below), recorded; screencast of the demo.
+- [x] Exit runs ("Exit runs" at the end), recorded.
+- [ ] Screencast of the demo.
 
 ## Acceptance
 
-- `town01_ego_drive`, `town01_engage_state`, `town02_episode_change` and one route per
+- [x] `town01_ego_drive`, `town01_engage_state`, `town02_episode_change` and one route per
   exported town: 5/5 PASS each on Isaac, 0 MRM, tracking within acceptance.py's limits.
-- The same car on the same route on CARLA and Isaac: longitudinal and cross-track tracking of
-  the same order (recorded here).
-- `just scenario <xosc> backend:=isaac` from a cold host (no world server, no ego stack) to
-  a verdict with no other command.
+  Met 2026-10-18/19, see "Exit runs".
+- [ ] The same car on the same route on CARLA and Isaac: longitudinal and cross-track tracking of
+  the same order (recorded here). Only Town01 so far (CARLA cross-track 0.04 m, Isaac
+  0.03-0.04); the new towns' routes were not run on CARLA.
+- [x] `just scenario <xosc> backend:=isaac` from a cold host (no world server, no ego stack) to
+  a verdict with no other command. Met: `just e2e` 3/3 from cold (operations, below), and each
+  town batch in "Exit runs" started from no world server and no ego stack.
 
 ### As built: vehicle
 
@@ -324,3 +328,82 @@ ego stack started, 23 s and a few minutes after it was ready. play_launch respaw
 csb's bridge waited for it, but the scenario under way failed (no simulator response, then a
 failed frame): a cold run then needs that memory free. The respawned server's earlier log is
 lost with play_launch 0.15.1 (out.1 is kept from 0.18.3 on; CLAUDE.md asks for that version).
+
+### Exit runs
+
+2026-10-18/19, headless world server, one town loaded at a time (`worlds:=<Town>`; Town01
+with Town02 preloaded for the episode change), acb at `7429bbc`; play_launch went from 0.15.1 to 0.18.3 during the
+Town01 batch, so every stack started after it runs 0.18.3. Every row is `just acceptance <xosc> 5
+backend:=isaac worlds:=<Town>` (scored by `scripts/acceptance_bag.py`) except the episode
+change, which is five `just scenario` pairs (`town02_episode_change`, then `town01_ego_drive`)
+judged by their junit. Medians over the five runs, range in brackets; limits 0.35 m/s^2,
+1.0 m and 10 m. "NDT" is acb_agent's "localized at the teleported pose after" per run: every
+run localized on the first attempt, none retried. Frame time is the world server's wall time
+per step, p50 per run.
+
+| scenario | PASS | longitudinal, m/s^2 | cross-track, m | EKF-GNSS, m | MRM | NDT, s | frame p50, ms |
+|---|---|---|---|---|---|---|---|
+| `town01_ego_drive` | 5/5 | 0.028 (0.023-0.036) | 0.04 (0.03-0.04) | 1.02 (1.01-1.05) | 0 | 2.2-6.7 | 22-28 |
+| `town01_engage_state` | 5/5 | 0.024 (0.022-0.026) | 0.03 (0.02-0.04) | 1.02 (1.01-1.03) | 0 | (as above) | (as above) |
+| `town02_episode_change` + `town01_ego_drive` | 5/5 + 5/5 | | | | | | |
+| `town02_ego_drive` (145 m, left turn) | 5/5 | 0.017 (0.017-0.017) | 0.01 | 1.35 (1.35-1.38) | 0 | 2.7-3.6 | 22.5 |
+| `town03_ego_drive` (136 m, left turn) | 5/5 | 0.025 (0.022-0.030) | 0.01 (0.01-0.02) | 0.95 (0.89-0.95) | 0 | 3.0-6.7 | 33 (28-36) |
+| `town05_ego_drive` (140 m, right turn) | 5/5 | 0.028 (0.023-0.030) | 0.03 | 0.71 (0.65-0.76) | 0 | 2.6-5.3 | 31 (26-42) |
+| `town10_ego_drive` (100 m, right turn) | 5/5 | 0.031 (0.026-0.035) | 0.04 | 0.42 (0.39-0.49) | 0 | 2.1-7.3 | 52 (45-53) |
+
+World server up from cold (Hello answering, first town rendered): Town01 + Town02 135 s,
+Town05 148 s, Town10HD 173 s, Town02 110 s. The Town03 and Town05 frame times are with
+another session compiling Rust beside them (load 70-150 on 32 cores); Town10HD's ~50 ms is
+the whole 50 ms frame on a quiet host, so it runs at real time with no headroom.
+
+**The routes.** `src/csb_examples/scenarios/basic/town{02,03,05,10}_ego_drive.xosc`, modelled
+on `town01_ego_drive`: start and goal in the middle of straight `road` lanelets, 100-145 m
+apart along the routing graph, one turn, no traffic-light regulatory element on any lanelet
+of the path, the goal lanelet with at most one successor. Start and goal were checked against
+`pointcloud_map.pcd` (CARLA's surface): ground under the car flat to 3 cm across 2.4 m and
+along +-3 m, and not above the lowest ground within 6 m to the side (a kerb or sidewalk is
+10-15 cm up). The start z is the pcd road height (Town02 0.22, the others 0.0). Town10's
+LogicFile is `$(env CARLA_MAPS)/Town10` like the 0.10 profile's; for CARLA 0.9.16
+`bridge_config.yaml` now aliases `Town10` to `Town10HD` (CARLA matches map names exactly,
+`UCarlaStatics::FindMapPath`), so the scenario also loads on the CARLA backend (not run there).
+
+**Failure 1: the poses came from `local_x`/`local_y`.** The first routes were placed with the
+map's `local_x`/`local_y` tags, as 043's town checks were. Autoware and SSv2 do not use them: they
+project each node's lat/lon through the TransverseMercator projector (WGS84, k0 0.9996), and the
+tags sit 0.709 % further out in y (033 step 3 and 032 found the same). At y = 200 m that is
+1.4 m, more than the margin a 2.16 m car has in a 3.5 m lane. Town03 showed both ways it fails:
+
+- a goal at (47.34, 192.81): `mission_planner` "Goal's footprint exceeds lane!", the route is
+  empty, 0/5;
+- a start at (83.89, 202.40), 1.43 m right of Autoware's lane centre: `start_planner` plans a
+  shift back to the centre, `path_optimizer` zeroes the whole trajectory because the footprint
+  at the start is outside the drivable area (bounds 199.22..202.70 against the tags'
+  200.65..204.15), and in some runs `planning_validator`'s `trajectory_shift` check latches on
+  the teleport; 1/5, the ego never moves.
+
+Re-placed in the projected frame, Town03 went 5/5. The Town02 route had passed 5/5 in the
+wrong frame too (4 m lanes leave room), with EKF-GNSS 1.5 m; it was replaced and rerun
+(the table's row). Town05 and Town10 are close to y = 0 and moved less than 0.6 m.
+The same mistake is in "As built: towns": its spawns used the tags, so its "Town01 outer
+lanelets about 2 m off the carriageway, half on the sidewalk" is the 0.709 % stretch at
+y = -332, not the lanelet (its elevation findings stand: they compare z).
+
+**Failure 2: Town05's and Town10's lanelet maps did not load.** Each has one `right_of_way`
+regulatory element with a `yield` lanelet and no `right_of_way` lanelet (Town05 131372,
+Town10 37142, in the pack as shipped). SSv2 stops at once ("Failed to load lanelet map ...
+A maneuver must refer to at least one lanelet that has right of way!", 0/5 in 10 s), and
+Autoware's `lanelet2_map_loader` logs the same and does not publish the map, so the ego
+stack stays INITIALIZING. `scripts/repair_lanelet_right_of_way.py` (wired into
+`download_maps.sh`, tests in `src/csb_launch/test/test_repair_lanelet_right_of_way.py`)
+deletes such elements; no lanelet refers to either. Applied to `data/carla-autoware-bridge`
+(git-ignored, `.orig` kept); lanelet2's `loadRobust` then reports no error on any of the five
+towns.
+
+**Environment.** `/home` ran out of space twice during the batches (other users): the
+bridge's log writes failed at 23:16 (`No space left on device` from its tracing writer; the
+runs then passed), and the ego stack's health check flagged 170 MiB free at 23:39 during the
+second failed Town05 batch, which had failed on the map already. Run logs and bags of these
+batches are in `/mnt/disk1/csb-043-exit/` (`play_log/` moved there).
+
+**Open.** The CARLA side of the same routes; Town10HD's frame cost (no margin at 50 ms);
+EKF-to-GNSS differs per town (0.4-1.4 m, all within 10 m) and was not chased.

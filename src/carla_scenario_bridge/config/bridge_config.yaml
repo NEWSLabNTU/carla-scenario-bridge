@@ -56,7 +56,10 @@ blueprint_map:
 #
 # The town is normally recovered from the scenario's lanelet2_map_path, whose final directory
 # is the town name. Add an entry only for maps that break that convention.
-map_alias: {}
+# data/carla-autoware-bridge/Town10 is CARLA 0.9.16's Town10HD (CARLA matches a map name
+# exactly, so "Town10" alone does not load).
+map_alias:
+  Town10: "Town10HD"
 #  kashiwanoha: "Town01"
 
 # Entities whose controller is `agent` (background AVs, each driven by its own Autoware):
