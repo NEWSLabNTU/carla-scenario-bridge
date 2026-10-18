@@ -61,8 +61,25 @@ as csb_isaac publishes them today.
 
 A seam (`aib.powertrain`): `ideal` is today's behaviour (the requested acceleration as
 per-wheel torque from m a, braking split by dynamic axle load). `physx` (DriveStandard),
-`ev` and `fmu` are reserved names that fail at load; realistic powertrain physics is a
-later phase.
+`ev` and `fmu` are reserved names that fail at load.
+
+`ev` comes next, modelled on the Tesla Model 3 drivetrain (user direction 2026-10-19), since
+there are no drive logs to fit against. It covers the motor torque/power curve, regenerative
+braking, the brake hydraulic lag and ABS. The other options (`physx` DriveStandard, an FMU,
+Project Chrono for rough or deformable ground) wait until a need shows.
+
+### Decisions (user, 2026-10-19)
+
+- **IMU/GNSS frames** keep `carla/imu_link` and `carla/gnss_link` for now, because acb's
+  sensing launch, which aib reuses, names them. Rename them in the spec at integration.
+- **Camera images** are stamped in `camera6/camera_optical_link` (REP-103: Autoware's
+  projection nodes assume the optical frame). acb stamps `camera_link`, which is likely
+  wrong there too. The camera is off on both bridges today.
+- **aib depends on acb at run time** (`acb_launch`, `acb_pilot`) instead of copying them;
+  standalone use needs `ACB_SETUP`.
+- **Sensor poses come from the spec only.** A hand edit to a generated calibration does not
+  reach Isaac, and `just check-generated` flags it.
+- **The Isaac message build is shared**: aib and csb both use `$ISAAC_ROOT/msgs`.
 
 ## Steps
 

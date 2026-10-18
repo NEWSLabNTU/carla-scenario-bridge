@@ -105,7 +105,8 @@ boxes are this phase.
   Met 2026-10-18/19, see "Exit runs".
 - [ ] The same car on the same route on CARLA and Isaac: longitudinal and cross-track tracking of
   the same order (recorded here). Only Town01 so far (CARLA cross-track 0.04 m, Isaac
-  0.03-0.04); the new towns' routes were not run on CARLA.
+  0.03-0.04); the new towns' routes were not run on CARLA. Moved to 044, which compares
+  every scenario on both backends (user, 2026-10-19).
 - [x] `just scenario <xosc> backend:=isaac` from a cold host (no world server, no ego stack) to
   a verdict with no other command. Met: `just e2e` 3/3 from cold (operations, below), and each
   town batch in "Exit runs" started from no world server and no ego stack.

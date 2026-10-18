@@ -40,3 +40,8 @@ Autoware. Stage 2 of three ([design/isaac-stack.svg](../design/isaac-stack.svg),
 
 - `town01_traffic_light`, `basic/*`, `demo/incidents/*`, AWF `UC-ACC-001` and `UC-AEB-001`
   pass on Isaac, with SSv2's verdict agreeing with CARLA's for each.
+- 043's routes on Town02, Town03, Town05 and Town10 (`basic/town0X_ego_drive`, `town10_ego_drive`)
+  run on CARLA too, with tracking of the same order as on Isaac. That includes the
+  `Town10: Town10HD` alias in `bridge_config.yaml`, which has not been tested on CARLA.
+- CARLA and Isaac never run at the same time (GPU and RAM): one backend's batch ends, and its
+  stacks are stopped, before the other's starts.
