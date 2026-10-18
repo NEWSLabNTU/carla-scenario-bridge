@@ -84,7 +84,8 @@ class WorldServer:
         handle = self.next_handle
         c = req.box_center
         self.world.spawn(handle, req.name, pb.KIND_NAME.get(req.kind, "KIND_UNSPECIFIED"),
-                         req.subtype, (c.x, c.y, c.z), (d.x, d.y, d.z), pb.pose_tuple(req.pose))
+                         req.subtype, (c.x, c.y, c.z), (d.x, d.y, d.z), pb.pose_tuple(req.pose),
+                         model=req.model)
         self.next_handle += 1
         self.entities[handle] = req.name
         return pb.Reply(ok=True, spawn=pb.SpawnReply(handle=handle))

@@ -29,8 +29,9 @@ class FakeWorld:
         self.loads.append((usd, ground_paths))
         self.bodies.clear()
 
-    def spawn(self, handle, name, kind, subtype, center, dims, pose):
-        self.bodies[handle] = {"name": name, "kind": kind, "pose": pose, "dims": dims}
+    def spawn(self, handle, name, kind, subtype, center, dims, pose, model=""):
+        self.bodies[handle] = {"name": name, "kind": kind, "pose": pose, "dims": dims,
+                               "model": model}
 
     def despawn(self, handle):
         del self.bodies[handle]

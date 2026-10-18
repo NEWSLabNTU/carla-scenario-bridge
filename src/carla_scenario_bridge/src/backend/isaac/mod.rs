@@ -800,6 +800,16 @@ impl SimBackend for IsaacBackend {
             }
         }
         let (center, dims) = entity_box(req.bounding_box.as_ref(), kind);
+        // The body's look: the CARLA blueprint the CARLA backend would spawn for the asset key
+        // (`blueprint_map` first, else the key itself); vehicles only.
+        let model = match entity_type {
+            EntityType::Ego | EntityType::Vehicle => self
+                .config
+                .blueprint_for(&req.asset_key)
+                .unwrap_or(req.asset_key.as_str())
+                .to_string(),
+            _ => String::new(),
+        };
         let pose = req.pose.unwrap_or(Pose {
             position: Some(geometry_msgs::Point::default()),
             orientation: Some(geometry_msgs::Quaternion {
@@ -825,6 +835,7 @@ impl SimBackend for IsaacBackend {
                 box_center: v3(center),
                 box_dimensions: v3(dims),
                 pose: Some(to_world(&pose, self.map_origin)),
+                model,
             }),
             // An ego brings its vehicle and sensors (038): the world server warms the sensors
             // up before it answers, seconds on a loaded host.

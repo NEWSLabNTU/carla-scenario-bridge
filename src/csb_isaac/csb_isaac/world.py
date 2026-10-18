@@ -25,6 +25,8 @@ from isaacsim.core.api import World
 from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics
 
+from . import vehicle_assets
+
 log = logging.getLogger("csb_isaac")
 
 # A step slower than this is logged with where the time went.
@@ -32,6 +34,7 @@ SLOW_STEP_S = 0.5
 ENTITIES = "/World/entities"
 CHASE_CAMERA = "/World/chaseCamera"
 SUN = "/World/sun"
+EGO_DEFAULT_MODEL = "vehicle.tesla.model3"
 SKY = "/World/sky"
 # Renders after a preload: the first compiles the world's materials, the rest settle it.
 PRELOAD_RENDERS = 5
@@ -89,6 +92,9 @@ class IsaacWorld:
                            rendering_dt=physics_dt)
         self.dt = physics_dt
         self.stage = omni.usd.get_context().get_stage()
+        # CARLA's vehicles exported to USD (CSB_VEHICLE_USD): an entity whose Spawn names one
+        # wears it; any other stays the box.
+        self.vehicle_assets = vehicle_assets.VehicleAssets()
         self.world.scene.add_default_ground_plane(prim_path=GROUND_PLANE)
         UsdGeom.Xform.Define(self.stage, ENTITIES)
         # Light for cameras (a viewport, 038's watching; the lidar needs none): a loaded world
@@ -168,12 +174,24 @@ class IsaacWorld:
             self.despawn(WARM_UP_HANDLE)
         log.info("preloaded %s in %.0f s", usd, time.perf_counter() - t)
 
-    def spawn(self, handle, name, kind, subtype, center, dims, pose):
+    def spawn(self, handle, name, kind, subtype, center, dims, pose, model=""):
         path = f"{ENTITIES}/e{handle}"
         if kind == "EGO" and self.ego_config is not None:
             from .ego import Ego
 
             ego = Ego(self.ego_config, self.ego_ros, self.stage, path, name, center, dims, pose)
+            # No model named: the ego's own car, the one its vehicle description and sensor
+            # kit are measured on (acb's Tesla Model 3), as the CARLA backend spawns it.
+            asset = self.vehicle_assets.get(model or EGO_DEFAULT_MODEL)
+            if asset is not None:
+                # Its wheels go on the PhysX wheels: only a car of the ego's own wheelbase fits.
+                wb, own = asset.get("wheel_base") or 0.0, ego.vehicle.p.wheel_base
+                if abs(wb - own) <= 0.05:
+                    vehicle_assets.add_ego_body(self.stage, path, asset,
+                                                collider=self.stage.GetPrimAtPath(f"{path}/body"))
+                else:
+                    log.warning("ego %r stays a box: %s's wheelbase %.3f m is not the vehicle's "
+                                "%.3f m", name, asset["id"], wb, own)
             prim = self.stage.GetPrimAtPath(path)
             prim.SetCustomDataByKey("csb:name", name)
             PhysxSchema.PhysxContactReportAPI.Apply(prim).CreateThresholdAttr(0.0)
@@ -204,12 +222,19 @@ class IsaacWorld:
         UsdGeom.XformCommonAPI(cube.GetPrim()).SetTranslate(Gf.Vec3d(*center))
         UsdGeom.XformCommonAPI(cube.GetPrim()).SetScale(Gf.Vec3f(*dims))
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        asset = None
+        if kind in ("VEHICLE", "EGO"):
+            # No model named: the car closest to the declared box, as the CARLA backend picks.
+            asset = self.vehicle_assets.get(model) if model else self.vehicle_assets.nearest(dims)
+        if asset is not None:
+            vehicle_assets.add_npc_body(self.stage, path, asset, center, collider=cube.GetPrim())
         if kind == "EGO":
             PhysxSchema.PhysxContactReportAPI.Apply(root.GetPrim()).CreateThresholdAttr(0.0)
             self.reporters.add(handle)
         self.entities[handle] = (path, translate, orient)
         self.by_path[path] = handle
-        log.info("spawned %s %r as %s (box %s at %s)", kind, name, path, dims, center)
+        log.info("spawned %s %r as %s (box %s at %s%s)", kind, name, path, dims, center,
+                 f", body {asset['id']}" if asset is not None else "")
 
     def despawn(self, handle):
         path, _, _ = self.entities.pop(handle)

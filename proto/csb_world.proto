@@ -72,6 +72,11 @@ message Spawn {
   Vec3 box_center = 4;
   Vec3 box_dimensions = 5;
   Pose pose = 6;
+  // What the body looks like: a CARLA blueprint id (`vehicle.tesla.model3`), SSv2's asset
+  // key after csb's `blueprint_map`. A server with that vehicle's exported USD renders it on
+  // the entity (render only: the box stays the collider); empty or unknown, the box shows.
+  // Added without a version bump: a server that predates it ignores it.
+  string model = 7;
 }
 
 message SpawnReply {
