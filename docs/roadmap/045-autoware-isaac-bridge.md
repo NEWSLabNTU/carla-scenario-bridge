@@ -65,7 +65,19 @@ per-wheel torque from m a, braking split by dynamic axle load). `physx` (DriveSt
 
 `ev` comes next, modelled on the Tesla Model 3 drivetrain (user direction 2026-10-19), since
 there are no drive logs to fit against. It covers the motor torque/power curve, regenerative
-braking, the brake hydraulic lag and ABS. The other options (`physx` DriveStandard, an FMU,
+braking, the brake hydraulic lag and ABS.
+
+- [x] `ev` in aib (aib `7816ba6`, 2026-10-19): the Model 3 RWD drive unit (3D7 motor, 340 N m /
+      194 kW, 9.03:1 scaled to the CARLA body's wheel, torque lag 40 ms), regen (130 N m /
+      60 kW, ~0.2 g, faded below 3 m/s) blended with friction brakes through 80 ms dead time
+      + 60 ms lag, ABS per wheel and traction control on PhysX slip; road loads (Crr 0.0095,
+      Cd 0.23 x 2.2 m^2) as a body force for every model. Unit-tested (93 tests, system and
+      Isaac Python); point-mass 0-100 km/h 5.9 s against the published 5.8-6.1 s.
+- [ ] `ev` validated in Isaac (`just isaac-steptest` in aib: 0-100, 100-0, regen at 60 km/h,
+      step lags, ABS at friction 1.0), then closed-loop with Autoware; only then the default
+      for tesla_model3 (`ideal` until then).
+
+The other options (`physx` DriveStandard, an FMU,
 Project Chrono for rough or deformable ground) wait until a need shows.
 
 ### Decisions (user, 2026-10-19)
