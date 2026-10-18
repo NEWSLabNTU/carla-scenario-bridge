@@ -477,6 +477,15 @@ isaac-msgs:
 # USD world in the map frame, e.g. CARLA's SimReady export with its physics layer, ground
 # from its semantic labels. Either replaces the other.
 #
+# Usage: just isaac-town <Town> [map_path:=<dir>] [export:=true]
+#
+# SimReady export when missing, collider layer, world file beside the town's Autoware map;
+# host paths from CARLA_SRC and CARLA_USD.
+# A CARLA town as an Isaac world (roadmap 043)
+[positional-arguments]
+isaac-town town *args:
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_town.sh" "$@"
+
 # Usage: just isaac-world-gen [map_path:=<dir>] [usd:=<file>]
 #
 # The Isaac world for a map (roadmap 038): <map>/isaac/world.yaml

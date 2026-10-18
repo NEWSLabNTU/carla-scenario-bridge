@@ -86,12 +86,14 @@ boxes are this phase.
 
 ## Steps
 
-- [ ] Phase docs, target diagram.
-- [ ] Collider layer generator, `just isaac-town`; Town02, 03, 05, 10HD exported and their
+- [x] Phase docs, target diagram.
+- [x] Collider layer generator, `just isaac-town`; Town02, 03, 05, 10HD exported and their
       world files written.
-- [ ] CARLA physics in the catalogue; the ego's params from it; the `vehicle_info` check;
+- [x] CARLA physics in the catalogue (reference); the ego a plausible real Model 3 instead
+      of CARLA's car (user direction 2026-10-18: realism, not CARLA parity); the
+      `vehicle_info` check;
       step-response comparison CARLA vs Isaac.
-- [ ] World server under play_launch with respawn; backend-aware `scenario`, `acceptance`,
+- [x] World server under play_launch with respawn; backend-aware `scenario`, `acceptance`,
       `e2e`; acb initialize timeout.
 - [ ] Exit runs (below), recorded; screencast of the demo.
 
