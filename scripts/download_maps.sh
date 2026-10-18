@@ -109,6 +109,9 @@ YAML
     # Some road lanelets start at fresh nodes where their predecessor ends, so Lanelet2
     # finds no successor and routing stops there (Town03's roundabout to its south exit).
     python3 "$(dirname "$0")/repair_lanelet_joins.py" "$OUT"
+    # Town05 and Town10 each carry a right_of_way element with no right-of-way lanelet,
+    # which scenario_simulator_v2 refuses to load the map over.
+    python3 "$(dirname "$0")/repair_lanelet_right_of_way.py" "$OUT"
 
     if [ "$found" -eq 0 ]; then
         echo "ERROR: no town directories with lanelet2_map.osm under $MAP_SOURCE" >&2
@@ -148,6 +151,7 @@ python3 "$(dirname "$0")/repair_lanelet_subtypes.py" "$OUT"
 python3 "$(dirname "$0")/repair_lanelet_local_coords.py" "$OUT"
 python3 "$(dirname "$0")/repair_lanelet_turn_direction.py" "$OUT"
 python3 "$(dirname "$0")/repair_lanelet_joins.py" "$OUT"
+python3 "$(dirname "$0")/repair_lanelet_right_of_way.py" "$OUT"
 
 # Clean up zip
 rm -f "$ZIP"
