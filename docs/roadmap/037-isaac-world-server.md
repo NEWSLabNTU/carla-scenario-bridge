@@ -43,7 +43,7 @@ step model).
   dir follow 017's layout.
 - **Launch**: `simulation.launch.xml backend:=isaac` starts csb and expects the world server;
   `ros2 run csb_isaac world_server` (wrapping `python.sh`) starts the server, headless by
-  default, `display:=:N` for VNC.
+  default, `DISPLAY=:N` (env) for VNC.
 
 ## As built (2026-10-17)
 

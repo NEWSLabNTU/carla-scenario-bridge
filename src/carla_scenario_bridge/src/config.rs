@@ -63,7 +63,7 @@ pub struct IsaacConfig {
     pub load_timeout_seconds: u64,
     /// Render once per frame. Off by default: nothing in the world needs a picture until the
     /// vehicle bridge's sensors (roadmap 038), and a render costs 3-5 ms of the frame (037).
-    /// On to watch the world on a display (`just isaac-world 5590 :8`).
+    /// On to watch the world on a display (`DISPLAY=:8 just isaac-world`).
     pub render: bool,
 }
 
@@ -371,7 +371,8 @@ impl BridgeConfig {
         Ok(config)
     }
 
-    /// Apply ROS parameters (`backend`, `isaac_endpoint`, `isaac_render`, `carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
+    /// Apply ROS parameters (`backend`, `isaac_endpoint`, `isaac_render`,
+    /// `isaac_request_timeout_seconds`, `isaac_load_timeout_seconds`, `carla_host`, `carla_port`, `ssv2_port`, `agent_relay`,
     /// `reconnect_wait_seconds`, `weather`, `npc_motion`, `gap_trace_dir`, `contact_report_dir`,
     /// `npc_contact_sensors`) over the file and the environment: a launch file's explicit
     /// value is the most specific statement of intent. A malformed number is an error, not
@@ -406,6 +407,12 @@ impl BridgeConfig {
                 })
                 .transpose()
         };
+        if let Some(s) = num("isaac_request_timeout_seconds")? {
+            self.isaac.request_timeout_seconds = s;
+        }
+        if let Some(s) = num("isaac_load_timeout_seconds")? {
+            self.isaac.load_timeout_seconds = s;
+        }
         if let Some(port) = num("carla_port")? {
             self.carla.port = u16::try_from(port).map_err(|e| eyre::eyre!("carla_port: {e}"))?;
         }
@@ -642,6 +649,47 @@ mod tests {
         .expect("parses");
         config.apply_ros_params(&params).expect("applies");
         assert_eq!(config.agent_relay(), "tcp://h:1");
+    }
+
+    #[test]
+    fn isaac_settings_take_launch_parameters_over_the_file() {
+        let params = |pairs: &[&str]| {
+            let mut args = vec!["--ros-args".to_string()];
+            for p in pairs {
+                args.push("-p".to_string());
+                args.push(p.to_string());
+            }
+            crate::ros_args::RosParams::from_args(args).expect("parses")
+        };
+        let mut config: BridgeConfig = serde_yaml::from_str(
+            "isaac:\n  request_timeout_seconds: 10\n  load_timeout_seconds: 120\n",
+        )
+        .expect("parses");
+        // Empty values (the launch defaults) keep the file's.
+        config
+            .apply_ros_params(&params(&[
+                "isaac_request_timeout_seconds:=",
+                "isaac_render:=",
+                "isaac_endpoint:=",
+            ]))
+            .expect("applies");
+        assert_eq!(config.isaac.request_timeout_seconds, 10);
+        assert!(!config.isaac.render);
+        config
+            .apply_ros_params(&params(&[
+                "isaac_request_timeout_seconds:=60",
+                "isaac_load_timeout_seconds:=300",
+                "isaac_render:=true",
+                "isaac_endpoint:=tcp://127.0.0.1:5591",
+            ]))
+            .expect("applies");
+        assert_eq!(config.isaac.request_timeout_seconds, 60);
+        assert_eq!(config.isaac.load_timeout_seconds, 300);
+        assert!(config.isaac.render);
+        assert_eq!(config.isaac.endpoint, "tcp://127.0.0.1:5591");
+        assert!(config
+            .apply_ros_params(&params(&["isaac_request_timeout_seconds:=soon"]))
+            .is_err());
     }
 
     #[test]

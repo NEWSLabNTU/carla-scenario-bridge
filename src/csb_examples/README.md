@@ -54,8 +54,8 @@ Town01's point-cloud map as voxels, generated once per host:
 
 ```bash
 just isaac-msgs && just isaac-world-gen # once: Autoware's messages for Isaac, the Town01 world
-just isaac-world &                      # the world server (headless; `5590 :8 <ego yaml> 1` to watch on VNC)
-CSB_BACKEND=isaac just run &            # csb on it
+just isaac-world &                      # the world server (headless; DISPLAY=:8 ... follow:=true to watch on VNC)
+just run backend:=isaac &               # csb on it
 just ego-isaac &                        # Autoware, domain 1
 ros2 run csb_launch run_suite basic/town01_ego_drive.xosc --output <dir>
 ```
@@ -65,12 +65,12 @@ Isaac (037), as is a second ego.
 
 **Without Autoware (037).** The scenarios below have an ego no Autoware drives, a kinematic
 box SSv2 poses or leaves standing, so they need the world server without the ego vehicle
-(`ego=""`, which keeps 037's box: a kinematic NPC shoving a dynamic ego breaks SSv2's motion
+(`ego:=` empty, which keeps 037's box: a kinematic NPC shoving a dynamic ego breaks SSv2's motion
 limits) and run with `managed_ego:=false` and no agent pre-flight:
 
 ```bash
-just isaac-world 5590 "" "" &           # the world server, kinematic ego
-CSB_BACKEND=isaac just run &            # csb on it
+just isaac-world ego:= &                # the world server, kinematic ego
+just run backend:=isaac &               # csb on it
 ros2 run csb_launch run_suite isaac/ --output <dir> --no-preflight -- managed_ego:=false
 ```
 

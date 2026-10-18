@@ -89,16 +89,25 @@ What changed from the design above, and why:
    `Spawn` the load timeout (120 s).
 9. **Configuration** is one ego YAML (`src/csb_isaac/config/acb_ego.yaml`: domain, the vehicle
    description and calibration files, physics, sensors), passed as `just isaac-world`'s
-   `ego` (the default). `ego=""` keeps 037's kinematic box: `isaac/town01_rear_contact.xosc`
+   `ego` (the default). `ego:=` (empty) keeps 037's kinematic box: `isaac/town01_rear_contact.xosc`
    needs it, since a kinematic NPC shoving a dynamic ego reads as 37.5 m/s^2 to SSv2's
    motion limits (±15).
-10. **Watching.** `just isaac-world 5590 :8 <ego yaml> 1` opens a UI-less window on the VNC
+10. **Watching.** `DISPLAY=:8 just isaac-world follow:=true` opens a UI-less window on the VNC
     display whose viewport chases the ego, with a sun and sky (the voxel world has no light of
     its own). It costs frames: 854x480 is what this host keeps near real time under load.
 11. **Tracking is scored from a bag** (`scripts/tracking_probe.py`): acb's `acceptance.py`
     formulas and limits, but run by run from one recording, on message stamps. A per-run
     observer joining the domain is discovered too late to see a run's start, and the wall
     clock misreads acceleration when the world runs slower than real time.
+
+12. **The lidar scan goes out one frame late** (stamp unchanged), after the next frame's
+    `/clock`. Sent with its own frame's `/clock`, a scan reached ndt_scan_matcher before the
+    EKF pose of its stamp, NDT could not interpolate ("Couldn't interpolate pose", WARN),
+    `/autoware/localization` went not-OK, autonomous became unavailable for a 10 Hz cycle,
+    and mrm_handler flipped to an emergency stop and back: 88 flips in the recorded proof run,
+    each within 0.35 s of an NDT warning. CARLA's scans arrive after acb's tick `/clock`, so it
+    never showed there. One frame (50 ms) is less than a real lidar's latency; after it, two
+    runs had no MRM transition and no interpolation warning.
 
 ## Steps
 
@@ -120,9 +129,9 @@ Run like this (CLAUDE.md's process rules apply; the world server first):
 
 ```bash
 just isaac-msgs && just isaac-world-gen        # once per host
-just isaac-world &                             # world server, ego = acb_ego.yaml
-CSB_BACKEND=isaac just run &                   # csb on Isaac, agent relay
-just ego-isaac &                               # Autoware, domain 1
+just isaac-world &                             # world server, ego = acb_ego.yaml (ISAAC_PORT, DISPLAY from env)
+just run backend:=isaac &                      # csb on Isaac, agent relay
+just ego-isaac &                               # Autoware, domain 1 (rviz:=true to watch)
 ros2 run csb_launch run_suite src/csb_examples/scenarios/basic/town01_ego_drive.xosc --output <dir>
 ```
 

@@ -5,6 +5,7 @@
 
     play_launch launch carla_scenario_bridge bridge.launch.xml [config_file:=...] [carla_host:=...]
         [weather:=ClearNoon] [gap_trace_dir:=DIR] [npc_contact_sensors:=false]
+        [backend:=isaac] [isaac_request_timeout_seconds:=60] [isaac_render:=true]
 
   Serves /carla/set_weather and /carla/get_weather (csb_interfaces) in its ROS domain.
 
@@ -15,6 +16,14 @@
 <launch>
   <arg name="backend" default=""
        description="carla | isaac: the simulator csb drives (roadmap 035); empty keeps the config file's (default carla; isaac is roadmap 037)"/>
+  <arg name="isaac_endpoint" default=""
+       description="backend isaac: the world server's ZMQ endpoint; empty keeps the config file's (default tcp://127.0.0.1:5590)"/>
+  <arg name="isaac_render" default=""
+       description="backend isaac: true | false, render every frame (for watching; an ego with a lidar renders anyway); empty keeps the config file's (default false)"/>
+  <arg name="isaac_request_timeout_seconds" default=""
+       description="backend isaac: how long a world server request may take before the bridge is wedged and exits for a fresh one; empty keeps the config file's (default 10)"/>
+  <arg name="isaac_load_timeout_seconds" default=""
+       description="backend isaac: the same for LoadWorld and an ego's Spawn; empty keeps the config file's (default 120)"/>
   <arg name="config_file" default="$(find-pkg-share carla_scenario_bridge)/config/bridge_config.yaml"
        description="bridge_config.yaml (CARLA, blueprint and map aliases, Traffic Manager, agent relay)"/>
   <arg name="carla_host" default="" description="CARLA host; empty keeps the config file's"/>
@@ -39,6 +48,10 @@
          rejects a substitution ('<' not supported between 'str' and 'float'). -->
     <param name="backend" value="$(var backend)"/>
     <param name="config_file" value="$(var config_file)"/>
+    <param name="isaac_endpoint" value="$(var isaac_endpoint)"/>
+    <param name="isaac_render" value="$(var isaac_render)"/>
+    <param name="isaac_request_timeout_seconds" value="$(var isaac_request_timeout_seconds)"/>
+    <param name="isaac_load_timeout_seconds" value="$(var isaac_load_timeout_seconds)"/>
     <param name="carla_host" value="$(var carla_host)"/>
     <param name="carla_port" value="$(var carla_port)"/>
     <param name="ssv2_port" value="$(var ssv2_port)"/>

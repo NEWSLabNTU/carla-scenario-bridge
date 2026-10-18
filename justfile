@@ -14,6 +14,8 @@ ego_domain := env_var_or_default('EGO_ROS_DOMAIN_ID', '1')
 # the scenario reaches vehicles only through the relay's TCP port (`agent_port`).
 scenario_domain := env_var_or_default('SCENARIO_ROS_DOMAIN_ID', '9')
 agent_port := env_var_or_default('AGENT_PORT', '5560')
+# The Isaac world server's REP port on 127.0.0.1 (`just isaac-world`, and csb's backend:=isaac)
+isaac_port := env_var_or_default('ISAAC_PORT', '5590')
 data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
 project := justfile_directory()
 acb_src := justfile_directory() + '/src/autoware_carla_bridge'
@@ -362,10 +364,14 @@ _require-agent entity:
     sys.exit("[just] the relay closed the connection")
 
 # Run the CARLA scenario bridge adapter only
-run:
+[positional-arguments]
+run *args:
     #!/usr/bin/env bash
     # As users start it (roadmap 017): csb_launch simulation.launch.xml under play_launch,
     # which restarts the bridge on a crash (respawn="true"). `just build` after changes.
+    # Arguments are the launch file's, name:=value (`just run backend:=isaac
+    # isaac_request_timeout_seconds:=60`); the older environment variables (CSB_BACKEND,
+    # CSB_CONFIG_DIR, WEATHER, ...) still work, and an argument given here wins.
     set -e
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
@@ -380,11 +386,13 @@ run:
         --log-dir play_log/bridge \
         csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
+        ${ISAAC_PORT:+isaac_endpoint:="tcp://127.0.0.1:$ISAAC_PORT"} \
         ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"} \
         ${CSB_BACKEND:+backend:="$CSB_BACKEND"} \
         ${WEATHER:+weather:="$WEATHER"} \
         ${GAP_TRACE_DIR:+gap_trace_dir:="$GAP_TRACE_DIR"} \
-        ${NPC_CONTACT_SENSORS:+npc_contact_sensors:="$NPC_CONTACT_SENSORS"}
+        ${NPC_CONTACT_SENSORS:+npc_contact_sensors:="$NPC_CONTACT_SENSORS"} \
+        "$@"
 
 # Start CARLA simulator as a background service
 carla-start:
@@ -398,23 +406,43 @@ isaac_display := env_var_or_default("ISAAC_DISPLAY", ":8")
 isaac-check:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/csb_isaac/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
 
-# Headless by default; `just isaac-world 5590 :8` opens Isaac's window on the VNC display
-# (`just isaac-vnc`). Stop it with Ctrl-C or SIGTERM; csb only empties its world.
-# The ego is a PhysX vehicle with Autoware's vehicle interface and sensors on its domain
-# (roadmap 038, `src/csb_isaac/config/acb_ego.yaml`); `ego=""` keeps 037's kinematic box.
-# `follow=1` with a display: no UI, the full-window viewport chases the ego (for recording).
-# DDS as the ego stack's: Cyclone with the localhost config (036: both sides must match).
+# Isaac Sim world server for csb's `backend:=isaac` (roadmaps 037, 038).
 #
-# Isaac Sim world server for `CSB_BACKEND=isaac just run` (roadmap 037), on 127.0.0.1:<port>
-isaac-world port="5590" display="" ego=(project + "/src/csb_isaac/config/acb_ego.yaml") follow="":
+# Where it runs is environment, set per shell or kept in .env / .envrc:
+#   ISAAC_PORT=5590   REP port on 127.0.0.1 (`just run` hands csb the same port)
+#   DISPLAY=:8        Isaac opens its window there (the VNC display); unset: headless.
+#                     ISAAC_HEADLESS=1 forces headless with DISPLAY set.
+# What it simulates is arguments, name:=value as for a launch file:
+#   ego:=<yaml>       the ego vehicle's YAML (default src/csb_isaac/config/acb_ego.yaml: a PhysX
+#                     vehicle with Autoware's sensors and vehicle interface on its domain);
+#                     ego:= (empty) keeps 037's kinematic box
+#   follow:=true      with a window: no UI, the full-window viewport chases the ego
+# DDS as the ego stack's: Cyclone with the localhost config (036: both sides must match).
+# Stop it with Ctrl-C or SIGTERM; csb only empties its world.
+#
+# Usage: [DISPLAY=:8] just isaac-world [ego:=<yaml>] [follow:=true]
+[positional-arguments]
+isaac-world *args:
     #!/usr/bin/env bash
     set -e
+    ego="{{project}}/src/csb_isaac/config/acb_ego.yaml"; follow=""
+    for a in "$@"; do
+        case "$a" in
+            ego:=*) ego="${a#ego:=}" ;;
+            follow:=*) follow="${a#follow:=}" ;;
+            *) echo "isaac-world: unknown argument '$a' (ego:=, follow:=; the port and display are ISAAC_PORT and DISPLAY)" >&2; exit 2 ;;
+        esac
+    done
+    case "$follow" in ""|false|0) follow="" ;; *) follow=1 ;; esac
+    display="${DISPLAY:-}"
+    [ -n "${ISAAC_HEADLESS:-}" ] && [ "${ISAAC_HEADLESS}" != 0 ] && display=""
     export ISAAC_ROOT={{isaac_root}}
     export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     source "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_env.sh"
     cd "{{justfile_directory()}}/src/csb_isaac"
-    exec python -m csb_isaac.world_server --port {{port}} {{ if display != "" { "--display " + display } else { "" } }} {{ if ego != "" { "--ego " + ego } else { "" } }} {{ if follow != "" { "--follow" } else { "" } }}
+    exec python -m csb_isaac.world_server --port {{isaac_port}} ${display:+--display "$display"} \
+        ${ego:+--ego "$ego"} ${follow:+--follow}
 
 # Build Autoware's message bindings for Isaac's Python (once per Isaac install; roadmap 038)
 isaac-msgs:
@@ -429,10 +457,31 @@ isaac-world-gen map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     cd "{{justfile_directory()}}/src/csb_isaac"
     python -m csb_isaac.pcd_world "{{map_path}}"
 
-# TurboVNC display for Isaac's window, localhost only (reach it through an SSH tunnel)
+# GNOME with 3 static workspaces (Ctrl+Alt+1/2/3), OpenGL on the NVIDIA GPU through
+# VirtualGL (-vgl; scripts/vnc_xstartup.sh). A GL app started from a terminal in the
+# session needs `vglrun` (gnome-terminal does not inherit the preload).
+#
+# TurboVNC display for Isaac's window ($ISAAC_DISPLAY, default :8), localhost only (SSH tunnel)
 isaac-vnc:
-    /opt/TurboVNC/bin/vncserver -list | grep -q "^{{isaac_display}}\s" || /opt/TurboVNC/bin/vncserver {{isaac_display}} -localhost -securitytypes None -geometry 1920x1080 -noxstartup
+    /opt/TurboVNC/bin/vncserver -list | grep -q "^{{isaac_display}}\s" || /opt/TurboVNC/bin/vncserver {{isaac_display}} -localhost -securitytypes None -geometry 1920x1080 -vgl -xstartup "{{justfile_directory()}}/scripts/vnc_xstartup.sh"
     @echo "DISPLAY={{isaac_display}}"
+
+# Place Isaac Sim, RViz and the terminals on the Isaac VNC display ($ISAAC_DISPLAY).
+# mode:=tile (one screen, default) or mode:=ws (workspace 1 Isaac, 2 RViz, 3 terminals;
+# Ctrl+Alt+1/2/3); wait:=SECS keeps placing while windows appear. A recording (x11grab)
+# sees only the workspace on screen: record with mode:=tile.
+#
+# Usage: just vnc-layout [mode:=tile|ws] [wait:=SECS]
+[positional-arguments]
+vnc-layout *args:
+    ISAAC_DISPLAY={{isaac_display}} "{{justfile_directory()}}/scripts/vnc_layout.sh" "$@"
+
+# A gnome-terminal titled "csb: <title>" in the Isaac VNC session, running <cmd>
+#
+# Usage: just vnc-term title:=ego-av "cmd:=tail -f play_log/ego/latest/play_launch.log"
+[positional-arguments]
+vnc-term *args:
+    ISAAC_DISPLAY={{isaac_display}} "{{justfile_directory()}}/scripts/vnc_layout.sh" term "$@"
 
 # Stop CARLA simulator service
 carla-stop:
@@ -659,8 +708,15 @@ ego-av map_path=(data_dir + "/carla-autoware-bridge/" + map_name): _require-carl
 # the world server (`just isaac-world`) is the vehicle interface, the sensors and /clock on
 # the ego's domain -- and the same vehicle agent registered with the relay. Long-lived like
 # `just ego-av`; start it once the world server is up.
-# Usage: just ego-isaac [map_path]
-ego-isaac map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
+#
+# Arguments are acb_launch carla_simulator.launch.xml's, name:=value, appended last so they
+# win: map_path:=<dir> (default the Town01 map), rviz:=true, rviz_config:=<file>,
+# relay:=tcp://host:port, goal_poses_file:=<file>, ... launch_vehicle_interface is false
+# (no acb_bridge: nothing CARLA in the stack, no V2X signals; Isaac has no lights, 037).
+#
+# Usage: just ego-isaac [map_path:=<dir>] [rviz:=true] [name:=value ...]
+[positional-arguments]
+ego-isaac *args:
     #!/usr/bin/env bash
     set -e
     source "{{autoware_setup}}"
@@ -671,23 +727,19 @@ ego-isaac map_path=(data_dir + "/carla-autoware-bridge/" + map_name):
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
-    relay="${EGO_RELAY-tcp://localhost:{{agent_port}}}"
-    optional_args=()
-    [ -n "${EGO_GOAL_POSES_FILE:-}" ] && optional_args+=(goal_poses_file:="$EGO_GOAL_POSES_FILE")
-    [ -n "${RVIZ_CONFIG:-}" ] && optional_args+=(rviz_config:="$RVIZ_CONFIG")
-    # launch_vehicle_interface:=false: no acb_bridge, so nothing CARLA in the stack, and no
-    # V2X signals (Isaac has no traffic lights, 037).
+    # Defaults, each dropped when an argument names the same launch argument.
+    launch_args=()
+    for d in map_path:="{{data_dir}}/carla-autoware-bridge/{{map_name}}" \
+             launch_vehicle_interface:=false relay:="tcp://localhost:{{agent_port}}" rviz:=false; do
+        given=false
+        for a in "$@"; do [ "${a%%:=*}" = "${d%%:=*}" ] && given=true; done
+        $given || launch_args+=("$d")
+    done
     exec play_launch launch --web-addr 0.0.0.0:8082 \
         --container-mode "${EGO_CONTAINER_MODE:-isolated}" --composable-respawn on-crash \
         --log-dir play_log/ego \
         ${EGO_PLAY_LAUNCH_ARGS:-} \
-        acb_launch carla_simulator.launch.xml \
-        map_path:="{{map_path}}" \
-        launch_vehicle_interface:=false \
-        ${relay:+relay:="$relay"} \
-        rviz:="${LAUNCH_RVIZ:-false}" \
-        "${optional_args[@]}" \
-        ${EGO_LAUNCH_ARGS:-}
+        acb_launch carla_simulator.launch.xml "${launch_args[@]}" "$@"
 
 # Launch one background AV's vehicle side -- Autoware + acb_bridge + vehicle agent -- in its
 # own ROS domain. The background AV is a scenario entity whose controller is `agent`
