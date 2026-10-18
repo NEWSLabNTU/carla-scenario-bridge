@@ -386,7 +386,7 @@ run *args:
         --log-dir play_log/bridge \
         csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
-        ${ISAAC_PORT:+isaac_endpoint:="tcp://127.0.0.1:$ISAAC_PORT"} \
+        isaac_endpoint:="tcp://127.0.0.1:{{isaac_port}}" \
         ${CSB_CONFIG_DIR:+config_file:="$CSB_CONFIG_DIR/bridge_config.yaml"} \
         ${CSB_BACKEND:+backend:="$CSB_BACKEND"} \
         ${WEATHER:+weather:="$WEATHER"} \
@@ -406,7 +406,10 @@ isaac_display := env_var_or_default("ISAAC_DISPLAY", ":8")
 isaac-check:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/csb_isaac/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
 
-# Isaac Sim world server for csb's `backend:=isaac` (roadmaps 037, 038).
+# Isaac Sim world server for csb's `backend:=isaac` (roadmaps 037, 038), supervised (043):
+# csb_launch isaac_world.launch.xml under play_launch (web 8085, logs in play_log/isaac/),
+# which respawns it when it dies. Long-lived: start it once, before `just run backend:=isaac`
+# and `just ego-isaac`; `just scenario ... backend:=isaac` starts it when it is not up.
 #
 # Where it runs is environment, set per shell or kept in .env / .envrc:
 #   ISAAC_PORT=5590   REP port on 127.0.0.1 (`just run` hands csb the same port)
@@ -415,38 +418,56 @@ isaac-check:
 # What it simulates is arguments, name:=value as for a launch file:
 #   ego:=<yaml>       the ego vehicle's YAML (default src/csb_isaac/config/acb_ego.yaml: a PhysX
 #                     vehicle with Autoware's sensors and vehicle interface on its domain);
-#                     ego:= (empty) keeps 037's kinematic box
+#                     ego:=none (or empty) keeps 037's kinematic box
 #   follow:=true      with a window: no UI, the full-window viewport chases the ego
-#   world:=<usd>      load and render this world before serving: a large world's first render
-#                     compiles its materials (CARLA Town01: ~9 min), which no request timeout
-#                     covers; csb's LoadWorld of the same file then keeps it
+#   render:=auto      window | headless; auto: a window when DISPLAY is set (see above)
+#   world:=<w>[,<w>]  worlds to load and render before serving: world files
+#                     (<map>/isaac/world.yaml), map directories or USD files. A world's first
+#                     render compiles its materials (CARLA Town01: ~9 min on a new host), which
+#                     no request timeout covers; csb's LoadWorld of a preloaded one is quick.
+#                     The first listed stays loaded.
 # DDS as the ego stack's: Cyclone with the localhost config (036: both sides must match).
-# Stop it with Ctrl-C or SIGTERM; csb only empties its world.
+# Ready when it answers Hello: `just isaac-health`. Stop it by its play_launch's pid
+# (SIGTERM); csb only empties its world.
 #
-# Usage: [DISPLAY=:8] just isaac-world [ego:=<yaml>] [follow:=true] [world:=<usd>]
+# Usage: [DISPLAY=:8] just isaac-world [ego:=<yaml>] [follow:=true] [world:=<w>,...] [render:=...]
 [positional-arguments]
 isaac-world *args:
     #!/usr/bin/env bash
     set -e
-    ego="{{project}}/src/csb_isaac/config/acb_ego.yaml"; follow=""; world=""
+    args=()
     for a in "$@"; do
         case "$a" in
-            ego:=*) ego="${a#ego:=}" ;;
-            world:=*) world="${a#world:=}" ;;
-            follow:=*) follow="${a#follow:=}" ;;
-            *) echo "isaac-world: unknown argument '$a' (ego:=, follow:=, world:=; the port and display are ISAAC_PORT and DISPLAY)" >&2; exit 2 ;;
+            ego:=) args+=("ego:=none") ;;
+            world:=) ;;
+            ego:=*|world:=*|follow:=*|render:=*) args+=("$a") ;;
+            *) echo "isaac-world: unknown argument '$a' (ego:=, world:=, follow:=, render:=; the port and display are ISAAC_PORT and DISPLAY)" >&2; exit 2 ;;
         esac
     done
-    case "$follow" in ""|false|0) follow="" ;; *) follow=1 ;; esac
-    display="${DISPLAY:-}"
-    [ -n "${ISAAC_HEADLESS:-}" ] && [ "${ISAAC_HEADLESS}" != 0 ] && display=""
-    export ISAAC_ROOT={{isaac_root}}
-    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    source /opt/ros/humble/setup.bash
+    source "{{project}}/install/setup.bash"
+    export ISAAC_ROOT={{isaac_root}} ISAAC_PORT={{isaac_port}}
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    source "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_env.sh"
-    cd "{{justfile_directory()}}/src/csb_isaac"
-    exec python -m csb_isaac.world_server --port {{isaac_port}} ${display:+--display "$display"} \
-        ${ego:+--ego "$ego"} ${follow:+--follow} ${world:+--world "$world"}
+    # Built beside this checkout's csb_isaac; a moved checkout points it here again.
+    export CSB_ISAAC_DIR="{{project}}/src/csb_isaac"
+    exec play_launch launch --web-addr 0.0.0.0:8085 --log-dir play_log/isaac \
+        csb_launch isaac_world.launch.xml "${args[@]}"
+
+# Is the world server up? One Hello round trip on ISAAC_PORT; wait:=SECS retries that long.
+#
+# Usage: just isaac-health [wait:=SECS]
+[positional-arguments]
+isaac-health *args:
+    #!/usr/bin/env bash
+    wait=0
+    for a in "$@"; do
+        case "$a" in
+            wait:=*) wait="${a#wait:=}" ;;
+            *) echo "isaac-health: unknown argument '$a' (wait:=SECS)" >&2; exit 2 ;;
+        esac
+    done
+    cd "{{project}}/src/csb_isaac"
+    exec "{{isaac_root}}/venv/bin/python" -m csb_isaac.health --port {{isaac_port}} --wait "$wait"
 
 # Build Autoware's message bindings for Isaac's Python (once per Isaac install; roadmap 038)
 isaac-msgs:
@@ -524,23 +545,47 @@ vehicle-params blueprint="vehicle.tesla.model3" *args:
 
 # Run a scenario against a live stack and judge it, with the reasons attached.
 #
-# Needs `just run` and `just ego-av` already up -- it judges a stack, it does not build one.
-# Checks the scenario's own verdict, that the ego actually drove somewhere, that no node died,
-# and reports non-OK diagnostics. Exit status is 0 only if every run passed every check.
+# backend:=carla (default): acb's acceptance.py; needs `just run` and `just ego-av` already
+# up -- it judges a stack, it does not build one. Checks the scenario's own verdict, that the
+# ego actually drove somewhere, that no node died, tracking, and reports non-OK diagnostics.
+# backend:=isaac: scripts/acceptance_bag.py, the same checks and limits (and no MRM) scored
+# from one bag of the ego's domain across the batch; starts the Isaac stacks when absent, as
+# `just scenario` does. Exit status is 0 only if every run passed every check.
 #
-# Usage: just acceptance [scenario] [runs]
-#        just acceptance src/csb_examples/scenarios/basic/town01_ego_drive.xosc 3
-acceptance scenario=(project + "/src/csb_examples/scenarios/basic/town01_ego_drive.xosc") runs="1" domain="":
+# Usage: just acceptance [scenario] [runs] [domain] [backend:=carla|isaac] [worlds:=...]
+#        just acceptance src/csb_examples/scenarios/basic/town01_ego_drive.xosc 3 backend:=isaac
+[positional-arguments]
+acceptance *args:
     #!/usr/bin/env bash
     set -e
+    scenario="{{project}}/src/csb_examples/scenarios/basic/town01_ego_drive.xosc"
+    runs=1; domain=""; backend=carla; worlds=""; n=0
+    for a in "$@"; do
+        case "$a" in
+            backend:=*) backend="${a#backend:=}" ;;
+            worlds:=*) worlds="${a#worlds:=}" ;;
+            *:=*) echo "acceptance: unknown argument '$a' (backend:=, worlds:=)" >&2; exit 2 ;;
+            *) n=$((n + 1)); case $n in 1) scenario="$a" ;; 2) runs="$a" ;; 3) domain="$a" ;;
+                   *) echo "acceptance: too many arguments" >&2; exit 2 ;; esac ;;
+        esac
+    done
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    args=(--scenario "{{scenario}}" --runs {{runs}})
-    # acceptance.py watches the ego's domain (default 1, `ego_domain`).
-    [ -n "{{domain}}" ] && args+=(--domain "{{domain}}")
-    python3 "{{acb_src}}/scripts/acceptance.py" "${args[@]}"
+    export ISAAC_PORT={{isaac_port}} SSV2_PORT={{ssv2_port}} AGENT_PORT={{agent_port}}
+    case "$backend" in
+        carla)
+            args=(--scenario "$scenario" --runs "$runs")
+            # acceptance.py watches the ego's domain (default 1, `ego_domain`).
+            [ -n "$domain" ] && args+=(--domain "$domain")
+            exec python3 "{{acb_src}}/scripts/acceptance.py" "${args[@]}" ;;
+        isaac)
+            exec python3 "{{project}}/scripts/acceptance_bag.py" --scenario "$scenario" \
+                --runs "$runs" --backend isaac --domain "${domain:-{{ego_domain}}}" \
+                ${worlds:+--worlds "$worlds"} ;;
+        *) echo "acceptance: backend '$backend' is not carla or isaac" >&2; exit 2 ;;
+    esac
 
 # Generate an Autoware point cloud map from the town CARLA currently has loaded.
 #
@@ -832,6 +877,10 @@ _clear-stale-scenario:
             [ "$pid" = "${PPID:-0}" ] && continue
             cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || continue
             case "$cmd" in *just*|*pgrep*) continue ;; esac
+            # Only this scenario domain's: a host shared with other runs (other domains, other
+            # ports) has scenario stacks of its own that are not stale (roadmap 043).
+            dom=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^ROS_DOMAIN_ID=//p')
+            [ "${dom:-0}" = "{{scenario_domain}}" ] || continue
             kill -9 "$pid" 2>/dev/null && stale=$((stale + 1))
         done
     done
@@ -842,11 +891,43 @@ _clear-stale-scenario:
         sleep 3
     fi
 
-# Usage: just scenario /path/to/scenario.xosc
+# Run one scenario against the stacks. backend:=carla (default) needs `just run` and
+# `just ego-av` up and refuses otherwise; backend:=isaac starts what is missing
+# (scripts/isaac_up.sh: the world server, `just run backend:=isaac`, `just ego-isaac`, each
+# waited for) and leaves it up for the next run. worlds:=<map>[,<map>] (Isaac): what a world
+# server started here preloads, map names under CARLA_MAPS or paths (default: the scenario's map).
+#
+# Usage: just scenario /path/to/scenario.xosc [backend:=carla|isaac] [worlds:=Town01,Town02]
 #        OUTPUT_DIR=/tmp/run1 just scenario ...   # verdict: $OUTPUT_DIR/scenario_test_runner/result.junit.xml
-scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
+[positional-arguments]
+scenario scenario_file *args:
     #!/usr/bin/env bash
     set -e
+    shift
+    backend=carla; worlds=""
+    for a in "$@"; do
+        case "$a" in
+            backend:=*) backend="${a#backend:=}" ;;
+            worlds:=*) worlds="${a#worlds:=}" ;;
+            *) echo "scenario: unknown argument '$a' (backend:=carla|isaac, worlds:=)" >&2; exit 2 ;;
+        esac
+    done
+    # The repo's scenarios name their map as $(env CARLA_MAPS)/<Town>.
+    export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
+    case "$backend" in
+        carla) just _require-carla; just _require-ego-stack ;;
+        isaac)
+            map_dir=$(just _scenario-map "{{scenario_file}}")
+            resolved=()
+            IFS=',' read -ra entries <<< "${worlds:-$map_dir}"
+            for w in "${entries[@]}"; do
+                case "$w" in */*) resolved+=("$w") ;; *) resolved+=("$CARLA_MAPS/$w") ;; esac
+            done
+            ISAAC_PORT={{isaac_port}} SSV2_PORT={{ssv2_port}} AGENT_PORT={{agent_port}} \
+                "{{project}}/scripts/isaac_up.sh" "$map_dir" "$(IFS=,; echo "${resolved[*]}")" ;;
+        *) echo "scenario: backend '$backend' is not carla or isaac" >&2; exit 2 ;;
+    esac
+    just _clear-stale-scenario
     # The interpreter resolves the vehicle description package (acb_vehicle_description).
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
@@ -857,8 +938,6 @@ scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
     # SSv2 runs in the scenario domain with the agent relay (`just run`); the ego is
     # reached through the relay, wherever it runs (roadmap 017).
     export ROS_DOMAIN_ID={{scenario_domain}}
-    # The repo's scenarios name their map as $(env CARLA_MAPS)/<Town>.
-    export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
     # The scenario file is read, never modified: SSv2's runner preprocesses a copy in its
     # output directory (fork, roadmap 017).
     exec play_launch launch --web-addr 0.0.0.0:8081 \
@@ -868,21 +947,83 @@ scenario scenario_file: _require-carla _require-ego-stack _clear-stale-scenario
         output_directory:="${OUTPUT_DIR:-/tmp}" \
         port:={{ssv2_port}}
 
-# Run the full stack: adapter + bridge + SSv2 + Autoware (CARLA must be running)
-# Usage: just e2e [scenario_file]
-e2e scenario_file=(project + "/src/csb_examples/scenarios/basic/town01_ego_drive.xosc") map_name=map_name:
+# The map directory a scenario names (its LogicFile, $(env CARLA_MAPS) expanded); the
+# default map when it names none.
+_scenario-map scenario_file:
+    #!/usr/bin/env bash
+    maps="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
+    f=$(grep -oE 'LogicFile filepath="[^"]*"|filepath: *.*' "{{scenario_file}}" | head -1 \
+        | sed -E 's/^LogicFile filepath="//; s/"$//; s/^filepath: *//')
+    f="${f//\$(env CARLA_MAPS)/$maps}"
+    echo "${f:-$maps/{{map_name}}}"
+
+# Run the full stack and one scenario, then take down what it started.
+#
+# backend:=carla (default): demo.launch.xml, adapter + bridge + SSv2 + Autoware in one
+# launch (CARLA must be running). backend:=isaac: the stacks `just scenario backend:=isaac`
+# brings up (world server, simulation side, ego-isaac; those already running are reused and
+# left), the scenario, its verdict, then the stacks this run started are stopped
+# (KEEP_STACKS=1 leaves them).
+#
+# Usage: just e2e [scenario_file] [map_name] [backend:=carla|isaac] [worlds:=...]
+[positional-arguments]
+e2e *args:
     #!/usr/bin/env bash
     set -e
+    scenario="{{project}}/src/csb_examples/scenarios/basic/town01_ego_drive.xosc"
+    map="{{map_name}}"; backend=carla; extra=(); n=0
+    for a in "$@"; do
+        case "$a" in
+            backend:=*) backend="${a#backend:=}" ;;
+            worlds:=*) extra+=("$a") ;;
+            *:=*) echo "e2e: unknown argument '$a' (backend:=, worlds:=)" >&2; exit 2 ;;
+            *) n=$((n + 1)); case $n in 1) scenario="$a" ;; 2) map="$a" ;;
+                   *) echo "e2e: too many arguments" >&2; exit 2 ;; esac ;;
+        esac
+    done
+    export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
+    if [ "$backend" = isaac ]; then
+        started=$(mktemp)
+        out="${OUTPUT_DIR:-{{project}}/play_log/e2e/$(date +%Y-%m-%d_%H-%M-%S)}"
+        mkdir -p "$out"
+        teardown() {
+            if [ "${KEEP_STACKS:-0}" = 1 ]; then
+                echo "[e2e] KEEP_STACKS=1: leaving the stacks this run started up"
+            elif [ -s "$started" ]; then
+                echo "[e2e] stopping the stacks this run started"
+                for pg in $(tac "$started"); do kill -TERM -"$pg" 2>/dev/null || true; done
+                for _ in $(seq 30); do
+                    alive=0; for pg in $(cat "$started"); do kill -0 -"$pg" 2>/dev/null && alive=1; done
+                    [ $alive = 0 ] && break; sleep 1
+                done
+                for pg in $(cat "$started"); do kill -KILL -"$pg" 2>/dev/null || true; done
+            fi
+            rm -f "$started"
+        }
+        trap teardown EXIT
+        ISAAC_UP_STARTED="$started" ISAAC_PORT={{isaac_port}} SSV2_PORT={{ssv2_port}} \
+            AGENT_PORT={{agent_port}} "{{project}}/scripts/isaac_up.sh" "$CARLA_MAPS/$map" \
+            "$CARLA_MAPS/$map"
+        OUTPUT_DIR="$out" just scenario "$scenario" backend:=isaac "${extra[@]}" || true
+        junit="$out/scenario_test_runner/result.junit.xml"
+        if [ ! -f "$junit" ]; then echo "[e2e] no verdict: $junit not written"; exit 1; fi
+        if grep -q 'failures="0"' "$junit" && grep -q 'errors="0"' "$junit"; then
+            echo "[e2e] PASS ($junit)"
+        else
+            echo "[e2e] FAIL ($junit)"; exit 1
+        fi
+        exit 0
+    fi
+    [ "$backend" = carla ] || { echo "e2e: backend '$backend' is not carla or isaac" >&2; exit 2; }
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
-    export CARLA_MAPS="${CARLA_MAPS:-{{data_dir}}/carla-autoware-bridge}"
     exec play_launch launch --web-addr 0.0.0.0:8080 \
         csb_launch demo.launch.xml \
-        scenario:="$(realpath "{{scenario_file}}")" \
-        map_path:="$CARLA_MAPS/{{map_name}}" \
+        scenario:="$(realpath "$scenario")" \
+        map_path:="$CARLA_MAPS/$map" \
         carla_port:={{carla_port}} \
         ssv2_port:={{ssv2_port}}
 

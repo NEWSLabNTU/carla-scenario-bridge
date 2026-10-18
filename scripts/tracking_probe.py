@@ -30,7 +30,9 @@ TOPICS = {
     "/localization/kinematic_state": "nav_msgs/msg/Odometry",
     "/planning/scenario_planning/trajectory": "autoware_planning_msgs/msg/Trajectory",
     "/sensing/gnss/pose_with_covariance": "geometry_msgs/msg/PoseWithCovarianceStamped",
+    "/api/fail_safe/mrm_state": "autoware_adapi_v1_msgs/msg/MrmState",
 }
+MRM_NORMAL = 1  # autoware_adapi_v1_msgs/MrmState.NORMAL
 SEATED_M = 5.0  # as acceptance.py: an EKF pose this far from GNSS is not this run's yet
 
 
@@ -101,8 +103,15 @@ def score(msgs, start, end, acceptance):
         path.append(p)
         if trajs and trajs[ti][0] <= t and len(trajs[ti][1]) >= 2:
             cross.append(min(math.dist(p, q) for q in trajs[ti][1]))
+    # Entries into an MRM (state leaving NORMAL) during the run: 043 asks for none.
+    mrm, prev = 0, None
+    for t, m in msgs["/api/fail_safe/mrm_state"]:  # published on change: carry the state in
+        if start <= t <= end and prev == MRM_NORMAL and m.state != MRM_NORMAL:
+            mrm += 1
+        prev = m.state
     med = acceptance.median
     return {
+        "mrm_entries": mrm,
         "duration_s": round(end - start, 1),
         "longitudinal_median_error": lon["median_error"],
         "longitudinal_samples": lon["samples"],

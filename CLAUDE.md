@@ -228,6 +228,16 @@ ps -eo pid,etimes,args --no-headers | grep -E "[c]arla_scenario_bridge|[s]cenari
 ss -lpn | grep -E ":5555 |:5560 "   # bridge, relay
 ```
 
+**On Isaac (roadmap 043) there is a fourth stack, the world server**: `just isaac-world`
+(csb_launch `isaac_world.launch.xml`, web 8085, `play_log/isaac/`, respawned on death).
+`just scenario|acceptance|e2e <xosc> backend:=isaac` starts the world server, the simulation
+side on backend isaac and `just ego-isaac` when they are absent (`scripts/isaac_up.sh`) and
+leaves them up (`e2e` stops what it started); it refuses a CARLA bridge on 8084 or a
+`just ego-av` on 8082 rather than replace them. `just isaac-health` is the Hello probe. The
+world server holds ~17.5 GB of RAM with Town01's SimReady world: on a host whose memory other
+work has taken, the kernel's OOM killer picks it first (seen once, as the ego stack started),
+and the respawned one preloads again for ~7 minutes.
+
 **The ego is reached through the relay, not ROS (roadmap 017).** SSv2 runs in the scenario
 domain (9), the ego stack in its own (1); a scenario whose ego never engages usually means
 the agent never registered: check the relay's log (`play_log/bridge/latest/node/

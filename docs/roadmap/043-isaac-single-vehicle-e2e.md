@@ -248,3 +248,77 @@ what is off:
 So the 5 cm criterion holds against CARLA's surface in every town, and against the lanelet
 `ele` only where the lanelet map carries the true height (Town01, Town05, Town10HD). Not
 yet checked: NDT on each town's pcd from the Isaac lidar.
+
+### As built: operations
+
+1. **The world server is a launch node.** `csb_launch isaac_world.launch.xml` runs
+   `isaac_world_server` (installed by csb_launch, pointing at the `src/csb_isaac` it was built
+   beside; `CSB_ISAAC_DIR` overrides), a wrapper that drops the launch's `--ros-args` and the
+   system Humble environment, sources `isaac_env.sh` and runs `csb_isaac.world_server` in
+   Isaac's venv. `respawn="true"` (10 s delay); output in `play_log/isaac/<run>/node/isaac_world/`.
+   `just isaac-world` is that launch under play_launch on web 8085. Launch args: `ego:=`
+   (`default`, `none` = 037's kinematic box, or a YAML; the recipe still maps `ego:=` empty to
+   `none`), `world:=` (comma separated world files, map directories or USD files),
+   `follow:=`, `render:=auto|window|headless` (auto: a window when `DISPLAY` is set, unless
+   `ISAAC_HEADLESS=1`). Port and display are `ISAAC_PORT` and `DISPLAY`. `just run` now always
+   hands csb `isaac_endpoint` on the same `ISAAC_PORT`.
+2. **Several towns preloaded.** `world_server.py` resolves each `world:=` entry to its USD
+   (a world file's `usd`, relative to its map directory as csb resolves it), checks them all
+   before starting Isaac, loads and renders each with a throwaway ego (the lidar's material
+   trace), and keeps the first listed loaded. Only one town is on the stage at a time; what
+   a preload buys is the compiled shaders and traced materials, which later loads reuse.
+   Measured: Town02 then Town01 preloaded in 126 + 52 s on a loaded host, 29 + 22 s on a
+   quieter one; after that the switch Town01 -> Town02 -> Town01 for `town02_episode_change`
+   costs 18-25 s at the next ego's spawn (sensors warm), against 54 s when Town01 had not
+   been preloaded since the last switch, all inside csb's 120 s load timeout.
+3. **Health probe**: `just isaac-health [wait:=SECS]` (`csb_isaac.health`, Isaac's venv
+   python, no Isaac environment) sends one Hello and reports the Isaac version, or that
+   nothing answered. A preloading server answers nothing; a Hello beside a running scenario
+   is harmless.
+4. **Backend-aware recipes.** `just scenario <xosc> backend:=isaac [worlds:=Town01,Town02]`
+   runs `scripts/isaac_up.sh`: the world server if Hello fails (or waits for one whose launch
+   is up), `just run backend:=isaac` unless 8084 already runs it, `just ego-isaac` with the
+   scenario's map unless 8082 runs it; then `_require-ego-stack` and the agent's registration
+   with the relay. A CARLA bridge on 8084 or a `just ego-av` on 8082 is refused, not
+   replaced. The stacks stay up for the next run. `just e2e <xosc> backend:=isaac` does the
+   same and stops what it started (`KEEP_STACKS=1` keeps them). `backend:=carla` (default)
+   is unchanged: CARLA and ego prechecks for `scenario`, acb's acceptance.py, demo.launch.xml.
+5. **Acceptance on Isaac** is `scripts/acceptance_bag.py` (`just acceptance <xosc> <runs>
+   backend:=isaac`). acb's acceptance.py needs a CARLA client (the ego watcher, the health
+   check) and a per-run ROS observer, which joins Isaac's domain too late (038, point 11).
+   The bag version keeps its judgement and imports its limits and `dead_nodes`, records the
+   ego's domain once across the batch (`tracking_probe.py`'s topics plus
+   `/api/fail_safe/mrm_state`) and scores each run from message stamps: verdict, peak speed
+   and distance, longitudinal, cross-track, EKF-to-GNSS, MRM entries, dead nodes. Not
+   carried over: the route-start check and the diagnostics report.
+6. **`_clear-stale-scenario` only clears its own domain.** The first cold run cleared two
+   processes it had not started: on a host shared with other runs, `pgrep -f
+   scenario_test_runner` finds theirs too. It now skips any process whose `ROS_DOMAIN_ID` is
+   not the scenario domain.
+7. **acb**: `initialize` gets 60 s (acb `fefb993`; the pin before it already had 30 s, the
+   checkout here was a stale 8 s one).
+
+**Exit runs** (2026-10-18, Town01 SimReady world, headless; the ego's physics as of
+`4aefee8`, the realistic Model 3), tracking by acceptance_bag.py, medians per run (limits
+0.35 m/s^2, 1.0 m, 10 m):
+
+| scenario | runs | verdicts | longitudinal, m/s^2 | cross-track, m | EKF-GNSS, m | MRM |
+|---|---|---|---|---|---|---|
+| `town01_ego_drive` (cold host, `worlds:=Town01,Town02`) | 3 | 3 PASS | 0.034, 0.030, 0.023 | 0.03, 0.03, 0.04 | 1.06, 1.02, 1.02 | 0 |
+| `town01_engage_state` | 3 | 3 PASS | 0.029, 0.025, 0.025 | 0.03, 0.03, 0.03 | 1.01, 1.02, 1.01 | 0 |
+| `town02_episode_change`, each followed by `town01_ego_drive` | 3 + 3 | 6 PASS | | | | |
+| `just e2e town01_ego_drive backend:=isaac` from a cold host | 3 | 3 PASS (182, 262, 107 s) | | | | |
+
+Against 038 (voxel world, its vehicle): longitudinal 0.017-0.076 there, 0.023-0.036 here;
+cross-track 0.06-0.28 there, 0.03-0.04 here, CARLA's 0.04; EKF-GNSS 0.74-0.83 there,
+~1.0 here (another world). With the intermediate physics (`3f5b708`) the same batch measured
+0.036/0.033/0.028 and 0.04/0.03/0.03: no change worth the name from either physics commit.
+Frame cost at the world server rose with the SimReady world: 22-24 ms p50 on a quiet host,
+45-50 ms (the whole 50 ms frame) at load 60-70.
+
+**Open.** The world server holds 15-17.5 GB of RAM with Town01 loaded; twice on this shared
+host (60 GB, two UE SimReady exports running beside) the kernel's OOM killer took it as the
+ego stack started, 23 s and a few minutes after it was ready. play_launch respawned it and
+csb's bridge waited for it, but the scenario under way failed (no simulator response, then a
+failed frame): a cold run then needs that memory free. The respawned server's earlier log is
+lost with play_launch 0.15.1 (out.1 is kept from 0.18.3 on; CLAUDE.md asks for that version).

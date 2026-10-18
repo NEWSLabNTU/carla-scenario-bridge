@@ -19,6 +19,15 @@ install(
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# `isaac_world_server`: the Isaac world server as a launch node (isaac_world.launch.xml,
+# roadmap 043), pointed at the csb_isaac sources beside this package (CSB_ISAAC_DIR overrides).
+get_filename_component(CSB_ISAAC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../csb_isaac" ABSOLUTE)
+configure_file(scripts/isaac_world_server.in ${CMAKE_CURRENT_BINARY_DIR}/isaac_world_server @ONLY)
+install(
+  PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/isaac_world_server
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Library modules the gap oracle (024) imports from its own directory: oriented-box
 # geometry and the gap trace reader. Not executables.
 install(

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Isaac Sim world server csb's backend:=isaac drives (roadmaps 037, 038, 043), supervised:
+  respawned when it dies, its output in the launch's log directory. Long-lived like the
+  simulation side: start it once, before `simulation.launch.xml backend:=isaac` and the
+  ego's stack (the ego's /clock comes from here).
+
+    play_launch launch FLAGS \
+        csb_launch isaac_world.launch.xml [ego:=default|none|<yaml>] \
+        [world:=<world>[,<world>...]] [follow:=true] [render:=auto|window|headless]
+
+    FLAGS are the play_launch options web-addr 127.0.0.1:8085 and log-dir play_log/isaac
+    (each with a double-hyphen prefix, which an XML comment cannot contain); `just isaac-world`
+    runs exactly this.
+
+  Host settings come from the environment: ISAAC_PORT (REP port on 127.0.0.1, default 5590;
+  `just run` gives csb the same), DISPLAY (Isaac's window, render auto or window),
+  ISAAC_HEADLESS=1 (render auto: headless with DISPLAY set), ISAAC_ROOT, CYCLONEDDS_URI.
+
+  The server answers nothing until every world in world:= is loaded and rendered once (a
+  town's first render compiles its materials: minutes the first time on a host). Ready means
+  it answers Hello: `just isaac-health`. A respawned server preloads again; csb's bridge
+  finds its connection gone, exits and is respawned against the new one (exit 75).
+-->
+<launch>
+  <arg name="ego" default="default"
+       description="the ego's YAML: default (src/csb_isaac/config/acb_ego.yaml, a PhysX vehicle with Autoware's sensors and vehicle interface), none (037's kinematic box) or a path"/>
+  <arg name="world" default="none"
+       description="worlds to preload, comma separated: world files (map/isaac/world.yaml), map directories or USD files; the first stays loaded; none: nothing"/>
+  <arg name="follow" default="false"
+       description="true: with a window, no UI and a viewport chasing the ego"/>
+  <arg name="render" default="auto"
+       description="auto (a window on DISPLAY when set, unless ISAAC_HEADLESS=1) | window | headless"/>
+
+  <!-- respawn_delay is a literal (stock ros2 launch rejects a substitution there). 10 s
+       lets the dead server's GPU memory and port go before the next one claims them. -->
+  <node pkg="csb_launch" exec="isaac_world_server" name="isaac_world" output="screen"
+        respawn="true" respawn_delay="10.0"
+        args="--port $(env ISAAC_PORT 5590) --ego $(var ego) --world $(var world) --follow $(var follow) --render $(var render)"/>
+</launch>

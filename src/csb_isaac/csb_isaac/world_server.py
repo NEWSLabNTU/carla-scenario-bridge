@@ -5,7 +5,13 @@ protocol on a ZMQ REP socket bound to localhost until csb sends `Shutdown` or th
 gets SIGINT/SIGTERM. Run it through `just isaac-world`, which sets Isaac's environment.
 
     python -m csb_isaac.world_server --port 5590 [--display :8] [--ego config/acb_ego.yaml]
-        [--world <usd>] [--follow]
+        [--world <world>[,<world>...]] [--follow]
+
+A world is a world file (`<map>/isaac/world.yaml`, as csb's `LoadWorld` reads it), a map
+directory (its `isaac/world.yaml`) or a USD file. Several, comma separated, are all loaded and
+rendered once before the server answers (roadmap 043: a town's first render compiles its
+materials, minutes, which a scenario's `LoadWorld` should not have to); the first one listed
+stays loaded.
 """
 import argparse
 import logging
@@ -13,6 +19,34 @@ import os
 import signal
 import sys
 import time
+
+
+def world_usd(entry):
+    """The USD stage a `--world` entry names: a world file's `usd` (relative to its map
+    directory, as csb resolves it), a map directory's `isaac/world.yaml`, or a USD file."""
+    path = os.path.abspath(os.path.expanduser(entry))
+    if os.path.isdir(path):
+        path = os.path.join(path, "isaac", "world.yaml")
+    if not path.endswith((".yaml", ".yml")):
+        return path
+    import yaml
+
+    with open(path) as f:
+        usd = (yaml.safe_load(f) or {}).get("usd", "")
+    if not usd:
+        raise SystemExit(f"{entry}: the world file names no usd (a flat ground plane needs no "
+                         "preload)")
+    map_dir = os.path.dirname(os.path.dirname(path))
+    return usd if os.path.isabs(usd) else os.path.join(map_dir, usd)
+
+
+def preload_list(worlds):
+    """`--world`'s comma-separated entries as USD paths, checked before Isaac starts."""
+    usds = list(dict.fromkeys(world_usd(e.strip()) for e in worlds.split(",") if e.strip()))
+    missing = [u for u in usds if not os.path.exists(u)]
+    if missing:
+        raise SystemExit(f"world(s) not found: {', '.join(missing)}")
+    return usds
 
 
 def main(argv=None):
@@ -24,8 +58,10 @@ def main(argv=None):
                     help="with --display: the viewport follows the ego from behind, no UI "
                          "(for watching or recording a run)")
     ap.add_argument("--world", default="",
-                    help="USD world to load and render before serving (its first render compiles "
-                         "its materials); csb's LoadWorld of the same file keeps it")
+                    help="worlds to load and render before serving, comma separated: world "
+                         "files, map directories or USD files (a first render compiles the "
+                         "world's materials); the first stays loaded, and csb's LoadWorld of "
+                         "it keeps it")
     ap.add_argument("--ego", default="",
                     help="ego YAML: the ego is a PhysX vehicle driven by Autoware (038); "
                          "empty: a kinematic box (037)")
@@ -34,6 +70,7 @@ def main(argv=None):
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = logging.getLogger("csb_isaac")
 
+    preload = preload_list(args.world)
     if args.display:
         os.environ["DISPLAY"] = args.display
     else:
@@ -55,8 +92,9 @@ def main(argv=None):
     from .world import IsaacWorld
 
     world = IsaacWorld(ego_config=args.ego or None, follow=bool(args.display and args.follow))
-    if args.world:
-        world.preload(args.world)
+    # The first listed is preloaded last, so it is the one loaded when csb first asks.
+    for usd in reversed(preload):
+        world.preload(usd)
     server = WorldServer(world)
     socket = zmq.Context.instance().socket(zmq.REP)
     socket.bind(f"tcp://127.0.0.1:{args.port}")
