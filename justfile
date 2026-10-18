@@ -2,7 +2,7 @@
 set dotenv-load
 
 # Host settings come from the environment (or .env / .envrc): ports, displays, install and
-# data paths. Project settings -- map, vehicle, rviz, scenario output, ... --
+# data paths, the log root. Project settings -- map, vehicle, rviz, scenario output, ... --
 # are recipe arguments, name:=value as for a launch file; the environment variables that
 # used to carry them are refused by name (scripts/just_lib.bash, CSB_RETIRED_ENV).
 carla_port := env_var_or_default('CARLA_PORT', '2000')
@@ -26,6 +26,10 @@ data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
 # $(env CARLA_MAPS)/<Town>.
 maps_dir := env_var_or_default('CARLA_MAPS', data_dir + '/carla-autoware-bridge')
 project := justfile_directory()
+# Where every stack's play_launch logs go, <log root>/<kind>/<time>/. A host setting: keep it
+# on a disk whose fsync latency cannot stall a node (CLAUDE.md, "The log disk can stall a
+# node"). When it is not the repo's play_log, play_log/<kind> links to it.
+export CSB_LOG_ROOT := env_var_or_default('CSB_LOG_ROOT', justfile_directory() + '/play_log')
 lib := justfile_directory() + '/scripts/just_lib.bash'
 acb_src := justfile_directory() + '/src/autoware_carla_bridge'
 # Where Autoware's own setup.bash lives. The NEWSLabNTU 1.5.0 Debian installs under
@@ -228,8 +232,7 @@ two-av *args: _require-carla
         esac
     done
     ego_dom={{ego_domain}}
-    logs="{{project}}/play_log/two-av"
-    mkdir -p "$logs"
+    logs=$(csb_log_dir "{{project}}" two-av)
     rec_display="${RECORD_DISPLAY:-${DISPLAY:-:1}}"
     launch_rviz=$([ "$record" = true ] && echo true || echo false)
     echo "[two-av] scenario domain {{scenario_domain}}, ego domain $ego_dom, background AV domain 2"
@@ -398,6 +401,7 @@ run *args:
     # the environment.
     set -e
     source "{{lib}}"; csb_reject_env
+    log_dir=$(csb_log_dir "{{project}}" bridge)
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
@@ -408,7 +412,7 @@ run *args:
     export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
     export ROS_DOMAIN_ID={{scenario_domain}}
     exec play_launch launch --web-addr 0.0.0.0:8084 \
-        --log-dir "play_log/bridge" \
+        --log-dir "$log_dir" \
         csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
         isaac_endpoint:="tcp://127.0.0.1:{{isaac_port}}" \
@@ -427,7 +431,7 @@ isaac-check:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/csb_isaac/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
 
 # Isaac Sim world server for csb's `backend:=isaac` (roadmaps 037, 038), supervised (043):
-# csb_launch isaac_world.launch.xml under play_launch (web 8085, logs in play_log/isaac/),
+# csb_launch isaac_world.launch.xml under play_launch (web 8085, logs in $CSB_LOG_ROOT/isaac/),
 # which respawns it when it dies. Long-lived: start it once, before `just run backend:=isaac`
 # and `just ego-isaac`; `just scenario ... backend:=isaac` starts it when it is not up.
 #
@@ -455,6 +459,7 @@ isaac-check:
 isaac-world *args:
     #!/usr/bin/env bash
     set -e
+    source "{{lib}}"
     args=()
     for a in "$@"; do
         case "$a" in
@@ -470,7 +475,8 @@ isaac-world *args:
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     # Built beside this checkout's csb_isaac; a moved checkout points it here again.
     export CSB_ISAAC_DIR="{{project}}/src/csb_isaac"
-    exec play_launch launch --web-addr 0.0.0.0:8085 --log-dir "play_log/isaac" \
+    log_dir=$(csb_log_dir "{{project}}" isaac)
+    exec play_launch launch --web-addr 0.0.0.0:8085 --log-dir "$log_dir" \
         csb_launch isaac_world.launch.xml "${args[@]}"
 
 # Is the world server up? One Hello round trip on ISAAC_PORT; wait:=SECS retries that long.
@@ -607,7 +613,7 @@ acceptance *args:
     export ISAAC_PORT={{isaac_port}} SSV2_PORT={{ssv2_port}} AGENT_PORT={{agent_port}}
     case "$backend" in
         carla)
-            args=(--scenario "$scenario" --runs "$runs")
+            args=(--scenario "$scenario" --runs "$runs" --play-log "$CSB_LOG_ROOT/ego")
             # acceptance.py watches the ego's domain (default 1, `ego_domain`).
             [ -n "$domain" ] && args+=(--domain "$domain")
             exec python3 "{{acb_src}}/scripts/acceptance.py" "${args[@]}" ;;
@@ -763,6 +769,7 @@ ego-av *args: _require-carla
         map_path:="{{maps_dir}}/{{default_map}}" vehicle_name:=hero carla_port:={{carla_port}} \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false seed_localization_on_attach:=false \
         -- "${given[@]}"
+    log_dir=$(csb_log_dir "{{project}}" ego)
     #
     # --container-mode isolated --composable-respawn on-crash: Autoware 1.5.0's
     # behavior_path_planner aborts now and then on a new route (autoware_universe#12460, once
@@ -775,7 +782,7 @@ ego-av *args: _require-carla
     # container); observable gives up reloading one crashed composable alone.
     exec play_launch launch --web-addr 0.0.0.0:8082 \
         --container-mode "$container_mode" --composable-respawn on-crash \
-        --log-dir "play_log/ego" \
+        --log-dir "$log_dir" \
         $play_launch_args \
         acb_launch carla_simulator.launch.xml "${launch_args[@]}"
 
@@ -822,9 +829,10 @@ ego-isaac *args:
         map_path:="{{maps_dir}}/{{default_map}}" launch_vehicle_interface:=false \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false \
         -- "${given[@]}"
+    log_dir=$(csb_log_dir "{{project}}" ego)
     exec play_launch launch --web-addr 0.0.0.0:8082 \
         --container-mode "$container_mode" --composable-respawn on-crash \
-        --log-dir "play_log/ego" \
+        --log-dir "$log_dir" \
         $play_launch_args \
         acb_launch carla_simulator.launch.xml "${launch_args[@]}"
 
@@ -874,11 +882,12 @@ bg-av *args: _require-carla
         entity:="$entity" relay:="tcp://localhost:{{agent_port}}" \
         map_path:="{{maps_dir}}/{{default_map}}" carla_port:={{carla_port}} launch_rviz:=false \
         -- "${given[@]}"
+    log_dir=$(csb_log_dir "{{project}}" "bg-$entity")
     exec play_launch launch --web-addr 0.0.0.0:"$web_port" \
         --container-mode isolated --composable-respawn on-crash \
         --load-node-timeout 120 \
         --load-total-budget 180 \
-        --log-dir "play_log/bg-$entity" \
+        --log-dir "$log_dir" \
         csb_launch background_av.launch.xml "${launch_args[@]}"
 
 # Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already
@@ -976,8 +985,9 @@ scenario scenario_file *args:
     export ROS_DOMAIN_ID={{scenario_domain}}
     # The scenario file is read, never modified: SSv2's runner preprocesses a copy in its
     # output directory (fork, roadmap 017).
+    log_dir=$(csb_log_dir "{{project}}" scenario)
     exec play_launch launch --web-addr 0.0.0.0:8081 \
-        --log-dir "play_log/scenario" \
+        --log-dir "$log_dir" \
         csb_launch scenario.launch.xml \
         scenario:="$(realpath "{{scenario_file}}")" \
         output_directory:="$output_directory" \
@@ -1000,7 +1010,7 @@ _scenario-map scenario_file:
 # brings up (world server, simulation side, ego-isaac; those already running are reused and
 # left), the scenario, its verdict, then the stacks this run started are stopped
 # (keep_stacks:=true leaves them). output_directory:=<dir> (Isaac; default
-# play_log/e2e/<time>) gets the scenario's output.
+# $CSB_LOG_ROOT/e2e/<time>) gets the scenario's output.
 #
 # Usage: just e2e [xosc] [map] [backend:=carla|isaac] [worlds:=..] [keep_stacks:=true] [output_directory:=<dir>]
 [positional-arguments]
@@ -1024,7 +1034,7 @@ e2e *args:
     export CARLA_MAPS="{{maps_dir}}"
     if [ "$backend" = isaac ]; then
         started=$(mktemp)
-        [ -n "$out" ] || out="{{project}}/play_log/e2e/$(date +%Y-%m-%d_%H-%M-%S)"
+        [ -n "$out" ] || out="$(csb_log_dir "{{project}}" e2e)/$(date +%Y-%m-%d_%H-%M-%S)"
         mkdir -p "$out"
         teardown() {
             if [ "$keep_stacks" = true ]; then
@@ -1060,12 +1070,37 @@ e2e *args:
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
-    exec play_launch launch --web-addr 0.0.0.0:8080 \
+    log_dir=$(csb_log_dir "{{project}}" demo)
+    exec play_launch launch --web-addr 0.0.0.0:8080 --log-dir "$log_dir" \
         csb_launch demo.launch.xml \
         scenario:="$(realpath "$scenario")" \
         map_path:="$CARLA_MAPS/$map" \
         carla_port:={{carla_port}} \
         ssv2_port:={{ssv2_port}}
+
+# Move play_launch runs older than `days` out of $CSB_LOG_ROOT into an archive, kind by
+# kind (<dest>/<kind>/<time>). Never deletes, never overwrites; skips each kind's `latest`,
+# and runs a live process still has open (a running play_launch). dest defaults to
+# $CSB_LOG_ARCHIVE (a host setting; default /mnt/disk1/csb-play_log-archive, a spinning disk,
+# fine for an archive and not for live logs: CLAUDE.md). dry_run:=true lists only.
+#
+# Usage: just prune-logs [days:=7] [dest:=<dir>] [dry_run:=true]
+[positional-arguments]
+prune-logs *args:
+    #!/usr/bin/env bash
+    set -e
+    days=7; dest="${CSB_LOG_ARCHIVE:-/mnt/disk1/csb-play_log-archive}"; dry=()
+    for a in "$@"; do
+        case "$a" in
+            days:=?*) days="${a#*:=}" ;;
+            dest:=?*) dest="${a#*:=}" ;;
+            dry_run:=true) dry=(--dry-run) ;;
+            dry_run:=false) ;;
+            *) echo "prune-logs: unknown argument '$a' (days:=, dest:=, dry_run:=true)" >&2; exit 2 ;;
+        esac
+    done
+    exec python3 "{{project}}/scripts/prune_logs.py" --root "$CSB_LOG_ROOT" --dest "$dest" \
+        --days "$days" "${dry[@]}"
 
 # Download pre-converted CARLA maps for Autoware
 download-maps:

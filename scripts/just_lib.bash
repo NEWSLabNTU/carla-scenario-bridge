@@ -2,7 +2,7 @@
 #
 # Project settings (map, vehicle and sensor choices, rviz, scenario output, ...) are
 # name:=value arguments of the recipes, as for a launch file. Host settings (displays, ports,
-# install and data paths) come from the environment, kept in .env or .envrc.
+# install and data paths, the log root) come from the environment, kept in .env or .envrc.
 
 # Environment variables the recipes used to read as project settings, each with the argument
 # that replaced it. `csb_reject_env` refuses to run while any of them is set (even empty),
@@ -82,4 +82,25 @@ csb_with_defaults() {
         [ -n "${a#*:=}" ] && _out+=("$a")
     done
     return 0
+}
+
+# csb_log_dir PROJECT KIND: the directory play_launch logs a stack of this kind under,
+# $CSB_LOG_ROOT/KIND (default PROJECT/play_log/KIND), created. When the log root is not the
+# repo's play_log, PROJECT/play_log/KIND is made a symlink to it, so play_log/<kind>/latest
+# keeps working from the repo.
+csb_log_dir() {
+    local project="$1" kind="$2"
+    local root="${CSB_LOG_ROOT:-$project/play_log}"
+    mkdir -p "$root/$kind"
+    if [ "$(realpath -m "$root")" != "$(realpath -m "$project/play_log")" ]; then
+        local link="$project/play_log/$kind"
+        mkdir -p "$project/play_log"
+        if [ -L "$link" ] || [ ! -e "$link" ]; then
+            ln -sfn "$root/$kind" "$link"
+        else
+            echo "[just] note: $link is a directory, not a link to $root/$kind;" \
+                 "this run logs to $root/$kind (move the old one with just prune-logs)" >&2
+        fi
+    fi
+    echo "$root/$kind"
 }

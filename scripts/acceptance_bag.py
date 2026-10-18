@@ -27,6 +27,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent
+# Where the stacks log (a host setting, as in the justfile)
+LOG_ROOT = Path(os.environ.get("CSB_LOG_ROOT") or PROJECT / "play_log")
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(PROJECT / "src/autoware_carla_bridge/scripts"))
 
@@ -123,8 +125,8 @@ def main() -> int:
     ap.add_argument("--backend", default="isaac")
     ap.add_argument("--worlds", default="", help="passed on as `just scenario worlds:=`")
     ap.add_argument("--domain", type=int, default=1, help="the ego's ROS domain")
-    ap.add_argument("--out", help="run outputs and the bag (default play_log/acceptance/<time>)")
-    ap.add_argument("--play-log", default=str(PROJECT / "play_log/ego"))
+    ap.add_argument("--out", help="run outputs and the bag (default $CSB_LOG_ROOT/acceptance/<time>)")
+    ap.add_argument("--play-log", default=str(LOG_ROOT / "ego"))
     ap.add_argument("--discovery", type=float, default=120.0,
                     help="s to wait for the recorder to subscribe")
     ap.add_argument("--run-timeout", type=float, default=900.0,
@@ -132,7 +134,7 @@ def main() -> int:
     ap.add_argument("--json", help="write the full result here")
     args = ap.parse_args()
 
-    out = Path(args.out or PROJECT / "play_log/acceptance"
+    out = Path(args.out or LOG_ROOT / "acceptance"
                / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")).resolve()
     out.mkdir(parents=True, exist_ok=True)
     scenario = str(Path(args.scenario).resolve())

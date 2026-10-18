@@ -12,15 +12,16 @@
 # up for the next run; their pids are appended to $ISAAC_UP_STARTED when that is set, so a
 # caller can take them down (`just e2e`).
 #
-# Environment (from the justfile): ISAAC_PORT, SSV2_PORT, AGENT_PORT, and the waits
+# Environment, host settings all (from the justfile): ISAAC_PORT, SSV2_PORT, AGENT_PORT,
+# CSB_LOG_ROOT (the stacks' consoles go there; default the repo's play_log), and the waits
 # ISAAC_READY_TIMEOUT (s, default 1800: a town's first render on a host compiles its
-# materials), EGO_READY_TIMEOUT (s, default 1200).
+# materials, so the budget is the host's) and EGO_READY_TIMEOUT (s, default 1200).
 set -euo pipefail
 map_dir="$1"
 worlds="${2:-$map_dir}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$here"
-logs="$here/play_log"
+logs="${CSB_LOG_ROOT:-$here/play_log}"
 mkdir -p "$logs"
 isaac_port="${ISAAC_PORT:-5590}"
 ssv2_port="${SSV2_PORT:-5555}"
@@ -76,7 +77,7 @@ else
     until just isaac-health > /dev/null 2>&1; do
         if ! alive "$pid"; then
             say "the world server launch exited before answering; see $logs/isaac.console" \
-                "and play_log/isaac/latest/"
+                "and $logs/isaac/latest/"
             exit 1
         fi
         if [ $SECONDS -gt $deadline ]; then

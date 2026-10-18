@@ -88,7 +88,7 @@ settings come from the environment, made permanent in `.env` (just's `dotenv-loa
 (`DISPLAY`, `ISAAC_DISPLAY`, `RECORD_DISPLAY`), install and data paths (`AUTOWARE_SETUP`,
 `ISAAC_ROOT`, `CARLA_DIR`, `DATA_DIR`, `CARLA_MAPS`), the ROS domains
 (`EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`) and the ego's RMW (`EGO_RMW_IMPLEMENTATION`),
-and the Isaac bring-up waits
+the log root and archive (`CSB_LOG_ROOT`, `CSB_LOG_ARCHIVE`), and the Isaac bring-up waits
 (`ISAAC_READY_TIMEOUT`, `EGO_READY_TIMEOUT`). The variables that used to carry project
 settings (`MAP_NAME`, `LAUNCH_RVIZ`, `EGO_LAUNCH_ARGS`, `OUTPUT_DIR`, `KEEP_STACKS`, ...;
 the list is `CSB_RETIRED_ENV` in `scripts/just_lib.bash`) make a recipe refuse to start,
@@ -365,16 +365,40 @@ du -sh play_log/ego/*/play_launch.log play_log/ego/*/interception 2>/dev/null | 
 
 ### The log disk can stall a node
 
-`/home` (`/dev/sda1`) is a spinning ext4 disk at 99 % that other users saturate at will.
-A node whose stdout goes to `play_log/` on it blocks in the ext4 journal when they do: acb's
-main loop stalled 0.5–3 s several times per scenario and 25 s once, skipping CARLA frames
-and starving Autoware into emergency stops (roadmap 014, acb `0d091de` moved acb's logging
-to a writer thread). Any other node that logs at tens of lines per second from a real-time
-loop is exposed the same way, and play_launch's own `system_stats.csv` shows the holes.
-Check before blaming code:
+A node whose stdout goes to a busy spinning disk blocks in the ext4 journal when other work
+saturates it: acb's main loop stalled 0.5–3 s several times per scenario and 25 s once,
+skipping CARLA frames and starving Autoware into emergency stops (roadmap 014, when `/home`
+was a spinning disk; acb `0d091de` moved acb's logging to a writer thread). Any other node
+that logs at tens of lines per second from a real-time loop is exposed the same way, and
+play_launch's own `system_stats.csv` shows the holes.
+
+Today `/home` is `/dev/nvme1n1p1` (NVMe, shared, 94 % full) and `/mnt/disk1` is `/dev/sda1`,
+a 16 TB Seagate **spinning** disk (`lsblk -d -o NAME,ROTA,MODEL`: ROTA 1) that holds Isaac
+Sim, its USD worlds, the NTU tiles and other users' data, and is often 80–95 % busy with
+reads. Measured 2026-10-19 (`append + fsync every 20th line` at 200 lines/s for 60 s, both at
+once, sda at 93 % util from other readers):
+
+| | fsync p50 | p99 | max | writes the loop managed |
+|---|---|---|---|---|
+| `/home` (NVMe) | 0.9 ms | 3.4 ms | 6.8 ms | 12000 of 12000 |
+| `/mnt/disk1` (HDD) | 142 ms | 339 ms | 1500 ms | 7500 of 12000 |
+
+So live logs stay on NVMe: the log root, `CSB_LOG_ROOT` (a host setting; default the repo's
+`play_log/`), is where every recipe's play_launch writes, `<root>/<kind>/<time>/` (`ego`,
+`bg-<entity>`, `bridge`, `isaac`, `scenario`, `demo`, `e2e`, `acceptance`, `two-av`). Point
+it at another *fast* disk if `/home` fills; when it is not `play_log/`, the recipes link
+`play_log/<kind>` to it, so `play_log/<kind>/latest` keeps working. Never point it at
+`/mnt/disk1`.
+
+The space problem is solved by moving old runs, not by logging elsewhere: `just prune-logs
+[days:=7] [dest:=<dir>] [dry_run:=true]` moves runs untouched for that long to
+`$CSB_LOG_ARCHIVE` (default `/mnt/disk1/csb-play_log-archive`, where a spinning disk is
+fine), kind by kind. It never deletes or overwrites, and keeps each kind's `latest` and any
+run a live process holds open (a running play_launch). `src/autoware_carla_bridge/play_log`
+is acb's own and not touched. Check before blaming code:
 
 ```bash
-cat /proc/pressure/io            # "some avg10" over ~30 means the disk is the bottleneck
+iostat -dx sda nvme1n1 5 2       # %util per device; /proc/pressure/io is host-wide, not per disk
 df -h /home
 for t in /proc/$(pgrep -x acb_bridge)/task/*; do grep -H State "$t/status"; done | grep -c "D (disk"
 ```

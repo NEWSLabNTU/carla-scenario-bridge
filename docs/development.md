@@ -31,15 +31,16 @@ recipes. The ones you will use most:
 | `just build-autoware-overlay` | Autoware fixes 1.5.0 lacks, built from a pinned fork commit into `third_party/autoware_overlay/`; `ego-av` / `bg-av` source it by default (`autoware_overlay:=false`: off; roadmap 042) |
 | `just scenario <file>` | one scenario (web UI on 8081); verdict in `<output_directory>/scenario_test_runner/` (`output_directory:=`, default `/tmp`) |
 | `just two-av` | two Autoware stacks, one scenario; `record:=true` records a screencast |
+| `just prune-logs [days:=7]` | move runs older than that out of the log root into the archive on `/mnt/disk1` (never deletes) |
 | `just acceptance <file> <runs>` | repeat a scenario and summarise |
 
 The `just` recipes use [play_launch](https://pypi.org/project/play-launch/) (per-node logs
-under `play_log/`, a web UI per stack); everything they start is also startable with plain
-`ros2 launch`, as the README shows.
+under `play_log/<kind>/<time>/`, a web UI per stack); everything they start is also startable
+with plain `ros2 launch`, as the README shows.
 
 Project settings (map, rviz, vehicle and launch choices, scenario output) are recipe
 arguments, `name:=value` as for a launch file; host settings (ports, displays, install and
-data paths such as `CARLA_MAPS`) come from the environment, made
+data paths such as `CARLA_MAPS`, the log root `CSB_LOG_ROOT`) come from the environment, made
 permanent in `.env` or `.envrc`. The recipes refuse to run while one of the environment
 variables that used to carry a project setting is set, naming the argument that replaced it
 (`scripts/just_lib.bash`).
