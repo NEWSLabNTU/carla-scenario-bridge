@@ -212,6 +212,10 @@ class IsaacWorld:
                 else:
                     log.warning("ego %r stays a box: %s's wheelbase %.3f m is not the vehicle's "
                                 "%.3f m", name, asset["id"], wb, own)
+            # The chassis box is the collider, not a body: hidden from rendering whether or
+            # not a catalogue body went on, or the roof lidar sees the ego itself (aib 54cace1:
+            # 11400 points of it in Autoware's obstacle cloud, a stop for "route-obstacle").
+            UsdGeom.Imageable(self.stage.GetPrimAtPath(ego.vehicle.body_path)).MakeInvisible()
             prim = self.stage.GetPrimAtPath(path)
             prim.SetCustomDataByKey("csb:name", name)
             PhysxSchema.PhysxContactReportAPI.Apply(prim).CreateThresholdAttr(0.0)
