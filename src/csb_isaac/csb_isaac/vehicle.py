@@ -3,9 +3,11 @@
 The vehicle's rigid body frame is Autoware's `base_link`: the rear axle centre on the ground,
 x forward, z up, so the pose csb reads back is the SSv2 ego origin and the pose the vehicle
 status reports is the one Autoware expects. Geometry comes from the Autoware vehicle
-description (`vehicle_info.param.yaml`: wheel base, tread, wheel radius and width, steering
-limit), so the model Autoware plans with and the one Isaac drives are the same one; mass and
-suspension are the vehicle YAML's (the vehicle description has none).
+description (`vehicle_info.param.yaml`: wheel base, tread, wheel radius and width), so the
+model Autoware plans with and the one Isaac drives are the same one; the physics (mass, centre
+of mass, steering limit, brake and drive torque, tires) is CARLA's blueprint's, from the
+vehicle catalogue (roadmap 043, `vehicle_params.py`); suspension is ours (CARLA does not expose
+it), tuned per axle to the same frequency so the car sits level on its sprung masses.
 
 PhysX drives it with no engine model ("drive none"): each wheel's drive torque, brake torque
 and steer angle are set directly. The actuation follows acb's contract on CARLA: Autoware's
@@ -21,46 +23,14 @@ from dataclasses import dataclass, field
 from omni.physx.scripts.utils import set_custom_metadata
 from pxr import Gf, PhysxSchema, UsdGeom, UsdPhysics
 
+from .vehicle_params import G, VehicleParams  # noqa: F401  (VehicleParams: re-exported)
+
 GROUPS = "/World/vehicleCollisionGroups"
 WHEEL_MASS = 20.0  # kg
 FRICTION_TABLE = "/World/vehicleTireFriction"
-G = 9.81
 
 # Autoware's GearCommand / GearReport values
 GEAR_NEUTRAL, GEAR_DRIVE, GEAR_REVERSE, GEAR_PARK = 1, 2, 20, 22
-
-
-@dataclass
-class VehicleParams:
-    """What the vehicle is: Autoware's vehicle_info plus the physics it lacks."""
-
-    wheel_base: float = 3.005
-    wheel_tread: float = 1.667
-    wheel_radius: float = 0.370
-    wheel_width: float = 0.235
-    max_steer_angle: float = 0.70
-    mass: float = 1845.0  # CARLA's vehicle.tesla.model3
-    com: tuple = (1.45, 0.0, 0.55)  # centre of mass in base_link, m
-    suspension_frequency: float = 1.6  # Hz
-    suspension_damping_ratio: float = 0.45
-    suspension_travel: float = 0.2  # m
-    tire_friction: float = 1.0
-    max_drive_torque: float = 2500.0  # per wheel, N m
-    max_brake_torque: float = 4000.0  # per wheel, N m
-    hold_brake_torque: float = 1500.0  # per wheel, N m: standing still
-    rolling_resistance: float = 0.0  # N per (m/s), added to the requested force
-    steer_time_constant: float = 0.0  # s; 0: none
-    steer_rate_limit: float = 0.0  # rad/s; 0: none
-
-    @classmethod
-    def from_vehicle_info(cls, path, **overrides):
-        """`vehicle_info.param.yaml` (ROS parameter file) plus the vehicle YAML's physics."""
-        import yaml
-
-        doc = yaml.safe_load(open(path))
-        p = next(iter(doc.values()))["ros__parameters"]
-        keys = ("wheel_base", "wheel_tread", "wheel_radius", "wheel_width", "max_steer_angle")
-        return cls(**{k: float(p[k]) for k in keys}, **overrides)
 
 
 @dataclass
@@ -162,10 +132,10 @@ class Vehicle:
         v.CreateVehicleEnabledAttr(True)
         v.CreateSuspensionLineQueryTypeAttr(PhysxSchema.Tokens.raycast)
         v.CreateSubStepThresholdLongitudinalSpeedAttr(5.0)
-        v.CreateLowForwardSpeedSubStepCountAttr(3)
-        v.CreateHighForwardSpeedSubStepCountAttr(1)
+        v.CreateLowForwardSpeedSubStepCountAttr(params.physx_substeps)
+        v.CreateHighForwardSpeedSubStepCountAttr(params.physx_substeps)
         v.CreateMinPassiveLongitudinalSlipDenominatorAttr(4.0)
-        v.CreateMinActiveLongitudinalSlipDenominatorAttr(0.1)
+        v.CreateMinActiveLongitudinalSlipDenominatorAttr(params.min_active_slip_denominator)
         v.CreateMinLateralSlipDenominatorAttr(1.0)
         v.CreateLongitudinalStickyTireThresholdSpeedAttr(0.2)
         v.CreateLongitudinalStickyTireThresholdTimeAttr(1.0)
@@ -175,17 +145,21 @@ class Vehicle:
         v.CreateLateralStickyTireDampingAttr(20.0)
 
         r, half_t, L = params.wheel_radius, params.wheel_tread / 2, params.wheel_base
-        sprung = params.mass / 4
-        k = sprung * (2 * math.pi * params.suspension_frequency) ** 2
-        c = 2 * params.suspension_damping_ratio * math.sqrt(k * sprung)
-        sag = sprung * G / k
-        rest_load = sprung * G
+        omega = 2 * math.pi * params.suspension_frequency
+        # Every spring at the same frequency on its own sprung mass sags the same, sag = g/w^2:
+        # the car sits level whatever the front/rear split.
+        sag = G / omega ** 2
         # The suspension frame sits so that, sagged under the static load, the wheel centre is
         # at z = r: base_link on the ground at rest.
         frame_z = r + (params.suspension_travel - sag)
+        front_sprung, rear_sprung = params.axle_loads()
         self.wheels = []
         for i, (name, x, y) in enumerate((("frontLeft", L, half_t), ("frontRight", L, -half_t),
                                           ("rearLeft", 0.0, half_t), ("rearRight", 0.0, -half_t))):
+            sprung = front_sprung if i < 2 else rear_sprung
+            k = sprung * omega ** 2
+            c = 2 * params.suspension_damping_ratio * math.sqrt(k * sprung)
+            rest_load = sprung * G
             wp = f"{path}/{name}"
             w = UsdGeom.Xform.Define(stage, wp)
             w.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionFloat).Set(Gf.Vec3f(x, y, r))
@@ -196,14 +170,19 @@ class Vehicle:
             wheel.CreateWidthAttr(params.wheel_width)
             wheel.CreateMassAttr(WHEEL_MASS)
             wheel.CreateMoiAttr(0.5 * WHEEL_MASS * r * r)
-            wheel.CreateDampingRateAttr(0.25)
+            wheel.CreateDampingRateAttr(params.wheel_damping_rate)
+            # CARLA's PhysX 4 tire, in PhysX 5's terms: lateral stiffness rises with load up
+            # to lat_stiff_max_load rest loads, where it is lat_stiff_value per N of rest
+            # load; longitudinal stiffness is given per g.
             tire = PhysxSchema.PhysxVehicleTireAPI.Apply(wprim)
-            tire.CreateLateralStiffnessGraphAttr(Gf.Vec2f(2.0, 17.0 * rest_load))
-            tire.CreateLongitudinalStiffnessAttr(10.0 * rest_load)
+            tire.CreateLateralStiffnessGraphAttr(
+                Gf.Vec2f(params.lat_stiff_max_load, params.lat_stiff_value * rest_load))
+            tire.CreateLongitudinalStiffnessAttr(params.long_stiff_value * G)
             tire.CreateCamberStiffnessAttr(0.0)
             tire.CreateFrictionVsSlipGraphAttr([Gf.Vec2f(0.0, 1.0), Gf.Vec2f(0.1, 1.0), Gf.Vec2f(1.0, 1.0)])
             tire.CreateFrictionTableRel().AddTarget(FRICTION_TABLE)
             susp = PhysxSchema.PhysxVehicleSuspensionAPI.Apply(wprim)
+            susp.CreateSprungMassAttr(sprung)
             susp.CreateSpringStrengthAttr(k)
             susp.CreateSpringDamperRateAttr(c)
             susp.CreateTravelDistanceAttr(params.suspension_travel)

@@ -95,6 +95,19 @@ class IsaacWorld:
         # CARLA's vehicles exported to USD (CSB_VEHICLE_USD): an entity whose Spawn names one
         # wears it; any other stays the box.
         self.vehicle_assets = vehicle_assets.VehicleAssets()
+        self.ego_params = None
+        if self.ego_config is not None:
+            # The ego's physics from its blueprint, checked against the vehicle description
+            # Autoware plans with: a mismatch stops the server here, not a drive later (043).
+            from .ego import ego_params
+
+            model = self.ego_config.model or EGO_DEFAULT_MODEL
+            physics = self.vehicle_assets.physics(model)
+            if physics is None:
+                log.warning("no CARLA physics for the ego's %s in the catalogue (run "
+                            "scripts/dump_vehicle_physics.py): the built-in Tesla defaults", model)
+            self.ego_params = ego_params(self.ego_config, physics)
+            log.info("ego vehicle: %s", self.ego_params)
         self.world.scene.add_default_ground_plane(prim_path=GROUND_PLANE)
         UsdGeom.Xform.Define(self.stage, ENTITIES)
         # Light for cameras (a viewport, 038's watching; the lidar needs none): a loaded world
@@ -179,10 +192,16 @@ class IsaacWorld:
         if kind == "EGO" and self.ego_config is not None:
             from .ego import Ego
 
-            ego = Ego(self.ego_config, self.ego_ros, self.stage, path, name, center, dims, pose)
-            # No model named: the ego's own car, the one its vehicle description and sensor
-            # kit are measured on (acb's Tesla Model 3), as the CARLA backend spawns it.
-            asset = self.vehicle_assets.get(model or EGO_DEFAULT_MODEL)
+            ego = Ego(self.ego_config, self.ego_ros, self.stage, path, name, center, dims, pose,
+                      params=self.ego_params)
+            # The ego is the ego YAML's car (acb's Tesla Model 3), the one its physics, vehicle
+            # description and sensor kit are of, as the CARLA backend spawns it, whatever body
+            # the scenario names.
+            own_model = self.ego_config.model or EGO_DEFAULT_MODEL
+            if model and model != own_model and self.vehicle_assets.by_id.get(model):
+                log.warning("ego %r: the scenario names %s, the ego YAML's car is %s: it wears "
+                            "%s", name, model, own_model, own_model)
+            asset = self.vehicle_assets.get(own_model)
             if asset is not None:
                 # Its wheels go on the PhysX wheels: only a car of the ego's own wheelbase fits.
                 wb, own = asset.get("wheel_base") or 0.0, ego.vehicle.p.wheel_base

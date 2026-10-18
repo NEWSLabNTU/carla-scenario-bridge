@@ -12,10 +12,18 @@ sensor_kit_calibration: ../../autoware_carla_bridge/src/individual_params/config
 # Added to Isaac's sim time on every stamp and on /clock, s; "wall": the wall clock when the
 # world server starts, so a restarted server never sends the ego stack's time backwards.
 clock_offset: wall
-# Physics the vehicle description does not have (vehicle.py VehicleParams); CARLA's model3.
-vehicle:
-  mass: 1845.0
-  com: [1.45, 0.0, 0.55]
+# The CARLA blueprint the ego is (roadmap 043): its physics -- mass, centre of mass, steering
+# limit, brake and drive torque, tires -- come from the vehicle catalogue's `physics` for it
+# (CSB_VEHICLE_USD/vehicles.json, written by scripts/dump_vehicle_physics.py from CARLA's
+# get_physics_control()), and its body from the same catalogue. The world server compares
+# vehicle_info's wheel base, tread and wheel radius with the catalogue's at start and refuses
+# a difference over 5 cm.
+model: vehicle.tesla.model3
+# Hand overrides, applied after the catalogue: any VehicleParams field by name
+# (csb_isaac/vehicle_params.py), e.g. `mass: 1900.0`, `com: [1.45, 0.0, 0.55]`,
+# `max_brake_torque: 1500.0`, `suspension_frequency: 1.4`, `steer_time_constant: 0.2`.
+# Empty: the car is CARLA's.
+vehicle: {}
 lidar:
   # 128 channels at 20 Hz, 1024 columns: 2.6 M points/s, acb's CARLA lidar rate.
   config: OS1

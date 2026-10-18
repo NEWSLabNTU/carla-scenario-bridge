@@ -45,6 +45,16 @@ class VehicleAssets:
             log.info("%d CARLA vehicle bodies from %s", len(self.by_id), index)
         else:
             log.info("no CARLA vehicle bodies (%s missing): entities are boxes", index)
+        # CARLA's physics per blueprint (scripts/dump_vehicle_physics.py, roadmap 043): in each
+        # entry's `physics`, and in the `physics.json` beside the index, which survives the
+        # index being regenerated.
+        sidecar = self.root / "physics.json"
+        self.physics_by_id = json.loads(sidecar.read_text()) if sidecar.exists() else {}
+
+    def physics(self, model):
+        """CARLA's `get_physics_control()` for `model`, in the catalogue's frame, or None."""
+        entry = self.by_id.get(model or "") or {}
+        return entry.get("physics") or self.physics_by_id.get(model or "")
 
     def get(self, model):
         """The asset for `model` (a CARLA blueprint id), or None."""

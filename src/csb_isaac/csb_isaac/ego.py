@@ -40,8 +40,8 @@ import numpy as np
 import yaml
 
 from .frames import kit_transform, lat_lon, qconj, qmul, qrot
-from .vehicle import (GEAR_DRIVE, GEAR_NEUTRAL, GEAR_PARK, GEAR_REVERSE, Command, State,
-                      Vehicle, VehicleParams)
+from .vehicle import GEAR_DRIVE, GEAR_NEUTRAL, GEAR_PARK, GEAR_REVERSE, Command, State, Vehicle
+from .vehicle_params import VehicleParams, read_vehicle_info
 
 log = logging.getLogger("csb_isaac")
 
@@ -52,6 +52,8 @@ WARM_UP_FRAMES = 60
 @dataclass
 class EgoConfig:
     domain: int = 1
+    # The CARLA blueprint the ego is: its physics (the vehicle catalogue's `physics`) and body.
+    model: str = "vehicle.tesla.model3"
     vehicle_info: str = ""
     sensors_calibration: str = ""
     sensor_kit_calibration: str = ""
@@ -193,19 +195,23 @@ class EgoRos:
         rclpy.shutdown(context=self.ctx)
 
 
+def ego_params(cfg: EgoConfig, physics=None):
+    """The ego's VehicleParams: geometry from `cfg.vehicle_info`, physics from `physics` (the
+    catalogue's for `cfg.model`), then the YAML's `vehicle:` overrides. Raises
+    `VehicleMismatch` when vehicle_info and the catalogue describe different cars."""
+    info = read_vehicle_info(cfg.vehicle_info) if cfg.vehicle_info else None
+    return VehicleParams.resolve(cfg.model, physics, info, cfg.vehicle)
+
+
 class Ego:
     """One ego: vehicle, sensors and ROS side, built at spawn and removed at despawn."""
 
-    def __init__(self, cfg: EgoConfig, ros: EgoRos, stage, path, name, box_center, box_dims, pose):
+    def __init__(self, cfg: EgoConfig, ros: EgoRos, stage, path, name, box_center, box_dims, pose,
+                 params: VehicleParams = None):
         self.cfg = cfg
         self.name = name
         self.path = path
-        overrides = {k: (tuple(v) if isinstance(v, list) else v) for k, v in cfg.vehicle.items()}
-        if cfg.vehicle_info:
-            params = VehicleParams.from_vehicle_info(cfg.vehicle_info, **overrides)
-        else:
-            params = VehicleParams(**overrides)
-        self.vehicle = Vehicle(stage, path, params, box_center, box_dims, pose)
+        self.vehicle = Vehicle(stage, path, params or ego_params(cfg), box_center, box_dims, pose)
         self.state = State()
         self.lidar = None
         self.lidar_frame = cfg.lidar.get("frame", "top")
