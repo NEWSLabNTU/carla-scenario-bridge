@@ -61,7 +61,7 @@ borrowed from greybox fuzzing.
 - [034: Bridge Failure Paths](034-bridge-failure-paths.md) — a hung tick (a lost wakeup in CARLA 0.9.16's Traffic Manager) ends in an error, a drain and a restart inside SSv2's timeouts; no TM unless a scenario needs one; a timed-out spawn's late actor adopted, actors looked up by id; then upstream's TM fix backported into carla-rust's prebuilt LibCarla
 - [042: Autoware Fixes Carried as an Overlay](042-autoware-overlay.md) — upstream fixes Autoware 1.5.0 lacks, built one package at a time from the NEWSLabNTU fork at a pinned commit (`just build-autoware-overlay`) and sourced by `just ego-av` by default; first: `blind_spot`'s right-turn ego passage interval (autoware_universe#13509, from 033)
 
-## Simulator backends and Isaac Sim (035-041)
+## Simulator backends and Isaac Sim (035-041, 043-044)
 
 SSv2 on more than one simulator, CARLA and Isaac Sim, chosen per run; the repository keeps
 its name ([design/simulator-backends.md](../design/simulator-backends.md)). Driven by a
@@ -71,11 +71,14 @@ sponsor's off-road competition on Isaac Sim (user direction 2026-10-16).
 - [036: Isaac Sim Bring-up and the Domain Spike](036-isaac-bringup.md) — Isaac Sim 6.1 on this host (VNC and headless); several ROS domains in one process, Cyclone, lockstep, GPU cost per sensor set
 - [037: Isaac World Server and `IsaacBackend`](037-isaac-world-server.md) — SSv2 scenarios on Isaac through a lockstep world server and a small batched protocol; puppeteered NPCs, contacts, no Autoware yet (done 2026-10-17: NPC poses within 0.04 mm, round trip p95 3.7 ms with 20 NPCs)
 - [038: Isaac Vehicle Bridge](038-isaac-vehicle-bridge.md) — Autoware drives a PhysX vehicle: sensors, vehicle interface, `/clock` on its domain; agent unchanged (done 2026-10-18: `town01_ego_drive` 3/3 on Isaac, tracking inside acceptance.py's limits beside CARLA's, 20 ms per frame for one ego)
-- [039: Several Autoware Instances on Isaac Sim](039-isaac-multi-autoware.md) — one domain per ego, relay-coordinated, ego count per GPU measured
+- [043: Single-Vehicle End to End on Isaac Sim](043-isaac-single-vehicle-e2e.md) — stage 1: CARLA's towns (SimReady, collider layer as code), CARLA's car with its blueprint physics, supervised world server, backend-aware `scenario`/`acceptance`/`e2e`
+- [044: NPCs and Traffic Lights on Isaac Sim](044-isaac-npcs-and-traffic-lights.md) — stage 2: tracked dynamic NPCs, CARLA walkers, lamps set from SSv2 and signals given to Autoware
+- [039: Several Autoware Instances on Isaac Sim](039-isaac-multi-autoware.md) — stage 3: one domain per ego, relay-coordinated, ego count per GPU measured; V2X; the gap campaign on Isaac
 - [040: NTU Off-road Test Field](040-ntu-offroad-field.md) — the vendor's NTU mesh as an Isaac world, aligned to our Autoware maps, terrain friction zones, Lanelet2 course
 - [041: Competition Director](041-competition-director.md) — heats, team isolation, scoring from ground truth, Isaac simulation-control services for the operator
 
-035 and 036 can run in parallel; 037 needs both. 040 can start on the import script as soon as
+035 and 036 can run in parallel; 037 needs both. After 038 the order is 043, 044, 039 (user
+direction 2026-10-18); the target stack is [design/isaac-stack.svg](../design/isaac-stack.svg). 040 can start on the import script as soon as
 the vendor delivers, but its acceptance needs 030.
 
 ## Real-site twin and realistic rendering (019-)

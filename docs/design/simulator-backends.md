@@ -53,6 +53,14 @@ csb  ── SSv2 handlers, entity table, episode clock, gap trace, contacts (sim
 agent relay (5560) ◀── agent protocol ──▶ acb_pilot per ego (unchanged)
 ```
 
+The target Isaac stack, with what is built and what each remaining stage adds
+([043](../roadmap/043-isaac-single-vehicle-e2e.md) one ego end to end,
+[044](../roadmap/044-isaac-npcs-and-traffic-lights.md) NPCs and traffic lights,
+[039](../roadmap/039-isaac-multi-autoware.md) several egos, V2X, the gap campaign); source
+`isaac-stack.typ`:
+
+![Target Isaac stack](isaac-stack.svg)
+
 ### The seam in csb (phase 035, built 2026-10-17)
 
 A Rust trait, `backend::SimBackend` (`src/backend/mod.rs`), is everything csb asks of a
