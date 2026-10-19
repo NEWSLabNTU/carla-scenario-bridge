@@ -107,22 +107,82 @@ Project Chrono for rough or deformable ground) wait until a need shows.
       `ev` and `ideal`. Needed: the chassis box hidden from the lidar (Autoware stopped for
       the ego's own roof), `just autoware` keeping the caller's CYCLONEDDS_URI, and
       `realtime:=true` (unpaced, the world ran 3x real time and localization never started).
-- [ ] Integration: aib as a submodule at `src/autoware_isaac_bridge` (pushed first, then the
+- [x] Integration: aib as a submodule at `src/autoware_isaac_bridge` (pushed first, then the
       pin); `csb_isaac` imports `aib` (world server's `PYTHONPATH` gets
       `src/autoware_isaac_bridge/src/aib`); `IsaacWorld` builds `aib.isaac.ego.Ego` from an
       aib ego config (`ego:=` names one; default aib's `config/ego.yaml`); the catalogue
       check runs against the rig's geometry; `just ego-isaac` runs `aib_launch
-      isaac_simulator.launch.xml`.
-- [ ] Remove the duplicated code from csb: `csb_isaac/{ego,vehicle,vehicle_params,frames}.py`,
+      isaac_simulator.launch.xml` (csb `442d34c`, `2868f8a`; pin aib `54cace1`). As built:
+      `csb_isaac/scripts/isaac_env.sh` sources aib's and adds aib to `PYTHONPATH` (every
+      Isaac-side csb script gets it), `build_msgs.sh` runs aib's; the catalogue check and
+      `physics_params` live in `csb_isaac/catalogue.py` (tests `test_catalogue.py`, against
+      aib's default ego); the world server hides every ego's chassis box from rendering, as
+      aib's runner does (the roof lidar sees it otherwise). csb's `just build` builds aib's
+      seven packages (no name clashes); a `play_launch dump` of `just ego-isaac`'s launch
+      resolves 206 nodes, no acb_bridge, all 201 vehicle_info references aib's.
+- [x] Remove the duplicated code from csb: `csb_isaac/{ego,vehicle,vehicle_params,frames}.py`,
       `config/acb_ego.yaml`, their tests (aib has them), and point docs (038, 043, the user
-      guide) at aib.
-- [ ] Exit runs through aib.
+      guide) at aib (038, 043 and design/simulator-backends.md carry a pointer; the user
+      guide has no Isaac section to point; CLAUDE.md's repository structure lists aib).
+- [x] Exit runs through aib (2026-10-19, "Exit runs" below).
 
 ## Acceptance
 
-- 043's exit runs (`town01_ego_drive`, `town01_engage_state`, `town02_episode_change`, one
+- [x] 043's exit runs (`town01_ego_drive`, `town01_engage_state`, `town02_episode_change`, one
   route per exported town) still pass on Isaac with the ego built by aib: 5/5 each, 0 MRM,
   tracking within acceptance.py's limits, and of the same order as 043's recorded numbers.
-- csb carries no copy of the ego: `grep -r PhysxVehicleAPI src/csb_isaac` finds nothing.
-- A change to the vehicle is one edit to aib's spec plus `just generate`; aib's
+- [x] csb carries no copy of the ego: `grep -r PhysxVehicleAPI src/csb_isaac` finds nothing.
+- [x] A change to the vehicle is one edit to aib's spec plus `just generate`; aib's
   `check-generated` fails if the generated files were not refreshed.
+
+## Exit runs
+
+2026-10-19, through aib `54cace1` (`ev` powertrain, the tyre grip falling to 0.8 at lock,
+1760 kg RWD, road loads as a body force), headless world server, one town per batch, each
+batch from no Isaac stack (`scripts/isaac_up.sh` started the world server, the simulation
+side and `just ego-isaac`, and the batch stopped them, no orphans). Every row is `just
+acceptance <xosc> 5 backend:=isaac` (`worlds:=Town01,Town02` for Town01) scored by
+`scripts/acceptance_bag.py`; the episode change is five `just scenario` pairs
+(`town02_episode_change`, then `town01_ego_drive`, `worlds:=Town01,Town02`) judged by their
+junit. Medians over the five runs, range in brackets; limits 0.35 m/s^2, 1.0 m, 10 m. 043's
+medians beside them (its flat tyre curve and 1845 kg AWD-mass `ideal` car). NDT and frame
+time were not extracted this time. Logs and bags: `/mnt/disk1/csb-045/play_log/`.
+
+| scenario | PASS | longitudinal, m/s^2 (043) | cross-track, m (043) | EKF-GNSS, m (043) | MRM |
+|---|---|---|---|---|---|
+| `town01_ego_drive` | 5/5 | 0.012 (0.009-0.021) (0.028) | 0.04 (0.04) | 1.03 (1.02) | 0 |
+| `town01_engage_state` | 5/5 | 0.013 (0.012-0.017) (0.024) | 0.03 (0.03) | 1.01 (1.02) | 0 |
+| `town02_episode_change` + `town01_ego_drive` | 5/5 + 5/5 | | | | |
+| `town02_ego_drive` | 5/5 | 0.007 (0.007-0.009) (0.017) | 0.01 (0.01) | 1.37 (1.35) | 0 |
+| `town03_ego_drive` | 5/5 (second batch; first 4/5) | 0.018 (0.018-0.033) (0.025) | 0.01 (0.01) | 0.91 (0.95) | 0 (first: 1) |
+| `town05_ego_drive` | 5/5 | 0.018 (0.018-0.019) (0.028) | 0.03 (0.03) | 0.77 (0.71) | 0 |
+| `town10_ego_drive` | 5/5 | 0.024 (0.023-0.030) (0.031) | 0.04 (0.04) | 0.45 (0.42) | 0 |
+
+**Deltas.** Cross-track and EKF-GNSS are 043's to the centimetre: steering, the sensors, the
+worlds and the GNSS model did not change, only the drivetrain and the tyre curve. Peak speed
+(4.25-4.30 m/s) and distance travelled are the same planner's. Longitudinal error is lower in
+every town (0.007-0.024 against 0.017-0.031), all at least 14x inside the limit. Autoware's
+requests on these routes are gentle (well under 0.2 g), where the grip curve's fall at lock
+never comes into play and regen alone carries the braking; the lighter car (1760 kg against
+1845) and the road loads now modelled rather than unmodelled residuals plausibly account for
+the rest. aib's own closed loop on Town01 measured `ev` 0.018 against `ideal` 0.016, so the
+powertrain itself is not what moved these numbers; the difference to 043 is of the order of
+run-to-run spread on a quiet host against 043's loaded one, and the same order of magnitude,
+as the acceptance asks.
+
+**The Town03 MRM** (first batch, run 2): one 0.1 s EMERGENCY_STOP while driving
+(`mrm_handler` NORMAL -> MRM_OPERATING -> NORMAL), from one `control_validator:
+control_validation_latency` ERROR sample ("The latency is larger than expected value"), the
+only ERROR in the diagnostics at that instant (bar the always-unknown door). Autoware's
+`nominal_latency` is 0.01 s with `diag_error_count_threshold: 0`, so one control command whose
+stamp lands a /clock frame (50 ms) behind its check trips it: a sim-clock race, not the
+vehicle, and nothing in the host load (15 % CPU) or the world server's step log (no slow step).
+The whole route reran 5/5 with 0 MRM. Not seen in 043's runs or in the other 44 here; if it
+recurs, the fix is acb's control_validator parameters (a count threshold of 1-2, or a latency
+allowance of one frame), not aib.
+
+**Builds.** Town01 to Town10 ran a csb `just build` of 07:17 (csb `2868f8a` plus the CARLA
+agent's then-uncommitted bridge config change, which became `077ca50`); the Town03 rerun ran
+its 08:35 rebuild (csb `3c9a4ba`, acb `f10ce12`). On Isaac neither acb_bridge nor the bridge's
+config change is in the ego's path.
+
