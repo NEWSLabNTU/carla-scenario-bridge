@@ -68,7 +68,8 @@ of simulation time**, inside 5-8; wall time longer on a loaded host (step 3).
 no `speed_limit` tags). acb gets a `max_velocity` launch argument through a generated copy of
 that file (the sync-script pattern of `carla_control` / `object_recognition` / the tracker
 param), **default 4.17**, so every suite keeps 15 km/h; the tour passes 11.11, and the ego's
-`Performance maxSpeed` in the scenario matches.
+`Performance maxSpeed` in the scenario sits above it (13.89: SSv2 fails a run whose ego
+exceeds maxSpeed, and the CARLA ego overshoots the cap; step 4d).
 
 **Perception: CenterPoint + the 042 overlay, for the whole tour** (user decision): clustering
 labels everything UNKNOWN, which `blind_spot` ignores, so incident 6 needs CenterPoint.
@@ -99,7 +100,7 @@ checks that.
 | n1-n2 | oncoming cars | x 337 road, 1250 -> 1110, clear before the cyclist's trigger | |
 | g1-g2 | oncoming cars | closing road, goal -> 1290 | |
 | cross | 8 cars, 4 pairs | inner-block roads y -57 / -54 / -129.5 / -133, past the x 337 junctions before the ego reaches them | |
-| parked | ~17 static cars | kerbs: west road (incl. incident 1's two), bottom road, east road, x 337 road, closing road | clutter for perception |
+| parked | ~17 static cars, **MiscObjects** (vehicle NPCs stall SSv2), 3.6 m right of the lane centre, >= 25 m from corner exits, clear of kerb furniture (step 4d) | kerbs: west road (incl. incident 1's two), bottom road, east road, x 337 road, closing road | clutter for perception |
 | p1-p8 | walkers | west road: two on the far sidewalk with the ego, two on the ego side towards it, a group of three waiting near the start, one after incident 1 | sidewalk walkers do not stop the ego |
 | p9-p10 | walkers | bottom road ego-side sidewalk, 440 -> 590 | |
 | p11-p14 | walkers | cross the ego's road just past its stop line **on the ego's red**, clear before green | |
@@ -646,3 +647,156 @@ objects / blind_spot debug / path watcher; `pedtl.py`, `objnear.py`; `i2/{reh,d3
 `i6/{probe,cp,cpfix}_*` with trace, judge, oracle and `bs.jsonl`; `bsfix/`, the 0.48.0
 module with the line order fixed and a `[bs_probe]` print, built for the overlay;
 `starters/`).
+
+**Step 4d: first 40 km/h drive of route C (2026-10-19).** Plan first, results below it.
+Route C bare (A) and with the design's 17 parked cars (B), on one `just ego-av
+max_velocity:=11.11 lidar_detection_model:=centerpoint` (042 overlay on), ClearNoon via
+`/carla/set_weather`, the ego's `Performance maxSpeed` 13.89 (11.11 failed the first run,
+below). Scenario: step 3's four waypoints
+and goal, start moved to lanelet 24444 s 10 (-2.03, -19.96) heading south, 1437.7 m. Parked
+cars: static NPCs (`vehicle.tesla.model3`, 2.16 m wide like the ego) added in Init at route m
+60, 72, 250, 262, 275, 470, 482, 712, 724, 740, 1015, 1120, 1132, 1363, 1381 at the kerb offset
+under test, right of the route centre, and two on the closing road's far kerb (1408, 1423).
+Two corrections to the design sketch: its route m 700 lies in the bottom-right corner's curve
+(moved to 724), and its (205 | 190, -198.8) are in the oncoming lane's centre (CARLA lane -1 at
+y -199.15; moved to the far kerb, mirrored). CARLA's lanes on these roads are 4.0 m wide and
+the sidewalk starts ~2.3 m from the lane centre, so the design's 3.2 m puts a car's inner edge
+at 2.12 m: just off the lane, its body on the sidewalk.
+
+What should bind, read from autoware_launch 1.5's `obstacle_slow_down.param.yaml`: an object is
+a slow-down target when its lateral margin to the ego's trajectory band (ego width 2.163 m)
+is under `obstacle_filtering.max_lat_margin` 1.1 m (leaves at 1.3, `lat_hysteresis_margin` 0.2,
+after 5 successive frames either way; `unknown: false`, so only a classifying perception's
+cars count), and the target speed is interpolated from 4 m/s at 0.2 m margin to 8 m/s at
+1.0 m (`static`, both sides). A model3 at offset *d* has margin d - 2.16; at 3.2 m that is
+1.04 m, so B should cap the ego at ~8 m/s beside each car and an offset of ~3.3 m or more
+should not bind at all. `obstacle_velocity_limiter` only sees static map obstacles
+(`dynamic_source: static_only`, `guard_rail` tags; Town01 has none), so it should not bind
+here. Measure: speed profile per segment (straights, corners, junctions), peak, first move
+-> goal, stops, the planning / velocity factors where the ego is below cruise, real-time
+factor and host load; for B the speed beside each car, and the same at other offsets until
+it stops binding.
+
+*Found on the way (fixed in csb, below)*:
+- A **vehicle blueprint spawned as a misc object** (`MiscObject model3d="vehicle.tesla.model3"`,
+  the parked-car form these runs settle on, below) has its CARLA box read as a prop's: CARLA
+  reports a prop's `bounding_box()` in world axes at 90° (`prop_box_in_actor_frame`), but a
+  vehicle's in its own frame, so the bridge turns a correct box: `Body outside tolerance ...
+  'vehicle.tesla.model3' is 2.16 x 4.79 x 1.49 m` for every parked car heading north or south,
+  and the gap trace's CARLA box for it is turned the same way. Fix: read the box as a prop's
+  only when the actor is a `static.*` blueprint. The same spawn logs `gets 'static.prop.slide'
+  by size` although the asset key's blueprint is spawned: log the size match only when it is
+  the blueprint used.
+- A spawn that collides on every lift ends with `A leftover actor may be occupying the spawn
+  point`. Here it was CARLA's street furniture (a hedge and lamp on the west road's kerb at
+  route m 262), and the bridge can tell: no vehicle within 2.5 m. Fix: the failure names the
+  vehicle on the point when there is one, otherwise says nothing stands there but the static
+  world (a pole, tree, hedge or prop: an off-road pose).
+
+*Results (2026-10-19).* Junit verdict, first move -> goal in simulation seconds, CARLA ego
+track (10 Hz) projected on route C; the factors from `/planning/planning_factors/*` and each
+planning stage's speed at the ego (`path_with_lane_id`, `path`, `path_optimizer`, motion
+velocity planner, scenario selector, velocity smoother). RTF 0.96-1.00 except where noted;
+host load 25-600 (1 min) over the session, IO pressure 40-98 %.
+
+| Run | Parked cars | Verdict | Goal (s) | Avg m/s | Peak m/s | Stops | Speed beside parked cars on straights |
+|---|---|---|---|---|---|---|---|
+| A1 | none | PASS | 184.3 | 7.78 | 11.25 | none | - |
+| A2 | none | PASS | 183.5 | 7.81 | 11.25 | none | - |
+| B 3.6 m (x2) | 16 misc | PASS, PASS | 183.3, 184.7 | 7.82, 7.76 | 11.22, 11.58 | none | cruise; **no slow-down factor at all** |
+| B 3.4 m | 17 misc | PASS | 184.9 | 7.75 | 11.22 | none | cruise; one `obstacle_slow_down` (2.3-5.4 m/s) just after the left turn (pk12, route m 1121) |
+| B 3.2 m (x2) | 17 misc | PASS, PASS | 188.2, 188.0 | 7.62, 7.62 | 11.24, 11.26 | none | `obstacle_slow_down` 7.4-8.4 m/s at each; ego to **0.8 / 1.8 m/s** in the bottom-right corner (pk08) |
+| B 2.8 m (x2) | 17 misc | PASS, PASS | 232.0*, 201.9 | 6.18*, 7.10 | 11.46, 11.22 | `obstacle_stop` 4.2 / 2.0 s at the corner exit (pk08, m 709) | `obstacle_slow_down` 6.3-7.2 m/s; 5.2 m/s after the left turn |
+| B 3.2 m vehicles | 17 vehicle NPCs | timeout | - | - | 8.0 | - | RTF **0.02** (SSv2, below) |
+
+\* B 2.8 m run 1 also stood 28 s at route m 315 in the bottom-left corner with every planning
+stage upstream of the velocity smoother at full speed and no factor: motion planning stopped
+publishing for 31.6 s (host IO stall, load 300, my own cargo build running beside it), not
+the parked cars; run 2 has no such stop.
+
+Bare route C at 40 km/h, per segment (A1 / A2 agree to 0.1 m/s): west road 0-298 m peak
+11.2 m/s; corners **3.0-3.3 m/s** (bottom-left, bottom-right, top-right; the left turn 2.9,
+the right turn at y -198 1.9-2.0); straights reach the 11.11 cap after ~70 m (bottom road
+409-633 holds 11.1 for 20 s, east road 711-1020 peaks 11.2); the signalled T at 633 slows
+to 9.4 only because the corner 60 m on begins. **What limits speed**: the cap (`max_vel`
+11.11; the ego overshoots to 11.25), and in corners the velocity smoother's lateral
+acceleration limit (no planning factor; every stage before the smoother carries the cap
+through the corners). `traffic_light` / `intersection` / `blind_spot` report themselves at
+the route's junctions (all green, nothing to yield to) and never slow the ego; no
+`obstacle_velocity_limiter` factor anywhere (`static_only`, no guard rails in Town01).
+**183.5-184.3 s of driving** for 1433 m (step 3 at 15 km/h: 321 s), so with ~2 min of
+incident handling the tour is ~5 min, the low end of 5-8.
+
+Parked cars (CenterPoint saw every one as CAR, at 1.83-2.12 m wide): the binding module is
+`obstacle_slow_down`, exactly as its parameters predicted. At **3.2 m** (the design) each
+car caps the ego near 7.4-8.4 m/s for ~50 m (factor velocity 7.4-8.4), +4 s over the route;
+at **3.4 m** nothing binds on a straight (margin 1.24 m > `max_lat_margin` 1.1), only where
+the ego's turning path sweeps towards a car just after a turn; at **3.6 m** nothing binds
+anywhere (both runs as fast as bare). At **2.8 m** the slow-down drops to ~6-7 m/s and
+`obstacle_stop` stops the ego for 2-4 s where a car stands 5 m after the bottom-right
+corner's exit. Separately, a car at a corner exit (pk08, route m 714-716) makes the velocity
+smoother take the ego to 0.8-1.8 m/s inside that corner at 3.2 m, although
+`obstacle_slow_down`'s own limit there is 7.7 and every upstream stage carries it: the
+smoother's dip, not a module's limit (not chased further).
+
+**Recommendation**: parked cars at **3.6 m** right of the lane centre (inner edge 2.52 m,
+past the 2.3 m kerb, so the car stands on the sidewalk; Town01 has no parking lane) and
+**at least ~25 m from a corner or turn exit**; no Autoware parameter change needed. The
+parameters that govern it, should a tour ever want cars closer: `obstacle_slow_down`
+`obstacle_filtering.max_lat_margin` (1.1 m; + `lat_hysteresis_margin` 0.2) and the
+`slow_down_planning.object_type_specified_params.default.{left,right}.static` speed ramp
+(4 m/s at 0.2 m margin to 8 m/s at 1.0 m), in autoware_launch's `obstacle_slow_down.param.yaml`;
+a tour-only copy would ride acb's generated-parameter pattern with the defaults unchanged.
+Not done: 3.6 m makes it unnecessary.
+
+Found and settled by these runs:
+- **The ego's `Performance maxSpeed` must sit above `max_vel`, not equal it** (the design said
+  "matches"): SSv2 checks every frame that the ego's speed is within ±maxSpeed and ends the
+  run with an `InternalError` when it is not (`entity_base.cpp:707`, "current velocity (which
+  is 11.124) is out of range"); the CARLA ego overshoots the cap by up to 0.4 m/s. maxSpeed
+  13.89 (50 km/h), which also becomes the external velocity limit Autoware clamps to 11.11.
+- **Parked cars must be MiscObjects** (`<MiscObject model3d="vehicle.tesla.model3">`), not
+  vehicle NPCs. 17 standing vehicle entities off the lane made SSv2's own frame take ~1.9 s
+  (`Your machine is not powerful enough ... 1877.5 milliseconds`) from the moment the ego
+  moved, while the bridge's processing stayed under 1 ms a frame: RTF 0.02, the run timed
+  out. As misc objects (no behaviour; the bridge spawns the blueprint the key names with
+  physics off and teleports it) the same 17 cost nothing measurable (RTF 0.96-1.00). Two
+  runs, the same result. Likely the vehicle behaviour plugin's per-frame lanelet matching of
+  an off-lane pose; not chased into SSv2.
+- **Kerb-side street furniture blocks spawns**: Town01's kerb line (~2.3-2.9 m from the lane
+  centre) carries lamps, sign and signal poles, bollards, bins, and the west road a hedge row;
+  a car whose body covers one fails to spawn (pk04 at route m 262, 3.2 m). The scratch
+  generator picks each slot clear of CARLA's environment-object boxes (moving it up to 15 m;
+  one slot dropped at 3.6 m), which step 8 should reuse. My first attempt to find slots by
+  `try_spawn_actor` from a side client while csb held CARLA synchronous leaked 46 probe
+  vehicles (the client never saw them, so `destroy()` was skipped as "already dead"); csb
+  then stacked parked cars on them and named them in its log (`because actor 2069
+  ('slot_probe') is already on that point`). Removed by id with `DestroyActor` commands.
+  Never probe a synchronous CARLA from outside csb.
+- The CenterPoint TensorRT engines were rebuilt at this stack's start (11 min, 07:23-07:31)
+  although built before; budget for it.
+
+Runs: `A1`, `A2`, `B36m_1/_2`, `B34m_1`, `B32m_1/_2`, `B28m_1/_2` (and the failed `A1_fail_maxspeed`,
+`B32_fail_spawn`, `B32_invalid_probes`, `B32_veh_stall`), each with the CARLA track, ego-domain
+planning log, context log, scenario logs. Scratch: `/tmp/claude-1000005/-home-aeon-repos-
+carla-scenario-bridge/f372598a-d329-483b-9e38-80a742b40cbd/scratchpad/s_40kmh` (`gen.py`,
+`routec.py`, `analyse.py`, `ego_watch.py`, `carla_watch.py`, `run.sh`, `furniture_bb.json`).
+
+Bridge fixes (both "Found on the way" items above): `box_reads_in_world_axes` reads the
+box as a prop's only for a `static.*` actor; the size match is logged only when it is the
+blueprint spawned; a spawn whose every lift collided ends in `spawn_ladder::Outcome::Blocked`
+and its error says `<actor> stands on the spawn point` or `No vehicle stands there: the static
+world blocks this pose (a pole, tree, hedge or prop -- is it off the road?)`. `just test`:
+359 nextest + 177 pytest pass; `just check` clean. Verified on the rebuilt bridge (`V36m`,
+3.6 m, PASS): every parked car's `Body ... 'vehicle.tesla.model3' is 4.79 x 2.16 x 1.49 m
+(difference +0.00 / +0.00 / -0.00 m)`, no `Body outside tolerance`, no `by size` line. That
+run also stood 45 s at route m 1164 and 1 s at 1095 with nothing in the way: motion planning
+published nothing for **52 s** (behaviour planning kept publishing) while the host's load went
+from 94 to 537 and IO pressure to 99 %, nothing of mine running -- the same signature as B
+2.8 m run 1. The motion-planning chain is the part of the ego stack that stalls under other
+users' IO storms; a demo take needs a quiet host (step 7), and which of its nodes blocks
+on the disk is worth finding before then.
+
+Left for 4d: the sites re-cut for route C and the templates regenerated (incident 2's van
+and second car as misc objects at the new offset), and the CenterPoint + overlay 5/5
+rehearsal of incidents 1-6 at 40 km/h.
