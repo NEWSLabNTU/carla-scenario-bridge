@@ -241,7 +241,10 @@ bridge was once found serving scenarios 44 hours later, running code from two re
 earlier. Treat it as a tracked singleton: check its age against the build before trusting a
 measurement, and after `just build` restart it deliberately (stop the play_launch on 8084 by
 pid, then `setsid just run > log 2>&1 &`). It runs the *installed* binary, so `just build`
-must run first.
+must run first. Its config is the bridge's ROS parameter `config_file` (`just run
+config_file:=<file>`, default the installed `bridge_config.yaml`; `CSB_CONFIG_DIR` is
+refused): `ros2 param get /carla_scenario_bridge config_file` in domain 9 names the file a
+running bridge loaded.
 
 ```bash
 ps -eo pid,etimes,args --no-headers | grep -E "[c]arla_scenario_bridge|[s]cenario_agent_relay"

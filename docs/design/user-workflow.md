@@ -262,7 +262,9 @@ trigger.
 ## Simulation side
 
 - **csb** (CARLA's SSv2 adapter, I1) becomes a ROS node: params `carla_host`, `carla_port`,
-  `ssv2_port`, `config_file`, `weather`; `bridge.launch.xml` with `respawn="true"`. It serves
+  `ssv2_port`, `config_file`, `weather`; `bridge.launch.xml` with `respawn="true"`.
+  `config_file` (default: the installed `bridge_config.yaml`) replaced `CSB_CONFIG_DIR`,
+  which is now refused; the node declares the file it loaded as a read-only parameter. It serves
   the world-configuration services `/carla/set_weather` and `/carla/get_weather`
   (`csb_interfaces`, roadmap 018) -- simulator-specific, outside the five interfaces above.
 - **agent relay** is its **own** package and node (`scenario_agent_relay`), not part of csb:

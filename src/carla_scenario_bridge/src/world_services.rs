@@ -10,7 +10,9 @@
 //!
 //! The node is named after the executable (`carla_scenario_bridge`, as the launch files
 //! name it); `--ros-args` remaps and `__node:=` apply as for any ROS node. Parameters are
-//! still read by [`crate::ros_args`], before the node exists.
+//! still read by [`crate::ros_args`], before the node exists; the node declares the config
+//! file the bridge chose as its read-only `config_file` parameter, so
+//! `ros2 param get /carla_scenario_bridge config_file` names the file this process loaded.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -102,7 +104,11 @@ fn from_msg(m: &WeatherMsg) -> [f32; 9] {
 /// Start the node on its own thread. Commands arrive on the returned receiver; the thread
 /// ends when `shutdown` is set. An error means the node could not be created (ROS not
 /// sourced, bad `--ros-args`), and nothing was started.
-pub fn start(shutdown: Arc<AtomicBool>) -> eyre::Result<mpsc::Receiver<WorldCommand>> {
+pub fn start(
+    shutdown: Arc<AtomicBool>,
+    config_file: &std::path::Path,
+) -> eyre::Result<mpsc::Receiver<WorldCommand>> {
+    let config_file: Arc<str> = config_file.display().to_string().into();
     let (tx, rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
     std::thread::Builder::new()
@@ -112,6 +118,15 @@ pub fn start(shutdown: Arc<AtomicBool>) -> eyre::Result<mpsc::Receiver<WorldComm
                 let ctx = rclrs::Context::new(std::env::args(), rclrs::InitOptions::default())?;
                 let executor = ctx.create_basic_executor();
                 let node = executor.create_node(crate::ros_args::NODE_NAME)?;
+                // The file the bridge resolved (the parameter, or the installed default it
+                // fell back to), not the raw override: read-only, so `ros2 param set` cannot
+                // suggest a config change the running bridge would not make.
+                let config_param = node
+                    .declare_parameter::<Arc<str>>("config_file")
+                    .default(config_file)
+                    .ignore_override()
+                    .description("bridge_config.yaml this bridge loaded (set at start only)")
+                    .read_only()?;
                 let set = {
                     let tx = tx.clone();
                     node.create_async_service::<csb_interfaces::srv::SetWeather, _>(
@@ -126,7 +141,7 @@ pub fn start(shutdown: Arc<AtomicBool>) -> eyre::Result<mpsc::Receiver<WorldComm
                         move |_: GetWeather_Request| get_weather(tx.clone()),
                     )?
                 };
-                Ok((executor, node, set, get))
+                Ok((executor, (node, config_param), set, get))
             })();
             let (mut executor, _node, _set, _get) = match setup {
                 Ok(s) => {

@@ -361,7 +361,7 @@ impl BridgeConfig {
             // so a run started from the wrong directory looks healthy while quietly being a
             // different run than the one configured.
             tracing::warn!(
-                "No configuration at {}; using defaults (no blueprint or map aliases). Pass config_file (ROS parameter) or set CSB_CONFIG_DIR if this is not what you meant.",
+                "No configuration at {}; using defaults (no blueprint or map aliases). Pass the ROS parameter config_file if this is not what you meant.",
                 path.display()
             );
             BridgeConfig::default()

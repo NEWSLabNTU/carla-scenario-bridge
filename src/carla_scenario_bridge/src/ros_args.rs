@@ -114,6 +114,33 @@ fn parse_params_yaml(text: &str) -> Result<HashMap<String, String>> {
     Ok(out)
 }
 
+/// The retired environment variable that once chose the config directory.
+pub const RETIRED_CONFIG_DIR_ENV: &str = "CSB_CONFIG_DIR";
+
+/// The bridge's config file: the `config_file` parameter, then the installed package's
+/// (`share/carla_scenario_bridge/config/bridge_config.yaml`), then `config/bridge_config.yaml`
+/// relative to the working directory (a source checkout).
+///
+/// `CSB_CONFIG_DIR` no longer chooses it, and is refused while set, so an old shell cannot
+/// leave a run on a config other than the one its launch names.
+pub fn config_file(params: &RosParams) -> Result<PathBuf> {
+    if std::env::var_os(RETIRED_CONFIG_DIR_ENV).is_some() {
+        eyre::bail!(
+            "{RETIRED_CONFIG_DIR_ENV} is retired: pass the ROS parameter instead \
+             (config_file:=<dir>/bridge_config.yaml as a launch argument, or \
+             --ros-args -p config_file:=<file>), and unset {RETIRED_CONFIG_DIR_ENV}"
+        );
+    }
+    Ok(resolve_config_file(params, installed_config()))
+}
+
+fn resolve_config_file(params: &RosParams, installed: Option<PathBuf>) -> PathBuf {
+    params
+        .path("config_file")
+        .or(installed)
+        .unwrap_or_else(|| PathBuf::from("config/bridge_config.yaml"))
+}
+
 /// The installed default config: `<prefix>/share/carla_scenario_bridge/config/bridge_config.yaml`
 /// for the first prefix in `AMENT_PREFIX_PATH` that has one.
 pub fn installed_config() -> Option<PathBuf> {
@@ -169,6 +196,25 @@ mod tests {
         .unwrap();
         assert_eq!(p.get("carla_port"), Some("2001"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn config_file_is_the_parameter_then_the_installed_one_then_the_checkout() {
+        let shared = PathBuf::from("/opt/x/share/carla_scenario_bridge/config/bridge_config.yaml");
+        let p = RosParams::from_args(args("--ros-args -p config_file:=/tmp/mine.yaml")).unwrap();
+        assert_eq!(
+            resolve_config_file(&p, Some(shared.clone())),
+            PathBuf::from("/tmp/mine.yaml")
+        );
+        // An empty parameter (a launch arg left empty) is no choice.
+        let p = RosParams::from_args(args("--ros-args -p config_file:=")).unwrap();
+        assert_eq!(resolve_config_file(&p, Some(shared.clone())), shared);
+        let p = RosParams::default();
+        assert_eq!(resolve_config_file(&p, Some(shared.clone())), shared);
+        assert_eq!(
+            resolve_config_file(&p, None),
+            PathBuf::from("config/bridge_config.yaml")
+        );
     }
 
     #[test]

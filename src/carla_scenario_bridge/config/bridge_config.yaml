@@ -1,5 +1,8 @@
 # carla-scenario-bridge configuration
 #
+# The bridge reads the file its ROS parameter `config_file` names (launch arg
+# `config_file:=`, default this installed copy); per-map files sit beside it.
+#
 # Every key here is read. Precedence is: environment > this file > built-in default.
 # The launch files set CARLA_HOST / CARLA_PORT / SSV2_PORT per run, so those override
 # whatever is written below.

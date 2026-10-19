@@ -246,6 +246,15 @@ ROS_DOMAIN_ID=9 ros2 launch csb_launch scenario.launch.xml \
 With play_launch instead, put `play_launch launch` and the flags from the table at the top
 in place of `ros2 launch`.
 
+**The bridge's configuration** (`bridge_config.yaml`: blueprint and map aliases, Traffic
+Manager, ticking) is chosen by the bridge's ROS parameter `config_file`, a launch argument of
+`simulation.launch.xml` and `just run` (`just run config_file:=<dir>/bridge.yaml`). It
+defaults to the installed `share/carla_scenario_bridge/config/bridge_config.yaml`; per-map
+files (`traffic_lights_<town>.yaml`) are read from the same directory. The bridge logs the
+file it loaded (`Config: ...`) and declares it as a read-only parameter:
+`ros2 param get /carla_scenario_bridge config_file`. The older `CSB_CONFIG_DIR` variable is
+refused, by `just run` and by the bridge itself.
+
 **When each part is ready.** Start them in this order and wait for each:
 
 - CARLA serves its RPC port: `ss -lnt | grep ':2000 '` lists it. Its own log prints nothing

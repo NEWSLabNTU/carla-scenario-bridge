@@ -49,18 +49,10 @@ fn main() -> Result<()> {
     // ROS parameters from `ros2 run ... --ros-args -p` or a launch file's params file.
     let params = ros_args::RosParams::from_args(std::env::args().skip(1))?;
 
-    // Which config file: the `config_file` parameter, then CSB_CONFIG_DIR, then the installed
-    // package's, then ./config (a source checkout). Per-map files (traffic_lights_<town>.yaml)
-    // are looked up beside it.
-    let config_file = params
-        .path("config_file")
-        .or_else(|| {
-            std::env::var("CSB_CONFIG_DIR")
-                .ok()
-                .map(|d| std::path::PathBuf::from(d).join("bridge_config.yaml"))
-        })
-        .or_else(ros_args::installed_config)
-        .unwrap_or_else(|| std::path::PathBuf::from("config/bridge_config.yaml"));
+    // Which config file: the `config_file` parameter, then the installed package's, then
+    // ./config (a source checkout). Per-map files (traffic_lights_<town>.yaml) are looked up
+    // beside it. The node declares the one chosen as its read-only `config_file` parameter.
+    let config_file = ros_args::config_file(&params)?;
     let config_dir = config_file
         .parent()
         .map(std::path::Path::to_path_buf)
@@ -138,7 +130,7 @@ fn main() -> Result<()> {
 
     // World configuration services. Served from their own thread, applied on this one.
     // Without them the bridge still serves SSv2, so a ROS failure is loud but not fatal.
-    let world_commands = match world_services::start(shutdown.clone()) {
+    let world_commands = match world_services::start(shutdown.clone(), &config_file) {
         Ok(rx) => Some(rx),
         Err(e) => {
             tracing::error!("{e:#}; /carla/* services are unavailable");
