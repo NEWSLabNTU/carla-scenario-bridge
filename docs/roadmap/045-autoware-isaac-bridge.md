@@ -54,8 +54,8 @@ and Isaac drive one car description; not part of this phase.
 every other argument passes through (`relay`, `map_path`, `rviz`, ...). The agent is acb's
 `acb_pilot`, unchanged. A `play_launch dump` of it resolves the same 205 nodes as
 `carla_simulator.launch.xml launch_vehicle_interface:=false`, with every vehicle_info
-reference aib's. Topics and frames are acb's (`top`, `carla/imu_link`, `carla/gnss_link`),
-as csb_isaac publishes them today.
+reference aib's. Topics and frames are acb's (`top`, `imu_link`, `gnss_link`; until
+2026-10-19 the last two were `carla/imu_link` and `carla/gnss_link`, see Decisions).
 
 ### Powertrain
 
@@ -87,8 +87,19 @@ Project Chrono for rough or deformable ground) wait until a need shows.
 
 ### Decisions (user, 2026-10-19)
 
-- **IMU/GNSS frames** keep `carla/imu_link` and `carla/gnss_link` for now, because acb's
-  sensing launch, which aib reuses, names them. Rename them in the spec at integration.
+- [x] **IMU/GNSS frames** kept `carla/imu_link` and `carla/gnss_link` until integration,
+  because acb's sensing launch, which aib reuses, named them. Renamed on both bridges at
+  once (2026-10-19, aib `23f719e`, acb `c9ff587`) to `imu_link` and `gnss_link`, Autoware's
+  sample-kit style: topics `/sensing/imu/imu_link/imu_raw` and
+  `/sensing/gnss/gnss_link/nav_sat_fix` (acb derives the topic from the frame). Nothing in
+  Autoware 1.5.0 assumes a `<vendor>/imu_link` form -- imu_corrector, gyro_odometer and
+  gnss_poser all go through TF from the message's `frame_id`. Both sensor kits' `imu.launch.xml`
+  and `gnss.launch.xml` take the topic as an argument (`imu_raw_name`, `gnss_fix_name`).
+  Bags and logs recorded before carry the old names.
+  Pushed before any simulator run (the GPU was taken by another user's job): builds and unit
+  tests pass in all three repos; still to run, Isaac then CARLA, never at once:
+  `town01_ego_drive` 3/3, `tf2_echo base_link imu_link` / `gnss_link`, and the IMU message's
+  `header.frame_id`.
 - **Camera images** are stamped in `camera6/camera_optical_link` (REP-103: Autoware's
   projection nodes assume the optical frame). acb stamps `camera_link`, which is likely
   wrong there too. The camera is off on both bridges today.

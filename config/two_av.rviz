@@ -164,7 +164,7 @@ Visualization Manager:
                   Alpha: 1
                   Show Axes: false
                   Show Trail: false
-                tamagawa/imu_link:
+                imu_link:
                   Alpha: 1
                   Show Axes: false
                   Show Trail: false
