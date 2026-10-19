@@ -196,6 +196,10 @@ pub struct BridgeConfig {
     pub ego: EgoConfig,
     /// SSv2 asset key to CARLA blueprint, for keys that are not blueprint names.
     pub blueprint_map: HashMap<String, String>,
+    /// CARLA `color` attribute ("R,G,B", 0-255) per entity, keyed by the role_name it
+    /// spawns with (the ego's `hero`, an agent's entity name). An entity not listed, or a
+    /// blueprint without the attribute, spawns in the blueprint's default colour.
+    pub actor_colors: HashMap<String, String>,
     /// Map directory name to CARLA town, for maps not named after their town.
     pub map_alias: HashMap<String, String>,
     /// Removed (roadmap 017): background AVs are scenario entities whose controller is
@@ -548,6 +552,11 @@ impl BridgeConfig {
     pub fn blueprint_for(&self, asset_key: &str) -> Option<&str> {
         self.blueprint_map.get(asset_key).map(String::as_str)
     }
+
+    /// The configured body colour of the entity with this role_name, if any.
+    pub fn color_for(&self, role_name: &str) -> Option<&str> {
+        self.actor_colors.get(role_name).map(String::as_str)
+    }
 }
 
 /// Why `background_avs` (file key, ROS parameter, `CSB_BACKGROUND_AVS`) is refused.
@@ -618,6 +627,16 @@ mod tests {
             Some("vehicle.tesla.model3")
         );
         assert_eq!(config.blueprint_for("unknown"), None);
+    }
+
+    #[test]
+    fn actor_colors_resolve_by_role_name() {
+        let config: BridgeConfig =
+            serde_yaml::from_str("actor_colors:\n  hero: \"255,110,0\"\n").expect("parses");
+        assert_eq!(config.color_for("hero"), Some("255,110,0"));
+        assert_eq!(config.color_for("bg_av_1"), None);
+        let empty = BridgeConfig::default();
+        assert_eq!(empty.color_for("hero"), None);
     }
 
     /// Background AVs moved into the scenario (controller `agent`); a file that still

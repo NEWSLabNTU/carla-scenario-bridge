@@ -3880,12 +3880,12 @@ impl CarlaBackend {
             Ok(None) => {
                 return failed(format!(
                     "Spawned '{name}' as actor {actor_id}, but CARLA no longer has it"
-                ))
+                ));
             }
             Err(e) => {
                 return failed(format!(
                     "Spawned '{name}' as actor {actor_id}, but cannot read it back: {e}"
-                ))
+                ));
             }
         };
         let mut spawn_loc = carla_transform.location;
@@ -5539,17 +5539,43 @@ impl CarlaBackend {
                 .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?
                 .set_attribute("role_name", role)
                 .is_ok();
+        if !takes_role {
+            tracing::debug!("'{blueprint_key}' takes no role_name; spawning unmarked");
+            return self
+                .world
+                .actor_builder(blueprint_key)
+                .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"));
+        }
+        // A configured colour (actor_colors), where the blueprint takes it. Probed on a
+        // throwaway builder first, since a refused attribute consumes the builder.
+        let color = self.config.color_for(role).map(str::to_owned);
+        let takes_color = match &color {
+            Some(c) => self
+                .world
+                .actor_builder(blueprint_key)
+                .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?
+                .set_attribute("color", c)
+                .is_ok(),
+            None => false,
+        };
         let builder = self
             .world
             .actor_builder(blueprint_key)
-            .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?;
-        if !takes_role {
-            tracing::debug!("'{blueprint_key}' takes no role_name; spawning unmarked");
-            return Ok(builder);
-        }
-        builder
+            .map_err(|e| eyre::eyre!("build '{blueprint_key}': {e}"))?
             .set_attribute("role_name", role)
-            .map_err(|e| eyre::eyre!("set role_name: {e}"))
+            .map_err(|e| eyre::eyre!("set role_name: {e}"))?;
+        match color {
+            Some(c) if takes_color => builder
+                .set_attribute("color", &c)
+                .map_err(|e| eyre::eyre!("set color: {e}")),
+            Some(c) => {
+                tracing::warn!(
+                    "'{blueprint_key}' takes no color '{c}' for '{role}'; default colour"
+                );
+                Ok(builder)
+            }
+            None => Ok(builder),
+        }
     }
 
     fn read_actor_state(
@@ -5634,7 +5660,9 @@ impl CarlaBackend {
             tracing::warn!(
                 "Actor {actor_id} acceleration outside SSv2 bounds: longitudinal={longitudinal:.2} \
                  carla=({:.2},{:.2},{:.2}) ros=({ax:.2},{ay:.2},{az:.2}) speed={:.2} z={:.2}",
-                acc.x, acc.y, acc.z,
+                acc.x,
+                acc.y,
+                acc.z,
                 (v.x * v.x + v.y * v.y).sqrt(),
                 t.location.z,
             );

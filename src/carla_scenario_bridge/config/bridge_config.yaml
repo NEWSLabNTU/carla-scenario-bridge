@@ -55,6 +55,13 @@ ego:
 blueprint_map:
   sample_vehicle: "vehicle.tesla.model3"
 
+# Body colour per entity, keyed by the role_name it spawns with (the ego's role_name above,
+# an agent's entity name): CARLA's `color` attribute, "R,G,B" with 0-255 values. Unlisted
+# entities, and blueprints without the attribute, keep the blueprint's default colour.
+#   actor_colors:
+#     hero: "255,110,0"
+actor_colors: {}
+
 # Map directory name -> CARLA town.
 #
 # The town is normally recovered from the scenario's lanelet2_map_path, whose final directory
