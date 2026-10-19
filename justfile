@@ -418,9 +418,13 @@ run *args:
         isaac_endpoint:="tcp://127.0.0.1:{{isaac_port}}" \
         "$@"
 
-# Start CARLA simulator as a background service
-carla-start:
-    "{{acb_src}}/scripts/carla_start.sh" {{carla_port}}
+# quality:=low saves memory but must not change towns: Low segfaults on load_world to another
+# town, so a scenario on another map, town02_episode_change or a suite that mixes towns needs
+# Epic (acb's scripts/carla_args.bash). CARLA_DIR, DISPLAY and CARLA_PORT are the host's.
+# Start CARLA as a background service: [map:=Town01] [quality:=epic|low] [render:=offscreen|window] [extra_args:=]
+[positional-arguments]
+carla-start *args:
+    "{{acb_src}}/scripts/carla_start.sh" {{carla_port}} "$@"
 
 # Isaac Sim (roadmap 036): install root, and the VNC display Isaac opens its window on
 isaac_root := env_var_or_default("ISAAC_ROOT", "/mnt/disk1/isaac-sim")

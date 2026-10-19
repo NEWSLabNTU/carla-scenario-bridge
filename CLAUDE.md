@@ -427,11 +427,23 @@ a restarted CARLA came up on the AMD iGPU or the software renderer (18 MiB on th
 card), took 4–8 min to serve RPC and froze in `apply_settings(synchronous)`; pinned, RPC was
 up in 50 s (roadmap 016, gap 13). acb's `third_party/carla/run.sh` sets it when unset.
 
-**Never run CARLA at `-quality-level=Low`.** At Low, CARLA 0.9.16 segfaults on `load_world`
-to another town and hangs on `reload_world()`: UE 4.26's landscape render task reads a
-texture freed by the level swap (`FGetSectionLODBiasesTask` → `UTexture2D::GetNumResidentMips`
-in UE's own crash reports under `~/.config/Epic/CarlaUE4/Saved/Crashes/`, which is where to
-look first when CARLA dies -- its stdout has no stack). At the default (Epic) quality the
-same server loads Town02 in 44 s and back in 4 s (carla-simulator/carla#4940; roadmap 015
-step 6). acb's `third_party/carla/run.sh` now defaults to Epic. Kill CARLA by pid, and if it
+**CARLA at `-quality-level=Low` must never change towns.** At Low, CARLA 0.9.16 segfaults
+on `load_world` to another town and on `reload_world()` (same town too): UE 4.26's landscape
+render task reads a texture freed by the level swap (`FGetSectionLODBiasesTask` →
+`UTexture2D::GetNumResidentMips` in UE's own crash reports under
+`~/.config/Epic/CarlaUE4/Saved/Crashes/`, which is where to look first when CARLA dies -- its
+stdout has no stack; carla-simulator/carla#4940). Re-measured 2026-10-19: 5 of 5 Low
+attempts died that way (3 x load_world Town02, 1 x reload_world, 1 x town02_episode_change),
+the client seeing only a 180 s RPC time-out; at Epic 5/5 cycles of Town02 → Town01 →
+reload_world and the episode change passed. A run that stays on the town CARLA booted on is
+fine at Low (town01_ego_drive passed 2/2; csb skips `load_world` when the town matches), but
+Low saves little: CARLA held 2424 MB RSS / 1730 MiB VRAM at Low against 2463 MB / 2005 MiB at
+Epic on Town01, idle or running the scenario (`docs/design/carla-server-tuning.md`). So the
+default is **Epic**: `just carla-start quality:=low` only for single-town work, never for
+`town02_episode_change`, a suite that mixes towns, or a scenario on another town than
+`map:=` (default Town01). Quality, map and render mode are arguments of `just carla-start`
+(`map:=`, `quality:=epic|low`, `render:=offscreen|window`, `extra_args:=`); the old
+`CARLA_QUALITY`/`CARLA_MAP`/`CARLA_RENDER`/`CARLA_EXTRA_ARGS` are refused. (Until acb's
+`carla_start.sh` took arguments it still defaulted to Low after `run.sh` moved to Epic, which
+is how two episode-change runs crashed CARLA on 2026-10-17.) Kill CARLA by pid, and if it
 ignores SIGTERM use SIGKILL before starting another: a new instance on a held port crashes.

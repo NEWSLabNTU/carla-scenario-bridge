@@ -42,13 +42,41 @@ What works is `GameDefaultMap` in `CarlaUE4/Config/DefaultEngine.ini`:
 GameDefaultMap=/Game/Carla/Maps/Town01.Town01
 ```
 
-`third_party/carla/run.sh` applies this from `CARLA_MAP` (default `Town01`) before every
-launch, idempotently, keeping the untouched original as `DefaultEngine.ini.orig`. Set
-`CARLA_MAP=` (empty) to leave the installation's own setting alone.
+`third_party/carla/run.sh` applies this from its `map:=` argument (`just carla-start
+map:=Town02`; default `Town01`) before every launch, idempotently, keeping the untouched
+original as `DefaultEngine.ini.orig`. Pass `map:=` (empty) to leave the installation's own
+setting alone.
 
 The bridge already skips `load_world` when the server is on the right town
 (`coordinator.rs::load_scenario_map`), so booting on the scenario's town removes the load
 rather than duplicating it.
+
+## Quality level: Epic, Low only for single-town runs
+
+The table above was measured at `-quality-level=Low`. Low cannot change towns: CARLA 0.9.16
+segfaults on `load_world` to another town and on `reload_world()`, in UE 4.26's landscape
+render task (`FLandscapeRenderSystem::FGetSectionLODBiasesTask` →
+`UTexture2D::GetNumResidentMips` on a texture the level swap freed; carla-simulator/carla#4940).
+So `just carla-start` defaults to `quality:=epic`.
+
+Re-measured 2026-10-19 (RTX 5090, CARLA booted on Town01, `-RenderOffScreen`, Vulkan on the
+NVIDIA ICD; one fresh server per row; GPU memory is CARLA's own process, from nvidia-smi):
+
+| | Low | Epic |
+|---|---|---|
+| 5 x (load_world Town02, load_world Town01, reload_world), loader only | crash on the first load_world, 3/3 servers | 5/5 cycles, 1.3-11 s each |
+| 5 x reload_world on Town01 | crash on the first | -- |
+| `town02_episode_change` (csb + ego stack) | CARLA segfaults, scenario errors | passes |
+| `town01_ego_drive` (single town) | passes 2/2 | passes 2/2 |
+| RSS / VRAM, idle on Town01 | 2424 MB / 1730 MiB | 2463 MB / 2005 MiB |
+| RSS / VRAM, during town01_ego_drive | 2391 MB / 1730 MiB | 2441 MB / 2005 MiB |
+| peak after the five Epic cycles | -- | 4376 MB / 4435 MiB |
+
+Every Low crash left the same UE crash report; the client only sees an RPC time-out after
+180 s. Low saves about 275 MiB of VRAM and 40-50 MB of RSS on one town -- not worth a server
+that dies the first time a scenario changes towns. Use `quality:=low` only when every run
+stays on the boot town (`map:=`), which csb then never reloads. What does grow memory is
+loading other towns (the last row): boot on the town the run uses rather than loading it.
 
 ## Rejected
 
