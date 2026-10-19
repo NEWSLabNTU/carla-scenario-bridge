@@ -1651,9 +1651,9 @@ impl CarlaBackend {
     /// actor just spawned. Vehicles come from a census by id (034 step 5), so one created
     /// since the last tick is named too, as a candidate whose pose is not known yet.
     ///
-    /// Only used to explain a spawn that had to be lifted. Compares in the horizontal plane:
-    /// a vehicle blocking a spawn does so by standing on the same patch of road, whatever
-    /// its own z is.
+    /// Only used to explain a spawn that had to be lifted or was blocked. Compares in the
+    /// horizontal plane: a vehicle blocking a spawn does so by standing on the same patch of
+    /// road, whatever its own z is.
     fn vehicle_occupying(&self, x: f32, y: f32, exclude: u32) -> Option<String> {
         /// Half a car length. Close enough to be the thing that refused the spawn.
         const OCCUPIED_RADIUS_M: f32 = 2.5;
@@ -3673,6 +3673,20 @@ impl CarlaBackend {
             Ok(k) => k,
             Err(e) => return failed(format!("Cannot spawn '{name}': {e}")),
         };
+        // Said only when the size match is what spawns: an asset key naming a blueprint
+        // (a parked car's `model3d`) wins over it.
+        if let Some(c) = size_choice
+            .as_ref()
+            .filter(|c| c.blueprint == blueprint_key && c.blueprint != kind.default_blueprint())
+        {
+            tracing::info!(
+                "'{name}' ({:?}, declared {}) gets '{}' by size; '{}' does not fit",
+                shape.subtype,
+                shape.declared.as_ref().map(format_dims).unwrap_or_default(),
+                c.blueprint,
+                kind.default_blueprint()
+            );
+        }
         // A prop matched turned is spawned turned, here and on every pose update after.
         if size_choice.is_some_and(|c| c.turned && c.blueprint == blueprint_key) {
             shape.origin_offset.yaw = std::f64::consts::FRAC_PI_2;
@@ -3846,6 +3860,18 @@ impl CarlaBackend {
                     kind.label()
                 ));
             }
+            spawn_ladder::Outcome::Blocked(why) => {
+                // Which: a vehicle on the point (a leftover, or two entities placed on top
+                // of each other), or the static world -- a kerb-side pole, hedge or tree
+                // under an off-road pose (033 step 4d: a parked car on the sidewalk).
+                let occupant = self.vehicle_occupying(base_x, base_y, 0);
+                return failed(format!(
+                    "Failed to spawn {} '{name}' (blueprint '{blueprint_key}') at \
+                     CARLA({base_x:.1}, {base_y:.1}, {base_z:.1}): {why}. {}",
+                    kind.label(),
+                    blocked_by(occupant.as_deref())
+                ));
+            }
         };
         // Record for teardown before anything else can fail.
         self.record_spawned(actor_id);
@@ -3871,7 +3897,10 @@ impl CarlaBackend {
             width: 2.0 * f64::from(bb.extent.y),
             height: 2.0 * f64::from(bb.extent.z),
         };
-        let actual = if kind == SpawnKind::MiscObject {
+        // Only a prop reads back in world axes; a vehicle blueprint spawned as a misc
+        // object (a parked car) reports its box in its own frame like any vehicle.
+        let world_axes_box = box_reads_in_world_axes(kind, &actor.type_id());
+        let actual = if world_axes_box {
             prop_box_in_actor_frame(read, carla_transform.rotation.yaw)
         } else {
             Some(read)
@@ -3880,7 +3909,7 @@ impl CarlaBackend {
         // CARLA says, both in the actor's own frame, ROS-handed.
         let trace_box = actual.map(|d| {
             let l = &bb.transform.location;
-            let (x, y) = if kind == SpawnKind::MiscObject {
+            let (x, y) = if world_axes_box {
                 prop_offset_in_actor_frame(
                     f64::from(l.x),
                     f64::from(l.y),
@@ -5358,14 +5387,12 @@ impl CarlaBackend {
         let table = self.blueprint_boxes.as_ref()?;
         let default = kind.default_blueprint();
         let chosen = blueprint_boxes::choose_by_size(class, &declared, table, default)?;
-        if chosen.blueprint != default {
-            tracing::info!(
-                "'{name}' ({:?}, declared {}) gets '{}' by size; '{default}' does not fit",
-                shape.subtype,
-                format_dims(&declared),
-                chosen.blueprint
-            );
-        }
+        tracing::debug!(
+            "'{name}' ({:?}, declared {}): '{}' fits by size",
+            shape.subtype,
+            format_dims(&declared),
+            chosen.blueprint
+        );
         Some(chosen)
     }
 
@@ -6185,6 +6212,24 @@ fn format_dims(d: &Dimensions) -> String {
     format!("{:.2} x {:.2} x {:.2} m", d.length, d.width, d.height)
 }
 
+/// What blocked a spawn whose every lift collided, for its error: the vehicle on the point
+/// when the census finds one within half a car length, else the static world.
+fn blocked_by(occupant: Option<&str>) -> String {
+    match occupant {
+        Some(v) => format!("{v} stands on the spawn point"),
+        None => "No vehicle stands there: the static world blocks this pose (a pole, tree, \
+                 hedge or prop -- is it off the road?)"
+            .to_string(),
+    }
+}
+
+/// Whether CARLA reports this actor's `bounding_box()` in world axes rather than its own
+/// frame: props do (see [`prop_box_in_actor_frame`]); a vehicle or walker blueprint does
+/// not, also when the scenario spawns it as a misc object (a parked car, 033 step 4d).
+fn box_reads_in_world_axes(kind: SpawnKind, type_id: &str) -> bool {
+    kind == SpawnKind::MiscObject && type_id.starts_with("static.")
+}
+
 /// A prop's box as CARLA reads it back, in the prop's own frame, or `None` when it cannot
 /// be recovered. CARLA 0.9.16 does not report a prop's `bounding_box()` in the actor's
 /// frame: the street barrier reads 1.21 x 0.37 m at yaw 0, 0.37 x 1.21 at 90 and
@@ -6910,6 +6955,32 @@ mod tests {
         assert_eq!(prop_box_in_actor_frame(at_90, 90.0), Some(barrier));
         assert_eq!(prop_box_in_actor_frame(at_90, -270.0), Some(barrier));
         assert_eq!(prop_box_in_actor_frame(barrier, 45.0), None);
+    }
+
+    #[test]
+    fn a_blocked_spawn_names_the_vehicle_or_the_static_world() {
+        assert_eq!(
+            blocked_by(Some("actor 9004 ('hero')")),
+            "actor 9004 ('hero') stands on the spawn point"
+        );
+        assert!(blocked_by(None).starts_with("No vehicle stands there: the static world"));
+    }
+
+    #[test]
+    fn only_props_read_their_box_in_world_axes() {
+        assert!(box_reads_in_world_axes(
+            SpawnKind::MiscObject,
+            "static.prop.streetbarrier"
+        ));
+        // A parked car: a vehicle blueprint as a misc object reports its own frame.
+        assert!(!box_reads_in_world_axes(
+            SpawnKind::MiscObject,
+            "vehicle.tesla.model3"
+        ));
+        assert!(!box_reads_in_world_axes(
+            SpawnKind::Npc,
+            "vehicle.tesla.model3"
+        ));
     }
 
     /// The gap trace's prop box offset is turned back with its extent (roadmap 024): read in

@@ -58,6 +58,9 @@ pub enum Outcome {
     },
     /// No actor; why.
     Failed(String),
+    /// No actor: every attempt of the ladder collided. Something occupies the point -- a
+    /// vehicle, or the static world (the caller can tell which); the last error.
+    Blocked(String),
 }
 
 /// The lookup after a failed call may take this long.
@@ -123,9 +126,8 @@ pub fn run(
             }
         }
     }
-    Outcome::Failed(format!(
-        "{attempts} attempt(s) at increasing height collided; last error: {}. A leftover \
-         actor may be occupying the spawn point.",
+    Outcome::Blocked(format!(
+        "{attempts} attempt(s) at increasing height collided; last error: {}",
         last_collision.unwrap_or_else(|| "none".into())
     ))
 }
@@ -254,8 +256,8 @@ mod tests {
                 .collect(),
             ..Default::default()
         };
-        let Outcome::Failed(why) = go(&mut fake, &Deadline::new(Duration::from_secs(75))) else {
-            panic!("expected a failure");
+        let Outcome::Blocked(why) = go(&mut fake, &Deadline::new(Duration::from_secs(75))) else {
+            panic!("expected a blocked spawn");
         };
         assert!(why.starts_with("5 attempt(s)"), "{why}");
     }
