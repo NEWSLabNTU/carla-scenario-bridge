@@ -67,7 +67,7 @@ class Agent:
         self.episode: Episode | None = None  # the current one, set before on_reset
         self._lock = threading.Lock()
         self._state = {"phase": self.initial_phase, "fault": P.FAULT_NONE, "detail": ""}
-        self._reports = 0  # how many report() calls so far
+        self._reports = 0  # how many phase reports so far
         self._on_report = lambda: None  # set by the client: push the state now
 
     # -- hooks ------------------------------------------------------------------------------
@@ -109,6 +109,10 @@ class Agent:
         """RTC auto mode for `module`."""
         raise NotImplementedError
 
+    def close(self):
+        """The agent is done (shutdown, or the end of `csb-agent check`): release what it
+        holds. Optional."""
+
     # -- state ------------------------------------------------------------------------------
     def report(self, phase=None, *, fault=None, fault_behavior=None, fault_progress=None,
                turn_indicators=None, detail=None, pose=None, rtc_status=None):
@@ -125,7 +129,8 @@ class Agent:
             if fault == P.FAULT_NONE:  # a cleared fault takes its details with it
                 self._state.pop("fault_behavior", None)
                 self._state.pop("fault_progress", None)
-            self._reports += 1
+            if phase is not None:
+                self._reports += 1  # phase reports only: a pose stream changes no phase
         self._on_report()
 
     @property

@@ -414,6 +414,14 @@ build-autoware-overlay` (roadmap 042); by hand, build
 of github.com/NEWSLabNTU/autoware_universe in a workspace of its own and source that
 workspace's `install/local_setup.bash` right after Autoware's setup.
 
+### Another autopilot
+
+The vehicle side does not have to be Autoware. Anything that registers with the relay as
+the entity's agent drives it: a Python class (`csb_agent.Agent`) in your own project, or a
+ROS 2 autopilot described in a YAML file (`ros2 run csb_agent ros_adapter --config
+agent.yaml`). Start one with `ros2 run csb_agent csb-agent new <name>` and test it with
+`csb-agent check` before running scenarios: [Writing an agent](agent-interface.md).
+
 ### Timeouts
 
 A broken setup should fail in a minute or two, naming the cause, and a healthy run should

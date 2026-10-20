@@ -174,7 +174,7 @@ over TCP. Nothing is added to this workspace.
    driving and no Autoware running.
 6. [ ] **Autoware adapter.** acb's agent moved onto the SDK (fork commit first), overridable
    steps; the starter `basic/` and `awf/` suites pass as before; acb's protocol copy removed.
-7. [ ] **ROS adapter.** `ros_adapter` and its YAML schema, with a test autopilot node; a
+7. [x] **ROS adapter.** `ros_adapter` and its YAML schema, with a test autopilot node; a
    subclass overriding one step.
 8. [ ] **Supervisor and restart ladder.** `csb-agent supervise`; `run_suite --restart`;
    result records; live: a reset made to fail (an agent that never reports ready) is
@@ -281,4 +281,35 @@ Tests (`test_check.py`, 6): a good agent passes; one whose reset never reports r
 exactly the two "IDLE before the reply" rules; a 3.5 s stop fails its window; an agent
 without reset is checked through `teleported` and passes; a generated project passes
 `csb-agent check` through the CLI; a `file.py:Class` spec loads. SDK tests 99 pass.
+
+**Step 7: ROS adapter (2026-10-21).** `csb_agent/ros.py`: the `RosNode` mixin (an rclpy
+node on a multi-threaded executor in a daemon thread, `self.node`, stopped in `close()`)
+and pose helpers for `Pose`, `PoseStamped`, `PoseWithCovariance(Stamped)` and `Odometry`.
+`csb_agent/ros_adapter.py`: `RosAdapter`, every hook running the actions configured for
+it (`publish`, `call`, `wait_phase`, `sleep`; `fields`, `from: pose | goal | mps`, `field`
+with `name[]` appending to a sequence, `"null"` for a lifted limit), phase from a
+subscription with a value map, pose from another; `reset` offered only when mapped; a
+config that names no type, an unknown action or a `wait_phase` without a phase
+subscription is refused at start. `ros2 run csb_agent ros_adapter --config agent.yaml`.
+Only these two modules import ROS; the SDK core stays standard library.
+
+New in the SDK on the way: `Agent.close()` (called by `csb_agent.main` at shutdown and by
+`check` at its end; `RosNode` stops its node there), and only *phase* reports suppress a
+hook's default phase -- a pose stream used to count as a report and skipped them.
+
+Tests (`test_ros_adapter.py`, 5, in ROS domain 77 on localhost so they never meet a live
+stack): a test autopilot node (goal topic, limit topic, `/initialpose`, reset and stop
+services, a String state) driven by YAML only passes `csb-agent check` and received the
+goal, the limit and both resets' poses; `reset` is not offered when unmapped; a lifted limit
+publishes the `"null"` value; a subclass overriding `on_goal` (the goal 10 m ahead, the
+rest from the YAML) passes the check and sent its own goal; three bad configs are refused.
+SDK tests 106 pass.
+
+**Step 9 (in part, 2026-10-21).** `docs/agent-interface.md`: the three ways, the hooks
+with what each must do and its time, reporting state and the phases the SDK sets, what the
+SDK handles, `ros_adapter`'s YAML, one step in code, `csb-agent check` / `new`, reset
+between scenarios, compatibility (v1, the Autoware agent). Linked from the README, the
+user guide ("Another autopilot", section 4) and `docs/README.md`. Still to come with their
+steps: the tutorial section running the CARLA reference agent (step 5) and the restart
+policy and supervisor (step 8).
 

@@ -10,6 +10,8 @@
   4. [Demo run](tutorials/04-demo-run.md) -- two Autoware vehicles, recording a screencast
 - [User Guide](user-guide.md) -- the reference: install, maps, scenario directories, running,
   the CARLA world, troubleshooting
+- [Writing an agent](agent-interface.md) -- drive scenarios with your own autopilot: the
+  `csb_agent.Agent` class, `ros_adapter` from YAML, `csb-agent check` / `new`
 - [Writing scenarios](design/scenario-authoring.md) -- what a scenario may use on CARLA, and how
 - [User workflow and the vehicle agent](design/user-workflow.md) -- the two sides, swapping
   CARLA or Autoware

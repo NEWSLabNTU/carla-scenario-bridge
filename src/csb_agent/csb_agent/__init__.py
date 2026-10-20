@@ -81,4 +81,5 @@ def main(agent_class, argv=None):
     while not done.wait(0.5):
         pass
     thread.join(timeout=5.0)
+    agent.close()
     return 0

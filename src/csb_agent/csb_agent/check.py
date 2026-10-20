@@ -268,6 +268,7 @@ def run_check(agent_class, config=None, reset_timeout=30.0):
         client.stop()
         relay.close()
         runner.join(timeout=3.0)
+        agent.close()
 
 
 def _describe(reply, dt):

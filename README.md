@@ -142,7 +142,8 @@ simulation.launch.xml` -- plus a log directory per node and a web UI (`--web-add
 
 **Reference** -- the [User Guide](docs/user-guide.md) (install, maps, scenario directories,
 running, configuring the CARLA world, troubleshooting) and
-[Writing scenarios](docs/design/scenario-authoring.md). All documentation:
+[Writing scenarios](docs/design/scenario-authoring.md). To drive with another autopilot than
+Autoware: [Writing an agent](docs/agent-interface.md). All documentation:
 [docs/](docs/README.md).
 
 ## Other CARLA versions

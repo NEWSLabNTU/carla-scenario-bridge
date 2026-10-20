@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'csb-agent = csb_agent.cli:main',
+            'ros_adapter = csb_agent.ros_adapter:main',
         ],
     },
 )
