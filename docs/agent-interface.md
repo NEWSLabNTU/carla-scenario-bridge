@@ -189,6 +189,59 @@ class GoalAhead(RosAdapter):
 Any class can get a ROS node the same way: mix in `csb_agent.ros.RosNode` and call
 `self.start_node("name")`; `self.node` is spun on its own thread and stopped in `close()`.
 
+## Tutorial: a scenario driven by CARLA's BasicAgent
+
+The SDK ships a complete agent that needs no autopilot at all: `csb_agent.adapters.carla_basic`
+drives the scenario's vehicle with CARLA's own `BasicAgent` (PythonAPI `agents` package).
+It is the quickest way to see a scenario run end to end, and a worked example of an agent.
+
+You need the simulation side up (CARLA and `just run`) and CARLA's Python API: the `carla`
+package and the PythonAPI's `agents` directory with its requirements (`networkx`, `shapely`).
+Do **not** start `just ego-av`: this agent is the ego's driver.
+
+`carla_basic.yaml`:
+
+```yaml
+carla_pythonapi: /path/to/CARLA_0.9.16/PythonAPI/carla   # where `agents/` is
+target_speed_kmh: 30                                    # when the scenario sets no limit
+```
+
+```bash
+# 1. the agent, as entity `ego` (any host that reaches CARLA and the relay)
+python3 -m csb_agent.adapters.carla_basic --relay tcp://localhost:5560 --entity ego \
+    --config carla_basic.yaml
+
+# 2. the scenarios (another terminal)
+ros2 run csb_launch run_suite src/csb_examples/scenarios/basic/town01_ego_drive.xosc \
+    src/csb_examples/scenarios/basic/town01_traffic_light.xosc --output /tmp/results
+```
+
+The agent logs each command: `reset` (it finds the vehicle the bridge spawned, by its CARLA
+`role_name`, `hero`), `set_goal` (BasicAgent plans through the route), `ARRIVED`, `stop`.
+`run_suite` checks that an agent is registered as `ego` before each scenario.
+
+How it behaves, so you can write your own the same way (`csb_agent/adapters/carla_basic.py`):
+
+- **It never touches the simulation beyond its vehicle.** The bridge ticks CARLA in
+  synchronous mode; the agent never ticks, never changes settings, never spawns or destroys
+  anything, and applies control only to its own vehicle. It follows the world's ticks
+  (`world.on_tick`), and the tick callback only wakes its control thread: a synchronous
+  server waits for its subscribers, so a slow callback would slow the whole simulation.
+- **It does not outlive the server.** When CARLA stops answering, it exits with status 3; a
+  CARLA client left connected to a dead server can hang the next one on the same port. Run
+  it under `csb-agent supervise` or anything that starts it again.
+- **Reset** finds the vehicle again (a new actor every scenario), drops the route and
+  brakes; **goal** plans and drives; **speed limit** sets BasicAgent's target speed;
+  **stop** brakes and holds; `ARRIVED` when BasicAgent's route is done.
+- **Checked without CARLA**: `csb-agent check csb_agent.adapters.carla_basic:CarlaBasicAgent
+  --config fake.yaml`, where `fake.yaml` is `world: fake`, runs the same class over a
+  kinematic stand-in.
+
+Config keys: `carla_host` (localhost), `carla_port` (2000), `role_name` (hero),
+`carla_pythonapi` (default `$CARLA_DIR/PythonAPI/carla`), `target_speed_kmh` (30),
+`ignore_traffic_lights` / `ignore_vehicles` (false: BasicAgent's own hazard stops),
+`find_timeout` (30 s for the vehicle to appear at a reset), `world` (`carla` | `fake`).
+
 ## Checking an agent
 
 `csb-agent check` runs your class against a fake relay -- no CARLA, no SSv2, no autopilot

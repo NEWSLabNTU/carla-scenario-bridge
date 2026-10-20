@@ -170,7 +170,7 @@ over TCP. Nothing is added to this workspace.
    `episode_end` via the commander role, mixed v1 / v2 tests.
 4. [x] **`csb-agent check` and `new`.** The fake relay and its scripted episode; the
    skeleton passes `check` as generated.
-5. [ ] **CARLA reference adapter.** `carla_basic`; `basic/town01_ego_drive` passes with it
+5. [x] **CARLA reference adapter.** `carla_basic`; `basic/town01_ego_drive` passes with it
    driving and no Autoware running.
 6. [ ] **Autoware adapter.** acb's agent moved onto the SDK (fork commit first), overridable
    steps; the starter `basic/` and `awf/` suites pass as before; acb's protocol copy removed.
@@ -313,3 +313,66 @@ user guide ("Another autopilot", section 4) and `docs/README.md`. Still to come 
 steps: the tutorial section running the CARLA reference agent (step 5) and the restart
 policy and supervisor (step 8).
 
+**Plan for steps 5, 6 and 8 (2026-10-21).**
+
+- *Step 5, `csb_agent.adapters.carla_basic`.* `CarlaBasicAgent`: connects to CARLA
+  (`carla_host`, `carla_port`), finds the vehicle whose `role_name` is the bridge's ego
+  role (`hero`) at each reset (a new actor per scenario), and drives it with CARLA's own
+  `agents.navigation.BasicAgent` (PythonAPI from `carla_pythonapi`, else
+  `$CARLA_DIR/PythonAPI/carla`; it needs `shapely` and `networkx`): `on_goal` traces the
+  route through the waypoints with BasicAgent's global planner, `on_speed_limit` sets its
+  target speed, `on_stop` brakes and holds. Control runs on world ticks: a `world.on_tick`
+  callback only wakes a control thread (a slow callback would hold a synchronous server's
+  frame), which runs `run_step()` and applies the ego's control. It never ticks, never
+  changes settings, never spawns or destroys, and touches no actor but the ego; when the
+  server stops answering (an idle probe), the process exits -- a CARLA client must not
+  outlive its server (CLAUDE.md). `csb-agent check` runs it with `world: fake`: the same
+  class over a kinematic stand-in for the world, so the check needs no CARLA (the check
+  tests the protocol, not the driving). Live: `basic/town01_ego_drive` through `run_suite`
+  with this agent registered as `ego` and no Autoware.
+- *Step 6, `csb_agent.adapters.autoware.AutowareAgent`* (in the SDK, beside `ros_adapter`:
+  ADAPI is Autoware's, not CARLA's, and any Autoware vehicle side can use it). acb's
+  `AgentCore` and `AutowarePort` move in as the class and its ROS port; the steps are
+  methods a subclass overrides -- `wait_ready()`, `relocalize(pose)`, `set_route(...)`,
+  `engage()` -- and the bounds (`scan_wait`, `converge_timeout`, `initialize_attempts`,
+  `engage_retry`, `settle`, `call_timeout`) are config keys. `on_reset` (v2) drops the
+  route, stops and relocalizes; the v1 `teleported` path comes from the SDK. acb's
+  `acb_pilot agent` keeps its executable name and parameters (the launch is unchanged) and
+  becomes a thin entry over the class (relay mode through `csb_agent`'s client, local mode
+  driving the same class to a goal file); acb's `agent_core.py`, `agent_protocol.py`,
+  `autoware_port.py` and their tests go (the fake-Autoware tests move to the SDK). acb's
+  agent then needs `csb_agent` installed (this workspace, the release tarball or the wheel).
+  Fork commit pushed before the pin. Live: the starter `basic/` and `awf/` suites through
+  `run_suite`, and a reset longer than the concealer's 9 s.
+- *Step 8.* `csb-agent supervise --entity E --autopilot CMD --agent CMD [--relay]
+  [--grace 10]`: starts both commands in one new process group, registers with the relay
+  as a commander and answers restart requests addressed to the entity's supervisor by
+  stopping the group (TERM, KILL after `--grace`, by pgid) and starting it again; ready is
+  the entity's agent registering at the relay again. `run_suite --restart=never |
+  on-reset-failure | on-failure | every:N` (default `on-reset-failure`): after each
+  scenario it reads the entity's last reset from the relay (`query`), sends `episode_end`
+  with the verdict through `csb_agent.Commander`, and restarts per policy before the next
+  one; a non-`never` policy without a supervisor or the agent's `restart` capability is
+  refused at start. Each scenario's result (summary and `suite.json`) records `reset`
+  status and seconds, and `restarted`. Live: an agent whose reset never reports ready is
+  restarted by the supervisor and the next scenario passes.
+
+**Step 5: CARLA reference adapter (2026-10-21).** `csb_agent/adapters/carla_basic.py`,
+`CarlaBasicAgent`, as planned: CARLA's `BasicAgent` (PythonAPI `agents`; `shapely` installed
+for it on this host), vehicle by `role_name` at every reset, route traced through the
+waypoints with BasicAgent's global planner, the limit as target speed, brake-and-hold on
+stop, control on world ticks through a woken control thread, exit 3 when an idle probe
+finds the server gone; pose reported in the map frame, moved to the scenario's vehicle
+origin by the offset measured at the reset. `python3 -m csb_agent.adapters.carla_basic`.
+
+- `csb-agent check csb_agent.adapters.carla_basic:CarlaBasicAgent` with `world: fake`:
+  **16/16**. Tests (`test_carla_basic.py`, 4): the check, a drive through a waypoint to
+  `ARRIVED`, speed limit and hold on stop, the frame helper. SDK tests 110 pass.
+- **Live, no Autoware** (ego stack down; sim side on the current build, ClearNoon): the
+  agent registered as `ego` (v2), `run_suite basic/town01_ego_drive.xosc`: **PASS** (20 s);
+  a second agent process, `town01_ego_drive` + `town01_traffic_light`: **2/2 PASS** (20 s,
+  167 s; BasicAgent waits at the red light). Each scenario's `reset` found the new vehicle
+  (actors 2985, 2987, 2989) in under 0.6 s; set_goal -> ARRIVED in 9 s on ego_drive. The
+  first run logged three pose warnings before its first reset, with no vehicle yet (fixed:
+  no pose is reported without one).
+- Tutorial: `docs/agent-interface.md`, "Tutorial: a scenario driven by CARLA's BasicAgent".
