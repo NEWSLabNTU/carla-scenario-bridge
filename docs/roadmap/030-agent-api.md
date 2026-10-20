@@ -168,7 +168,7 @@ over TCP. Nothing is added to this workspace.
    `Agent` and the run loop, v1 fallback; unit tests against the relay's server in-process.
 3. [x] **Protocol v2 in the relay.** `reset` from SSv2's `initialize`, `reset_timeout`,
    `episode_end` via the commander role, mixed v1 / v2 tests.
-4. [ ] **`csb-agent check` and `new`.** The fake relay and its scripted episode; the
+4. [x] **`csb-agent check` and `new`.** The fake relay and its scripted episode; the
    skeleton passes `check` as generated.
 5. [ ] **CARLA reference adapter.** `carla_basic`; `basic/town01_ego_drive` passes with it
    driving and no Autoware running.
@@ -259,4 +259,26 @@ agent, the commander query carrying the last reset, `episode_end` through a `Com
 reaching `on_episode_end` with the reset's episode). 151 pass across both packages. Not
 yet run live: acb's agent is v1 and takes the unchanged `teleported` path; the first live
 `reset` comes with step 5's CARLA adapter or step 6's Autoware adapter.
+
+**Step 4: `csb-agent check` and `new` (2026-10-21).** One command, `csb-agent` (`ros2 run
+csb_agent csb-agent`, or `python3 -m csb_agent`; a console script once installed from the
+wheel):
+
+- `check <module:Class | file.py:Class> [--config] [--reset-timeout 30]` runs the class
+  with the SDK's `Client` against a fake relay on localhost (`csb_agent/check.py`) and a
+  scripted episode: register, reset (or `teleported` for an agent without the capability),
+  `set_goal`, `set_speed_limit`, `stop`, `episode_end` (v2), a second reset, a dropped
+  connection. 16 rules, each printed PASS / FAIL with what was seen: registers in 5 s and
+  offers every required command; speaks v2; pushes state after registering and at least
+  every 1.5 s; each command answered in its window (reset: `--reset-timeout`; set_goal 9 s;
+  others 2.5 s); the state before each reply (reset -> `IDLE`, set_goal -> past `IDLE`,
+  stop -> `STOPPED`); registers again after the drop. Exit 1 on any failure.
+- `new <name> [--dir]` writes `<name>/` with `pyproject.toml` (depends on `csb-agent`), the
+  package with the agent class (every hook stubbed and commented), `__main__` running
+  `csb_agent.main`, `agent.yaml` and a README; it passes `check` as generated (16/16).
+
+Tests (`test_check.py`, 6): a good agent passes; one whose reset never reports ready fails
+exactly the two "IDLE before the reply" rules; a 3.5 s stop fails its window; an agent
+without reset is checked through `teleported` and passes; a generated project passes
+`csb-agent check` through the CLI; a `file.py:Class` spec loads. SDK tests 99 pass.
 

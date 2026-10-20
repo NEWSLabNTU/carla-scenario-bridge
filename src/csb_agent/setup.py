@@ -17,4 +17,9 @@ setup(
     description='Agent SDK: drive carla-scenario-bridge scenarios with any autopilot',
     license='Apache-2.0',
     tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+            'csb-agent = csb_agent.cli:main',
+        ],
+    },
 )
