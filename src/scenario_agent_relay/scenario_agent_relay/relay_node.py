@@ -35,7 +35,7 @@ from tier4_rtc_msgs.msg import CooperateResponse, CooperateStatus, CooperateStat
 from tier4_rtc_msgs.srv import AutoModeWithModule, CooperateCommands
 
 from . import mapping as M
-from . import protocol as P
+from csb_agent import protocol as P
 from .server import AgentServer
 
 # How long a service handler waits for the agent's reply. Each is under the concealer's

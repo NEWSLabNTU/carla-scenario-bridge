@@ -5,8 +5,8 @@ the user's own project, without touching this workspace. Between scenarios the a
 **reset**; a **restart** of the autopilot is an option, used when a reset fails or by
 policy.
 
-Today the relay's agent protocol (I3, [user-workflow.md](../design/user-workflow.md#the-agent-protocol-i3),
-`scenario_agent_relay/protocol.py`) is generic, but only acb implements it
+Before this phase the relay's agent protocol (I3, [user-workflow.md](../design/user-workflow.md#the-agent-protocol-i3),
+then `scenario_agent_relay/protocol.py`, now `csb_agent/protocol.py`) was generic, but only acb implemented it
 (`acb_pilot/agent_core.py` with a copy of `protocol.py`), so changing how an autopilot is
 driven means editing acb. The scenario boundary is implicit: SSv2's `initialize` reaches the
 agent as `stop`, `clear_goal`, `teleported`, and the agent has no way to say "reset and
@@ -164,7 +164,7 @@ over TCP. Nothing is added to this workspace.
 
 1. [x] **Docs.** This phase doc; protocol v2 in user-workflow.md (normative), marked
    planned.
-2. [ ] **SDK core.** `csb_agent` package, `protocol.py` moved in (relay imports it),
+2. [x] **SDK core.** `csb_agent` package, `protocol.py` moved in (relay imports it),
    `Agent` and the run loop, v1 fallback; unit tests against the relay's server in-process.
 3. [ ] **Protocol v2 in the relay.** `reset` from SSv2's `initialize`, `reset_timeout`,
    `episode_end` via the commander role, mixed v1 / v2 tests.
@@ -196,3 +196,38 @@ over TCP. Nothing is added to this workspace.
   release tarball or the wheel, and nothing else from this workspace.
 
 ### Results
+
+**Step 2: SDK core (2026-10-21).** `src/csb_agent/` (ament_python, standard library only):
+
+- `protocol.py`, moved from the relay, now v1 + v2: `VERSIONS = (1, 2)`, `encode(message,
+  version)`, `decode` accepting either; `reset`, `episode_end`, `restart` with their
+  argument checks, refused in a v1 message. The relay imports it from here.
+- `Agent` (agent.py): the hooks of the design, `report()`, capabilities derived from the
+  hooks a subclass overrides (`reset`, `restart`, RTC), `Episode`, `Failed`. A hook that
+  reports no phase leaves the one its command implies (reset / teleported / clear_goal ->
+  `IDLE`, set_goal -> `PLANNING`, stop -> `STOPPED`). `set_goal`'s extra arguments
+  (`allow_goal_modification`, `segments`) reach `on_goal` only if its signature takes them.
+- `Client` (client.py): registration, heartbeats via 5 Hz state pushes, reconnects (1 -> 5 s),
+  one command at a time with the state pushed before the reply, a repeat of an identical
+  `set_goal` / `teleported` / `reset` within 10 s of its success answered from memory, and
+  the **v1 fallback** (a v2 register refused for its version -> v1 from then on; on v1 the
+  boundary is `teleported`, which runs `on_reset` with only the pose).
+- `csb_agent.main(MyAgent)`: `--relay` (or `$CSB_RELAY`), `--entity`, `--config` (JSON or
+  YAML).
+- Relay (`server.py`): **versions per connection**; each session is answered in its own
+  version, a mid-connection version change is a protocol error, rejections go out in v1,
+  and the relay answers `UNSUPPORTED` itself for a v2 command to a v1 agent or `reset` /
+  `restart` to an agent without the capability. `AgentServer(versions=(1,))` stands in
+  for a v1 relay in tests.
+
+Tests: `csb_agent/test` (protocol incl. v1 / v2 round trips and v2-only refusals, agent and
+dispatch without sockets) 93 pass; `scenario_agent_relay/test` 50 pass, including
+`test_sdk_client.py` (the SDK against the real `AgentServer`: v2 registration and
+capabilities, reset with the state before the reply, hooks, heartbeats over 4 s of
+silence, v1 fallback against a v1-only relay, reconnect after a drop) and the mixed-version
+server tests. `just test` now runs both directories (the relay's tests were not in it).
+acb's unchanged v1 agent (`RelayClient` + `AgentCore` on its fake Autoware) registers with
+the new relay as v1, answers `stop`, and is answered `UNSUPPORTED` for `reset` by the relay.
+acb's drift test (its copy against the relay's `protocol.py`) now skips: the file it compares
+with moved; step 6 deletes the copy.
+

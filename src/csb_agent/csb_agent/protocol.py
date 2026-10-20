@@ -1,18 +1,21 @@
 """The agent protocol (I3): newline-delimited JSON over plain TCP.
 
-Spec: docs/design/user-workflow.md, "The agent protocol (I3)". This module is the
-executable form of that section and depends on nothing but the standard library, so an
-agent for any autopilot can copy it (acb_pilot/agent_protocol.py is such a copy).
+Spec: docs/design/user-workflow.md, "The agent protocol (I3)" and "Protocol v2". This
+module is the executable form of those sections and depends on nothing but the standard
+library. The relay and every csb_agent agent import it from here.
 
 Every message is one JSON object on one line, UTF-8, terminated by "\\n", and carries
-"v": VERSION and "type". A receiver drops a connection whose messages carry another
-version, after sending an "error" message naming the reason.
+"v" and "type". Versions 1 and 2 are understood; v2 is v1 plus the `reset`, `episode_end`
+and `restart` commands. A connection speaks the version of its `register` message, and a
+receiver answers a version it does not know, or a v2 message on a v1 connection, with an
+"error" naming the reason and closes.
 """
 
 import json
 import math
 
-VERSION = 1
+VERSION = 2
+VERSIONS = (1, 2)  # understood; a connection speaks the version its register carried
 
 # -- message types -------------------------------------------------------------------
 REGISTER = "register"  # agent -> relay, first message on a connection
@@ -48,10 +51,15 @@ STOP = "stop"
 TELEPORTED = "teleported"
 COOPERATE = "cooperate"  # optional (RTC)
 COOPERATE_AUTO = "cooperate_auto"  # optional (RTC)
+# v2 (roadmap 030)
+RESET = "reset"  # capability: a scenario boundary, instead of stop + clear_goal + teleported
+EPISODE_END = "episode_end"  # an event: the scenario's verdict
+RESTART = "restart"  # capability: restart the autopilot in place, then re-register
 
 REQUIRED_COMMANDS = (SET_GOAL, CLEAR_GOAL, SET_SPEED_LIMIT, STOP, TELEPORTED)
 OPTIONAL_COMMANDS = (COOPERATE, COOPERATE_AUTO)
-COMMANDS = REQUIRED_COMMANDS + OPTIONAL_COMMANDS
+V2_COMMANDS = (RESET, EPISODE_END, RESTART)
+COMMANDS = REQUIRED_COMMANDS + OPTIONAL_COMMANDS + V2_COMMANDS
 
 # -- reply status ---------------------------------------------------------------------
 OK = "OK"
@@ -104,12 +112,16 @@ def _finite_or_none(value):
     return value
 
 
-def encode(message: dict) -> bytes:
-    """One message as one line. Adds "v"."""
+def encode(message: dict, version: int = VERSION) -> bytes:
+    """One message as one line, in `version` (the connection's). Adds "v"."""
     if message.get("type") not in MESSAGE_TYPES:
         raise ProtocolError(f"unknown message type {message.get('type')!r}")
+    if version not in VERSIONS:
+        raise ProtocolError(f"protocol version {version!r} not in {VERSIONS}")
+    if version < 2 and message.get("command") in V2_COMMANDS:
+        raise ProtocolError(f"{message['command']} needs protocol version 2")
     body = dict(message)
-    body["v"] = VERSION
+    body["v"] = version
     return (json.dumps(_finite_or_none(body), allow_nan=False, separators=(",", ":"))
             + "\n").encode("utf-8")
 
@@ -127,9 +139,12 @@ def decode(line) -> dict:
         raise ProtocolError(f"not JSON: {e}") from e
     if not isinstance(message, dict):
         raise ProtocolError("a message is a JSON object")
-    if message.get("v") != VERSION:
-        raise ProtocolError(f"protocol version {message.get('v')!r}, expected {VERSION}")
+    if message.get("v") not in VERSIONS:
+        raise ProtocolError(f"protocol version {message.get('v')!r}, expected one of "
+                            f"{VERSIONS}")
     validate(message)
+    if message["v"] < 2 and message.get("command") in V2_COMMANDS:
+        raise ProtocolError(f"{message['command']} needs protocol version 2")
     return message
 
 
@@ -242,6 +257,22 @@ def _validate_args(command, args):
             raise ProtocolError("set_speed_limit: mps is a number or null (no limit)")
     elif command == TELEPORTED:
         validate_pose(args.get("pose"), "teleported.pose")
+    elif command == RESET:
+        validate_pose(args.get("pose"), "reset.pose")
+        for key in ("episode", "scenario", "map"):
+            if not isinstance(args.get(key, ""), str):
+                raise ProtocolError(f"reset: {key!r} is a string")
+        if not isinstance(args.get("parameters", {}), dict):
+            raise ProtocolError("reset: parameters is an object")
+    elif command == EPISODE_END:
+        if not isinstance(args.get("episode", ""), str):
+            raise ProtocolError("episode_end: 'episode' is a string")
+        result = _require(args, "result", dict)
+        if not isinstance(result.get("passed"), bool):
+            raise ProtocolError("episode_end: result.passed is a boolean")
+        failures = result.get("failures", [])
+        if not isinstance(failures, list) or not all(isinstance(f, str) for f in failures):
+            raise ProtocolError("episode_end: result.failures is a list of strings")
     elif command == COOPERATE:
         _require(args, "module", str)
         _one_of(args, "command", ("ACTIVATE", "DEACTIVATE"))

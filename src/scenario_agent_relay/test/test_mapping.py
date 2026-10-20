@@ -1,7 +1,7 @@
 import pytest
 
 from scenario_agent_relay import mapping as M
-from scenario_agent_relay import protocol as P
+from csb_agent import protocol as P
 
 
 def reading(state, arrived_age=0.0):

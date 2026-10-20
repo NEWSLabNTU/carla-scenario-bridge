@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from scenario_agent_relay import protocol as P
+from csb_agent import protocol as P
 
 POSE = {"x": 1.0, "y": -2.0, "z": 0.3, "qx": 0.0, "qy": 0.0, "qz": 1.0, "qw": 0.0}
 
@@ -35,6 +35,13 @@ MESSAGES = [
     P.query(3, "bg_av_1"),
     P.reply(3, P.OK, "", P.state(P.IDLE, pose=POSE), registered=True),
     P.reply(4, P.FAILED, "no agent registered for entity 'x'", registered=False),
+    # v2
+    P.command(10, P.RESET, episode="e1", scenario="town01_ego_drive", map="Town01",
+              pose=POSE, parameters={"speed": 5}),
+    P.command(11, P.EPISODE_END, episode="e1",
+              result={"passed": False, "failures": ["contact"], "contacts": 1}),
+    P.command(12, P.RESTART),
+    P.command_for(5, "ego", P.EPISODE_END, episode="e1", result={"passed": True}),
 ]
 
 
@@ -54,9 +61,29 @@ def test_every_command_has_a_round_trip_case():
 
 def test_wrong_version_is_rejected():
     with pytest.raises(P.ProtocolError, match="version"):
-        P.decode(b'{"v": 2, "type": "heartbeat"}')
+        P.decode(b'{"v": 3, "type": "heartbeat"}')
     with pytest.raises(P.ProtocolError, match="version"):
         P.decode(b'{"type": "heartbeat"}')
+
+
+V1_MESSAGES = [m for m in MESSAGES if m.get("command") not in P.V2_COMMANDS]
+
+
+@pytest.mark.parametrize("message", V1_MESSAGES, ids=lambda m: m["type"])
+def test_v1_round_trip(message):
+    decoded = P.decode(P.encode(message, version=1))
+    assert decoded.pop("v") == 1 and decoded == message
+
+
+@pytest.mark.parametrize("name", P.V2_COMMANDS)
+def test_v2_commands_need_v2(name):
+    args = {"pose": POSE} if name == P.RESET else (
+        {"result": {"passed": True}} if name == P.EPISODE_END else {})
+    with pytest.raises(P.ProtocolError, match="version 2"):
+        P.encode(P.command(1, name, **args), version=1)
+    line = P.encode(P.command(1, name, **args)).replace(b'"v":2', b'"v":1')
+    with pytest.raises(P.ProtocolError, match="version 2"):
+        P.decode(line)
 
 
 @pytest.mark.parametrize("line", [
@@ -78,6 +105,10 @@ def test_wrong_version_is_rejected():
     b'{"v": 1, "type": "query", "id": 1}',
     b'{"v": 1, "type": "reply", "id": 1, "status": "OK", "registered": "yes"}',
     b'{"v": 1, "type": "reply", "id": 1, "status": "OK", "state": {"phase": "FLYING"}}',
+    b'{"v": 2, "type": "command", "id": 1, "command": "reset", "args": {}}',
+    b'{"v": 2, "type": "command", "id": 1, "command": "reset", "args": {"pose": {"x": 0, "y": 0, "z": 0, "qx": 0, "qy": 0, "qz": 0, "qw": 1}, "parameters": []}}',
+    b'{"v": 2, "type": "command", "id": 1, "command": "episode_end", "args": {"result": {}}}',
+    b'{"v": 2, "type": "command", "id": 1, "command": "episode_end", "args": {"result": {"passed": true, "failures": [1]}}}',
 ])
 def test_invalid_messages_are_rejected(line):
     with pytest.raises(P.ProtocolError):

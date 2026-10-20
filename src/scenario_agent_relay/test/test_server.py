@@ -4,21 +4,23 @@ import time
 
 import pytest
 
-from scenario_agent_relay import protocol as P
+from csb_agent import protocol as P
 from scenario_agent_relay.server import AgentServer
 
 
 class FakeAgent:
-    def __init__(self, port, entity="ego", register=True):
+    def __init__(self, port, entity="ego", register=True, version=P.VERSION,
+                 capabilities=P.REQUIRED_COMMANDS):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=5)
         self.reader = P.LineReader()
         self.pending = []
+        self.version = version
         if register:
-            self.send(P.register(entity, P.REQUIRED_COMMANDS, "fake"))
+            self.send(P.register(entity, capabilities, "fake"))
             assert self.recv()["type"] == P.REGISTERED
 
     def send(self, message):
-        self.sock.sendall(P.encode(message))
+        self.sock.sendall(P.encode(message, self.version))
 
     def send_raw(self, data):
         self.sock.sendall(data)
@@ -145,7 +147,7 @@ def test_closing_the_connection_drops_the_agent(server):
 
 def test_wrong_version_gets_an_error_and_is_dropped(server):
     agent = FakeAgent(server.port, register=False)
-    agent.send_raw(b'{"v": 2, "type": "register", "entity": "ego"}\n')
+    agent.send_raw(b'{"v": 3, "type": "register", "entity": "ego"}\n')
     message = agent.recv()
     assert message["type"] == P.ERROR and "version" in message["reason"]
     assert server.session("ego") is None
@@ -155,6 +157,7 @@ def test_wrong_version_gets_an_error_and_is_dropped(server):
 class FakeCommander(FakeAgent):
     def __init__(self, port):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        self.version = P.VERSION
         self.reader = P.LineReader()
         self.pending = []
         self.send(P.register_commander("fake_commander"))
@@ -243,3 +246,89 @@ def test_a_commander_cannot_send_agent_messages(server):
     message = commander.recv()
     assert message["type"] == P.ERROR and "commander" in message["reason"]
     commander.close()
+
+
+# -- protocol v2 (roadmap 030): versions per connection ------------------------------------
+
+POSE = {"x": 1.0, "y": 2.0, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
+
+
+def answer_one(agent, status=P.OK):
+    """Answer the next command; return it."""
+    message = agent.recv()
+    assert message["type"] == P.COMMAND
+    agent.send(P.reply(message["id"], status))
+    return message
+
+
+def test_each_connection_is_answered_in_its_own_version(server):
+    v1 = FakeAgent(server.port, entity="old", version=1)
+    v2 = FakeAgent(server.port, entity="new", capabilities=[*P.REQUIRED_COMMANDS, P.RESET])
+    assert server.session("old").version == 1 and server.session("new").version == 2
+    for agent, entity in ((v1, "old"), (v2, "new")):
+        result = {}
+        t = threading.Thread(target=lambda: result.update(
+            r=server.command(entity, P.STOP, 2.0)))
+        t.start()
+        line = None
+        while line is None:  # read the raw line to see its "v"
+            data = agent.sock.recv(65536)
+            for raw in agent.reader.feed(data):
+                if b'"heartbeat"' not in raw:
+                    line = raw
+        assert f'"v":{agent.version}'.encode() in line
+        agent.send(P.reply(P.decode(line)["id"]))
+        t.join()
+        assert result["r"][0] == P.OK
+    v1.close()
+    v2.close()
+
+
+def test_v2_commands_are_not_sent_to_a_v1_agent(server):
+    agent = FakeAgent(server.port, version=1)
+    status, text = server.command("ego", P.EPISODE_END, 1.0, result={"passed": True})
+    assert status == P.UNSUPPORTED and "v1" in text
+    agent.close()
+
+
+def test_reset_needs_the_capability(server):
+    agent = FakeAgent(server.port)  # v2, no reset capability
+    status, text = server.command("ego", P.RESET, 1.0, pose=POSE)
+    assert status == P.UNSUPPORTED and "reset" in text
+    agent.close()
+
+
+def test_reset_reaches_a_v2_agent_that_offers_it(server):
+    agent = FakeAgent(server.port, capabilities=[*P.REQUIRED_COMMANDS, P.RESET])
+    result = {}
+    t = threading.Thread(target=lambda: result.update(r=server.command(
+        "ego", P.RESET, 2.0, episode="e1", scenario="s", map="Town01", pose=POSE)))
+    t.start()
+    message = answer_one(agent)
+    t.join()
+    assert message["command"] == P.RESET and message["args"]["episode"] == "e1"
+    assert result["r"][0] == P.OK
+    agent.close()
+
+
+def test_a_v1_only_relay_refuses_a_v2_register_in_v1():
+    s = AgentServer("127.0.0.1", 0, versions=(1,))
+    s.start()
+    try:
+        agent = FakeAgent(s.port, register=False)
+        agent.send(P.register("ego", P.REQUIRED_COMMANDS, "fake"))
+        raw = agent.sock.recv(65536)
+        assert b'"v":1' in raw
+        message = P.decode(raw.strip())
+        assert message["type"] == P.ERROR and "version" in message["reason"]
+        agent.close()
+    finally:
+        s.stop()
+
+
+def test_a_connection_cannot_switch_versions(server):
+    agent = FakeAgent(server.port, version=1)
+    agent.version = 2
+    agent.send(P.heartbeat())
+    assert wait_until(lambda: server.session("ego") is None)
+    agent.close()

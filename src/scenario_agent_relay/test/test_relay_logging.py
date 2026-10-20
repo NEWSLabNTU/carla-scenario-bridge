@@ -1,6 +1,6 @@
 import rclpy.logging
 
-from scenario_agent_relay import protocol as P
+from csb_agent import protocol as P
 from scenario_agent_relay.relay_node import RelayNode
 
 

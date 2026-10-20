@@ -187,6 +187,8 @@ test:
     cargo nextest run --no-tests pass --no-fail-fast
     # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)
     python3 -m pytest -q src/csb_launch/test
+    # The agent SDK and protocol, and the relay against it (roadmap 030)
+    python3 -m pytest -q src/csb_agent/test src/scenario_agent_relay/test
     # The Isaac world server's protocol side, on a fake world (roadmap 037; protobuf only)
     python3 -m unittest discover -s src/csb_isaac/test
 

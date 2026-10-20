@@ -86,8 +86,10 @@ channel (CARLA actor ids).
 
 ## The agent protocol (I3)
 
-Implemented in `scenario_agent_relay/protocol.py` (relay) and its copy
-`acb_pilot/agent_protocol.py` (agent); a test fails if the copies drift.
+Implemented in `csb_agent/protocol.py` (roadmap 030), which the relay and every
+`csb_agent` agent import; acb's agent still carries a v1 copy,
+`acb_pilot/agent_protocol.py`, until 030 step 6 moves it onto the SDK. The relay speaks v1
+to it.
 
 - **Transport**: plain TCP, **newline-delimited JSON** (one UTF-8 object per line), standard
   library only on both ends -- no ZMQ or protobuf dependency for an agent author (decision
@@ -221,8 +223,13 @@ watch Autoware's own pipeline, not just ADAPI states:
 ### Protocol v2 (planned, roadmap 030)
 
 Additive: `VERSION` 2, and a v1 agent on a v2 relay (or the reverse) behaves as above.
-Specified here so 030's SDK, relay and adapters are built against one text; not
-implemented yet.
+**Versions are per connection**: a connection speaks the version its `register` carried,
+and the relay answers each agent and commander in it. A v2 register refused by a v1 relay
+gets an `error` in v1 naming the version; the SDK then registers again in v1 and stays
+there. The relay never sends a v2 command to a v1 agent, nor `reset` / `restart` to an
+agent without the capability: it answers the caller `UNSUPPORTED` itself. *Implemented*
+(030 step 2): the messages, versioning and the SDK's handling; the relay sending `reset`
+on `initialize`, `reset_timeout` and `episode_end` are step 3.
 
 | Message | Direction | Fields | Meaning |
 |---|---|---|---|

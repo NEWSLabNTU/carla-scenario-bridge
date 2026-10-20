@@ -10,7 +10,7 @@ import socket
 import threading
 import time
 
-from . import protocol as P
+from csb_agent import protocol as P
 
 # A commander's command_for waits this long for the agent's reply unless it names its own
 # timeout, which is capped at COMMANDER_MAX_TIMEOUT.
@@ -21,8 +21,10 @@ COMMANDER_MAX_TIMEOUT = 30.0
 class AgentSession:
     """One registered agent connection."""
 
-    def __init__(self, server, sock, address, entity, agent, capabilities):
+    def __init__(self, server, sock, address, entity, agent, capabilities,
+                 version=P.VERSION):
         self.server = server
+        self.version = version  # the protocol version its register carried
         self.sock = sock
         self.address = address
         self.entity = entity
@@ -38,7 +40,7 @@ class AgentSession:
         self._pending_lock = threading.Lock()
 
     def send(self, message) -> bool:
-        data = P.encode(message)
+        data = P.encode(message, self.version)
         with self._send_lock:
             if self.closed.is_set():
                 return False
@@ -67,8 +69,19 @@ class AgentSession:
                 slot[0].set()
         self.server._session_closed(self, reason)
 
+    def supports(self, name):
+        """(True, "") if the agent can take `name`, else (False, why)."""
+        if name in P.V2_COMMANDS and self.version < 2:
+            return False, f"the agent speaks protocol v{self.version}; {name} needs v2"
+        if name in (P.RESET, P.RESTART) and name not in self.capabilities:
+            return False, f"the agent does not offer {name}"
+        return True, ""
+
     def command(self, command_id, name, args, timeout):
         """Send a command and wait for its reply: (status, message)."""
+        ok, why = self.supports(name)
+        if not ok:
+            return P.UNSUPPORTED, why
         slot = [threading.Event(), None]
         with self._pending_lock:
             self._pending[command_id] = slot
@@ -102,15 +115,16 @@ class CommanderSession:
     entity and is never timed out for silence; a closed socket ends it.
     """
 
-    def __init__(self, sock, address, agent):
+    def __init__(self, sock, address, agent, version=P.VERSION):
         self.sock = sock
         self.address = address
         self.agent = agent
+        self.version = version
         self.closed = threading.Event()
         self._send_lock = threading.Lock()
 
     def send(self, message) -> bool:
-        data = P.encode(message)
+        data = P.encode(message, self.version)
         with self._send_lock:
             if self.closed.is_set():
                 return False
@@ -142,7 +156,7 @@ class AgentServer:
 
     def __init__(self, host="0.0.0.0", port=5560, on_state=None, on_presence=None,
                  peer_timeout=P.PEER_TIMEOUT, heartbeat_period=P.HEARTBEAT_PERIOD,
-                 logger=None):
+                 logger=None, versions=P.VERSIONS):
         self.host = host
         self.port = port
         self.on_state = on_state or (lambda *a: None)
@@ -150,6 +164,7 @@ class AgentServer:
         self.peer_timeout = peer_timeout
         self.heartbeat_period = heartbeat_period
         self.log = logger or logging.getLogger("scenario_agent_relay")
+        self.versions = tuple(versions)  # accepted; (1,) behaves as a v1-only relay
         self._sessions = {}
         self._commanders = set()
         self._lock = threading.Lock()
@@ -244,6 +259,12 @@ class AgentServer:
                 lines = reader.feed(data)
                 for index, line in enumerate(lines):
                     message = P.decode(line)
+                    if message["v"] not in self.versions:
+                        raise P.ProtocolError(f"protocol version {message['v']}, expected "
+                                              f"one of {self.versions}")
+                    if session is not None and message["v"] != session.version:
+                        raise P.ProtocolError(f"protocol version {message['v']} on a "
+                                              f"v{session.version} connection")
                     if session is None:
                         if message["type"] != P.REGISTER:
                             raise P.ProtocolError("the first message must be register")
@@ -278,7 +299,8 @@ class AgentServer:
 
     # -- commanders -------------------------------------------------------------------------
     def _serve_commander(self, sock, address, message, reader, pending):
-        commander = CommanderSession(sock, address, message.get("agent", ""))
+        commander = CommanderSession(sock, address, message.get("agent", ""),
+                                     message["v"])
         with self._lock:
             self._commanders.add(commander)
         commander.send(P.registered(""))
@@ -345,7 +367,8 @@ class AgentServer:
 
     def _reject(self, sock, reason):
         try:
-            sock.sendall(P.encode(P.error(reason)))
+            # v1, which every agent can read: it is how a v2 agent learns to fall back.
+            sock.sendall(P.encode(P.error(reason), version=1))
         except OSError:
             pass
         try:
@@ -356,7 +379,7 @@ class AgentServer:
     def _register(self, sock, address, message):
         entity = message["entity"]
         session = AgentSession(self, sock, address, entity, message.get("agent", ""),
-                               message.get("capabilities", []))
+                               message.get("capabilities", []), message["v"])
         with self._lock:
             previous = self._sessions.get(entity)
             self._sessions[entity] = session
@@ -368,7 +391,7 @@ class AgentServer:
             previous.close("replaced by a new registration")
         session.send(P.registered(entity))
         self.log.info(f"entity {entity!r}: agent {session.agent or '?'} registered from "
-                      f"{address[0]}:{address[1]} (capabilities: "
+                      f"{address[0]}:{address[1]}, protocol v{session.version} (capabilities: "
                       f"{', '.join(session.capabilities) or 'none'})")
         self.on_presence(entity, True)
         return session

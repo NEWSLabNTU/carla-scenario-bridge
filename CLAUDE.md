@@ -59,6 +59,8 @@ just test     # Run tests
 │   ├── Cargo.toml
 │   └── package.xml
 ├── src/csb_interfaces/     # rosidl: Weather.msg, SetWeather.srv, GetWeather.srv
+├── src/csb_agent/          # Agent SDK + agent protocol v1/v2 (030): csb_agent.Agent, Client, main
+├── src/scenario_agent_relay/  # the relay: concealer ADAPI <-> agents (imports csb_agent.protocol)
 ├── src/csb_isaac/          # Isaac Sim world server (Python, Isaac's venv; `just isaac-world`):
 │                           #   lockstep world, NPCs, contacts, the CARLA vehicle catalogue
 ├── src/autoware_isaac_bridge/  # aib submodule (045): the Isaac ego the world server imports
