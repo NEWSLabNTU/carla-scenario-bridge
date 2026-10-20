@@ -101,7 +101,8 @@ trigger to arrive the way the tour does, and routes it through to a nearby goal;
 starts when the ego arrives, its actors are added then and deleted when it is over, and a
 watchdog clears them if the ego stands still too long (logged as degraded). Timed for the
 tour's 40 km/h on CenterPoint with the [042](../../docs/roadmap/042-autoware-overlay.md)
-overlay: `just ego-av max_velocity:=11.11 lidar_detection_model:=centerpoint` (at the default
+overlay: `just ego-av max_velocity:=11.11 lidar_detection_model:=centerpoint
+use_multi_channel_tracker_merger:=false` (acb issue 028; at the default
 15 km/h they still run, but the actors' timing no longer meets the ego). Judge a run with
 `ros2 run csb_launch incident_judge` (gap trace plus a log of `/simulation/context`).
 

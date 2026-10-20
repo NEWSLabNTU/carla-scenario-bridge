@@ -75,7 +75,8 @@ exceeds maxSpeed, and the CARLA ego overshoots the cap; step 4d).
 labels everything UNKNOWN, which `blind_spot` ignores, so incident 6 needs CenterPoint.
 CenterPoint lost 7 of 9 UC-AEB variants on this host, so incidents 1-5 are rehearsed again
 on it, at 40 km/h; ground-truth objects (`perception:=false`, acb labels BICYCLE) are the
-fallback if they do not hold, decided then with the user.
+fallback if they do not hold, decided then with the user. (2026-10-21: the user chose CenterPoint with
+the lidar merger, `use_multi_channel_tracker_merger:=false`, acb issue 028; all six 5/5, step 4d.)
 
 **Weather: ClearNoon**, the bridge's `weather` parameter, for the whole run (no change
 mid-tour).
@@ -237,8 +238,10 @@ recording picks them up.
      (2026-10-20, Results);
    - [ ] each template 5/5 on **CenterPoint + overlay at 40 km/h**, ClearNoon; incident 6 back in
      the judged set. If CenterPoint does not hold 1-5, stop and take the fallback question to
-     the user. **2026-10-20: 1, 3, 5, 6 5/5; 2 0/5 and 4 3/5, both CenterPoint's range --
-     with the user** (Results).
+     the user. **2026-10-20: 1, 3, 5, 6 5/5; 2 0/5 and 4 3/5, both CenterPoint's range.
+     2026-10-21, option (b) (user): with `use_multi_channel_tracker_merger:=false` all six
+     5/5** (Results). The tour's ego stack is now `just ego-av max_velocity:=11.11
+     lidar_detection_model:=centerpoint use_multi_channel_tracker_merger:=false`.
 5. [ ] **Compose the tour** (`src/csb_examples/scenarios/demo/town01_tour.xosc`): route,
    triggers, add / delete, watchdogs, the single stop trigger. One ManeuverGroup per
    incident holding its add, delete and watchdog events: a `StoryboardElementStateCondition`
@@ -939,3 +942,52 @@ fallback question above: (b). Plan first, results below it.
   wins).
 - Then UC-AEB-001 (9 variants, the suite CenterPoint lost 7/9 on) on the same stack.
 - If it does not hold: diagnose briefly and report; ground truth stays the user's call.
+
+*Results, option (b) (2026-10-21).* acb `5c544dc` (the argument; csb `c1e9534` pins it), one
+`just ego-av max_velocity:=11.11 lidar_detection_model:=centerpoint
+use_multi_channel_tracker_merger:=false` (042 overlay on; engines cached, CenterPoint up in
+191 s), the sim side traced as before. Host load 8-47, IO pressure 0-7 %: no run spoiled.
+
+*The graph* (`play_launch dump`): default identical to before but for the argument; with
+false, 211 nodes instead of 208 -- `object_association_merger_alpha` (`centerpoint/objects`,
+CenterPoint's raw output, + `clustering/objects`, priority 2 = confidence) ->
+`object_association_merger_beta` (+ `detection_by_tracker/objects`) -> `object_lanelet_filter`
+-> `detection/objects` -> `multi_object_tracker` on one channel (`detected_objects`). No
+radar tracking merger in lidar mode. acb issue 028.
+
+*Live* (stage by stage, `firstdet.py`): the broken-down car now tracked (UNKNOWN) from
+**66-79 m** (was 28-35 m), the pedestrian from **32-35 m** as he steps out (was 9-12 m or
+never); CenterPoint's own detections unchanged (car ~38 m, pedestrian ~19 m), its class
+taking over when it comes. The cyclist reaches `/perception/object_recognition/objects` as
+**BICYCLE** (64 of 65 frames near the ego, the first one UNKNOWN), and `blind_spot` goes
+`Unsafe`: merger alpha keeps CenterPoint's class where the two overlap.
+
+| # (route order) | Pass | Numbers (5 runs) | Oracle |
+|---|---|---|---|
+| 2 pedestrian (1) | **5/5** (+1 diagnostic) | the ego stopped every run, **5.3-5.8 m** from the pedestrian; stood 5.9-6.6 s | G1/G2 0; G3 4 per run on `i2_ped`, yaw only (below) |
+| 1 lead brakes (2) | **5/5** | brake at the brake point with the ego **45.3-45.7 m** behind at 7.9 m/s (it now follows further back); stop gap 5.3-5.4 m; stood 5.6-5.9 s | clean |
+| 3 red light (3) | **5/5** | front 0.47 m short to 0.09 m past the line; moving 0.9-1.0 s after green | clean |
+| 4 blocked lane (4) | **5/5** (+1) | stop gap **4.75-5.39 m**; waited 12 s (staged), moving 1.4-1.5 s after | clean |
+| 5 crossing at a turn (5) | **5/5** | stood 2.8-2.9 s; min gap 1.57-1.60 m | clean |
+| 6 cyclist inside (6) | **5/5** (+1) | yielded every run, stood 1.0-1.2 s, cyclist past at 0.14-0.15 m | G3 1 (the added-moving artefact, as before) |
+
+*Side effects looked for, none found:* route C with the 17 parked misc cars at 3.6 m
+(`route_c_parked36m`, 4d) ran first move -> goal in 183.6 s with no stop (183.3-184.7 s
+before), so neither kerb furniture (clustering's UNKNOWNs on the far kerb are visible in
+`objects`) nor the parked cars stop or slow the ego; incidents 3 and 5 kept their numbers;
+the walker standing 1.4 m from the parked car was never lost (issue 027's case: present in
+every run, the ego stood 5.3-5.8 m short of him).
+
+*`i2_ped`'s G3*: while the walker stands in the lane for 4 s, its CARLA body oscillates
++-0.01 m around SSv2's pose and its velocity changes sign each ~1.5 s (+-0.05 m/s, at the
+bridge's `WALKER_SPEED_FLOOR`), and CARLA turns the walker round with it: yaw 180 deg off,
+xy 0.011 m, three 24-frame windows. A limit cycle of the walker's position correction around
+the speed floor (roadmap 032 gap C's kind), not chased here; the incident is unaffected.
+
+*UC-AEB-001* (9 variants, same stack): **7/9** (CenterPoint with the multi-channel tracker
+was 2/9 on 2026-10-10, clustering 9/9). Failed: variants 3 (8.33 m/s, pedestrian 15 m ahead)
+and 6 (9.72 m/s, 15 m), both contact; the 15 m variants leave 2.3-3.2 m/s^2 of braking with
+no latency at all. Not diagnosed further.
+
+Runs: `i<N>/{diagb,rehb}_<k>`, `routec/B36m_b`, `aeb/b_1` in the scratch directory above
+(`rounds_b.log`).
