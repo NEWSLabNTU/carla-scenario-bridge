@@ -194,6 +194,10 @@ class Client:
                 and self._last[2] == P.OK and now - self._last[4] < REPEAT_WINDOW):
             return P.OK, "already done"
         self.log.info(f"command {name}")
+        if name in (P.RESET, P.TELEPORTED) and self.agent.overrides("on_reset"):
+            # The relay may answer the scenario before the reset is done; until the
+            # agent says otherwise it is re-initializing, not ready for a goal.
+            self.agent.report(P.INITIALIZING)
         reports = self.agent._reports
         try:
             text = self._dispatch(name, args)

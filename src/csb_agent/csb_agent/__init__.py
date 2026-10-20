@@ -23,10 +23,12 @@ import threading
 from . import protocol
 from .agent import Agent, Episode, Failed
 from .client import Client, parse_relay
+from .commander import Commander
 from .protocol import (ARRIVED, DRIVING, EMERGENCY, FAULT_NONE, IDLE, INITIALIZING,
                        MINIMAL_RISK_MANEUVER, PLANNING, READY, STOPPED, UNAVAILABLE)
 
-__all__ = ["Agent", "Episode", "Failed", "Client", "main", "load_config", "protocol",
+__all__ = ["Agent", "Episode", "Failed", "Client", "Commander", "main", "load_config",
+           "protocol",
            "UNAVAILABLE", "INITIALIZING", "IDLE", "PLANNING", "READY", "DRIVING", "ARRIVED",
            "STOPPED", "FAULT_NONE", "MINIMAL_RISK_MANEUVER", "EMERGENCY"]
 

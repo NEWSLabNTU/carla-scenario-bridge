@@ -34,8 +34,10 @@ from tier4_external_api_msgs.srv import Engage, SetVelocityLimit
 from tier4_rtc_msgs.msg import CooperateResponse, CooperateStatus, CooperateStatusArray
 from tier4_rtc_msgs.srv import AutoModeWithModule, CooperateCommands
 
-from . import mapping as M
 from csb_agent import protocol as P
+
+from . import mapping as M
+from .episodes import RESET_TIMEOUT, Episodes
 from .server import AgentServer
 
 # How long a service handler waits for the agent's reply. Each is under the concealer's
@@ -71,6 +73,9 @@ class RelayNode(Node):
         self.declare_parameter("agent_port", 5560)
         self.declare_parameter("agent_timeout", P.PEER_TIMEOUT)
         self.declare_parameter("publish_rate", 10.0)
+        # How long an agent with the `reset` capability has to get ready after SSv2's
+        # initialize (protocol v2); the concealer is answered within SLOW_REPLY anyway.
+        self.declare_parameter("reset_timeout", RESET_TIMEOUT)
         self.entity = self.get_parameter("entity").value
         host = self.get_parameter("agent_host").value
         port = int(self.get_parameter("agent_port").value)
@@ -130,6 +135,9 @@ class RelayNode(Node):
                                   on_presence=self._on_presence, peer_timeout=timeout,
                                   logger=_RosLogger(self.get_logger()))
         self.server.start()
+        self.episodes = Episodes(
+            self.server, float(self.get_parameter("reset_timeout").value),
+            logger=self.get_logger().info)
         self.get_logger().info(
             f"Relaying entity {self.entity!r}: agents register on tcp://{host}:"
             f"{self.server.port}; ADAPI served in ROS domain "
@@ -281,7 +289,14 @@ class RelayNode(Node):
             return self._adapi(response, P.FAILED,
                                "the relay needs an explicit pose (teleported carries one)")
         pose = pose_to_dict(request.pose[0].pose.pose)
-        return self._adapi(response, *self._command(P.TELEPORTED, SLOW_REPLY, pose=pose))
+        # reset (v2, capability) or teleported (v1): episodes.py decides.
+        status, message = self.episodes.initialize(self.entity, pose, SLOW_REPLY)
+        text = f"initialize -> {status or 'no reply'}" + (f": {message}" if message else "")
+        if status == P.OK:
+            self.get_logger().info(text)
+        else:
+            self.get_logger().warning(text)
+        return self._adapi(response, status, message)
 
     def _goal(self, request, **extra):
         return self._command(

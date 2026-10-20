@@ -166,6 +166,7 @@ class AgentServer:
         self.log = logger or logging.getLogger("scenario_agent_relay")
         self.versions = tuple(versions)  # accepted; (1,) behaves as a v1-only relay
         self._sessions = {}
+        self._resets = {}  # entity -> how its last reset went (episodes.py)
         self._commanders = set()
         self._lock = threading.Lock()
         self._ids = itertools.count(1)
@@ -208,6 +209,16 @@ class AgentServer:
         if session is None or session.closed.is_set():
             return None
         return session
+
+    def record_reset(self, entity, record):
+        """Keep how the entity's last reset went, for commanders' queries."""
+        with self._lock:
+            self._resets[entity] = dict(record)
+
+    def last_reset(self, entity):
+        with self._lock:
+            record = self._resets.get(entity)
+        return dict(record) if record is not None else None
 
     def entities(self):
         with self._lock:
@@ -341,7 +352,9 @@ class AgentServer:
                                        f"entity {message['entity']!r}", registered=False))
             else:
                 commander.send(P.reply(message["id"], P.OK, "", session.state,
-                                       registered=True))
+                                       registered=True,
+                                       reset=(self.last_reset(message["entity"])
+                                              if commander.version >= 2 else None)))
         elif kind == P.COMMAND_FOR:
             # Its own thread: a slow agent must not hold up the commander's other requests.
             threading.Thread(target=self._command_for, args=(commander, message),

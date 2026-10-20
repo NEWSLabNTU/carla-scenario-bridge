@@ -166,7 +166,7 @@ over TCP. Nothing is added to this workspace.
    planned.
 2. [x] **SDK core.** `csb_agent` package, `protocol.py` moved in (relay imports it),
    `Agent` and the run loop, v1 fallback; unit tests against the relay's server in-process.
-3. [ ] **Protocol v2 in the relay.** `reset` from SSv2's `initialize`, `reset_timeout`,
+3. [x] **Protocol v2 in the relay.** `reset` from SSv2's `initialize`, `reset_timeout`,
    `episode_end` via the commander role, mixed v1 / v2 tests.
 4. [ ] **`csb-agent check` and `new`.** The fake relay and its scripted episode; the
    skeleton passes `check` as generated.
@@ -230,4 +230,33 @@ acb's unchanged v1 agent (`RelayClient` + `AgentCore` on its fake Autoware) regi
 the new relay as v1, answers `stop`, and is answered `UNSUPPORTED` for `reset` by the relay.
 acb's drift test (its copy against the relay's `protocol.py`) now skips: the file it compares
 with moved; step 6 deletes the copy.
+
+**Step 3: protocol v2 in the relay (2026-10-21).**
+
+- **`reset` on SSv2's `initialize`** (`scenario_agent_relay/episodes.py`, ROS-free): an
+  agent with the `reset` capability gets one `reset` with a new episode id
+  (`<entity>-<n>-<unix time>`); any other gets `teleported`, as in v1 (acb today).
+  `scenario`, `map` and `parameters` go out empty: the relay is long-lived and learns
+  neither from the concealer's `initialize`; filling them needs a source (SSv2's
+  `/simulation/context`, or `run_suite` through the commander) -- open.
+- **Bounded, and not held to the concealer's window**: the relay waits up to the
+  concealer's 9 s for the agent's reply; past that it answers the concealer OK and lets the
+  reset go on up to the node parameter `reset_timeout` (default 60 s). The SDK reports
+  `INITIALIZING` while `on_reset` runs, which holds the concealer at "Autoware initializing"
+  until the agent is `IDLE`. A repeated `initialize` for the same pose while the reset runs
+  (the concealer's retry) joins it; nothing is sent twice.
+- **How each reset went** (`episode`, `status`, `message`, `seconds`, `timed_out`) is kept
+  per entity and returned to v2 commanders in `query` replies (`reset`), for step 8's
+  ladder.
+- **`episode_end`** goes through the commander role as any command does; the relay refuses
+  it for a v1 agent (`UNSUPPORTED`). `csb_agent.Commander` is the client: `episode_end()`,
+  `query()`, `command()`. Wiring it into `run_suite` is step 8, with the restart ladder.
+
+Tests: `test_episodes.py` (8: a quick reset answered with its outcome, a failed one failing
+the initialize, a slow one answered OK then completed with the concealer's retry joining it,
+a reset past its timeout recorded, `teleported` for an agent without the capability, no
+agent, the commander query carrying the last reset, `episode_end` through a `Commander`
+reaching `on_episode_end` with the reset's episode). 151 pass across both packages. Not
+yet run live: acb's agent is v1 and takes the unchanged `teleported` path; the first live
+`reset` comes with step 5's CARLA adapter or step 6's Autoware adapter.
 

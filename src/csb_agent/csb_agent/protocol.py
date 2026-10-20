@@ -203,6 +203,9 @@ def validate(message: dict) -> None:
         # entity's name, and its latest state.
         if "registered" in message and not isinstance(message["registered"], bool):
             raise ProtocolError("reply: registered is a boolean")
+        # v2, to commanders: how the entity's last reset went.
+        if message.get("reset") is not None and not isinstance(message["reset"], dict):
+            raise ProtocolError("reply: reset is an object")
         if message.get("state") is not None:
             if not isinstance(message["state"], dict):
                 raise ProtocolError("reply: state is an object")
@@ -316,10 +319,12 @@ def command(command_id, name, **args):
     return {"type": COMMAND, "id": command_id, "command": name, "args": args}
 
 
-def reply(command_id, status=OK, message="", state=None, registered=None):
+def reply(command_id, status=OK, message="", state=None, registered=None, reset=None):
     body = {"type": REPLY, "id": command_id, "status": status, "message": message}
     if registered is not None:
         body["registered"] = registered
+    if reset is not None:
+        body["reset"] = reset
     if state is not None:
         body["state"] = state
     return body

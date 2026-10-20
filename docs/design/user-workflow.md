@@ -228,8 +228,11 @@ and the relay answers each agent and commander in it. A v2 register refused by a
 gets an `error` in v1 naming the version; the SDK then registers again in v1 and stays
 there. The relay never sends a v2 command to a v1 agent, nor `reset` / `restart` to an
 agent without the capability: it answers the caller `UNSUPPORTED` itself. *Implemented*
-(030 step 2): the messages, versioning and the SDK's handling; the relay sending `reset`
-on `initialize`, `reset_timeout` and `episode_end` are step 3.
+(030 steps 2-3). The relay answers the concealer's `initialize` within its usual 9 s even
+when the reset takes longer: OK, with the agent reporting `INITIALIZING` until ready, and
+the reset bounded by the relay parameter `reset_timeout` (60 s); a retried `initialize`
+for the same pose joins the running reset. A v2 commander's `query` reply carries `reset`
+(`episode`, `status`, `message`, `seconds`, `timed_out`) for the entity's last reset.
 
 | Message | Direction | Fields | Meaning |
 |---|---|---|---|
