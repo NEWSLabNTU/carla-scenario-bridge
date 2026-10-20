@@ -915,3 +915,27 @@ stages and factors), `bs.jsonl` (objects, blind_spot), `det.jsonl` (every percep
 load. Scratch: `/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d329-
 483b-9e38-80a742b40cbd/scratchpad/s_4d` (`sites.py` the pose tool, `regen.sh`, `run_one.sh` /
 `batch.sh` / `rounds.sh`, `summ.py`, `det_watch.py`, `firstdet.py`, `profile.py`, `rounds.log`).
+
+**Step 4d, option (b): CenterPoint with the lidar merger (2026-10-21).** User decision on the
+fallback question above: (b). Plan first, results below it.
+
+- acb: a launch argument `use_multi_channel_tracker_merger` (default **true**, Autoware 1.5's
+  own, so every suite keeps today's graph) passed to acb's perception component, which
+  already declares it. With **false**, Autoware's lidar mode switches to the lidar merger:
+  `object_association_merger_alpha` (CenterPoint's validated objects + `clustering/objects`,
+  priority by confidence) -> `object_association_merger_beta` (+ `detection_by_tracker`) ->
+  the lanelet object filter -> `detection/objects` -> one-channel `multi_object_tracker`
+  (`detected_objects`) -> `decorative_tracker_merger` (radar tracking fusion, no radar here)
+  -> `tracking/objects`. Checked with `play_launch dump`: the default model identical to
+  today's, and with false exactly that chain. acb issue 028 records the finding; a profile
+  test pins the default.
+- Live, on one stack with the argument false: UNKNOWN objects from clustering reach
+  `/perception/object_recognition/objects` at their 35-70 m, CenterPoint's classes still
+  come through (the cyclist as BICYCLE).
+- Incidents 1-6, 5 runs each at 40 km/h, same judge and oracle. Watch for what the UNKNOWN
+  objects may add: phantom stops or slow-downs for kerb furniture and the parked misc
+  objects, the issue 027 merging of a walker into a parked car, and `blind_spot` ignoring an
+  UNKNOWN cyclist (it needs BICYCLE; the merger's confidence priority decides which label
+  wins).
+- Then UC-AEB-001 (9 variants, the suite CenterPoint lost 7/9 on) on the same stack.
+- If it does not hold: diagnose briefly and report; ground truth stays the user's call.
