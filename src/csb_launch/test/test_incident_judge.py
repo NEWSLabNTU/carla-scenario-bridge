@@ -135,6 +135,36 @@ class IncidentJudge(unittest.TestCase):
         self.assertEqual(m["verdict"], "PASS", m["reasons"])
         self.assertGreaterEqual(m["ego_wait_s"], 9.0)
 
+    @staticmethod
+    def cyclist_frames(cyclist_y, ego_stops=True):
+        """the ego drives east at 4 m/s and (if `ego_stops`) stands at x 20 for t 5..8; a
+        cyclist overtakes it at 6 m/s from 30 m behind, `cyclist_y` m to its side"""
+        frames = []
+        for k in range(int(12 / 0.05)):
+            t = round(k * 0.05, 2)
+            if ego_stops and 5.0 <= t < 8.0:
+                x, v = 20.0, 0.0
+            elif ego_stops and t >= 8.0:
+                x, v = 20.0 + (t - 8.0) * 4.0, 4.0
+            else:
+                x, v = t * 4.0, 4.0
+            frames.append((t, {"ego": state(x, v), "i6_cyclist": state(-30.0 + 6.0 * t, 6.0, cyclist_y)}))
+        return frames
+
+    def test_cyclist_yield(self):
+        m = self.judge(trace_lines(self.cyclist_frames(-2.6), actors=("i6_cyclist",)), 6,
+                       context(("i6_start", 0.5)))
+        self.assertEqual(m["verdict"], "PASS", m["reasons"])
+        self.assertTrue(m["ego_yielded"])
+        self.assertAlmostEqual(m["min_gap"]["m"], 0.6, places=1)
+
+    def test_cyclist_never_met_fails(self):
+        m = self.judge(trace_lines(self.cyclist_frames(-9.0, ego_stops=False), actors=("i6_cyclist",)), 6,
+                       context(("i6_start", 0.5)))
+        self.assertEqual(m["verdict"], "FAIL")
+        self.assertFalse(m["ego_yielded"])
+        self.assertTrue(any("never came within" in r for r in m["reasons"]))
+
 
 if __name__ == "__main__":
     unittest.main()

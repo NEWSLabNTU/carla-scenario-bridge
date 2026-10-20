@@ -26,7 +26,9 @@ or, with --junit, a scenario that did not pass. Per row:
   4 blocked lane      the ego waits (stands >= 5 s) behind the broken-down car without
                       contact, then proceeds after it is cleared (moves >= 10 m)
   5 crossing traffic  no contact; the ego's wait before the turn and min gap reported
-  6 cyclist           no contact; min gap and whether the ego waited reported
+  6 cyclist           no contact, and the two met (min gap < 5 m: a cyclist that came too
+                      early or too late tested nothing); min gap reported, and whether the
+                      ego yielded (below 1 m/s while the cyclist was within 10 m)
 
 Distances are CARLA's: the signed distance between blueprint boxes at CARLA's transforms
 (`gap_geometry.carla_box`), negative when they overlap.
@@ -52,6 +54,9 @@ DECEL_WINDOW_S = 0.25
 STOP_LINE_SLACK_M = 0.5
 I4_MIN_WAIT_S = 5.0
 I4_PROCEED_M = 10.0
+I6_MET_M = 5.0
+I6_NEAR_M = 10.0
+I6_YIELD_MPS = 1.0
 
 
 def events_from_context(lines):
@@ -336,6 +341,13 @@ def judge(trace, incident, done, junit_ok=None, stop_line=None):
             m["ego_min_mps"] = round(min(vs), 2) if vs else None
         if ts is None:
             fail.append("the incident never started")
+        if incident == 6 and ts is not None:
+            g = run.gaps("i6_cyclist")
+            near = [ev for t, d, ev, _ in g if d < I6_NEAR_M and ev is not None]
+            m["ego_min_mps_cyclist_near"] = round(min(near), 2) if near else None
+            m["ego_yielded"] = bool(near) and min(near) < I6_YIELD_MPS
+            if not g or min(d for _, d, _, _ in g) >= I6_MET_M:
+                fail.append(f"the cyclist never came within {I6_MET_M} m of the ego (timing)")
 
     m["verdict"] = "FAIL" if fail else "PASS"
     m["reasons"] = fail

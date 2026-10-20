@@ -2,8 +2,10 @@
 """Generate the demo tour's incident templates (roadmap 033 step 4).
 
 Each incident is a short standalone OpenSCENARIO file on Town01: the ego (Autoware, through
-the agent relay) starts ~100-150 m before the incident's site on the step 3 tour route and is
-routed through it to a nearby goal. The incident is triggered by the ego's arrival
+the agent relay) starts on the tour's route C far enough before the incident's trigger to
+arrive the way the tour brings it there (at the 40 km/h cruise, or out of the corner before
+it), and is routed through the site to a nearby goal. Timings are for the tour's ego stack:
+`just ego-av max_velocity:=11.11 lidar_detection_model:=centerpoint` (step 4d). The incident is triggered by the ego's arrival
 (`ReachPositionCondition`), its actors are added then (`AddEntityAction`) and deleted when it
 is over (`DeleteEntityAction`), and a per-incident watchdog removes them if the ego has stood
 still too long while the incident is active (logged as degraded). The only stop trigger is
@@ -33,7 +35,6 @@ Rules the templates keep (033 step 2 spike, step 4b):
 
 Usage:
     scripts/gen_demo_incidents.py                 # writes src/csb_examples/scenarios/demo/incidents/
-                                                  # (and the dropped 6 to scenarios/demo/)
     scripts/gen_demo_incidents.py --out /tmp/x    # elsewhere
 """
 
@@ -50,6 +51,10 @@ DEFAULT_OUT = ROOT / "src/csb_examples/scenarios/demo/incidents"
 
 TIMEOUT_S = 300  # sim time; every template's drive is well under 2 min
 GOAL_TOLERANCE_M = 3.0
+# The ego's Performance maxSpeed: above Autoware's max_vel (11.11 on the tour), since SSv2 ends
+# a run whose ego exceeds it and the CARLA ego overshoots the cap by up to 0.4 m/s (step 4d);
+# SSv2 also hands it to Autoware as the external velocity limit, which max_vel then clamps.
+EGO_MAX_SPEED = 13.89
 WATCHDOG_S = 20.0  # ego stood still this long while an incident is active -> clear it
 I4_CLEAR_S = 12.0  # incident 4's staged "tow truck": the watchdog, on purpose
 I3_GREEN_AFTER_STOP_S = 8.0
@@ -68,13 +73,15 @@ FILES = {
     5: "town01_i5_cross_turn.xosc",
     6: "town01_i6_cyclist_inside.xosc",
 }
-# Incident 6 is dropped from the tour (step 4b: the cyclist tracks, but Autoware turns across
-# it, 2 of 2 runs): written beside the repo's other reproducers, not into the installed set.
-# Why (step 4c): the stack's clustering perception reports the cyclist UNKNOWN and static,
-# which `blind_spot` ignores, and with a classifying perception Autoware's `blind_spot`
-# still misjudges a right turn (its ego passage interval collapses). Kept as the reproducer.
-DROPPED_OUT = ROOT / "scenarios/demo"
-DROPPED = {6}
+# Incident 6 is in the set again (2026-10-18): it needs a classifying perception (CenterPoint)
+# and the 042 overlay's blind_spot fix. scenarios/demo/town01_i6_cyclist_inside.xosc is the
+# step 4b version, frozen as 042's reproducer of the stock module's right-turn bug.
+
+# CARLA 0.9.16's boxes (config/blueprint_boxes_0.9.16.yaml): length, width, height
+BLUEPRINT_BOX = {
+    "vehicle.tesla.model3": (4.792, 2.163, 1.488),
+    "vehicle.mercedes.sprinter": (5.915, 1.988, 2.561),
+}
 
 # ---------------------------------------------------------------------------- entities
 
@@ -107,7 +114,7 @@ WALKER = """<Pedestrian model="unspecified" mass="70.0" name="walker.pedestrian.
 
 def ego_object():
     return f"""<ScenarioObject name="ego">
-			{CAR.format(bp="vehicle.tesla.model3", vmax=50)}
+			{CAR.format(bp="vehicle.tesla.model3", vmax=EGO_MAX_SPEED)}
 			<ObjectController><Controller name="Autoware"><Properties>
 				<Property name="maxJerk" value="1.5" /><Property name="minJerk" value="-1.5" />
 			</Properties></Controller></ObjectController>
@@ -133,6 +140,20 @@ def bicycle(name):
 
 def walker(name):
     return npc_object(name, WALKER)
+
+
+def parked(name, bp):
+    """a parked vehicle as a MiscObject (no behaviour; the bridge spawns blueprint `bp` with
+    physics off and holds it where SSv2 puts it). Not a vehicle NPC: standing vehicle entities
+    off the lane cost SSv2 ~0.1 s a frame each (step 4d: 17 took it to RTF 0.02). Its origin
+    is its box centre, as for every misc object."""
+    length, width, height = BLUEPRINT_BOX[bp]
+    return f"""<ScenarioObject name="{name}">
+			<MiscObject mass="1800" miscObjectCategory="obstacle" name="{bp}" model3d="{bp}">
+				<BoundingBox><Center x="0.0" y="0.0" z="{height / 2:.3f}" /><Dimensions width="{width}" height="{height}" length="{length}" /></BoundingBox>
+				<Properties />
+			</MiscObject>
+		</ScenarioObject>"""
 
 
 # ---------------------------------------------------------------------------- positions
@@ -358,13 +379,15 @@ def incident_groups(i, S):
     if i == 1:
         lead = "i1_lead"
         on_road, brake, resume = "i1_lead_on_road", "i1_lead_brake", "i1_lead_resume"
+        lead_mps, brake_gap = S.get("lead_mps", 3.0), S.get("brake_gap_m", 12.0)
         extra = [
-            # merged into the ego's lane: slow to 3 m/s so the ego closes in behind
-            event(on_road, [speed("i1_cruise", 3.0, 3.0)], [reach("i1_lead_merged", lead, S["lead_on_road"], 3.0)]),
-            # brake ~6 m/s2 to a stop when the ego is within 12 m (box to box), or at the
-            # brake point whatever the gap
+            # merged into the ego's lane: on to `lead_mps` (below the ego's cruise, so the
+            # ego closes in behind and follows)
+            event(on_road, [speed("i1_cruise", lead_mps, 2.0)], [reach("i1_lead_merged", lead, S["lead_on_road"], 3.0)]),
+            # brake ~6 m/s2 to a stop when the ego is within `brake_gap` m (box to box), or at
+            # the brake point whatever the gap
             event(brake, [speed_profile("i1_brake_hard", 0.0, 3.0, 6.0, 60.0), log("i1_brake_log", "i1", "brake", lead)],
-                  [state("i1_brake_after_merge", on_road), gap_below("i1_ego_close", "ego", lead, 12.0)],
+                  [state("i1_brake_after_merge", on_road), gap_below("i1_ego_close", "ego", lead, brake_gap)],
                   [reach("i1_lead_at_brake_point", lead, S["brake_at"], 2.5)]),
             # drive off once the ego has stood behind it for 4 s (or 20 s after the brake)
             event(resume, [speed("i1_drive_off", 4.5, 2.0)],
@@ -380,39 +403,47 @@ def incident_groups(i, S):
         return [car(lead)], [g]
 
     if i == 2:
-        parked, ped = "i2_parked", "i2_ped"
+        ped = "i2_ped"
         line = S["ped_spawn"]
+        # A van at the kerb hides the walker from the approaching ego; a second car stands
+        # just beyond him, so he steps out of the gap between the two. Both are misc objects
+        # (`parked`) at the offset where obstacle_slow_down leaves them alone (step 4d).
+        # Older sites files (step 4b) have one car, `parked`, and no van.
+        cars = [(n, bp, S[k]) for n, bp, k in (("i2_van", "vehicle.mercedes.sprinter", "van"),
+                                               ("i2_parked", "vehicle.tesla.model3", "parked")) if k in S]
         # Untimed trajectories at a commanded walking speed: with vertex times SSv2 started
         # the walker late and then ended the scenario for missing a vertex time (step 4b).
-        # Out from behind the parked car into the ego's lane, stop there 4 s (startled), then
+        # Out from behind the van into the ego's lane, stop there 4 s (startled), then
         # on across the oncoming lane to the far kerb.
         b = "i2_ped_busy"
+        # he faces the way he walks: from the kerb across the ego's lane
+        walk_yaw = math.atan2(S["ped_far"]["y"] - line["y"], S["ped_far"]["x"] - line["x"])
         ped_extra = [
-            event("i2_ped_dart", [speed("i2_ped_walk", 1.5, rate=WALKER_START_RATE), trajectory("i2_dart", [(None, S["ped_spawn"]), (None, S["ped_in_lane"])], yaw=math.pi),
+            event("i2_ped_dart", [speed("i2_ped_walk", 1.5, rate=WALKER_START_RATE), trajectory("i2_dart", [(None, S["ped_spawn"]), (None, S["ped_in_lane"])], yaw=walk_yaw),
                                   set_param("i2_dart_running", b, 1), log("i2_dart_log", "i2", "dart", ped)],
                   [reach("i2_ego_near", "ego", S["dart"], 2.0), param_is("i2_dart_live", "i2_ped_phase", 1)]),
             event("i2_ped_hold", [speed("i2_ped_stop", 0.0)], [state("i2_ped_in_lane", "i2_ped_dart")]),
-            event("i2_ped_cross", [speed("i2_ped_walk_on", 1.5, rate=WALKER_START_RATE), trajectory("i2_cross", [(None, S["ped_hold"]), (None, S["ped_far"])], yaw=math.pi)],
+            event("i2_ped_cross", [speed("i2_ped_walk_on", 1.5, rate=WALKER_START_RATE), trajectory("i2_cross", [(None, S["ped_hold"]), (None, S["ped_far"])], yaw=walk_yaw)],
                   [state("i2_ped_held", "i2_ped_hold", delay=4.0)]),
             event("i2_ped_across", [speed("i2_ped_stop_far", 0.0), set_param("i2_ped_walked_far", b, 2)],
                   [state("i2_ped_crossed", "i2_ped_cross")]),
         ]
         trigger = reach("i2_trigger", "ego", S["trigger"], 3.0)
         past = [[reach("i2_ego_past", "ego", S["ego_past"], 3.0)]]
-        g_parked = actor_group(2, "i2_parked", [parked],
-                               [add(parked, S["parked"]), speed("i2_park", 0.0)], trigger,
-                               [delete(parked)], past)
+        names = [n for n, _, _ in cars]
+        g_parked = actor_group(2, "i2_parked", names, [add(n, p) for n, _, p in cars], trigger,
+                               [delete(n) for n in names], past)
         # no hold SpeedAction on the walker: a target speed of 0 left it standing through its
         # FollowTrajectoryAction (step 4b, first run); a walker added without one stands
         g_ped = actor_group(2, "i2_ped", [ped],
-                            [add(ped, dict(line, yaw=math.pi))],
+                            [add(ped, dict(line, yaw=walk_yaw))],
                             reach("i2_trigger_ped", "ego", S["trigger"], 3.0),
                             [delete(ped)],
                             [[param_is("i2_ped_walked", "i2_ped_busy", 2)],
                              [reach("i2_ego_past_ped", "ego", S["ego_past"], 3.0),
                               param_is("i2_ped_never_darted", "i2_ped_busy", 0)]],
                             ped_extra, busy=True)
-        return [car(parked), walker(ped)], [g_parked, g_ped]
+        return [*[parked(n, bp) for n, bp, _ in cars], walker(ped)], [g_parked, g_ped]
 
     if i == 3:
         sid = str(S["signal"])
@@ -440,7 +471,7 @@ def incident_groups(i, S):
                              speed("i4_oncoming_hold", 0.0), acquire("i4_oncoming_route", S["oncoming_target"])],
                             trigger("i4_trigger_oncoming"), [delete(a) for a in onc],
                             [[reach("i4_oncoming_gone", onc[1], S["oncoming_end"], 4.0)]],
-                            [go_event("i4_oncoming", 6.0)])
+                            [go_event("i4_oncoming", S.get("oncoming_mps", 6.0))])
         return [car(broken), *[car(a) for a in onc]], [g_broken, g_onc]
 
     if i == 5:
@@ -455,12 +486,16 @@ def incident_groups(i, S):
 
     if i == 6:
         bike = "i6_cyclist"
-        v = 5.5
-        t_turn = dist(S["cyclist_spawn"], S["cyclist_turn"]) / v
-        t_far = t_turn + dist(S["cyclist_turn"], S["cyclist_far"]) / v
-        ride = trajectory("i6_ride", [(0.0, S["cyclist_spawn"]), (t_turn, S["cyclist_turn"]),
-                                      (t_far, S["cyclist_far"])])
-        g = actor_group(6, "i6", [bike], [add(bike, S["cyclist_spawn"])],
+        v = S.get("cyclist_mps", 5.5)
+        # Added already riding at `v` (a step SpeedAction with the add) just behind the ego as
+        # it brakes for the turn, then along the kerb side of its lane, straight on through
+        # the junction, untimed. Not from rest on a timed trajectory: a bicycle ramping from 0
+        # at its 4 m/s2 misses its first vertex time at 8 m/s and SSv2 fails the run (step
+        # 4d), and one spawned further back cannot catch a 40 km/h ego. Close behind it is also
+        # where CenterPoint sees it: ~10 m for a bicycle on this host (step 4d).
+        ride = trajectory("i6_ride", [(None, S["cyclist_spawn"]), (None, S["cyclist_turn"]),
+                                      (None, S["cyclist_far"])])
+        g = actor_group(6, "i6", [bike], [add(bike, S["cyclist_spawn"]), speed("i6_riding", v)],
                         reach("i6_trigger", "ego", S["trigger"], 3.0),
                         [delete(bike)], [[param_is("i6_rode", "i6_busy", 2)]],
                         busy_event("i6", "i6_ride", [ride], [state("i6_ride_go", "i6_start")]), busy=True)
@@ -522,9 +557,7 @@ def main():
     sites = yaml.safe_load(a.sites.read_text())
     a.out.mkdir(parents=True, exist_ok=True)
     for i in a.only or sorted(FILES):
-        out = DROPPED_OUT if i in DROPPED and a.out == DEFAULT_OUT else a.out
-        out.mkdir(parents=True, exist_ok=True)
-        path = out / FILES[i]
+        path = a.out / FILES[i]
         path.write_text(template(i, sites))
         print(path)
 

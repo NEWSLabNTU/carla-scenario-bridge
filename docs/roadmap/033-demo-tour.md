@@ -232,11 +232,13 @@ recording picks them up.
      otherwise; `ros2 param get` 11.11 / 4.17. Still binding at 11.11: corner lateral
      acceleration (1.0 m/s^2), `obstacle_slow_down` (at most 8 m/s past an obstacle beside the
      path), `obstacle_velocity_limiter`;
-   - sites: `scripts/demo_town01_sites.yaml` re-cut for route C (incident 2 on the west road,
-     incident 4 alone on the east road), triggers rescaled for 40 km/h, templates regenerated;
-   - each template 5/5 on **CenterPoint + overlay at 40 km/h**, ClearNoon; incident 6 back in
+   - [x] sites: `scripts/demo_town01_sites.yaml` re-cut for route C (incident 2 on the west road,
+     incident 4 alone on the east road), triggers rescaled for 40 km/h, templates regenerated
+     (2026-10-20, Results);
+   - [ ] each template 5/5 on **CenterPoint + overlay at 40 km/h**, ClearNoon; incident 6 back in
      the judged set. If CenterPoint does not hold 1-5, stop and take the fallback question to
-     the user.
+     the user. **2026-10-20: 1, 3, 5, 6 5/5; 2 0/5 and 4 3/5, both CenterPoint's range --
+     with the user** (Results).
 5. [ ] **Compose the tour** (`src/csb_examples/scenarios/demo/town01_tour.xosc`): route,
    triggers, add / delete, watchdogs, the single stop trigger. One ManeuverGroup per
    incident holding its add, delete and watchdog events: a `StoryboardElementStateCondition`
@@ -800,3 +802,116 @@ on the disk is worth finding before then.
 Left for 4d: the sites re-cut for route C and the templates regenerated (incident 2's van
 and second car as misc objects at the new offset), and the CenterPoint + overlay 5/5
 rehearsal of incidents 1-6 at 40 km/h.
+
+**Step 4d: incidents re-sited for route C, rehearsed at 40 km/h (2026-10-20).** Plan first,
+results below it.
+
+Sites (`scripts/demo_town01_sites.yaml`, now in route C metres = step 3's + 130; poses from
+the map's projected lat/lon as before). The incident places are the revised table's; where a
+trigger moved, the reason is the ego's own speed profile on route C, read from the 4d bare
+drives (A1/A2: cruise 11.1 m/s from ~70 m after a start or corner exit, corners 3.0-3.3 m/s,
+the right turn 2.5) and the time each actor needs:
+
+| # | Template start (route m) | Trigger (ego, route m) | Actors | Why there |
+|---|---|---|---|---|
+| 2 | 0 (the tour's start) | 30 adds the actors; **121** the dart (ego 60 m before the walker's line) | `i2_van` (sprinter, 2.56 m tall) and `i2_parked` (model3) as misc objects at 3.5 / 3.6 m right, the walker in the 2.6 m gap between them at route m 181 | lamps at m 171 and 192 bound the kerb slot (the design's 190 has a lamp); the van is taller than the lidar and the walker, so he is hidden from any point behind it; 60 m ~ 5.4 s at cruise leaves ~25 m of braking after he is in the lane |
+| 1 | 200 | **310** (corner entry) | lead from the x 90 stem (33476 s 82), merges at 6 m/s, on to **8 m/s**; brakes 6 m/s^2 at x 200 (m 507) or when the ego is within 18 m | the lead needs ~10 s to the bottom road: merged ~45 m ahead of the ego, which closes in behind it before x 200; the corner fixes the ego's state, so the start only needs to precede it |
+| 3 | 440 | 558 (75 m before the line at 633) | signal 43757 | cruise from ~510 |
+| 4 | 665 | 775 | broken car at y -175 (m 855); oncoming pair 39 / 69 m beyond it at **8 m/s** | the corner at 692-711 sets the ego's state; 80 m at cruise |
+| 5 | 860 | **1007** (before the top-right corner) | the crossing pair spawn at x 216 / 201 on the top road (2113 s 48 / 33), 8 m/s | the ego needs ~15 s from 1007 to the turn (the corner); the pair, 45 m further back than in 4b, reach the conflict ~1.5 s after it gets to the turn entry |
+| 6 | 1105 | **1228** (ego decelerating for the turn; **1240** after the shakedown, below) | cyclist spawned 1.6 m right of centre at m 1212 (16 m behind the ego), timed trajectory at **8 m/s** | at 40 km/h the ego outruns a cyclist ahead of it on the straight and would overtake it in its own lane (slow-down, not `blind_spot`); spawned behind it as it brakes, the cyclist comes up on the inside and reaches the turn ~0.6 s after the ego, as in 4c |
+
+Generator (`gen_demo_incidents.py`): the ego's `maxSpeed` 13.89; parked vehicles as
+`MiscObject`s (`parked()`, box from the blueprint table); incident 6 back in the installed
+set (`scenarios/demo/town01_i6_cyclist_inside.xosc` stays as 042's frozen reproducer); the
+lead's, oncoming pair's and cyclist's speeds read from the sites file. Judge: incident 6 also
+reports whether the ego yielded (stood or slowed below 1 m/s before the cyclist crossed its
+turn) and fails a run in which the two never met.
+
+Rehearsal: one `just ego-av max_velocity:=11.11 lidar_detection_model:=centerpoint` (042
+overlay on; first objects on `/perception/object_recognition/objects` before any run counts),
+the sim side `just run weather:=ClearNoon gap_trace_dir:=<scratch>`; a shakedown per incident
+to tune actor timing, then 5 runs each, `incident_judge` + `gap_oracle` on every trace. Host
+load and `/proc/pressure/io` logged per run; a run spoiled by the host (motion planning silent
+for seconds, the 4d stall) is re-run and reported apart, not counted. If CenterPoint loses an
+incident after a reasonable diagnosis, stop tuning it and take the ground-truth fallback to the
+user.
+
+*Changes on the way (before the rehearsal):*
+- **Incident 6's cyclist is added already riding** (7.5 m/s, a step `SpeedAction` with the
+  add, untimed trajectory), 8 m behind the ego as it brakes for the turn (trigger route m
+  1240, spawn 1232). The first cut (spawned from rest 16 m behind at 8 m/s on a timed
+  trajectory) failed twice over in the shakedown: SSv2 ended the run because the bicycle,
+  ramping from rest at its 4 m/s^2, missed its first vertex time ("completed a trajectory to
+  the nearest waypoint ... 0.5504 ... greater than this step distance: 0.5503"), and
+  CenterPoint first reported it as BICYCLE only 9 m behind the ego, when the ego was 4 m
+  from the turn and `blind_spot` was already `OverPassJudge`: contact. A cyclist further back
+  cannot catch a 40 km/h ego, so it starts where CenterPoint sees it.
+- **The walker faces the way he walks** (yaw from his kerb towards the far side; the generator
+  had pi for step 4b's east road, which on the west road is backwards: G3 yaw 162-180 deg on
+  `i2_ped` in the shakedown).
+
+*Results (2026-10-20).* One `just ego-av max_velocity:=11.11 lidar_detection_model:=centerpoint`
+(042 overlay on; the CenterPoint engines rebuilt at start again, ~10 min), the sim side
+`just run weather:=ClearNoon gap_trace_dir:=...` on a build of `7749756`; five interleaved
+rounds (1 3 5 6 2 4) after one shakedown each. Host load (1 min) 8-87, IO pressure (avg10)
+0-2 % throughout: **no run spoiled by the host**, no motion-planning stall. Wall time 67-120 s
+per run. Every run `incident_judge` + `gap_oracle`.
+
+| # (route order) | Pass | Numbers (5 runs) | Oracle |
+|---|---|---|---|
+| 2 pedestrian (1) | **0/5** (and the shakedown and one diagnostic run: 0/7) | contact every run, the ego at 4.9-9.8 m/s at its slowest after the dart; pedestrian in the ego's band with the ego ~38 m away | G1 1 (the contact), G3 yaw on `i2_ped` (before the walker fix) |
+| 1 lead brakes (2) | **5/5** | brake with the ego 22.6-27.2 m behind at 7.6-8.2 m/s; lead's peak 6.0 m/s^2; **stop gap 4.9-5.6 m**; stood 5.8-5.9 s, then followed | clean |
+| 3 red light (3) | **5/5** | front **0.45 m short to 0.05 m past** the line at its furthest while red; green 8.1 s after it stood, moving 0.9-1.0 s later | clean |
+| 4 blocked lane (4) | **3/5** (shakedown also failed) | passes: stop gap 3.05 / 3.33 / 5.0 m, waited 12 s (the staged clear), moving 1.4 s after; failures: contact at walking pace (gap -0.04 m, impulse 7.0-9.8 kN s), then the same wait | G1/G2 1 in the failures (the contact), else clean |
+| 5 crossing at a turn (5) | **5/5** | stood 2.8-3.1 s for the pair, then turned; min gap 1.53-1.61 m | clean |
+| 6 cyclist inside (6) | **5/5** | the ego yielded every run: stood 0.9-1.1 s ~4 m before the turn, the cyclist passing inside it at **0.14-0.16 m** (the scenario's geometry, as in 4c); CenterPoint's first BICYCLE track 6.4-7.9 m from the ego | G3 1 per run: `i6_cyclist` 0.28 m for 6 frames as it is added at 7.5 m/s (the speed-step artefact of 032 N6's kind: the CARLA body starts from rest) |
+
+**Why 2 and 4 fail: CenterPoint's range on this lidar, and nothing behind it.** Traced stage by
+stage (`centerpoint/objects`, `clustering/objects`, `tracking/objects`, per run, against the
+actor's pose; scratch `firstdet.py`):
+
+| | clustering sees it at | CenterPoint first at | tracked from |
+|---|---|---|---|
+| broken-down car (4), 7 runs | 67-76 m | 36-40 m (CAR) | **28-35 m**: every run tracked from >= 33 m passed, every one from <= 30 m hit it |
+| pedestrian (2), 6 runs | 34-37 m (as he steps out) | 17-22 m (PEDESTRIAN) | 9-12 m, or never |
+
+At 11.1 m/s the ego needs ~25 m to stop at 2.5 m/s^2 plus ~0.5-1 s of latency, so a track at
+~30 m is the edge, and one at 10 m is a collision whatever the timing. The objects that
+clustering finds much further out never reach planning: in this stack's CenterPoint mode
+the tracker subscribes to `centerpoint/validation/objects` and `detection_by_tracker/objects`
+only (`ros2 node info`; `clustering/objects` has no subscriber). That is Autoware 1.5's
+`use_multi_channel_tracker_merger: true` (autoware_launch's default): the multi-channel
+tracker takes the DNN channel and detection-by-tracker, and the lidar merger that would add
+clustering's UNKNOWN objects to CenterPoint's is switched off; detection-by-tracker only
+re-finds objects already tracked. So an object CenterPoint has not yet classified does not
+exist for planning, and on CARLA's lidar CenterPoint classifies cars from ~38 m and people
+from ~20 m. On clustering (step 4c, on the east road at 15 km/h) the walker was tracked as UNKNOWN
+while he stood in the lane. The scenario is not the cause: the broken-down car stands in the lane 80 m before
+the ego; moving the dart earlier only lets the pedestrian stand longer unseen.
+
+**Stopped tuning 2 and 4 here; the fallback is the user's decision.** Options, cheapest first:
+(a) ground-truth objects for the tour (`perception:=false publish_ground_truth_objects:=true`;
+acb labels every `vehicle.*` CAR, so the cyclist needs acb's ground-truth path to read
+CARLA's `base_type` first -- 4c's note); (b) CenterPoint with the lidar merger instead of the
+multi-channel tracker (`use_multi_channel_tracker_merger:=false` through acb: clustering's
+UNKNOWN objects then reach the tracker beside CenterPoint's classes, which should give
+incident 4 its 67 m and incident 2 its 35 m while keeping the BICYCLE label incident 6
+needs; untested, an acb launch argument and a re-run of 1-6 and UC-AEB); (c) a slower tour
+(the stop distance scales with v^2: at 30 km/h ~14 m plus latency). 1, 3, 5 and 6 hold as
+they are.
+
+Generator and judge: `gen_demo_incidents.py` as in the plan, plus the two changes above;
+`incident_judge` incident 6: `ego_yielded`, `ego_min_mps_cyclist_near`, and a FAIL when the
+cyclist never came within 5 m (2 tests); `test_gen_demo_incidents.py` (new, 6 tests:
+every template generates with its parameters declared, ego maxSpeed above the cap, parked
+cars as misc objects with no SpeedAction, a step 4b-shaped sites file still generates, the
+sites file's speeds reach the templates, incident 6 installed). `just test`: 360 nextest +
+185 pytest pass; `just check` clean. All six templates load-checked with
+`openscenario_preprocessor`'s `load`.
+
+Runs: `i<N>/{shake,diag,reh}_<k>` with trace, context, judge, oracle, `ego.jsonl` (planning
+stages and factors), `bs.jsonl` (objects, blind_spot), `det.jsonl` (every perception stage),
+load. Scratch: `/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d329-
+483b-9e38-80a742b40cbd/scratchpad/s_4d` (`sites.py` the pose tool, `regen.sh`, `run_one.sh` /
+`batch.sh` / `rounds.sh`, `summ.py`, `det_watch.py`, `firstdet.py`, `profile.py`, `rounds.log`).
