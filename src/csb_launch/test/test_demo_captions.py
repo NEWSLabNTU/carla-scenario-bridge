@@ -68,6 +68,12 @@ class DemoCaptions(unittest.TestCase):
         self.assertIn("Tour complete", self.out[-1][0])
         self.assertIn("0 of 1 incidents handled", self.out[-1][1])
 
+    def test_no_time_passes_before_the_start(self):
+        # SSv2's entity time is NaN until the scenario starts
+        for _ in range(100):
+            self.c.on_status({"ego": box(0, 0, speed=0.0)}, float("nan"))
+        self.assertNotIn("stopped", self.c.live)
+
     def test_red_light(self):
         self.c.on_context(snapshot({"i3_red": "completeState"}), 100.0)
         for k in range(200):

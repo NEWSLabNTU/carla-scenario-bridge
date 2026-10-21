@@ -209,6 +209,10 @@ class Captions:
         ego = entities.get("ego")
         if ego is None:
             return
+        # SSv2 reports NaN for the time before the scenario starts: no time passes then
+        # (min() with a NaN returns its other argument, which once counted 0.5 s a message)
+        if t is None or t != t:
+            t = None
         dt = 0.0 if self.last_t is None or t is None else max(0.0, min(0.5, t - self.last_t))
         self.last_t = t
         v = abs(ego[7])
