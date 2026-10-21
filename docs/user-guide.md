@@ -268,7 +268,8 @@ refused, by `just run` and by the bridge itself.
   `entity 'ego': agent acb_agent registered` and then `ego: agent up`. Under play_launch the
   vehicle side also logs `Startup complete: all nodes ready (nodes 63/63, containers 18/18,
   composable 127/127)` (the counts depend on your Autoware; check that each is whole). About
-  a minute on a warm host; the first start builds TensorRT engines and takes several.
+  a minute on a warm host; the first start builds TensorRT engines and takes several (every
+  start does when your TensorRT is not 10.8.0; see below).
 
 **RViz.** The vehicle side opens Autoware's RViz on `$DISPLAY` by default. Pass `rviz:=false`
 on a headless host (no `DISPLAY`, or one you do not own) and for every vehicle side after the
@@ -413,6 +414,16 @@ build-autoware-overlay` (roadmap 042); by hand, build
 `autoware_behavior_velocity_blind_spot_module` from branch `csb/blind-spot-right-turn-0.48.0`
 of github.com/NEWSLabNTU/autoware_universe in a workspace of its own and source that
 workspace's `install/local_setup.bash` right after Autoware's setup.
+
+Autoware 1.5.0 was compiled against TensorRT **10.8.0**, and it rebuilds any cached engine
+that another TensorRT version made. If the first `libnvinfer.so.10` your loader finds is
+another version, for example CUDA 12.8's 10.9 under `/usr/local/cuda`, CenterPoint rebuilds
+its engines at every start. That takes minutes, and its log says `Plan was created with a
+different version of TensorRT`. To avoid it, give the vehicle side a 10.8.0 runtime. Fetch
+NVIDIA's `tensorrt-cu12-libs==10.8.0.43` wheel from `https://pypi.nvidia.com` and unzip its
+`tensorrt_libs/` directory anywhere. Then put that directory first on `LD_LIBRARY_PATH` in
+the vehicle side's terminal, after sourcing the setups. The developer workflow does this with
+`just setup-tensorrt` and the `AUTOWARE_TENSORRT_LIB` host setting.
 
 ### Another autopilot
 

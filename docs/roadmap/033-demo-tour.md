@@ -779,7 +779,10 @@ Found and settled by these runs:
   ('slot_probe') is already on that point`). Removed by id with `DestroyActor` commands.
   Never probe a synchronous CARLA from outside csb.
 - The CenterPoint TensorRT engines were rebuilt at this stack's start (11 min, 07:23-07:31)
-  although built before; budget for it.
+  although built before; budget for it. *(Cause, found 2026-10-21: the host's TensorRT 10.9
+  built them and Autoware, compiled against 10.8.0, rejected them at every start. `just
+  setup-tensorrt` gives the stacks a 10.8.0 runtime, and CenterPoint is now ready 19 s after
+  start instead of 189 s. See CLAUDE.md, "Autoware's TensorRT is 10.8.0".)*
 
 Runs: `A1`, `A2`, `B36m_1/_2`, `B34m_1`, `B32m_1/_2`, `B28m_1/_2` (and the failed `A1_fail_maxspeed`,
 `B32_fail_spawn`, `B32_invalid_probes`, `B32_veh_stall`), each with the CARLA track, ego-domain

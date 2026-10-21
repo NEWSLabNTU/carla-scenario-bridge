@@ -114,7 +114,7 @@ the cyclist is a BICYCLE and the pedestrian is seen in time -- and clear noon:
 ```bash
 just run weather:=ClearNoon                     # Terminal 2, if not already running
 just ego-av max_velocity:=11.11 lidar_detection_model:=centerpoint \
-    use_multi_channel_tracker_merger:=false     # Terminal 3; CenterPoint takes minutes
+    use_multi_channel_tracker_merger:=false     # Terminal 3; CenterPoint: minutes unless TensorRT is 10.8.0
 just demo-tour                                  # the tour, headless; prints the verdict
 ```
 

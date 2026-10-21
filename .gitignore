@@ -41,3 +41,6 @@ record.json
 
 # Autoware fix overlay (roadmap 042): fetched and built by `just build-autoware-overlay`
 third_party/autoware_overlay/
+
+# TensorRT runtime for the Autoware stacks: fetched by `just setup-tensorrt` (default dir)
+third_party/tensorrt/

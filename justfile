@@ -39,6 +39,10 @@ autoware_setup := env_var_or_default('AUTOWARE_SETUP', '/opt/autoware/1.5.0/setu
 # Autoware packages carried with fixes 1.5.0 lacks (roadmap 042), built by
 # `just build-autoware-overlay` from the commit pinned in scripts/autoware_overlay.bash.
 autoware_overlay_dir := justfile_directory() + '/third_party/autoware_overlay'
+# The TensorRT runtime Autoware 1.5.0 was compiled against (10.8.0), put first on the
+# Autoware stacks' LD_LIBRARY_PATH so their cached engines validate (scripts/
+# autoware_tensorrt.bash). A host setting: AUTOWARE_TENSORRT_LIB, empty for the host's own.
+autoware_tensorrt_lib := env_var_or_default('AUTOWARE_TENSORRT_LIB', justfile_directory() + '/third_party/tensorrt/lib')
 
 # List available recipes
 default:
@@ -160,6 +164,19 @@ build-autoware-overlay:
     PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/\.venv/bin$' | paste -sd:)
     source "{{project}}/scripts/autoware_overlay.bash"
     csb_autoware_overlay_build "{{autoware_overlay_dir}}" "{{autoware_setup}}"
+
+# Download TensorRT 10.8.0 (NVIDIA's tensorrt-cu12-libs wheel, 3.1 GB; 2.6 GB extracted) into
+# AUTOWARE_TENSORRT_LIB (default third_party/tensorrt/lib), the runtime `just ego-av`,
+# `ego-isaac` and `bg-av` put first on LD_LIBRARY_PATH. Autoware 1.5.0 was compiled against
+# 10.8.0 and rejects an engine any other TensorRT built, so without it CenterPoint rebuilds
+# its engines at every start. Idempotent.
+#
+# Fetch the TensorRT runtime Autoware was built against
+setup-tensorrt:
+    #!/usr/bin/env bash
+    set -e
+    source "{{project}}/scripts/autoware_tensorrt.bash"
+    csb_tensorrt_setup "{{autoware_tensorrt_lib}}"
 
 # Remove build artifacts
 clean:
@@ -900,6 +917,10 @@ ego-av *args: _require-carla
     if [ -n "$overlay" ]; then source "$overlay"; fi
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
+    # TensorRT 10.8.0 first on LD_LIBRARY_PATH, after the setups that rewrite it: the version
+    # Autoware was compiled against, so cached engines validate (`just setup-tensorrt`).
+    source "{{project}}/scripts/autoware_tensorrt.bash"
+    csb_tensorrt_source "{{autoware_tensorrt_lib}}"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
@@ -982,6 +1003,8 @@ ego-isaac *args:
     if [ -n "$overlay" ]; then source "$overlay"; fi
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
+    source "{{project}}/scripts/autoware_tensorrt.bash"
+    csb_tensorrt_source "{{autoware_tensorrt_lib}}"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
     # Defaults, each dropped when an argument names the same launch argument.
@@ -1034,6 +1057,8 @@ bg-av *args: _require-carla
     csb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
+    source "{{project}}/scripts/autoware_tensorrt.bash"
+    csb_tensorrt_source "{{autoware_tensorrt_lib}}"
     # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain
     # 1000 in it is what keeps domain 1's unicast ports out of domain 0's range.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
@@ -1230,6 +1255,8 @@ e2e *args:
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
+    source "{{project}}/scripts/autoware_tensorrt.bash"
+    csb_tensorrt_source "{{autoware_tensorrt_lib}}"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
     log_dir=$(csb_log_dir "{{project}}" demo)

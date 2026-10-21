@@ -91,7 +91,7 @@ map_path:=<dir> rviz:=true`, `just scenario <xosc> output_directory:=<dir>`); `e
 settings come from the environment, made permanent in `.env` (just's `dotenv-load`) or
 `.envrc`: ports (`CARLA_PORT`, `SSV2_PORT`, `AGENT_PORT`, `ISAAC_PORT`), displays
 (`DISPLAY`, `ISAAC_DISPLAY`, `RECORD_DISPLAY`), install and data paths (`AUTOWARE_SETUP`,
-`ISAAC_ROOT`, `CARLA_DIR`, `DATA_DIR`, `CARLA_MAPS`), the ROS domains
+`ISAAC_ROOT`, `CARLA_DIR`, `DATA_DIR`, `CARLA_MAPS`, `AUTOWARE_TENSORRT_LIB`), the ROS domains
 (`EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`) and the ego's RMW (`EGO_RMW_IMPLEMENTATION`),
 the log root and archive (`CSB_LOG_ROOT`, `CSB_LOG_ARCHIVE`), and the Isaac bring-up waits
 (`ISAAC_READY_TIMEOUT`, `EGO_READY_TIMEOUT`). The variables that used to carry project
@@ -150,6 +150,41 @@ package, `blind_spot`, with the right-turn ego passage fix (autoware_universe#13
 `csb/blind-spot-right-turn-0.48.0` = tag 0.48.0 + the fix). To carry another fix: commit on
 a `csb/*` branch of the fork from the release tag, push, move the pin, add the dir, rebuild.
 Check what a stack loaded: `grep blind_spot /proc/<behavior_velocity_planner pid>/maps`.
+
+### Autoware's TensorRT is 10.8.0, not the host's
+
+Autoware 1.5.0's `libautoware_tensorrt_common` was compiled against TensorRT **10.8.0** and
+accepts a cached engine only when the plan was built by exactly that version. The loader takes
+`libnvinfer.so.10` from whatever comes first: on this host `/usr/local/cuda` (CUDA 12.8, so
+TensorRT **10.9.0**) is ahead of the system's 10.15 in `ld.so.conf`. So 10.9 built every
+engine, the next start rejected it, and CenterPoint rebuilt both of its engines at every
+ego-stack start: 3-11 minutes, depending on load. The `lidar_centerpoint` err log said so
+each time:
+
+```
+[W] [TRT] Plan was created with a different version of TensorRT! Current version: 10.8.0
+[W] [TRT] Validation failed for the existing engine file. Rebuilding
+```
+
+`just ego-av`, `ego-isaac`, `bg-av` and `e2e` now put a 10.8.0 runtime first on the stack's
+`LD_LIBRARY_PATH`, after every setup is sourced (`scripts/autoware_tensorrt.bash`). The
+directory is a host setting, `AUTOWARE_TENSORRT_LIB` (default `third_party/tensorrt/lib`;
+empty: the host's own). `just setup-tensorrt` fills it from NVIDIA's `tensorrt-cu12-libs`
+10.8.0.43 wheel: libnvinfer, its builder resource, the plugin library and the ONNX parser,
+2.6 GB. Nothing goes into the system or a Python environment, and `ld.so.conf` is left
+alone. On this host it is `/mnt/wd/aeon/tensorrt-10.8.0/lib`, set in `.env`. A missing
+directory warns and the stack starts on the host's TensorRT, rebuilding as before.
+
+The first start on 10.8 rebuilds once, because the old engine came from 10.9. After that
+the engine loads. Measured 2026-10-21 with `lidar_detection_model:=centerpoint`:
+CenterPoint was ready at **189 s** on the first start and **19 s** on the second, the whole
+stack in 20 s, and the engine mtimes did not change. Demo incident 2 passed with the
+pedestrian 5.4 m ahead, as before. On the default stack (`clustering`) only
+`shape_estimation` and `detection_by_tracker` load libnvinfer. Neither builds an engine,
+and both start as before. To check what a stack loaded:
+`grep nvinfer /proc/<lidar_centerpoint container pid>/maps`.
+When Autoware moves to a release built against another TensorRT, bump the version, wheel
+and checksum in `scripts/autoware_tensorrt.bash` together.
 
 ### The CARLA version is a Cargo feature
 

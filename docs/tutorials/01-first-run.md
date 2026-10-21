@@ -90,7 +90,9 @@ This starts ~90 processes and opens RViz (add `rviz:=false` to skip it). Ready w
 ```
 
 The first start on a machine builds Autoware's TensorRT engines and can take several
-minutes; later starts take about one.
+minutes. Later starts take about one, as long as the TensorRT that loads is the 10.8.0
+Autoware was built with. With any other version every start rebuilds. The fix is in the
+[user guide](../user-guide.md) (section 4, TensorRT 10.8.0) or `just setup-tensorrt`.
 
 `map_path` must be the town the scenario drives in. Every starter scenario with an ego is
 Town01.
