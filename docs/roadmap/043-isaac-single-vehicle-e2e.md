@@ -265,6 +265,57 @@ So the 5 cm criterion holds against CARLA's surface in every town, and against t
 `ele` only where the lanelet map carries the true height (Town01, Town05, Town10HD). Not
 yet checked: NDT on each town's pcd from the Isaac lidar.
 
+### A new host
+
+Everything above was built on one host, whose paths are the scripts' defaults
+(`/mnt/disk1/{isaac-sim,carla-src,carla-usd}`). Set up from nothing on newslab-server139
+(2026-10-21; roadmap 045, "Reproduction on newslab-server139"), in order, with what that
+took there (RTX 5090, 32 cores, two idle HDDs; GitHub served 50-400 KB/s a connection,
+everything else 10-100 MB/s):
+
+1. **Host paths in `.env`**: `ISAAC_ROOT`, `CARLA_SRC`, `CARLA_USD` and `CSB_VEHICLE_USD`
+   (the defaults name a disk the host may not have). Kit's caches: `install_isaac.sh` names
+   `~/.cache/ov`, `~/.local/share/ov` and `~/.nvidia-omniverse`; with `--portable` (the
+   world server and the spikes) Kit keeps its shader cache and DDC in the venv
+   (`isaacsim/kit/cache`, 12 GB after five towns), and writes only small things under
+   `$HOME` (`~/.cache/warp`, `~/Documents/Kit`).
+2. **Isaac Sim**: `install_isaac.sh` 21 min (venv 27 GB); `just isaac-msgs` 2 s; `just
+   isaac-check` SMOKE OK, app start 21 s, step+render 2.2 ms. `isaac_env.sh` (aib's) sets
+   `OMNI_KIT_ACCEPT_EULA=YES`: running it accepts NVIDIA's Omniverse licence.
+3. **UE 4.26, CARLA's fork** (`CarlaUnreal/UnrealEngine`, branch `carla`; needs a GitHub
+   account linked to Epic, a `gh` login is enough): `Setup.sh` (11.7 GB of dependencies from
+   Epic's CDN), `GenerateProjectFiles.sh`, `make`: 35 min, 93 GB. On a slow GitHub link a
+   plain clone of it (or of CARLA, or of the sumo tree CARLA's `osm2odr` downloads) runs for
+   hours; a `--filter=blob:none --depth 1` clone whose blobs are then fetched by 16-24
+   parallel `git fetch origin <oid>...` took minutes.
+4. **CARLA 0.9.16** (tag `0.9.16`, content `20250912_2171890` from `Util/ContentVersions.txt`,
+   20 GB, extracted into `Unreal/CarlaUE4/Content/Carla`), with `$CARLA_SRC/env.sh` exporting
+   `UE4_ROOT`, `CARLA_ROOT` and `PM_PACKAGES_ROOT` (SimReady's packman cache, 0.7 GB, which
+   defaults to `$HOME`); then `make LibCarla.server.release osm2odr downloadplugins` and `make
+   CarlaUE4Editor` (SimReady is on by default): 36 min, 30 GB. CARLA's `Setup.sh` fetches
+   libpng from a SourceForge URL that now returns 404: set `LIBPNG_REPO` in
+   `Util/BuildTools/Setup.sh` to `https://download.sourceforge.net/libpng/libpng-1.6.37.tar.xz`.
+5. **Towns**: `just isaac-town <Town>` for Town01, 02, 03, 05, 10HD: 845, 498, 919, 315 and
+   525 s (Town03's includes five minutes of a hung exit), 0.9-1.9 GB each. Colliders and
+   ground prims came out identical to the table above in every town. Fixed on the way in
+   `isaac_town.sh`: the editor enumerated the AMD iGPU too and tripped an ensure, whose
+   CrashReportClient (which uploads to Epic) logged `LogExit: Exiting` into the export log;
+   the script took that for the editor's exit and killed Town05 and Town10HD mid-export.
+   It now waits for `Execution of commandlet took`, pins Vulkan to the NVIDIA ICD, and
+   follows an ignored SIGTERM with SIGKILL.
+6. **Maps**: a host whose `data/carla-autoware-bridge` predates a `repair_lanelet_*.py`
+   lacks that repair (`download_maps.sh` used to skip everything when the maps were present):
+   Town05 and Town10 failed every scenario on the `right_of_way` element, and Town03 lacked
+   two joins. `just download-maps` now runs the repairs on maps already present.
+7. **Not reproducible from the repository**: the 41 CARLA vehicle bodies
+   (`$CSB_VEHICLE_USD/vehicles.json`). Commit `05bdd87` says their tools live in that
+   directory, not in git. Without them every entity is a box and the ego's chassis box is
+   hidden, so the lidar sees no car body. 045's tracking numbers reproduced without them.
+
+A first world-server preload compiles the town's materials: Town01 and Town02 together
+934 s, Town02 again in a later batch 1052 s, Town03 280 s, Town05 135 s, Town10HD 316 s
+(all under `ISAAC_READY_TIMEOUT`'s 1800 s); a later load of a compiled town 26-64 s.
+
 ### As built: operations
 
 1. **The world server is a launch node.** `csb_launch isaac_world.launch.xml` runs

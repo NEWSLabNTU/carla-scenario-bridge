@@ -91,7 +91,8 @@ map_path:=<dir> rviz:=true`, `just scenario <xosc> output_directory:=<dir>`); `e
 settings come from the environment, made permanent in `.env` (just's `dotenv-load`) or
 `.envrc`: ports (`CARLA_PORT`, `SSV2_PORT`, `AGENT_PORT`, `ISAAC_PORT`), displays
 (`DISPLAY`, `ISAAC_DISPLAY`, `RECORD_DISPLAY`), install and data paths (`AUTOWARE_SETUP`,
-`ISAAC_ROOT`, `CARLA_DIR`, `DATA_DIR`, `CARLA_MAPS`, `AUTOWARE_TENSORRT_LIB`), the ROS domains
+`ISAAC_ROOT`, `CARLA_SRC`, `CARLA_USD`, `CSB_VEHICLE_USD`, `CARLA_DIR`, `DATA_DIR`,
+`CARLA_MAPS`, `AUTOWARE_TENSORRT_LIB`), the ROS domains
 (`EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`) and the ego's RMW (`EGO_RMW_IMPLEMENTATION`),
 the log root and archive (`CSB_LOG_ROOT`, `CSB_LOG_ARCHIVE`), and the Isaac bring-up waits
 (`ISAAC_READY_TIMEOUT`, `EGO_READY_TIMEOUT`). The variables that used to carry project
@@ -415,7 +416,8 @@ was a spinning disk; acb `0d091de` moved acb's logging to a writer thread). Any 
 that logs at tens of lines per second from a real-time loop is exposed the same way, and
 play_launch's own `system_stats.csv` shows the holes.
 
-Today `/home` is `/dev/nvme1n1p1` (NVMe, shared, 94 % full) and `/mnt/disk1` is `/dev/sda1`,
+On the host roadmaps 036-045 were built on (the scripts' `/mnt/disk1` defaults), `/home` is
+`/dev/nvme1n1p1` (NVMe, shared, 94 % full) and `/mnt/disk1` is `/dev/sda1`,
 a 16 TB Seagate **spinning** disk (`lsblk -d -o NAME,ROTA,MODEL`: ROTA 1) that holds Isaac
 Sim, its USD worlds, the NTU tiles and other users' data, and is often 80–95 % busy with
 reads. Measured 2026-10-19 (`append + fsync every 20th line` at 200 lines/s for 60 s, both at
@@ -432,6 +434,15 @@ So live logs stay on NVMe: the log root, `CSB_LOG_ROOT` (a host setting; default
 it at another *fast* disk if `/home` fills; when it is not `play_log/`, the recipes link
 `play_log/<kind>` to it, so `play_log/<kind>/latest` keeps working. Never point it at
 `/mnt/disk1`.
+
+newslab-server139 is laid out differently: `/` is the only fast disk (`/dev/nvme0n1p2`, NVMe,
+1.8 TB, ~1 TB free); `/home` (`/dev/sda1`, 87 % full) and `/mnt/wd` (`/dev/sdb1`, 4.2 TB
+free) are both 5.5 TB WD Purple **spinning** disks, idle (1-2 % util) when measured on
+2026-10-21. Large things live under `/mnt/wd/aeon/`, set in its `.env`: `ISAAC_ROOT`
+(`isaac-sim`), `CARLA_SRC` (`carla-src`, the UE 4.26 + CARLA editor build), `CARLA_USD` and
+`CSB_VEHICLE_USD` (`carla-usd`), `AUTOWARE_TENSORRT_LIB`; CARLA 0.9.16 itself is
+`/mnt/wd/aeon/carla-simulator/CARLA_0.9.16`. The 045 reproduction ran with
+`CSB_LOG_ROOT=/mnt/wd/aeon/csb-045/play_log` (per command, not in `.env`).
 
 The space problem is solved by moving old runs, not by logging elsewhere: `just prune-logs
 [days:=7] [dest:=<dir>] [dry_run:=true]` moves runs untouched for that long to

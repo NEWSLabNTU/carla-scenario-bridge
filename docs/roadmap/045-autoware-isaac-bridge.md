@@ -106,11 +106,15 @@ Project Chrono for rough or deformable ground) wait until a need shows.
   topic names; gyro_odometer, imu_corrector, gnss_poser and the gyro bias estimator log no
   frame errors. (EKF-vs-GNSS worst 65.7 m in runs 2 and 3, median 0.95 m: likely a sample
   across the route reset between runs, not looked into.)
-  **Isaac leg still to run** (stopped 2026-10-21: host RAM taken by other users, ~14 GB
-  available against the world server's ~17.5 GB): `just acceptance
-  src/csb_examples/scenarios/basic/town01_ego_drive.xosc 3 backend:=isaac`, the same
-  `tf2_echo` (should match CARLA's numbers, one spec) and `frame_id` checks. Start only with
-  >= 30 GB RAM available and >= 16 GB GPU free.
+  **Isaac leg passed 2026-10-21** on newslab-server139 (csb `3107381`, aib `23f719e`, acb
+  `25470e4`; Town01 SimReady world, `worlds:=Town01,Town02`, headless): `just acceptance
+  src/csb_examples/scenarios/basic/town01_ego_drive.xosc 3 backend:=isaac` 3/3 PASS, 0 MRM,
+  longitudinal 0.013-0.020 m/s^2, cross-track 0.03-0.04 m, EKF-GNSS 0.99-1.04 m.
+  `tf2_echo base_link imu_link` = [0.900, 0.000, 2.000], q [0.018, 1.000, -0.000, -0.008];
+  `base_link gnss_link` = [0.797, 0.004, 1.802]: CARLA's numbers to the last digit. `imu_raw`
+  carries `frame_id: imu_link`, `nav_sat_fix` `gnss_link`, both published by `isaac_vehicle`;
+  no `carla/` topic; gyro_odometer, imu_corrector, gnss_poser and the gyro bias estimator
+  log no frame or TF errors.
 - **Camera images** are stamped in `camera6/camera_optical_link` (REP-103: Autoware's
   projection nodes assume the optical frame). acb stamps `camera_link`, which is likely
   wrong there too. The camera is off on both bridges today.
@@ -208,14 +212,63 @@ agent's then-uncommitted bridge config change, which became `077ca50`); the Town
 its 08:35 rebuild (csb `3c9a4ba`, acb `f10ce12`). On Isaac neither acb_bridge nor the bridge's
 config change is in the ego's path.
 
+## Reproduction on newslab-server139
+
+2026-10-21: the exit runs again on a second host, set up from nothing the same day (Isaac
+Sim 6.1, the CARLA 0.9.16 editor build, the five towns exported; how, and what the setup
+docs lacked: 043, "A new host"). RTX 5090, 32 cores, 60 GB RAM with 48 GB available at each
+batch's start. Same code as the rename leg above (csb `3107381`, aib `23f719e`, acb
+`25470e4`), headless, each town a batch from no Isaac stack, run the same way as "Exit runs"
+(`just acceptance <xosc> 5 backend:=isaac`, `worlds:=Town01,Town02` for Town01; the episode
+change as five `just scenario` pairs judged by their junit). Medians over five runs, range
+in brackets; the original host's ("Exit runs" above) beside them. Logs and bags:
+`/mnt/wd/aeon/csb-045/` on server139.
+
+| scenario | PASS here (orig.) | longitudinal, m/s^2: here / orig. | cross-track, m | EKF-GNSS, m | MRM |
+|---|---|---|---|---|---|
+| `town01_ego_drive` | 5/5 (5/5) | 0.012 (0.008-0.018) / 0.012 (0.009-0.021) | 0.04 / 0.04 | 1.01 / 1.03 | 0 / 0 |
+| `town01_engage_state` | 5/5 (5/5) | 0.018 (0.014-0.021) / 0.013 (0.012-0.017) | 0.03 / 0.03 | 0.99 / 1.01 | 0 / 0 |
+| `town02_episode_change` + `town01_ego_drive` | 5/5 + 5/5 (5/5 + 5/5) | | | | |
+| `town02_ego_drive` | 5/5 (5/5) | 0.009 (0.007-0.010) / 0.007 (0.007-0.009) | 0.01 / 0.01 | 1.38 / 1.37 | 0 / 0 |
+| `town03_ego_drive` | 5/5 (5/5) | 0.020 (0.017-0.038) / 0.018 (0.018-0.033) | 0.01 / 0.01 | 0.92 / 0.91 | 0 / 0 |
+| `town05_ego_drive` | 5/5 (5/5) | 0.019 (0.018-0.022) / 0.018 (0.018-0.019) | 0.03 / 0.03 | 0.72 / 0.77 | 0 / 0 |
+| `town10_ego_drive` | 5/5 (5/5) | 0.028 (0.023-0.036) / 0.024 (0.023-0.030) | 0.04 / 0.04 | 0.51 / 0.45 | 0 / 0 |
+
+**It reproduces.** Every run passed with no MRM, cross-track is the original's to the
+centimetre in every town, peak speed (4.24-4.28 m/s) and distance travelled are the same,
+and each longitudinal range overlaps the original's. Five of six longitudinal medians are
+higher here by 0.001-0.005 m/s^2; only `town01_engage_state` sits outside the original's
+range (median 0.018 against at most 0.017), and that gap is half the spread
+`town01_ego_drive` shows by itself on either host (0.008-0.018 here), 20x inside the limit.
+Two plausible causes, neither isolated: this host was not quiet (an idle CARLA server kept
+~2.8 GB and two cores of the same GPU busy, and another long-running job a third core), and
+the ego here is a box with no CARLA body (below). EKF-GNSS moved both ways (Town05 -0.05 m,
+Town10 +0.06 m), as a per-town localization difference of that size would; not looked into.
+
+Differences in the setup, each noted where it matters:
+
+- **No vehicle bodies.** The 41 SimReady vehicles and their `vehicles.json` were made by
+  tools kept beside them on the original host, not in git (`05bdd87`), so here every
+  entity, the ego included, is a box (`no CARLA body for 'vehicle.tesla.model3': a box`).
+  Bodies are render-only; the numbers above say they do not move tracking.
+- **Stale maps.** This host's `data/carla-autoware-bridge` predated
+  `repair_lanelet_right_of_way.py` (and Town03 two joins): the first Town05 and Town10
+  batches failed 0/5 in 9 s each (SSv2: `Creating a regulatory element of type right_of_way
+  failed`). After the repairs both passed, and Town03 was rerun on its repaired map (on
+  the stale one: 5/5, longitudinal 0.022, same cross-track and EKF-GNSS). `just
+  download-maps` now runs the repairs on maps already present.
+- **World-server preload** (first render, materials compiled): Town01 + Town02 934 s,
+  Town02 alone in its own batch 1052 s, Town03 280 s, Town05 135 s, Town10HD 316 s; a reload
+  of a compiled town 26-64 s.
+
 
 ## Handoff (2026-10-21)
 
 Isaac work paused by the user; where it stands:
 
-- **045** is done except the IMU/GNSS rename's Isaac leg (above, under the rename note):
-  CARLA leg passed, Isaac leg needs >= 30 GB RAM available and >= 16 GB GPU free (other
-  users' CARLA servers and training held ~40 GB RAM on 2026-10-21). Then mark it here.
+- **045** is done: the IMU/GNSS rename's Isaac leg passed on 2026-10-21 (above, under the
+  rename note), and the exit runs reproduced on a second host set up from nothing
+  ("Reproduction on newslab-server139").
 - **Workspace state:** a pull on 2026-10-21 moved the acb pin to `25470e4` (descends from
   `c9ff587`); the checked-out submodule and `install/` are still `c9ff587`. Before the next
   run: `git submodule update --init --recursive`, rebuild acb then csb (CLAUDE.md).
