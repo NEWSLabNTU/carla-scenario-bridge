@@ -87,9 +87,7 @@ channel (CARLA actor ids).
 ## The agent protocol (I3)
 
 Implemented in `csb_agent/protocol.py` (roadmap 030), which the relay and every
-`csb_agent` agent import; acb's agent still carries a v1 copy,
-`acb_pilot/agent_protocol.py`, until 030 step 6 moves it onto the SDK. The relay speaks v1
-to it.
+`csb_agent` agent import, the Autoware agent included (030 step 6; it speaks v2).
 
 - **Transport**: plain TCP, **newline-delimited JSON** (one UTF-8 object per line), standard
   library only on both ends -- no ZMQ or protobuf dependency for an agent author (decision
@@ -259,9 +257,11 @@ trigger.
   Autoware agent. It is **simulator-neutral** -- it would serve an Autoware on AWSIM
   unchanged. It does not live in `acb_bridge`. Implemented as the `agent` entry point of
   `acb_pilot` (`ros2 run acb_pilot agent --ros-args -p relay:=tcp://host:5560 -p
-  entity:=ego`), beside `auto_drive`: same package, same ADAPI-only dependencies, and the
-  logic (`agent_core.py`) is ROS-free behind an `AutopilotPort` so it is tested against a
-  fake Autoware. Without `relay` it drives once to `goal_poses_file` (local mode).
+  entity:=ego`), beside `auto_drive`. Since roadmap 030 step 6 the agent itself is the SDK's
+  `csb_agent.adapters.autoware.AutowareAgent` (ROS-free logic behind an `AutopilotPort`,
+  tested against a fake Autoware; the ADAPI port in `autoware_ros.py`), and acb's node only
+  runs it with acb's parameters. Without `relay` it drives once to `goal_poses_file` (local
+  mode).
 - **acb_bridge** is the CARLA vehicle bridge (I5): sensors, vehicle interface, `/clock`,
   traffic signals for one CARLA vehicle, found by `role_name`.
 - Packages for Autoware users: `acb_launch` (`carla_simulator.launch.xml`, the CARLA profile

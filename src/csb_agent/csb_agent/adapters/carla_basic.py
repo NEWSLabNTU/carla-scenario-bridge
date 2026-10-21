@@ -201,6 +201,9 @@ class CarlaWorld:
         self.vehicle = None
         return False
 
+    def place(self, pose):
+        """Nothing: the bridge has placed the vehicle (the agent never moves actors)."""
+
     def vehicle_pose(self):
         if self.vehicle is None:
             return None
@@ -349,8 +352,7 @@ class CarlaBasicAgent(csb_agent.Agent):
         with self._ctl:
             self.limit_kmh = None
             if ep.pose is not None:
-                if self.cfg["world"] == "fake":
-                    self.world.place(ep.pose)
+                self.world.place(ep.pose)
                 x, y, _, yaw = self.world.vehicle_pose()
                 along = (x - ep.pose["x"]) * math.cos(yaw) + (y - ep.pose["y"]) * math.sin(yaw)
                 # the same pose for the bridge's actor and the scenario's vehicle; a

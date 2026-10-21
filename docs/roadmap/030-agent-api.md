@@ -172,7 +172,7 @@ over TCP. Nothing is added to this workspace.
    skeleton passes `check` as generated.
 5. [x] **CARLA reference adapter.** `carla_basic`; `basic/town01_ego_drive` passes with it
    driving and no Autoware running.
-6. [ ] **Autoware adapter.** acb's agent moved onto the SDK (fork commit first), overridable
+6. [x] **Autoware adapter.** acb's agent moved onto the SDK (fork commit first), overridable
    steps; the starter `basic/` and `awf/` suites pass as before; acb's protocol copy removed.
 7. [x] **ROS adapter.** `ros_adapter` and its YAML schema, with a test autopilot node; a
    subclass overriding one step.
@@ -376,3 +376,39 @@ origin by the offset measured at the reset. `python3 -m csb_agent.adapters.carla
   first run logged three pose warnings before its first reset, with no vehicle yet (fixed:
   no pose is reported without one).
 - Tutorial: `docs/agent-interface.md`, "Tutorial: a scenario driven by CARLA's BasicAgent".
+
+**Step 6: Autoware adapter (2026-10-21).** `csb_agent/adapters/autoware.py` (ROS-free) and
+`autoware_ros.py` (the ADAPI port), as planned. `AutowareAgent` carries acb's core as hooks
+and steps: `wait_ready(timeout)`, `relocalize(pose)` (fresh scans -> initialize -> converge,
+blocking, `Failed` with the reason), `set_route(...)`, `engage()`; a background step (10 Hz)
+engages a ready goal and reports Autoware's state (phase, MRM / emergency faults, turn
+indicators, RTC, pose); `on_reset` reports INITIALIZING throughout, whatever Autoware shows,
+then the derived phase. RTC is offered only when Autoware's RTC services answer. Bounds are
+config keys (`DEFAULTS`). `ros2 run csb_agent autoware_agent`.
+
+- acb `25470e4` (pushed before the pin): `acb_pilot agent` keeps its name and parameters
+  and runs the class (relay mode through `csb_agent.Client`, local mode driving it to the
+  goal file), plus `agent_config:=` (a settings file); `agent_core.py`, `agent_protocol.py`,
+  `autoware_port.py` and their three test files deleted (the drift test with them). acb's
+  agent now needs `csb_agent` (this workspace, the tarball or the wheel); acb's own workspace
+  alone no longer runs it.
+- Tests (`test_autoware_agent.py`, 23, on the moved fake Autoware and clock): the phase
+  table; reset -> goal -> engage -> arrive; a reset drops a driven route first; fresh scans
+  waited for but not forever; no convergence and refused initializes fail the reset with
+  the reason; a refused initialize retried; services never answering; an overridden
+  `relocalize`; goals (duplicate, reroute while driving, refused), stop holding, engage
+  retries, unavailable, speed limit, RTC only with the services, faults, state validity;
+  and `csb-agent check` on a fake Autoware: 16/16. SDK + relay tests 191 pass.
+- **Live** (`just ego-av`, default clustering stack, the new agent; sim side on the current
+  build): the agent registers as v2 with `reset`; starter suites through `run_suite`:
+  **basic/ (six Town01) 6/6** (ego_drive 46 s, engage_state 43, pedestrian 125, rear_contact
+  24, simulator_autopilot 45, traffic_light 183), **UC-AEB-001 9/9** (538 s), **UC-ACC-001
+  27/27** (1967 s; a first run with `--timeout-per-scenario 600` was cut at 25 variants by that
+  timeout, not a failure). Every scenario reset through v2: `ego: reset ego-<n>-<t> -> OK in
+  4.3-5.8 s` in the relay's log, `localized at the reset pose after ...` in the agent's.
+- **A reset longer than the concealer's 9 s** (`agent_config:=` with `scans_required: 100000,
+  scan_wait: 14`, so each reset waits 14 s for scans): the relay answered the concealer at
+  9 s (`initialize -> OK: reset ego-52-... in progress`), the reset completed in 16.6 s and
+  17.7 s, and `town01_ego_drive` and `town01_traffic_light` passed (56 s, 197 s).
+- Docs: `agent-interface.md` "Autoware: AutowareAgent"; user-workflow.md no longer
+  describes acb's own copy.

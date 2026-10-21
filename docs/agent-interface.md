@@ -189,6 +189,31 @@ class GoalAhead(RosAdapter):
 Any class can get a ROS node the same way: mix in `csb_agent.ros.RosNode` and call
 `self.start_node("name")`; `self.node` is spun on its own thread and stopped in `close()`.
 
+## Autoware: `AutowareAgent`
+
+The Autoware vehicle side (`just ego-av`) runs `csb_agent.adapters.autoware.AutowareAgent`:
+Autoware's ADAPI as an agent. At a reset it stops, drops the route, waits for Autoware's
+services, then re-localizes at the scenario's pose (two fresh LiDAR scans, initialize
+localization, wait until the estimate agrees within 1 m / 0.2 rad); on a goal it sets the
+route and engages once Autoware offers autonomous mode. Without acb:
+
+```bash
+ros2 run csb_agent autoware_agent --relay tcp://sim-host:5560 --entity ego --config agent.yaml
+```
+
+`agent.yaml` takes `use_sim_time` (true for a simulator) and the bounds: `ready_timeout`
+(60 s), `scan_wait` (10), `scans_required` (2), `converge_timeout` (30),
+`initialize_attempts` (5), `engage_retry` (3), `settle` (2). Under `just ego-av` the same
+file is `agent_config:=agent.yaml`. Each step is a method to override in a subclass:
+
+```python
+from csb_agent.adapters.autoware import AutowareAgent
+
+class TrustTeleport(AutowareAgent):
+    def relocalize(self, pose):          # e.g. a simulator that places the vehicle exactly
+        ...                              # also: wait_ready(timeout), set_route(...), engage()
+```
+
 ## Tutorial: a scenario driven by CARLA's BasicAgent
 
 The SDK ships a complete agent that needs no autopilot at all: `csb_agent.adapters.carla_basic`
@@ -277,8 +302,8 @@ Restarting the autopilot when a reset fails (`csb-agent supervise`, `run_suite
 ## Compatibility
 
 The protocol is versioned. Agents written with this SDK speak v2 and fall back to v1 on an
-older relay; the relay serves v1 agents (such as the Autoware agent today) unchanged, giving
-them the v1 sequence -- `stop`, `clear_goal`, `teleported(pose)` -- instead of `reset`. An
+older relay; the relay serves v1 agents unchanged, giving them the v1 sequence -- `stop`,
+`clear_goal`, `teleported(pose)` -- instead of `reset`. An
 agent without `on_reset` is treated the same way by the SDK. The protocol itself, for
 writing an agent in another language: [design/user-workflow.md, "The agent protocol
 (I3)"](design/user-workflow.md#the-agent-protocol-i3).

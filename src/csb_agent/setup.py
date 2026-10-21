@@ -21,6 +21,8 @@ setup(
         'console_scripts': [
             'csb-agent = csb_agent.cli:main',
             'ros_adapter = csb_agent.ros_adapter:main',
+            'autoware_agent = csb_agent.adapters.autoware_ros:main',
+            'carla_basic = csb_agent.adapters.carla_basic:main',
         ],
     },
 )
