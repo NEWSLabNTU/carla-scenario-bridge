@@ -71,13 +71,21 @@ class GenDemoTour(unittest.TestCase):
             for a in g["actors"]:
                 o = objs[a["name"]]
                 want = {"cars": "Vehicle", "parked": "MiscObject", "walkers": "Pedestrian"}[g["kind"]]
+                if g["kind"] == "walkers" and len(a["path"]) == 1:
+                    want = "MiscObject"  # a person standing still: free for SSv2 (step 8)
                 self.assertIsNotNone(o.find(want), a["name"])
-        # parked cars never get a speed action (they are misc objects)
-        parked = {a["name"] for g in AMBIENT["groups"] if g["kind"] == "parked" for a in g["actors"]}
+        # parked cars and standing people never get a speed action (they are misc objects)
+        parked = {a["name"] for g in AMBIENT["groups"] for a in g["actors"]
+                  if g["kind"] == "parked" or (g["kind"] == "walkers" and len(a["path"]) == 1)}
         for grp in root.iter("ManeuverGroup"):
             actors = {e.get("entityRef") for e in grp.find("Actors")}
             if actors & parked:
                 self.assertEqual(list(grp.iter("SpeedAction")), [], grp.get("name"))
+        # an adult blueprint for every ambient person (0009-0014, 0048-0049 are children)
+        for g in AMBIENT["groups"]:
+            for a in g["actors"]:
+                if g["kind"] == "walkers":
+                    self.assertNotIn(int(a["bp"].rsplit(".", 1)[1]), (9, 10, 11, 12, 13, 14, 48, 49), a["name"])
         # ambient groups have no watchdog: only incident groups delete on the ego standing still
         for ev in root.iter("Event"):
             if ev.get("name", "").endswith("_watchdog") or ev.get("name", "").endswith("_clear"):

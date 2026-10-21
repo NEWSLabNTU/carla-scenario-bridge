@@ -368,6 +368,153 @@ two-av *args: _require-carla
 # Succeed if an agent is registered with the agent relay as `entity` (the relay's commander
 # `query`; docs/design/user-workflow.md). A scenario entity with controller `agent` fails its
 # first goal without one.
+# One continuous drive of Town01 through six incidents, ambient traffic and walkers (roadmap
+# 033), in tutorial 4's layout -- CARLA's chase camera top left, the ego's RViz on the right
+# half, a caption strip (demo_captions) under the chase view.
+# The demo tour, in tutorial 4's layout: [record:=true] [rviz:=] [keep_stacks:=] [scenario:=]
+demo-tour *args: _require-carla
+    #!/usr/bin/env bash
+    # Usage: just demo-tour [record:=true] [rviz:=true|false] [keep_stacks:=true|false]
+    #            [scenario:=<xosc>] [output_directory:=<dir>]
+    #   record:=true       screencast of the display to play_log/demo/<time>/demo-tour.mp4
+    #   rviz:=false        no RViz (default true when a display is set)
+    #   keep_stacks:=false stop the stacks this run started afterwards (default: keep them;
+    #                      the ego stack takes minutes to come up)
+    # The windows go to RECORD_DISPLAY, else DISPLAY (host settings); none set: no windows,
+    # the tour runs headless. The ego stack is the tour's (max_velocity:=11.11, CenterPoint
+    # with the lidar merger); a running one (web 8082) is reused, so start it with those
+    # arguments. The simulation side is reused or started, and set to ClearNoon either way.
+    set -e
+    source "{{lib}}"; csb_reject_env
+    record=false; rviz=""; keep_stacks=true; output_directory=""
+    scenario="{{project}}/src/csb_examples/scenarios/demo/town01_tour.xosc"
+    for a in "$@"; do
+        case "$a" in
+            record:=*) record="${a#*:=}" ;;
+            rviz:=*) rviz="${a#*:=}" ;;
+            keep_stacks:=*) keep_stacks="${a#*:=}" ;;
+            scenario:=?*) scenario="${a#*:=}" ;;
+            output_directory:=?*) output_directory="${a#*:=}" ;;
+            *) echo "demo-tour: unknown argument '$a' (record:=, rviz:=, keep_stacks:=, scenario:=, output_directory:=)" >&2; exit 2 ;;
+        esac
+    done
+    logs="$(csb_log_dir "{{project}}" demo-tour)/$(date +%Y-%m-%d_%H-%M-%S)"
+    mkdir -p "$logs"; ln -sfn "$logs" "$(dirname "$logs")/latest"
+    output_directory="${output_directory:-$logs/out}"
+    display="${RECORD_DISPLAY:-${DISPLAY:-}}"
+    if [ -n "$display" ] && ! DISPLAY="$display" xdpyinfo > /dev/null 2>&1; then
+        echo "demo-tour: display $display is not usable; running headless" >&2; display=""
+    fi
+    [ -z "$rviz" ] && rviz=$([ -n "$display" ] && echo true || echo false)
+    [ -z "$display" ] && rviz=false
+    if [ "$record" = true ] && [ -z "$display" ]; then
+        echo "demo-tour: record:=true needs RECORD_DISPLAY or DISPLAY" >&2; exit 2
+    fi
+    source "{{autoware_setup}}"
+    if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
+    source "{{project}}/install/setup.bash"
+    export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
+    export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
+
+    stack_on_port() {
+        for p in $(pgrep -x play_launch); do
+            tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q -- "--web-addr [0-9.]*:$1 " \
+                && { echo "$p"; return 0; }
+        done
+        return 1
+    }
+    # What this run started, killed by process group (setsid) at the end.
+    started=(); windows=(); rec_pid=""
+    cleanup() {
+        if [ -n "$rec_pid" ]; then
+            # SIGINT, not SIGKILL: mp4 writes its index when the muxer closes.
+            kill -INT -"$rec_pid" 2>/dev/null || true; sleep 5
+            echo "[demo-tour] screencast: $logs/demo-tour.mp4"
+        fi
+        for pg in "${windows[@]}"; do kill -TERM -"$pg" 2>/dev/null || true; done
+        if [ "$keep_stacks" != true ] && [ ${#started[@]} -gt 0 ]; then
+            echo "[demo-tour] stopping the stacks this run started"
+            for pg in "${started[@]}"; do kill -TERM -"$pg" 2>/dev/null || true; done
+            sleep 15
+            for pg in "${started[@]}"; do kill -KILL -"$pg" 2>/dev/null || true; done
+        fi
+    }
+    trap cleanup EXIT INT TERM
+
+    # The simulation side, ClearNoon.
+    if ! stack_on_port 8084 > /dev/null; then
+        echo "[demo-tour] starting the simulation side (just run weather:=ClearNoon)"
+        setsid just run weather:=ClearNoon > "$logs/bridge.log" 2>&1 < /dev/null &
+        started+=($!)
+        for _ in $(seq 1 120); do
+            ss -lnt 2>/dev/null | grep -q ":{{ssv2_port}} " && break
+            sleep 2
+        done
+    fi
+    ROS_DOMAIN_ID={{scenario_domain}} timeout 30 ros2 service call /carla/set_weather \
+        csb_interfaces/srv/SetWeather "{preset: ClearNoon}" 2>/dev/null | grep -o "success=[A-Za-z]*" \
+        || echo "[demo-tour] note: could not set ClearNoon (bridge not answering yet?)"
+
+    # The ego stack, the tour's arguments, RViz on the display.
+    if pid=$(stack_on_port 8082); then
+        args=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+        case "$args" in *max_velocity:=11.11*) ;; *)
+            echo "[demo-tour] warning: the running ego stack (web 8082) was not started with" \
+                 "max_velocity:=11.11 -- the tour is timed for 40 km/h" >&2 ;;
+        esac
+        echo "[demo-tour] reusing the running ego stack (web 8082)"
+    else
+        echo "[demo-tour] starting the ego stack (several minutes; CenterPoint)"
+        rviz_args=(rviz:="$rviz")
+        [ "$rviz" = true ] && rviz_args+=(rviz_config:="{{project}}/src/csb_launch/rviz/autoware_cast.rviz")
+        setsid env ${display:+DISPLAY=$display} just ego-av max_velocity:=11.11 \
+            lidar_detection_model:=centerpoint use_multi_channel_tracker_merger:=false \
+            "${rviz_args[@]}" > "$logs/ego.log" 2>&1 < /dev/null &
+        started+=($!)
+        deadline=$((SECONDS + 1500))
+        until grep -q "Startup complete" "$logs/ego.log" 2>/dev/null; do
+            kill -0 "${started[-1]}" 2>/dev/null || { echo "[demo-tour] ego stack exited; see $logs/ego.log"; exit 1; }
+            [ $SECONDS -gt $deadline ] && { echo "[demo-tour] ego stack not up in 1500 s; see $logs/ego.log"; exit 1; }
+            sleep 10
+        done
+    fi
+    just _require-ego-stack
+
+    # The windows: chase camera top left, captions under it (tutorial 4's layout; RViz's
+    # autoware_cast.rviz takes the right half of a 1920x1080 screen).
+    if [ -n "$display" ]; then
+        setsid env DISPLAY="$display" SDL_VIDEO_WINDOW_POS=70,28 VIEW_W=740 VIEW_H=416 \
+            CARLA_PORT={{carla_port}} ros2 run csb_launch chase_view > "$logs/chase_view.log" 2>&1 < /dev/null &
+        windows+=($!)
+        setsid env DISPLAY="$display" ROS_DOMAIN_ID={{scenario_domain}} ros2 run csb_launch demo_captions \
+            --geometry 740x190+70+478 --log "$logs/captions.jsonl" > "$logs/captions.log" 2>&1 < /dev/null &
+        windows+=($!)
+        sleep 5
+    else
+        setsid env ROS_DOMAIN_ID={{scenario_domain}} ros2 run csb_launch demo_captions --headless \
+            --log "$logs/captions.jsonl" > "$logs/captions.log" 2>&1 < /dev/null &
+        windows+=($!)
+    fi
+    if [ "$record" = true ]; then
+        geom=$(DISPLAY="$display" xdpyinfo 2>/dev/null | awk '/dimensions:/ {print $2; exit}')
+        echo "[demo-tour] recording $display ($geom) to $logs/demo-tour.mp4"
+        setsid ffmpeg -y -f x11grab -video_size "$geom" -framerate 15 -i "$display.0" \
+            -vf scale=1280:-2 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
+            "$logs/demo-tour.mp4" > "$logs/ffmpeg.log" 2>&1 < /dev/null &
+        rec_pid=$!
+    fi
+
+    echo "[demo-tour] running $(basename "$scenario")"
+    junit="$output_directory/scenario_test_runner/result.junit.xml"
+    rm -f "$junit"
+    just scenario "$scenario" output_directory:="$output_directory" 2>&1 | tail -3 || true
+    if [ -f "$junit" ] && grep -q 'failures="0" errors="0"' "$junit"; then
+        echo "[demo-tour] tour PASSED"
+    else
+        echo "[demo-tour] tour did not pass: ${junit}"
+    fi
+    echo "[demo-tour] captions: $logs/captions.jsonl"
+
 _require-agent entity:
     #!/usr/bin/env python3
     import json, socket, sys

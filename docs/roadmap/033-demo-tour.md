@@ -253,11 +253,11 @@ recording picks them up.
    `openscenario_preprocessor`'s `load` service (it returns the reason) before a full run.
    Remove the ~300 ms frame stall each NPC despawn costs (step 2: `sensor_release` waits out
    its timeout for an ack nobody sends for an NPC).
-6. [ ] **Captions** (`demo_captions`, subscribing `/simulation/context` in domain 9) and a
+6. [x] **Captions** (`demo_captions`, subscribing `/simulation/context` in domain 9) and a
    `demo` launch / justfile recipe bringing up the layout. Per-incident numbers from the
    bridge: see the step 2 results for what it has and what it would need.
 7. [ ] **Rehearsal**: 3 full tours; one recorded take; README / tutorial 4 updated.
-8. [ ] **Ambient layer** (between 5 and 7): the groups in "Ambient traffic and walkers" as
+8. [x] **Ambient layer** (between 5 and 7): the groups in "Ambient traffic and walkers" as
    their own ManeuverGroups in the tour (generated, unique names), walker polylines fitted to
    CARLA's sidewalks (`get_waypoint(..., lane_type=Sidewalk)`), each segment checked to cause
    no ego stop or slowdown outside an incident (planning factors), and the bridge's frame
@@ -1051,3 +1051,137 @@ CARLA's side, not chased). `just test`: 361 nextest + 195 pytest pass; `just che
 Run: `r5_1` (context, ego planning log, trace, judge per incident) in the scratch directory
 `/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-80a742b40cbd/scratchpad/s_tour`
 (`run_tour.sh`, `tour_summ.py`, `loadcheck.sh`).
+
+**Step 8: the ambient layer (2026-10-21).** Plan first, results below it.
+
+- `scripts/demo_town01_ambient.yaml` (new, data like the sites file): every ambient actor's
+  poses, made by a scratch pose tool (`s_tour/amb.py`) from route C, the Lanelet2 map (lanes
+  off the route), CARLA's environment-object boxes along the route (4d's `furniture_bb.json`,
+  read-only) and the **OpenDRIVE sidewalks read offline** (`carla.Map("Town01", xodr)` in the
+  Python API, no server: `get_waypoint(..., lane_type=Any)` gives each point's lane type). On
+  this map a sidewalk runs ~2.4-6.3 m right of the lane centre and ~8-10.3 m left of it (beyond
+  the oncoming lane); walkers walk at -5.0..-5.9 / +8.4..+9.6 m, at the offset with the fewest
+  object boxes along their path, and clear of the parked cars (3.6 m, outer edge 4.7 m).
+- `gen_demo_tour.py` reads it (`ambient_groups`): each group is added when the ego reaches its
+  trigger pose (optionally also once an incident's phase parameter has a value: the stem cars
+  and the crossing walkers wait for incident 3's red, the east-road oncoming pair for incident
+  4's clearing) and deleted when it is done -- cars when the last reaches its end pose, parked
+  cars and standing walkers when the ego has passed, walkers when their walk is done and the
+  ego has passed (they stop and stand at the end of the path, so none vanishes in front of the
+  camera). No watchdog: nothing ambient may hold the ego up. Every actor's contact with the
+  ego is logged.
+- The groups, against the design table: oncoming pairs on the west road (a_west1, a_west2),
+  three on the bottom road (a_bottom), two stem cars turning east on the red (s_stem, 10 m/s,
+  gone before the broken car), two followers from m 495 that queue behind the ego at the red
+  and the blocked lane (f_follow), oncoming pairs on the east road after the clearing (b_east),
+  on the x 337 road (n_stem) and the closing road (g_close), four inner-block pairs at the
+  x 337 T junctions (x_57w/e, x_133w/e, never entering the junction); 18 parked misc cars in
+  five segments; 27 walkers (far and near sidewalks on the west road, a waiting group of three
+  at the start and at the top-right corner, four crossing the ego's road past its stop line on
+  its red, the bottom, east, x 337 and closing roads). Not done: w1 (an oncoming car held by
+  its own red) -- the westbound approach at that T has no signal in the Lanelet2 map, so SSv2
+  has no light to hold it with.
+- Check, on the same stacks: no ego stop or slow-down outside an incident (planning factors,
+  speed along the route against the 4d bare drive), the bridge's frame budget and SSv2's
+  real-time factor at the densest points, no contact; thin group by group (parked cars and far
+  walkers first) if any fails.
+
+*Results (2026-10-21).* **SSv2's own frame is the budget, not the bridge's.** The first full
+layer (70 actors: 25 moving cars, 18 parked, 27 walkers; `r8_1`) ran at RTF ~0.5: the
+interpreter warned "not powerful enough" every frame, while the bridge's processing stayed at
+0.4-0.9 ms. SSv2's own split (`/simulation/interpreter/execution_time/{evaluate,update,output}`,
+logged per run): `evaluate` 3-5 ms, `output` 7-10 ms (the `/simulation/context` JSON, 210 KB a
+frame with ~250 events), **`update` 5 ms with only the ego and misc objects, ~10 ms more per
+walking pedestrian and ~20-25 ms more per moving vehicle** -- `traffic_simulator`'s per-entity
+update (behaviour trees, lanelet matching); a pedestrian standing at the end of its walk costs
+almost nothing. So the incidents alone already overrun at times: incident 4 (three cars)
+takes SSv2's frame to ~85 ms for ~35 s, incident 5 (two) to ~60 ms -- in the step 4 templates
+too (`s_4d/i4/rehb_1`: 409 overrun warnings), unnoticed until now. Not chased into SSv2 here;
+a bridge experiment (not echoing NPC statuses back, so SSv2 skips re-canonicalising them)
+changed nothing and was reverted (it also emptied the gap trace of NPCs).
+
+The layer was thinned to what the frame holds, cheapest form first:
+
+- **Standing people are misc objects** with a walker blueprint (`standing_walker`): physics
+  off, posed where SSv2 puts them, free for SSv2. Moving people are pedestrian entities with
+  two-vertex straight paths (multi-vertex untimed polylines twice ended a run in SSv2's
+  FollowTrajectory controller at the last vertex: "Contradictory acceleration limits",
+  `p_bottom_2`, `r8_1` and `r8_2`), adult blueprints only (0009-0014 are children).
+- **At most ~2 moving ambient NPCs at a time, none while incident 4 or 5 runs**: single
+  oncoming cars instead of pairs, one stem car on the red, no followers (they would have
+  overlapped incident 4's three cars) and one inner-block pair instead of four.
+- Placement fixes found on the way: no oncoming car in a corner as the ego enters it (it took
+  the ego to 1.1 m/s, `obstacle_stop` then `dynamic_obstacle_stop`; `r8_3`), none on the
+  bottom road while incident 1's lead merges (a CARLA contact, `rh_0`), no parked car ~8 m
+  before the bottom-left corner, no people standing on the closing road's ego-side sidewalk
+  (a `road_user_stop` slow-down to 4.4 m/s, `rh_0`); a group's deletion "when the ego has
+  passed" is a latched parameter (a ReachPositionCondition holds only while the ego is there,
+  so walkers that ended their walk after it never went).
+
+What remains (`scripts/demo_town01_ambient.yaml`, 21 groups): 17 parked cars (misc), 8 moving
+cars (oncoming on the west, bottom, east, x 337 and closing roads; one stem car turning east
+on the red; a pair leaving the y -57 T), 19 people (14 standing, 5 walking, two of them
+crossing the ego's road past its stop line on its red).
+
+
+*Checks on the thinned layer* (rehearsal `rh_1`, through `just demo-tour`, same stacks; the
+full table is step 7's): **no stop or slow-down outside an incident** -- one stop per incident,
+each with its module's factor, and the ego's speed along route C, 5 m bins, never more than
+1.5 m/s under the 4d bare drive's except in an incident's own approach or departure; no
+contact (CARLA or SSv2); `incident_judge` 6/6 PASS on the tour's trace; `gap_oracle` G1 0 / G2 0,
+G3 only of known kinds (cars and the cyclist starting, the incident walker's turn-round, the
+walking ambient people starting or held by a kerb -- the bridge then poses them kinematically,
+032's fallback). SSv2's `update`, 5 s means: **31 ms outside incidents (worst 66 ms, the closing
+road's oncoming car and walker), 56 ms inside them (worst 97 ms, incident 4's three cars)**;
+real-time factor over the drive 0.81 (275 s of simulation in 338 s). The bridge: processing p50
+0.5 ms, p95 under 1 ms; spawns are its only frames over 25 ms.
+
+**Step 6: captions and the demo recipe (2026-10-21).** Plan first, results below it.
+
+- `demo_captions` (`csb_launch`, Python, Tk): subscribes `/simulation/context` (transient
+  local) and `/simulation/entity/status` in the scenario domain; diffs each event's state by
+  name and acts on the change to `completeState` -- an incident's start group (`i2_ped_start`,
+  `i1_start`, `i3_red`, `i4_broken_start`, `i5_start`, `i6_start`) shows its title, its end
+  (`<group>_end`, `i3_green`) or watchdog (`_watchdog`, incident 4's `_clear`) how it went,
+  `<actor>_contact` a contact in red, `goal_reached` (already on `runningState`: its exit ends
+  the interpreter in the same frame) a closing tally. The numbers come from SSv2's own entity
+  state, not the bridge (step 2's open question, answered without a new bridge topic): box to
+  box gap from the ego to the incident's actor (incident 4: the broken car, not the oncoming
+  pair), the ego's lowest speed and time stood. A live line shows the ego's speed, the gap and
+  how long it has stood. `--headless` prints the captions only; `--log` keeps them as JSON
+  lines. Unit tests on synthetic snapshots (`test_demo_captions.py`).
+- `just demo-tour [record:=true] [rviz:=] [keep_stacks:=] [scenario:=] [output_directory:=]`:
+  reuses or starts the simulation side (ClearNoon, set through `/carla/set_weather` either
+  way) and the ego stack with the tour's arguments (RViz `autoware_cast.rviz` on the display
+  when it starts it; a reused stack without `max_velocity:=11.11` gets a warning), then opens
+  tutorial 4's layout on `RECORD_DISPLAY` / `DISPLAY` -- chase view at 70,28 (740x416),
+  captions under it (740x190) -- records the display with ffmpeg when asked, and runs the
+  tour; logs, captions and the video under `play_log/demo-tour/<time>/`.
+
+*Results (2026-10-21).* Both as planned; every rehearsal below ran through `just demo-tour`
+on a private 1920x1080 TurboVNC display. RViz needs GLX there: a bare `Xvnc :N` has none
+(`couldn't find RGB GLX visual`, RViz crash-loops); started with TurboVNC's own
+`-dridir /usr/lib/x86_64-linux-gnu/dri -registrydir /usr/lib/xorg` it renders on Mesa's
+llvmpipe (~3 cores at 18 fps). The captions of one tour, as shown:
+
+```
+Incident 1 of 6: Pedestrian darts out from behind a parked van
+Pedestrian darts out from behind a parked van -- Autoware braked and stopped 5.0 m short of the pedestrian
+Incident 2 of 6: Lead car brakes hard
+Lead car brakes hard -- Autoware stopped 5.6 m behind the braking car
+Incident 3 of 6: Red light
+Red light -- Autoware stopped at the line and went on green after 8 s
+Incident 4 of 6: Blocked lane: a broken-down car
+Blocked lane: a broken-down car -- Autoware stopped 5.6 m behind it, waited 12 s until the tow truck cleared it
+Incident 5 of 6: Crossing traffic at a left turn
+Crossing traffic at a left turn -- Autoware yielded to both cars (4 s), then turned
+Incident 6 of 6: Cyclist on the inside of a right turn
+Cyclist on the inside of a right turn -- Autoware yielded (1.2 s) and let the cyclist through on its inside
+Tour complete: goal reached -- 6 of 6 incidents handled, 0 contacts, 4.6 min
+```
+
+(`rh_1`. Captions measure SSv2's declared boxes, the judge CARLA's bodies: pedestrian 5.0 / 4.9 m,
+lead 5.6 / 5.35 m, broken car 5.6 / 5.3 m.)
+The closing caption's time is simulation time; the tour plays ~20 % slower on the wall
+clock (SSv2's frame, step 8). Tutorial 4 has a new section 4 (the tour, `just demo-tour`,
+recording, GLX on a VNC display) and the README's tutorial entry mentions it.

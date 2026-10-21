@@ -14,7 +14,7 @@ install(
 # `ros2 run csb_launch chase_view`: a chase camera window on the ego, for demos (027).
 # `ros2 run csb_launch gap_oracle`: SSv2-vs-CARLA disagreements in a gap trace (024).
 install(
-  PROGRAMS scripts/run_suite scripts/physical_verdict scripts/carla_poses scripts/chase_view
+  PROGRAMS scripts/run_suite scripts/physical_verdict scripts/carla_poses scripts/chase_view scripts/demo_captions
     scripts/gap_oracle scripts/incident_judge
   DESTINATION lib/${PROJECT_NAME}
 )

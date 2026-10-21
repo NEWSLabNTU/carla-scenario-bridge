@@ -137,8 +137,9 @@ simulation.launch.xml` -- plus a log directory per node and a web UI (`--web-add
    write the `.xosc`, run it.
 3. [Run and judge](docs/tutorials/03-run-and-judge.md) -- suites, CARLA's contacts in the
    verdict, the result files.
-4. [Demo run](docs/tutorials/04-demo-run.md) -- two Autoware vehicles in one scenario, and
-   recording a screencast.
+4. [Demo run](docs/tutorials/04-demo-run.md) -- two Autoware vehicles in one scenario,
+   recording a screencast, and the demo tour (`just demo-tour`: six incidents in one
+   five-minute drive through Town01, with captions).
 
 **Reference** -- the [User Guide](docs/user-guide.md) (install, maps, scenario directories,
 running, configuring the CARLA world, troubleshooting) and

@@ -50,6 +50,32 @@ WAYPOINTS = [dict(x=213.62, y=-330.6, yaw=-0.0001), dict(x=396.3, y=-164.54, yaw
 GOAL = dict(x=175.67, y=-195.15, yaw=3.1415)
 
 AMBIENT_CAR_MPS = 8.0
+WALKER_BOX = (0.6, 0.6, 1.8)  # length, width, height, as the incident walker's
+
+
+def pedestrian(name, bp="walker.pedestrian.0001"):
+    """a walking ambient pedestrian; `bp` the CARLA walker blueprint (SSv2 sends model3d as
+    the asset key)"""
+    return f"""<ScenarioObject name="{name}">
+			<Pedestrian model="unspecified" model3d="{bp}" mass="70.0" name="{bp}" pedestrianCategory="pedestrian">
+				<BoundingBox><Center x="0.0" y="0.0" z="0.9" /><Dimensions width="0.6" length="0.6" height="1.8" /></BoundingBox>
+				<Properties />
+			</Pedestrian>
+			<ObjectController><Controller name=""><Properties /></Controller></ObjectController>
+		</ScenarioObject>"""
+
+
+def standing_walker(name, bp):
+    """a person standing still, as a MiscObject: a pedestrian entity costs SSv2 ~10 ms of its
+    frame each on Town01 (step 8), a misc object nothing measurable. The bridge spawns the
+    walker blueprint with physics off where SSv2 puts it (pose z = the walker's centre)."""
+    length, width, height = WALKER_BOX
+    return f"""<ScenarioObject name="{name}">
+			<MiscObject mass="70" miscObjectCategory="obstacle" name="{bp}" model3d="{bp}">
+				<BoundingBox><Center x="0.0" y="0.0" z="0.0" /><Dimensions width="{width}" height="{height}" length="{length}" /></BoundingBox>
+				<Properties />
+			</MiscObject>
+		</ScenarioObject>"""
 
 
 # ---------------------------------------------------------------------------- ambient (step 8)
@@ -78,6 +104,16 @@ def _ambient_group(name, actors, start_actions, conds, ends, extra=()):
     return G.group(name, actors, evs)
 
 
+def _passed(tag, g):
+    """(event, condition): `<tag>_ego_by` becomes 1 when the ego reaches the group's `ego_gone`
+    pose, and stays: a ReachPositionCondition holds only while the ego is there, so a deletion
+    that also waits for something else (a walk to end, a drive-off) would miss it."""
+    flag = f"{tag}_ego_by"
+    ev = G.event(f"{tag}_ego_passed", [G.set_param(f"{tag}_ego_by_set", flag, 1)],
+                 [G.reach(f"{tag}_ego_at_gone", "ego", _pose(g["ego_gone"]), 3.0)])
+    return ev, G.param_is(f"{tag}_ego_gone", flag, 1)
+
+
 def ambient_groups(A):
     """(entities, groups) from the ambient file's `groups`, each started when the ego reaches
     its `trigger` pose (and, with `after_param: [p, v]`, only once global parameter p is v --
@@ -89,8 +125,9 @@ def ambient_groups(A):
       entity is deleted while a speed change of its own runs).
     - `parked`: misc objects (`vehicle.*` blueprints, physics off; step 4d), deleted when the
       ego reaches `ego_gone`.
-    - `walkers`: pedestrians. One with a `path` of one pose stands (all such in one group,
-      deleted when the ego reaches `ego_gone`); one with a longer path walks it untimed at
+    - `walkers`: pedestrians. One with a `path` of one pose stands -- a MiscObject with a walker
+      blueprint (`standing_walker`), all such in one group, deleted when the ego reaches
+      `ego_gone`; one with a longer path is a pedestrian entity and walks it untimed at
       `mps` (started at WALKER_START_RATE, `delay` s after the add), in a group of its own
       (a group's private actions apply to all its actors), stops at its end and is deleted
       then, or once the ego has reached the group's `ego_gone` as well, if given.
@@ -114,26 +151,30 @@ def ambient_groups(A):
             go = G.event(f"{name}_go", [G.speed(f"{name}_drive_off", g.get("mps", AMBIENT_CAR_MPS), G.GO_ACCEL)],
                          [G.state(f"{name}_added", f"{name}_start", delay=G.GO_DELAY_S)])
             ends = [[G.reach(f"{name}_done", actors[-1], _pose(g["end"]), g.get("end_tol", 4.0))]]
+            extra = [go]
             if "ego_gone" in g:
-                ends.append([G.reach(f"{name}_ego_gone", "ego", _pose(g["ego_gone"]), 3.0),
-                             G.state(f"{name}_went", f"{name}_go", delay=5.0)])
-            groups.append(_ambient_group(name, actors, start, conds(), ends, [go]))
+                ev, gone = _passed(name, g)
+                extra.append(ev)
+                ends.append([gone, G.state(f"{name}_went", f"{name}_go", delay=5.0)])
+            groups.append(_ambient_group(name, actors, start, conds(), ends, extra))
         elif kind == "parked":
             actors = [a["name"] for a in g["actors"]]
             entities += [G.parked(a["name"], a.get("bp", "vehicle.tesla.model3")) for a in g["actors"]]
             start = [G.add(a["name"], _pose(a["pose"])) for a in g["actors"]]
-            ends = [[G.reach(f"{name}_ego_gone", "ego", _pose(g["ego_gone"]), 3.0)]]
-            groups.append(_ambient_group(name, actors, start, conds(), ends))
+            ev, gone = _passed(name, g)
+            groups.append(_ambient_group(name, actors, start, conds(), [[gone]], [ev]))
         elif kind == "walkers":
             standing = [a for a in g["actors"] if len(a["path"]) == 1]
             walking = [a for a in g["actors"] if len(a["path"]) > 1]
-            entities += [G.walker(a["name"]) for a in g["actors"]]
+            entities += [standing_walker(a["name"], a.get("bp", "walker.pedestrian.0001")) for a in standing]
+            entities += [pedestrian(a["name"], a.get("bp", "walker.pedestrian.0001")) for a in walking]
             if standing:
                 path0 = [_pose(a["path"][0]) for a in standing]
-                # a standing walker faces `yaw` of its pose
+                # a standing walker faces `yaw` of its pose; its misc-object origin is its centre
+                ev, gone = _passed(name, g)
                 groups.append(_ambient_group(name, [a["name"] for a in standing],
-                                             [G.add(a["name"], p) for a, p in zip(standing, path0)], conds(),
-                                             [[G.reach(f"{name}_ego_gone", "ego", _pose(g["ego_gone"]), 3.0)]]))
+                                             [G.add(a["name"], p, z=WALKER_BOX[2] / 2 + g.get("kerb_z", 0.15))
+                                              for a, p in zip(standing, path0)], conds(), [[gone]], [ev]))
             for a in walking:
                 w = a["name"]
                 path = [_pose(p) for p in a["path"]]
@@ -145,11 +186,13 @@ def ambient_groups(A):
                 # on), and stands there until it is deleted -- at once, or once the ego has
                 # reached `ego_gone`, so it does not vanish in front of the camera
                 halt = G.event(f"{w}_halt", [G.speed(f"{w}_stand", 0.0)], [G.state(f"{w}_walked", f"{w}_walk")])
-                end = [G.state(f"{w}_halted", f"{w}_halt")]
+                end, extra = [G.state(f"{w}_halted", f"{w}_halt")], [walk, halt]
                 if "ego_gone" in g:
-                    end.append(G.reach(f"{w}_ego_gone", "ego", _pose(g["ego_gone"]), 3.0))
+                    ev, gone = _passed(w, g)
+                    end.append(gone)
+                    extra.append(ev)
                 groups.append(_ambient_group(w, [w], [G.add(w, dict(path[0], yaw=yaw))], conds(w),
-                                             [end], [walk, halt]))
+                                             [end], extra))
         else:
             raise ValueError(f"{name}: kind {kind}")
     return entities, groups
