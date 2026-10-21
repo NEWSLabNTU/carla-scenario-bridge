@@ -320,5 +320,115 @@ class PreflightTest(unittest.TestCase):
         self.assertFalse((self.dir / "out" / "a" / "launch.log").exists())
 
 
+class FakeCommander:
+    """A csb_agent.Commander stand-in: canned queries, records commands."""
+
+    def __init__(self, answers, log, restart_status="OK"):
+        self.answers, self.log, self.restart_status = answers, log, restart_status
+
+    def __call__(self, relay):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def query(self, entity):
+        return self.answers[0] if len(self.answers) == 1 else self.answers.pop(0)
+
+    def episode_end(self, entity, passed, failures=(), contacts=None, episode=""):
+        self.log.append(("episode_end", passed, list(failures), episode))
+        return {"status": "OK"}
+
+    def command(self, entity, name, timeout=None, **args):
+        self.log.append((name,))
+        return {"status": self.restart_status, "message": ""}
+
+
+def _result(passed=True):
+    r = rs.ScenarioResult(stem="s", path=Path("s.xosc"), output=Path("/tmp"))
+    r.cases = [rs.Case("s", "s", "pass" if passed else "failure", "", "")]
+    return r
+
+
+IDLE = {"registered": True, "supervised": True, "state": {"phase": "IDLE", "capabilities": []}}
+
+
+class RestartLadder(unittest.TestCase):
+    def ladder(self, policy, answers, log, **kw):
+        return rs.Ladder("tcp://x:1", "ego", policy, restart_timeout=1.0,
+                         commander=FakeCommander(answers, log, **kw), log=lambda *_: None,
+                         poll=0.01)
+
+    def test_policies_parse(self):
+        self.assertEqual(rs.parse_restart("every:3"), ("every", 3))
+        for bad in ("every:0", "sometimes", "every:x"):
+            with self.assertRaises(ValueError):
+                rs.parse_restart(bad)
+
+    def test_refused_without_supervisor_or_capability(self):
+        log = []
+        alone = {"registered": True, "supervised": False, "state": {"phase": "IDLE"}}
+        self.assertIn("needs a supervisor", self.ladder("on-failure", [alone], log).refuse())
+        self.assertIsNone(self.ladder("never", [alone], log).refuse())
+        able = {"registered": True, "supervised": False,
+                "state": {"phase": "IDLE", "capabilities": ["restart"]}}
+        self.assertIsNone(self.ladder("on-failure", [able], log).refuse())
+
+    def test_failed_reset_restarts_and_marks_the_next_scenario(self):
+        log = []
+        failed = dict(IDLE, reset={"episode": "ego-1", "status": "FAILED", "seconds": 60.0,
+                                   "timed_out": True})
+        ladder = self.ladder("on-reset-failure", [failed, IDLE], log)
+        first = _result(passed=False)
+        ladder.after(first)
+        self.assertEqual(first.reset["episode"], "ego-1")
+        self.assertEqual(first.restart["status"], "OK")
+        self.assertIn(("restart",), log)
+        self.assertEqual(log[0], ("episode_end", False, ["s"], "ego-1"))
+        ok = dict(IDLE, reset={"episode": "ego-2", "status": "OK", "seconds": 4.0})
+        ladder.commander.answers = [ok]
+        second = _result()
+        ladder.after(second)
+        self.assertTrue(second.restarted)
+        self.assertIsNone(second.restart)
+
+    def test_good_reset_no_restart_and_stale_reset_not_recorded(self):
+        log = []
+        ok = dict(IDLE, reset={"episode": "ego-1", "status": "OK", "seconds": 4.0})
+        ladder = self.ladder("on-reset-failure", [ok], log)
+        a, b = _result(), _result()
+        ladder.after(a)
+        ladder.after(b)  # the same episode again: this scenario reset nothing
+        self.assertEqual(a.reset["episode"], "ego-1")
+        self.assertIsNone(b.reset)
+        self.assertNotIn(("restart",), log)
+
+    def test_every_n_and_on_failure(self):
+        log = []
+        ladder = self.ladder("every:2", [IDLE], log)
+        ladder.after(_result())
+        self.assertNotIn(("restart",), log)
+        ladder.after(_result())
+        self.assertIn(("restart",), log)
+        log.clear()
+        ladder = self.ladder("on-failure", [IDLE], log)
+        ladder.after(_result())
+        self.assertNotIn(("restart",), log)
+        ladder.after(_result(passed=False))
+        self.assertIn(("restart",), log)
+
+    def test_restart_that_never_registers_fails(self):
+        log = []
+        gone = {"registered": False, "supervised": True}
+        ladder = self.ladder("on-failure", [IDLE, gone], log)
+        r = _result(passed=False)
+        ladder.after(r)
+        self.assertEqual(r.restart["status"], "FAILED")
+        self.assertIn("did not register", r.restart["message"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -36,7 +36,10 @@ MESSAGE_TYPES = (REGISTER, REGISTERED, ERROR, COMMAND, REPLY, STATE, HEARTBEAT,
 # -- roles (register.role) -------------------------------------------------------------
 ROLE_AGENT = "agent"  # the default: drives the vehicle registered as `entity`
 ROLE_COMMANDER = "commander"  # commands agents by entity name; no entity of its own
-ROLES = (ROLE_AGENT, ROLE_COMMANDER)
+# v2: restarts an entity's autopilot for the relay (`csb-agent supervise`); registers with
+# the entity's name, answers `restart`, heartbeats like an agent, and sends no state.
+ROLE_SUPERVISOR = "supervisor"
+ROLES = (ROLE_AGENT, ROLE_COMMANDER, ROLE_SUPERVISOR)
 
 # Each side sends something at least this often, and treats a peer that sent nothing for
 # PEER_TIMEOUT as gone.
@@ -120,6 +123,8 @@ def encode(message: dict, version: int = VERSION) -> bytes:
         raise ProtocolError(f"protocol version {version!r} not in {VERSIONS}")
     if version < 2 and message.get("command") in V2_COMMANDS:
         raise ProtocolError(f"{message['command']} needs protocol version 2")
+    if version < 2 and message.get("role") == ROLE_SUPERVISOR:
+        raise ProtocolError("the supervisor role needs protocol version 2")
     body = dict(message)
     body["v"] = version
     return (json.dumps(_finite_or_none(body), allow_nan=False, separators=(",", ":"))
@@ -180,7 +185,7 @@ def validate(message: dict) -> None:
         role = message.get("role", ROLE_AGENT)
         if role not in ROLES:
             raise ProtocolError(f"register: role={role!r} not in {ROLES}")
-        if role == ROLE_AGENT and not _require(message, "entity", str):
+        if role in (ROLE_AGENT, ROLE_SUPERVISOR) and not _require(message, "entity", str):
             raise ProtocolError("register: empty entity")
         caps = message.get("capabilities", [])
         if not isinstance(caps, list) or not all(isinstance(c, str) for c in caps):
@@ -203,9 +208,12 @@ def validate(message: dict) -> None:
         # entity's name, and its latest state.
         if "registered" in message and not isinstance(message["registered"], bool):
             raise ProtocolError("reply: registered is a boolean")
-        # v2, to commanders: how the entity's last reset went.
+        # v2, to commanders: how the entity's last reset went, whether it has a supervisor.
         if message.get("reset") is not None and not isinstance(message["reset"], dict):
             raise ProtocolError("reply: reset is an object")
+        if message.get("supervised") is not None and not isinstance(message["supervised"],
+                                                                     bool):
+            raise ProtocolError("reply: supervised is a boolean")
         if message.get("state") is not None:
             if not isinstance(message["state"], dict):
                 raise ProtocolError("reply: state is an object")
@@ -295,6 +303,11 @@ def register_commander(agent=""):
     return {"type": REGISTER, "role": ROLE_COMMANDER, "agent": agent}
 
 
+def register_supervisor(entity, agent=""):
+    return {"type": REGISTER, "role": ROLE_SUPERVISOR, "entity": entity, "agent": agent,
+            "capabilities": [RESTART]}
+
+
 def command_for(request_id, entity, name, timeout=None, **args):
     message = {"type": COMMAND_FOR, "id": request_id, "entity": entity, "command": name,
                "args": args}
@@ -319,12 +332,15 @@ def command(command_id, name, **args):
     return {"type": COMMAND, "id": command_id, "command": name, "args": args}
 
 
-def reply(command_id, status=OK, message="", state=None, registered=None, reset=None):
+def reply(command_id, status=OK, message="", state=None, registered=None, reset=None,
+          supervised=None):
     body = {"type": REPLY, "id": command_id, "status": status, "message": message}
     if registered is not None:
         body["registered"] = registered
     if reset is not None:
         body["reset"] = reset
+    if supervised is not None:
+        body["supervised"] = supervised
     if state is not None:
         body["state"] = state
     return body

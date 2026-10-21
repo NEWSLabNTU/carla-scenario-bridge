@@ -296,8 +296,51 @@ and goes on once it reports `IDLE`, so a reset may take as long as the autopilot
 re-localize, up to the relay's `reset_timeout` (default 60 s). A reset that fails or runs
 out of time fails that scenario.
 
-Restarting the autopilot when a reset fails (`csb-agent supervise`, `run_suite
---restart=...`) is planned (roadmap 030 step 8).
+### When a reset fails: restart
+
+A reset is the cheap way between scenarios; when it fails, the autopilot can be restarted.
+`run_suite` climbs that ladder after each scenario, by `--restart`:
+
+| `--restart` | Restarts the agent |
+|---|---|
+| `never` | never |
+| `on-reset-failure` | when the scenario's reset failed or ran out of time (the default when a restart is possible) |
+| `on-failure` | after any failed scenario |
+| `every:N` | after every N scenarios, to start each batch fresh |
+
+A restart needs someone to do it: a **supervisor**, or an agent that restarts itself
+(`on_restart`, capability `restart`). Given explicitly, a policy other than `never` with
+neither is refused when the suite starts; left at the default, the suite runs without
+restarts and says so. After a restart `run_suite` waits (`--restart-timeout`, 300 s) for
+the agent to register again before the next scenario. Each scenario's result -- its
+summary line and `<results>/suite.json` -- records its reset (episode, status, seconds)
+and whether it ran on a restarted agent; `run_suite` also sends the agent each verdict
+(`on_episode_end`).
+
+```
+[run_suite] restarting 'ego': reset ego-1-1792545605 FAILED (timed out)
+[run_suite] restart OK in 2 s: group 1121799 started; the agent registers when ready
+[run_suite] FAIL a_town01_ego_drive: 0/1 passed in 133 s [reset FAILED 60.0 s] -- ...
+[run_suite] PASS b_town01_ego_drive: 1/1 passed in 20 s [reset OK 0.5 s] [restarted agent]
+```
+
+### `csb-agent supervise`
+
+```bash
+csb-agent supervise --entity ego \
+    --autopilot "ros2 launch my_stack bringup.launch.py" \
+    --agent "python3 -m my_pilot --relay tcp://sim-host:5560 --entity ego" \
+    [--relay tcp://sim-host:5560] [--grace 10]
+```
+
+The supervisor starts the autopilot and the agent (`--autopilot` is optional: an agent that
+is its own autopilot, such as the CARLA reference agent, needs only `--agent`) in one
+process group of its own, and registers with the relay as the entity's supervisor. On a
+restart it stops the whole group -- SIGTERM, then SIGKILL after `--grace` seconds, by
+process group, never by name -- and starts it again; it answers the relay once the new
+group runs, and the restart is ready when the agent registers. It also starts the group
+again when the agent exits on its own (at most every `--respawn-delay`, 10 s), and stops
+it when the supervisor itself is stopped. Run it where the autopilot runs.
 
 ## Compatibility
 

@@ -176,10 +176,10 @@ over TCP. Nothing is added to this workspace.
    steps; the starter `basic/` and `awf/` suites pass as before; acb's protocol copy removed.
 7. [x] **ROS adapter.** `ros_adapter` and its YAML schema, with a test autopilot node; a
    subclass overriding one step.
-8. [ ] **Supervisor and restart ladder.** `csb-agent supervise`; `run_suite --restart`;
+8. [x] **Supervisor and restart ladder.** `csb-agent supervise`; `run_suite --restart`;
    result records; live: a reset made to fail (an agent that never reports ready) is
    restarted and the next scenario passes.
-9. [ ] **User docs.** `docs/agent-interface.md` (the three ways, `check`, supervise,
+9. [x] **User docs.** `docs/agent-interface.md` (the three ways, `check`, supervise,
    restart policy), the user guide and README pointing to it, a tutorial section running
    the CARLA reference agent.
 
@@ -412,3 +412,45 @@ config keys (`DEFAULTS`). `ros2 run csb_agent autoware_agent`.
   17.7 s, and `town01_ego_drive` and `town01_traffic_light` passed (56 s, 197 s).
 - Docs: `agent-interface.md` "Autoware: AutowareAgent"; user-workflow.md no longer
   describes acb's own copy.
+
+**Step 8: supervisor and restart ladder (2026-10-21).**
+
+- Protocol (v2): a third role, `supervisor` (`register_supervisor(entity)`; refused in a v1
+  message); query replies to v2 commanders carry `supervised`. Relay: one supervisor
+  session per entity beside the agent's (heartbeats, peer timeout), and `restart` for an
+  entity goes to its agent when the agent offers it, else to its supervisor (no agent need
+  be registered), else `UNSUPPORTED` naming both.
+- `csb-agent supervise` (`csb_agent/supervise.py`): `--entity`, `--agent`, `--autopilot`
+  (optional), `--relay`, `--grace` (10 s), `--respawn-delay` (10 s). Both commands in one
+  new process group (the first leads it, the second joins it); stop = SIGTERM to the group,
+  SIGKILL after the grace, reap, by pgid only. Answers `restart` once the new group runs;
+  restarts the group when the agent exits on its own; stops it on its own exit.
+- `run_suite --restart=never|on-reset-failure|on-failure|every:N` (default
+  `on-reset-failure` when the relay reports a supervisor or the agent's `restart`
+  capability, else `never` with a note; an explicit non-`never` policy without either is
+  refused at start, exit 2) and `--restart-timeout` (300 s). After each scenario: the
+  reset record from the relay (kept only when its episode is new), `episode_end` with the
+  verdict through `csb_agent.Commander`, the ladder, then a wait for the agent to register
+  again (phase past `UNAVAILABLE`). Results: the summary line (`[reset OK 0.5 s]`,
+  `[restarted agent]`) and a new `<results>/suite.json` (per scenario: reset, restarted,
+  the restart done after it). Deviation from the design: the default degrades to `never`
+  rather than refusing, so a plain `run_suite` on a stack with no supervisor keeps working.
+- Tests: `test_supervisor.py` (4: restart routed to the supervisor, old group gone by pgid,
+  the agent back; an agent that exits started again; no supervisor and no capability ->
+  `UNSUPPORTED`; the role needs v2) and run_suite's `RestartLadder` (6, on a fake
+  commander: policy parsing, refusal, a failed reset restarting and marking the next
+  scenario, a stale reset not recorded, every:N and on-failure, a restart that never
+  registers failing). csb_launch 23 + SDK/relay tests pass.
+- **Live** (CARLA reference agent, no Autoware): `csb-agent supervise --entity ego --grace 5
+  --agent "never_ready_once.py ..."` -- a CarlaBasicAgent whose first reset blocks for good
+  while a marker file exists (scratch `s_4d/a8`). `run_suite <two copies of
+  town01_ego_drive> --restart on-reset-failure`: the first scenario's reset timed out at the
+  relay's 60 s (`reset ego-1-... -> FAILED in 60.0 s`) and SSv2 failed it ("waited for ...
+  WAITING_FOR_ROUTE ... INITIALIZING"); run_suite asked for a restart, the supervisor
+  stopped group 1108743 and started 1121799 (`restart OK in 2 s`), the new agent registered,
+  and the second scenario **passed** on it (`[reset OK 0.5 s] [restarted agent]`);
+  `suite.json` records both.
+
+**Step 9 (rest, 2026-10-21).** `agent-interface.md`: the CARLA reference agent tutorial
+(step 5), "Autoware: AutowareAgent" (step 6), "When a reset fails: restart" and
+"`csb-agent supervise`" (this step).

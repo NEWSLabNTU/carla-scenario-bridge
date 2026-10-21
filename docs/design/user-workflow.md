@@ -218,7 +218,7 @@ watch Autoware's own pipeline, not just ADAPI states:
   saying it did not converge -- the concealer's own pose check then fails the scenario
   with both poses named). So `WAITING_FOR_ROUTE` is only reported once the pose agrees.
 
-### Protocol v2 (planned, roadmap 030)
+### Protocol v2 (roadmap 030)
 
 Additive: `VERSION` 2, and a v1 agent on a v2 relay (or the reverse) behaves as above.
 **Versions are per connection**: a connection speaks the version its `register` carried,
@@ -238,12 +238,16 @@ for the same pose joins the running reset. A v2 commander's `query` reply carrie
 | `episode_end` | relay → agent (event) | `episode`, `result` (`passed`, `failures[]`, `contacts`) | the scenario's verdict; `run_suite` sends it through the commander role (`command_for`), since only it knows the verdict |
 | `restart` | relay → agent (command, capability `restart`) | -- | restart the autopilot in place; the agent closes and re-registers when ready |
 
-A **supervisor** (`csb-agent supervise`) registers in the commander role for an entity and
-answers a restart request for an agent without the capability: it stops the process group
-it started (autopilot and agent), starts it again, and is done when the agent's
-registration arrives. `run_suite --restart=never|on-reset-failure|on-failure|every:N`
-decides when a restart is asked for; a reset that fails or times out is the default
-trigger.
+A **supervisor** (`csb-agent supervise`) registers in a third role, `supervisor` (v2 only:
+`{"type": "register", "role": "supervisor", "entity": E, "capabilities": ["restart"]}`),
+heartbeats like an agent and sends no state. The relay sends `restart` for E to the agent
+when it has the capability, else to E's supervisor (no agent need be registered), else
+answers `UNSUPPORTED`; a v2 commander's `query` reply carries `supervised`. The supervisor
+stops the process group it started (autopilot and agent: SIGTERM, then SIGKILL, by
+process group), starts it again and replies `OK`; the restart is done when the agent's
+registration arrives, which the commander watches. `run_suite
+--restart=never|on-reset-failure|on-failure|every:N` decides when a restart is asked for; a
+reset that fails or times out is the default trigger. *Implemented* (030 step 8).
 
 ## Vehicle side
 

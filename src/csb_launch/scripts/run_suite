@@ -23,6 +23,22 @@ out SSv2's initialize timeout. With --physical-verdict, each scenario also gets 
 (`physical_verdict`, roadmap 021): it fails when CARLA saw the ego touch something the
 scenario did not declare in csbExpectedContacts. Exit status is 0 only if every testcase
 of every scenario passed.
+
+Between scenarios (roadmap 030): after each scenario run_suite asks the relay how the ego
+agent's reset went (`csb_agent.Commander.query`), tells the agent the verdict
+(`episode_end`), and climbs the restart ladder by `--restart`:
+
+  never              never restart
+  on-reset-failure   restart when the scenario's reset failed or timed out (default)
+  on-failure         restart after any failed scenario
+  every:N            restart after every N scenarios
+
+A restart goes through the relay to the agent (its `restart` capability) or to the entity's
+supervisor (`csb-agent supervise`); run_suite then waits up to --restart-timeout for the
+agent to register again. A policy other than `never` with neither available is refused at
+start. Each scenario's result (summary line and `suite.json`) records its reset (episode,
+status, seconds) and whether it ran on a restarted agent. With a scenario file that expands
+to several variants, the record is the last variant's reset.
 """
 
 import argparse
@@ -73,6 +89,9 @@ class ScenarioResult:
     started_unix: Optional[float] = None
     ended_unix: Optional[float] = None
     cases: List[Case] = field(default_factory=list)
+    reset: Optional[dict] = None  # the agent's reset for this scenario (relay's record)
+    restarted: bool = False  # ran on an agent restarted after the previous scenario
+    restart: Optional[dict] = None  # the restart done after this scenario, if any
 
     @property
     def passed(self) -> bool:
@@ -196,6 +215,12 @@ def summary_line(r: ScenarioResult) -> str:
     if r.timed_out:
         cap = r.timeout if r.timeout else r.seconds
         line += f" -- TIMEOUT after {cap:.0f} s"
+    if r.reset:
+        secs = r.reset.get("seconds")
+        line += f" [reset {r.reset.get('status')}" + (f" {secs:.1f} s" if secs is not None
+                                                      else "") + "]"
+    if r.restarted:
+        line += " [restarted agent]"
     bad = [c for c in r.cases if c.kind != "pass"]
     if bad:
         first = bad[0]
@@ -424,6 +449,151 @@ def run_one(scenario: Path, stem: str, results_dir: Path, extra: List[str],
     return result
 
 
+# ---------------------------------------------------------------------------------------
+# Between scenarios: reset record, episode_end, the restart ladder (roadmap 030)
+# ---------------------------------------------------------------------------------------
+
+RESTART_POLICIES = ("never", "on-reset-failure", "on-failure", "every:N")
+
+
+def parse_restart(value: str) -> Tuple[str, int]:
+    """'never' | 'on-reset-failure' | 'on-failure' | 'every:N' -> (kind, N)."""
+    if value in ("never", "on-reset-failure", "on-failure"):
+        return value, 0
+    if value.startswith("every:"):
+        try:
+            n = int(value.split(":", 1)[1])
+        except ValueError:
+            n = 0
+        if n >= 1:
+            return "every", n
+    raise ValueError(f"--restart must be one of {', '.join(RESTART_POLICIES)}, got {value!r}")
+
+
+def _commander(relay: str):
+    from csb_agent import Commander  # the agent SDK: this workspace, the tarball or the wheel
+    return Commander(relay, "run_suite")
+
+
+class Ladder:
+    """One entity's agent between scenarios. `commander` builds a csb_agent.Commander."""
+
+    def __init__(self, relay: str, entity: str, policy: str, restart_timeout: float = 300.0,
+                 commander=_commander, log=print, poll=2.0):
+        self.relay, self.entity = relay, entity
+        self.kind, self.every = parse_restart(policy)
+        self.restart_timeout = restart_timeout
+        self.commander = commander
+        self.log = log
+        self.poll = poll
+        self.last_episode = None
+        self.since_restart = 0
+        self.restarted = False  # the next scenario runs on a restarted agent
+
+    def _query(self):
+        with self.commander(self.relay) as c:
+            return c.query(self.entity)
+
+    def refuse(self) -> Optional[str]:
+        """Why this policy cannot run, or None."""
+        if self.kind == "never":
+            return None
+        try:
+            answer = self._query()
+        except (OSError, Exception) as e:  # an unreachable relay, a missing SDK
+            return f"--restart={self.kind}: cannot ask the relay {self.relay} ({e})"
+        caps = (answer.get("state") or {}).get("capabilities") or []
+        if answer.get("supervised") or "restart" in caps:
+            return None
+        return (f"--restart={self.kind if self.kind != 'every' else f'every:{self.every}'} "
+                f"needs a supervisor for entity {self.entity!r} (csb-agent supervise) or an "
+                f"agent with the restart capability; the relay has neither (use "
+                f"--restart=never)")
+
+    def after(self, result: ScenarioResult) -> None:
+        """Record the reset, send the verdict, restart if the policy says so."""
+        result.restarted, self.restarted = self.restarted, False
+        self.since_restart += 1
+        try:
+            answer = self._query()
+        except Exception as e:  # noqa: BLE001 -- the relay gone is not this scenario's fault
+            self.log(f"[run_suite] relay query for {self.entity!r} failed: {e}")
+            answer = {}
+        reset = answer.get("reset")
+        if reset and reset.get("episode") != self.last_episode:
+            result.reset = reset
+            self.last_episode = reset.get("episode")
+        failures = [c.name for c in result.cases if c.kind != "pass"]
+        if answer.get("registered"):
+            try:
+                with self.commander(self.relay) as c:
+                    c.episode_end(self.entity, result.passed, failures,
+                                  episode=(result.reset or {}).get("episode", ""))
+            except Exception as e:  # noqa: BLE001 -- informational only
+                self.log(f"[run_suite] episode_end for {self.entity!r}: {e}")
+        why = self.wants_restart(result)
+        if why:
+            result.restart = self.restart(why)
+            self.restarted = result.restart.get("status") == "OK"
+
+    def wants_restart(self, result: ScenarioResult) -> Optional[str]:
+        if self.kind == "never":
+            return None
+        if self.kind == "on-reset-failure":
+            r = result.reset
+            if r is not None and (r.get("status") != "OK" or r.get("timed_out")):
+                return f"reset {r.get('episode')} {r.get('status')}" + (
+                    " (timed out)" if r.get("timed_out") else "")
+            return None
+        if self.kind == "on-failure":
+            return None if result.passed else "the scenario failed"
+        if self.since_restart >= self.every:
+            return f"every {self.every} scenario(s)"
+        return None
+
+    def restart(self, why: str) -> dict:
+        self.log(f"[run_suite] restarting {self.entity!r}: {why}")
+        start = time.monotonic()
+        record = {"reason": why}
+        try:
+            with self.commander(self.relay) as c:
+                reply = c.command(self.entity, "restart", timeout=30.0)
+            record["status"], record["message"] = reply.get("status"), reply.get("message", "")
+        except Exception as e:  # noqa: BLE001
+            record["status"], record["message"] = "FAILED", str(e)
+        if record["status"] == "OK":
+            end = time.monotonic() + self.restart_timeout
+            ready = False
+            while time.monotonic() < end:
+                try:
+                    answer = self._query()
+                    phase = (answer.get("state") or {}).get("phase", "")
+                    if answer.get("registered") and phase not in ("", "UNAVAILABLE"):
+                        ready = True
+                        break
+                except Exception:  # noqa: BLE001 -- keep polling
+                    pass
+                time.sleep(self.poll)
+            if not ready:
+                record["status"] = "FAILED"
+                record["message"] = (f"the agent did not register again within "
+                                     f"{self.restart_timeout:.0f} s")
+        record["seconds"] = round(time.monotonic() - start, 1)
+        self.since_restart = 0
+        self.log(f"[run_suite] restart {record['status']} in {record['seconds']:.0f} s"
+                 + (f": {record['message']}" if record.get("message") else ""))
+        return record
+
+
+def write_suite_json(results: List[ScenarioResult], path: Path) -> None:
+    rows = [{"stem": r.stem, "path": str(r.path), "passed": r.passed,
+             "seconds": round(r.seconds, 1), "reset": r.reset, "restarted": r.restarted,
+             "restart": r.restart,
+             "cases": [{"name": c.name, "kind": c.kind, "message": c.message}
+                       for c in r.cases]} for r in results]
+    path.write_text(json.dumps({"scenarios": rows}, indent=1) + "\n")
+
+
 def _physical_verdict():
     """The physical_verdict script next to this one, as a module."""
     path = Path(__file__).resolve().parent / "physical_verdict"
@@ -477,6 +647,13 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--ego-entity", default="ego", metavar="NAME",
                     help="entity the relay serves the ego as (simulation.launch.xml "
                          "entity:=, default ego)")
+    ap.add_argument("--restart", default=None, metavar="POLICY",
+                    help="restart the ego's agent between scenarios: never, on-reset-failure "
+                         "(default when a restart is possible, else never), on-failure, "
+                         "every:N; given explicitly, anything but never needs a supervisor "
+                         "(csb-agent supervise) or the agent's restart capability")
+    ap.add_argument("--restart-timeout", type=float, default=300.0, metavar="S",
+                    help="how long a restarted agent has to register again (default 300)")
     ap.add_argument("--no-preflight", action="store_true",
                     help="skip the relay check and run every scenario regardless")
     ap.add_argument("--physical-verdict", action="store_true",
@@ -490,6 +667,10 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                          "impulse, N*s (default 0)")
     args = ap.parse_args(argv)
     args.extra = extra
+    try:
+        parse_restart(args.restart or "on-reset-failure")
+    except ValueError as e:
+        ap.error(str(e))
     return args
 
 
@@ -510,6 +691,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"[run_suite] {len(scenarios)} scenario(s), domain {args.domain}, results in "
           f"{results_dir}", flush=True)
 
+    ladder = None
+    if not args.no_preflight:
+        ladder = Ladder(args.relay, args.ego_entity, args.restart or "on-reset-failure",
+                        args.restart_timeout)
+        refused = ladder.refuse()
+        if refused and args.restart is not None:
+            print(f"[run_suite] {refused}", file=sys.stderr)
+            return 2
+        if refused:  # the default: restart when possible, never otherwise
+            ladder.kind = "never"
+        print(f"[run_suite] restart policy for {args.ego_entity!r}: "
+              f"{ladder.kind if ladder.kind != 'every' else f'every:{ladder.every}'}"
+              + (" (no supervisor or restart capability)" if refused else ""), flush=True)
+
     results: List[ScenarioResult] = []
     suite_path = results_dir / "suite.junit.xml"
     pv = _physical_verdict() if args.physical_verdict else None
@@ -523,10 +718,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                         ego_entity=args.ego_entity)
             if pv is not None:
                 add_physical_verdict(r, contacts_dir, args.min_impulse, pv)
+            if ladder is not None and r.preflight_error is None:
+                ladder.after(r)
+            elif ladder is not None:  # no run: but a restart may bring the agent back
+                why = ladder.wants_restart(r) if ladder.kind == "on-failure" else None
+                if why:
+                    r.restart = ladder.restart(why)
+                    ladder.restarted = r.restart.get("status") == "OK"
             results.append(r)
             print(summary_line(r), flush=True)
             # Written after every scenario, so an interrupted suite still leaves a verdict.
             build_suite_xml(results).write(suite_path, encoding="utf-8", xml_declaration=True)
+            write_suite_json(results, results_dir / "suite.json")
     except KeyboardInterrupt:
         print("[run_suite] interrupted", file=sys.stderr)
         build_suite_xml(results).write(suite_path, encoding="utf-8", xml_declaration=True)

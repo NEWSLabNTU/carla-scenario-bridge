@@ -36,6 +36,7 @@ class AgentSession:
         self.last_sent = 0.0
         self.closed = threading.Event()
         self._send_lock = threading.Lock()
+        self.supervising = False  # a supervisor's session, not an agent's
         self._pending = {}  # command id -> [Event, reply or None]
         self._pending_lock = threading.Lock()
 
@@ -166,6 +167,7 @@ class AgentServer:
         self.log = logger or logging.getLogger("scenario_agent_relay")
         self.versions = tuple(versions)  # accepted; (1,) behaves as a v1-only relay
         self._sessions = {}
+        self._supervisors = {}  # entity -> AgentSession of its supervisor (v2)
         self._resets = {}  # entity -> how its last reset went (episodes.py)
         self._commanders = set()
         self._lock = threading.Lock()
@@ -191,7 +193,7 @@ class AgentServer:
     def stop(self):
         self._stopping.set()
         with self._lock:
-            sessions = list(self._sessions.values())
+            sessions = list(self._sessions.values()) + list(self._supervisors.values())
             commanders = list(self._commanders)
         for session in sessions:
             session.close("relay stopping")
@@ -220,13 +222,31 @@ class AgentServer:
             record = self._resets.get(entity)
         return dict(record) if record is not None else None
 
+    def supervisor(self, entity):
+        with self._lock:
+            session = self._supervisors.get(entity)
+        if session is None or session.closed.is_set():
+            return None
+        return session
+
     def entities(self):
         with self._lock:
             return sorted(self._sessions)
 
     def command(self, entity, name, timeout, **args):
-        """Command the entity's agent: (status, message); status None = no answer."""
+        """Command the entity's agent: (status, message); status None = no answer.
+
+        `restart` goes to the agent when it offers it, else to the entity's supervisor
+        (which needs no agent registered: restarting a dead one is its point)."""
         session = self.session(entity)
+        if name == P.RESTART and (session is None or not session.supports(P.RESTART)[0]):
+            supervisor = self.supervisor(entity)
+            if supervisor is not None:
+                return supervisor.command(next(self._ids), name, args, timeout)
+            if session is None:
+                return None, f"no agent or supervisor registered for entity {entity!r}"
+            return P.UNSUPPORTED, (f"the agent of {entity!r} does not offer restart and "
+                                   "no supervisor is registered for it")
         if session is None:
             return None, f"no agent registered for entity {entity!r}"
         return session.command(next(self._ids), name, args, timeout)
@@ -283,10 +303,15 @@ class AgentServer:
                             self._serve_commander(sock, address, message, reader,
                                                   lines[index + 1:])
                             return
+                        if message.get("role") == P.ROLE_SUPERVISOR:
+                            session = self._register_supervisor(sock, address, message)
+                            continue
                         session = self._register(sock, address, message)
                         continue
                     session.last_received = time.monotonic()
                     kind = message["type"]
+                    if kind == P.STATE and session.supervising:
+                        continue  # a supervisor has no state to show
                     if kind == P.STATE:
                         session.state = message
                         session.state_received_at = session.last_received
@@ -346,15 +371,20 @@ class AgentServer:
     def _on_commander_message(self, commander, message):
         kind = message["type"]
         if kind == P.QUERY:
-            session = self.session(message["entity"])
+            entity = message["entity"]
+            session = self.session(entity)
+            supervised = (self.supervisor(entity) is not None
+                          if commander.version >= 2 else None)
             if session is None:
                 commander.send(P.reply(message["id"], P.FAILED, "no agent registered for "
-                                       f"entity {message['entity']!r}", registered=False))
+                                       f"entity {entity!r}", registered=False,
+                                       supervised=supervised))
             else:
                 commander.send(P.reply(message["id"], P.OK, "", session.state,
                                        registered=True,
-                                       reset=(self.last_reset(message["entity"])
-                                              if commander.version >= 2 else None)))
+                                       reset=(self.last_reset(entity)
+                                              if commander.version >= 2 else None),
+                                       supervised=supervised))
         elif kind == P.COMMAND_FOR:
             # Its own thread: a slow agent must not hold up the commander's other requests.
             threading.Thread(target=self._command_for, args=(commander, message),
@@ -409,7 +439,28 @@ class AgentServer:
         self.on_presence(entity, True)
         return session
 
+    def _register_supervisor(self, sock, address, message):
+        entity = message["entity"]
+        session = AgentSession(self, sock, address, entity, message.get("agent", ""),
+                               [P.RESTART], message["v"])
+        session.supervising = True
+        with self._lock:
+            previous = self._supervisors.get(entity)
+            self._supervisors[entity] = session
+        if previous is not None and not previous.closed.is_set():
+            previous.close("replaced by a new supervisor")
+        session.send(P.registered(entity))
+        self.log.info(f"entity {entity!r}: supervisor {session.agent or '?'} registered from "
+                      f"{address[0]}:{address[1]}")
+        return session
+
     def _session_closed(self, session, reason):
+        if session.supervising:
+            with self._lock:
+                if self._supervisors.get(session.entity) is session:
+                    del self._supervisors[session.entity]
+            self.log.warning(f"entity {session.entity!r}: supervisor gone ({reason})")
+            return
         with self._lock:
             current = self._sessions.get(session.entity) is session
             if current:
@@ -422,7 +473,7 @@ class AgentServer:
         while not self._stopping.wait(min(0.2, self.heartbeat_period / 2)):
             now = time.monotonic()
             with self._lock:
-                sessions = list(self._sessions.values())
+                sessions = list(self._sessions.values()) + list(self._supervisors.values())
             for session in sessions:
                 if now - session.last_received > self.peer_timeout:
                     session.close(f"silent for {now - session.last_received:.1f} s")
