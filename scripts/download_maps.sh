@@ -20,10 +20,44 @@ DIR="$(cd "$(dirname "$0")/.." && pwd)/data"
 ZIP="$DIR/carla-autoware-bridge.zip"
 OUT="$DIR/carla-autoware-bridge"
 
+# The map repairs, in order. Each is idempotent, so they also run on maps already present:
+# a repair added after a host fetched its maps reaches that host the next time this runs.
+repair_maps() {
+    # Four of the five towns ship their traffic lights with the two tags lanelet2 keys
+    # on left empty, which makes every signal invisible to Autoware and unaddressable
+    # from SSv2. Repair in place -- the map file is a per-file symlink into the source
+    # pack, so replace it with a real file first, exactly as the projector yaml below.
+    for town in "$1"/*/; do
+        [ -f "$town/lanelet2_map.osm" ] || continue
+        if [ -L "$town/lanelet2_map.osm" ]; then
+            src="$(readlink -f "$town/lanelet2_map.osm")"
+            rm -f "$town/lanelet2_map.osm"
+            cp "$src" "$town/lanelet2_map.osm"
+        fi
+    done
+    python3 "$(dirname "$0")/repair_lanelet_traffic_lights.py" "$1"
+    # Some lanelets ship with no subtype at all (kerb strips, mostly), which makes
+    # Autoware's map_based_prediction abort as soon as a pedestrian is near one.
+    python3 "$(dirname "$0")/repair_lanelet_subtypes.py" "$1"
+    # A few nodes (stop lines, signs) carry only lat/lon, which Autoware projects with a
+    # different transform than the one that made them: up to 2.4 m off. Tag them locally.
+    python3 "$(dirname "$0")/repair_lanelet_local_coords.py" "$1"
+    # No lanelet carries turn_direction, so Autoware's intersection and blind_spot
+    # modules never launch. Tag the junction lanelets from their heading change.
+    python3 "$(dirname "$0")/repair_lanelet_turn_direction.py" "$1"
+    # Some road lanelets start at fresh nodes where their predecessor ends, so Lanelet2
+    # finds no successor and routing stops there (Town03's roundabout to its south exit).
+    python3 "$(dirname "$0")/repair_lanelet_joins.py" "$1"
+    # Town05 and Town10 each carry a right_of_way element with no right-of-way lanelet,
+    # which scenario_simulator_v2 refuses to load the map over.
+    python3 "$(dirname "$0")/repair_lanelet_right_of_way.py" "$1"
+}
+
 # Skip if already present
 if [ -d "$OUT" ] && [ "$(ls -A "$OUT" 2>/dev/null)" ]; then
     echo "Maps already available at $OUT"
     ls "$OUT"
+    repair_maps "$OUT"
     exit 0
 fi
 
@@ -84,34 +118,7 @@ YAML
         fi
     done
 
-    # Four of the five towns ship their traffic lights with the two tags lanelet2 keys
-    # on left empty, which makes every signal invisible to Autoware and unaddressable
-    # from SSv2. Repair in place -- the map file is a per-file symlink into the source
-    # pack, so replace it with a real file first, exactly as the projector yaml above.
-    for town in "$OUT"/*/; do
-        [ -f "$town/lanelet2_map.osm" ] || continue
-        if [ -L "$town/lanelet2_map.osm" ]; then
-            src="$(readlink -f "$town/lanelet2_map.osm")"
-            rm -f "$town/lanelet2_map.osm"
-            cp "$src" "$town/lanelet2_map.osm"
-        fi
-    done
-    python3 "$(dirname "$0")/repair_lanelet_traffic_lights.py" "$OUT"
-    # Some lanelets ship with no subtype at all (kerb strips, mostly), which makes
-    # Autoware's map_based_prediction abort as soon as a pedestrian is near one.
-    python3 "$(dirname "$0")/repair_lanelet_subtypes.py" "$OUT"
-    # A few nodes (stop lines, signs) carry only lat/lon, which Autoware projects with a
-    # different transform than the one that made them: up to 2.4 m off. Tag them locally.
-    python3 "$(dirname "$0")/repair_lanelet_local_coords.py" "$OUT"
-    # No lanelet carries turn_direction, so Autoware's intersection and blind_spot
-    # modules never launch. Tag the junction lanelets from their heading change.
-    python3 "$(dirname "$0")/repair_lanelet_turn_direction.py" "$OUT"
-    # Some road lanelets start at fresh nodes where their predecessor ends, so Lanelet2
-    # finds no successor and routing stops there (Town03's roundabout to its south exit).
-    python3 "$(dirname "$0")/repair_lanelet_joins.py" "$OUT"
-    # Town05 and Town10 each carry a right_of_way element with no right-of-way lanelet,
-    # which scenario_simulator_v2 refuses to load the map over.
-    python3 "$(dirname "$0")/repair_lanelet_right_of_way.py" "$OUT"
+    repair_maps "$OUT"
 
     if [ "$found" -eq 0 ]; then
         echo "ERROR: no town directories with lanelet2_map.osm under $MAP_SOURCE" >&2
@@ -146,12 +153,7 @@ echo "Checksum verified."
 unzip -q -o "$ZIP" -d "$OUT"
 echo "Maps extracted to $OUT"
 ls "$OUT"
-python3 "$(dirname "$0")/repair_lanelet_traffic_lights.py" "$OUT"
-python3 "$(dirname "$0")/repair_lanelet_subtypes.py" "$OUT"
-python3 "$(dirname "$0")/repair_lanelet_local_coords.py" "$OUT"
-python3 "$(dirname "$0")/repair_lanelet_turn_direction.py" "$OUT"
-python3 "$(dirname "$0")/repair_lanelet_joins.py" "$OUT"
-python3 "$(dirname "$0")/repair_lanelet_right_of_way.py" "$OUT"
+repair_maps "$OUT"
 
 # Clean up zip
 rm -f "$ZIP"

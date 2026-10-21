@@ -1291,7 +1291,7 @@ prune-logs *args:
     exec python3 "{{project}}/scripts/prune_logs.py" --root "$CSB_LOG_ROOT" --dest "$dest" \
         --days "$days" "${dry[@]}"
 
-# Download pre-converted CARLA maps for Autoware
+# Download pre-converted CARLA maps for Autoware (present ones: apply any newer repairs)
 download-maps:
     "{{project}}/scripts/download_maps.sh"
 

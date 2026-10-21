@@ -11,8 +11,9 @@
 #   export:=true    export again even if <Town>.usd exists
 #
 # Host paths from the environment:
-#   CARLA_SRC   CARLA 0.9.16 editor build with SimReady (default /mnt/disk1/carla-src; its
-#               env.sh sets UE4_ROOT, CARLA_ROOT and the caches)
+#   CARLA_SRC   CARLA 0.9.16 editor build with SimReady (default /mnt/disk1/carla-src), with
+#               an env.sh exporting UE4_ROOT and CARLA_ROOT; building one on a new host:
+#               roadmap 043, "A new host"
 #   CARLA_USD   where towns are exported, one directory each (default /mnt/disk1/carla-usd)
 #   ISAAC_ROOT  Isaac Sim's install (isaac_env.sh; default /mnt/disk1/isaac-sim)
 #
@@ -61,6 +62,9 @@ if [ "$force" = true ] || [ ! -f "$usd" ]; then
     # Its own process group, so a hang at exit is killed with its shader workers.
     setsid bash -c '
         source "$1/env.sh"
+        # On a host with another GPU the editor enumerates it too, and an AMD iGPU trips
+        # an ensure that starts CrashReportClient (which then uploads a report to Epic).
+        export VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/nvidia_icd.json}
         exec nice -n 15 "$UE4_ROOT/Engine/Binaries/Linux/UE4Editor-Cmd" \
             "$CARLA_ROOT/Unreal/CarlaUE4/CarlaUE4.uproject" -run=SimReadyExport \
             -AllowCommandletRendering "-map=$2.umap" "-path=$3" -MDL=true -COLLISION=true \
@@ -68,11 +72,17 @@ if [ "$force" = true ] || [ ! -f "$usd" ]; then
         > "$log" 2>&1 < /dev/null &
     pid=$!
     trap 'kill -TERM -$pid 2>/dev/null || true' INT TERM
-    until ! kill -0 $pid 2>/dev/null || grep -q "LogExit: Exiting" "$log"; do sleep 5; done
+    # The commandlet's own end, not "LogExit: Exiting": CrashReportClient logs that line to
+    # the same output when it exits, mid-export.
+    until ! kill -0 $pid 2>/dev/null || grep -q "Execution of commandlet took" "$log"; do sleep 5; done
     for _ in $(seq 24); do kill -0 $pid 2>/dev/null || break; sleep 5; done
     if kill -0 $pid 2>/dev/null; then
         echo "isaac_town: the editor hangs at exit: killing its group" | tee -a "$log"
         kill -TERM -$pid 2>/dev/null || true
+        # SIGTERM is not always enough: an editor has been seen to log "Exiting
+        # abnormally (error code: 143)" and then keep running on eight cores for minutes.
+        for _ in $(seq 12); do kill -0 $pid 2>/dev/null || break; sleep 5; done
+        kill -KILL -$pid 2>/dev/null || true
     fi
     wait $pid 2>/dev/null || true
     trap - INT TERM
