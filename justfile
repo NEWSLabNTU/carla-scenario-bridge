@@ -372,6 +372,7 @@ two-av *args: _require-carla
 # 033), in tutorial 4's layout -- CARLA's chase camera top left, the ego's RViz on the right
 # half, a caption strip (demo_captions) under the chase view.
 # The demo tour, in tutorial 4's layout: [record:=true] [rviz:=] [keep_stacks:=] [scenario:=]
+[positional-arguments]
 demo-tour *args: _require-carla
     #!/usr/bin/env bash
     # Usage: just demo-tour [record:=true] [rviz:=true|false] [keep_stacks:=true|false]
@@ -507,7 +508,10 @@ demo-tour *args: _require-carla
     echo "[demo-tour] running $(basename "$scenario")"
     junit="$output_directory/scenario_test_runner/result.junit.xml"
     rm -f "$junit"
-    just scenario "$scenario" output_directory:="$output_directory" 2>&1 | tail -3 || true
+    # The runner's cap is wall time and the tour runs ~5 min of simulation at a real-time
+    # factor of ~0.8 (SSv2's own frame, roadmap 033 step 8): 400 s is too tight, and a loaded
+    # host stretches it further. The tour's own stop trigger is 600 s of simulation time.
+    just scenario "$scenario" output_directory:="$output_directory" global_timeout:=1200 2>&1 | tail -3 || true
     if [ -f "$junit" ] && grep -q 'failures="0" errors="0"' "$junit"; then
         echo "[demo-tour] tour PASSED"
     else
@@ -1095,7 +1099,8 @@ _clear-stale-scenario:
 # waited for) and leaves it up for the next run. worlds:=<map>[,<map>] (Isaac): what a world
 # server started here preloads, map names under CARLA_MAPS or paths (default: the scenario's map).
 # output_directory:=<dir> (default /tmp): the verdict is
-# <dir>/scenario_test_runner/result.junit.xml.
+# <dir>/scenario_test_runner/result.junit.xml. global_timeout:=<s>: the runner's wall-clock cap
+# (default 400 s; raise it for a scenario that drives longer).
 #
 # Usage: just scenario <xosc> [backend:=carla|isaac] [worlds:=Town01,..] [output_directory:=<dir>]
 [positional-arguments]
@@ -1104,13 +1109,14 @@ scenario scenario_file *args:
     set -e
     shift
     source "{{lib}}"; csb_reject_env
-    backend=carla; worlds=""; output_directory=/tmp
+    backend=carla; worlds=""; output_directory=/tmp; timeout_args=()
     for a in "$@"; do
         case "$a" in
             backend:=*) backend="${a#backend:=}" ;;
             worlds:=*) worlds="${a#worlds:=}" ;;
             output_directory:=?*) output_directory="${a#*:=}" ;;
-            *) echo "scenario: unknown argument '$a' (backend:=carla|isaac, worlds:=, output_directory:=)" >&2; exit 2 ;;
+            global_timeout:=?*) timeout_args=("global_timeout:=${a#*:=}") ;;
+            *) echo "scenario: unknown argument '$a' (backend:=carla|isaac, worlds:=, output_directory:=, global_timeout:=)" >&2; exit 2 ;;
         esac
     done
     # The repo's scenarios name their map as $(env CARLA_MAPS)/<Town>.
@@ -1147,7 +1153,7 @@ scenario scenario_file *args:
         csb_launch scenario.launch.xml \
         scenario:="$(realpath "{{scenario_file}}")" \
         output_directory:="$output_directory" \
-        port:={{ssv2_port}}
+        port:={{ssv2_port}} "${timeout_args[@]}"
 
 # The map directory a scenario names (its LogicFile, $(env CARLA_MAPS) expanded); the
 # default map when it names none.
