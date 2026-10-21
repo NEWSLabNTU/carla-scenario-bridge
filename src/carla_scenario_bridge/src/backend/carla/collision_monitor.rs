@@ -558,10 +558,14 @@ impl CollisionMonitor {
 
     /// Stop and destroy an NPC's sensor, if it has one. Must run **before** the NPC is
     /// destroyed, for the reason [`CollisionMonitor::finish_run`] gives for the ego's.
-    pub fn detach_npc(&mut self, npc_id: u32) {
-        if let Some((sensor, name)) = self.npc_sensors.remove(&npc_id) {
-            stop_and_destroy(sensor, &format!("NPC '{name}'"));
-        }
+    ///
+    /// Returns the sensor's actor id, if one was attached: the despawn that follows tells it
+    /// apart from sensors somebody else attached (033 step 5).
+    pub fn detach_npc(&mut self, npc_id: u32) -> Option<u32> {
+        let (sensor, name) = self.npc_sensors.remove(&npc_id)?;
+        let sensor_id = sensor.id();
+        stop_and_destroy(sensor, &format!("NPC '{name}'"));
+        Some(sensor_id)
     }
 
     /// [`CollisionMonitor::detach_npc`] for every NPC: before a teardown.

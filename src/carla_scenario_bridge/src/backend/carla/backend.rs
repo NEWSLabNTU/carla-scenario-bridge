@@ -4326,7 +4326,8 @@ impl CarlaBackend {
         );
 
         // Its agent stops driving it.
-        if self.agent_vehicles.remove(name) {
+        let was_agent = self.agent_vehicles.remove(name);
+        if was_agent {
             if let Some(link) = self.agent_link.as_ref() {
                 link.despawned(name);
             }
@@ -4374,7 +4375,7 @@ impl CarlaBackend {
             Some(actor_id) => {
                 // An NPC's own collision sensor (032 step 5): stopped and destroyed by this
                 // client, its listener, before the vehicle goes.
-                self.collision_monitor.detach_npc(actor_id);
+                let own_sensor = self.collision_monitor.detach_npc(actor_id);
                 let started = Instant::now();
                 // Report failure when the actor could not be destroyed. This used to warn
                 // and return success regardless, so SSv2 believed an entity was gone while
@@ -4392,7 +4393,20 @@ impl CarlaBackend {
                             // Destroying a sensor out from under its listener leaves that
                             // client retrying a dead stream at ~48k errors/s. See
                             // sensor_release.
-                            self.announce_release(actor_id, name);
+                            //
+                            // Only when somebody may be listening: the ego, an agent's
+                            // vehicle, or anything with a child that is not our own collision
+                            // sensor. An SSv2 NPC has none, and its notice went unanswered for
+                            // the full timeout -- a ~300 ms frame stall per despawn, six in a
+                            // demo tour (033 step 2).
+                            let children = actors
+                                .iter()
+                                .map(|a| (a.id(), a.parent_id()))
+                                .collect::<Vec<_>>();
+                            if release_needed(was_ego || was_agent, actor_id, own_sensor, &children)
+                            {
+                                self.announce_release(actor_id, name);
+                            }
 
                             // Sensors first: a despawn is where a vehicle most often leaves
                             // acb's sensors behind, and the server segfaults on the next
@@ -6378,9 +6392,39 @@ fn failed<T>(why: impl Into<String>) -> Result<T, BackendError> {
 /// Why SSv2's sensors are refused.
 const SENSORS_ELSEWHERE: &str = "CARLA sensors provided by autoware_carla_bridge";
 
+/// Does despawning `actor_id` need the sensor-release notice (and its wait)?
+///
+/// `sensor_owner`: the ego or an agent-driven vehicle, which a sensor bridge attaches to.
+/// Otherwise only when some actor in `actors` (id, parent id) rides on it, other than
+/// `own_sensor`, the collision sensor this bridge attached and has just destroyed (the
+/// client's actor list still holds it until the next tick).
+fn release_needed(
+    sensor_owner: bool,
+    actor_id: u32,
+    own_sensor: Option<u32>,
+    actors: &[(u32, u32)],
+) -> bool {
+    sensor_owner
+        || actors
+            .iter()
+            .any(|&(id, parent)| parent == actor_id && Some(id) != own_sensor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_needed_only_for_a_vehicle_somebody_may_listen_to() {
+        // An NPC with only our collision sensor (still listed): no notice, no wait.
+        assert!(!release_needed(false, 10, Some(11), &[(10, 0), (11, 10)]));
+        // ... and with no sensor at all.
+        assert!(!release_needed(false, 10, None, &[(10, 0), (12, 0)]));
+        // Someone else's sensor on it: announce.
+        assert!(release_needed(false, 10, Some(11), &[(11, 10), (13, 10)]));
+        // The ego or an agent's vehicle: always, whatever is listed.
+        assert!(release_needed(true, 10, None, &[]));
+    }
 
     #[test]
     fn the_spawn_timeout_hook_is_off_unless_set_to_milliseconds() {

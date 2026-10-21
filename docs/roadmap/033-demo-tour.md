@@ -242,7 +242,7 @@ recording picks them up.
      2026-10-21, option (b) (user): with `use_multi_channel_tracker_merger:=false` all six
      5/5** (Results). The tour's ego stack is now `just ego-av max_velocity:=11.11
      lidar_detection_model:=centerpoint use_multi_channel_tracker_merger:=false`.
-5. [ ] **Compose the tour** (`src/csb_examples/scenarios/demo/town01_tour.xosc`): route,
+5. [x] **Compose the tour** (`src/csb_examples/scenarios/demo/town01_tour.xosc`): route,
    triggers, add / delete, watchdogs, the single stop trigger. One ManeuverGroup per
    incident holding its add, delete and watchdog events: a `StoryboardElementStateCondition`
    naming an event in another ManeuverGroup by its bare name fails the load (step 2), and the
@@ -991,3 +991,63 @@ no latency at all. Not diagnosed further.
 
 Runs: `i<N>/{diagb,rehb}_<k>`, `routec/B36m_b`, `aeb/b_1` in the scratch directory above
 (`rounds_b.log`).
+
+**Step 5: the tour composed (2026-10-21).** Plan first, results below it.
+
+- `scripts/gen_demo_tour.py` (new) writes `src/csb_examples/scenarios/demo/town01_tour.xosc`
+  from the same sites file and the same `gen_demo_incidents.incident_groups(n, sites)` the
+  templates use, so a template and its incident in the tour cannot drift apart. The ego: route
+  C's start (route m 0, heading south), Performance maxSpeed 13.89, one `AssignRouteAction`
+  through step 3's four waypoints to the goal (the 4d drives' route, 1438 m). One Act holds the
+  ego's group (goal reached: `exitSuccess`; 600 s of simulation time: `exitFailure` -- the only
+  stop trigger) and every incident's groups unchanged: their triggers (the ego reaching a
+  pose), adds and deletes, per-group watchdogs (20 s standing while live: actors deleted,
+  `test(iN, watchdog, degraded, ...)`; incident 4's 12 s `clear`, logged `staged`) and contact
+  logs (`CollisionCondition`, never fatal). Global parameters: the union of the incidents'.
+  Template-only parts (each template's own start, goal and 300 s timeout) are not used.
+- Load-check every generated file with `openscenario_preprocessor`'s `load` (on a copy, private
+  domain) before a run; a test (`test_gen_demo_tour.py`) checks the composition: every
+  incident's groups present, parameters declared, names unique, one exitSuccess and one
+  exitFailure, no `CollisionCondition` in a stop path.
+- **The despawn stall** (step 2: ~300 ms per despawned NPC, `sensor_release` waiting out its
+  timeout for an ack nobody sends): the bridge announces a release only when somebody may be
+  listening -- the ego, an agent's vehicle, or an actor with a child that is not the
+  bridge's own collision sensor (read from the actor list the despawn already fetches; the
+  collision sensor it has just destroyed is still listed until the next tick, so it is
+  excluded by id). An SSv2 NPC then despawns with no wait. Check: no `Frame N processing over
+  25 ms` at the tour's despawns.
+- One tour on the step 4d option (b) stack and the sim side on the rebuilt bridge
+  (ClearNoon, gap trace on): every incident in order, the junit verdict, the per-incident
+  `incident_judge` numbers, watchdog lines, wall and simulation time.
+
+*Results (2026-10-21).* `scripts/gen_demo_tour.py` and `town01_tour.xosc` as planned (17
+entities, 9 incident groups + the ego's; `test_gen_demo_tour.py`, 5 tests). Load-checked with
+`openscenario_preprocessor`'s `load`: success. One tour (`r5_1`) on the option (b) stack and
+the sim side on the rebuilt bridge (ClearNoon, gap trace on): **PASS** (junit 0 failures),
+first move -> goal **274.2 s of simulation time** (293 s wall; RTF 0.94), every incident in
+route order, `incident_judge` on the tour's trace **6/6 PASS**:
+
+| # (route order) | Ego (judge, CARLA bodies) |
+|---|---|
+| 2 pedestrian (1) | stopped **5.5 m** from the pedestrian (route m 171), stood 5.5 s |
+| 1 lead brakes (2) | brake with the ego 45.5 m behind at 7.9 m/s; lead's peak 6.0 m/s^2; **stop gap 5.3 m**, stood 6.2 s |
+| 3 red light (3) | front 0.47 m short of the line; green 8.0 s after it stood, moving 1.1 s later |
+| 4 blocked lane (4) | **stop gap 5.35 m**; 12 s staged clear (the only watchdog), oncoming pair past at 1.74 m |
+| 5 crossing at a turn (5) | stood 3.3 s for the pair, min gap 1.56 m |
+| 6 cyclist inside (6) | yielded: stood 1.5 s, cyclist past at 0.15 m (the scenario's geometry) |
+
+No stop outside an incident (six stops, one per incident, each with its module's factor). No
+contact. **4.6 min of simulation time**: under the 5-8 min the tour was sized for, before the
+ambient layer (step 8) adds its queues.
+
+*The despawn stall: gone.* The bridge now skips the release notice for an actor no sensor
+bridge can be listening to (`release_needed`: the ego or an agent's vehicle always; otherwise
+only a child that is not the bridge's own, just-destroyed collision sensor; 1 test). Eleven
+NPC despawns in the run, none of them in a `Frame N processing over 25 ms` line (step 2: 300 ms
+each). The frames over budget are now **spawns**: 33-67 ms per added group, and **561 ms** once
+when incident 4 added three cars, 460 ms of it inside one `spawn_actor` call (`i4_oncoming_b`;
+CARLA's side, not chased). `just test`: 361 nextest + 195 pytest pass; `just check` clean.
+
+Run: `r5_1` (context, ego planning log, trace, judge per incident) in the scratch directory
+`/tmp/claude-1000005/-home-aeon-repos-carla-scenario-bridge/f372598a-d329-483b-9e38-80a742b40cbd/scratchpad/s_tour`
+(`run_tour.sh`, `tour_summ.py`, `loadcheck.sh`).
