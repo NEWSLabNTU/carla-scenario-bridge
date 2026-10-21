@@ -250,13 +250,26 @@ Differences in the setup, each noted where it matters:
 - **No vehicle bodies.** The 41 SimReady vehicles and their `vehicles.json` were made by
   tools kept beside them on the original host, not in git (`05bdd87`), so here every
   entity, the ego included, is a box (`no CARLA body for 'vehicle.tesla.model3': a box`).
-  Bodies are render-only; the numbers above say they do not move tracking.
+  Bodies are render-only; the numbers above say they do not move tracking. (Since
+  `be62582` the tools are in git and this host has the bodies: below.)
 - **Stale maps.** This host's `data/carla-autoware-bridge` predated
   `repair_lanelet_right_of_way.py` (and Town03 two joins): the first Town05 and Town10
   batches failed 0/5 in 9 s each (SSv2: `Creating a regulatory element of type right_of_way
   failed`). After the repairs both passed, and Town03 was rerun on its repaired map (on
   the stale one: 5/5, longitudinal 0.022, same cross-track and EKF-GNSS). `just
   download-maps` now runs the repairs on maps already present.
+- **Bodies since then** (043, "A new host" item 7; csb `be62582`, the vehicles exported on
+  this host the same evening): `town01_ego_drive`, three runs, the ego wearing the Model 3,
+  against the box ego's five from the table:
+
+  | ego | PASS | longitudinal, m/s^2 | cross-track, m | EKF-GNSS, m | peak, m/s | MRM |
+  |---|---|---|---|---|---|---|
+  | box (above) | 5/5 | 0.012 (0.008-0.018) | 0.04 | 1.01 | 4.24-4.28 | 0 |
+  | Model 3 body | 3/3 | 0.012 (0.012-0.018) | 0.03 (0.03-0.04) | 1.00 (0.99-1.05) | 4.28-4.29 | 0 |
+
+  The same within the spread, as expected of a render-only body (the colliders stay the
+  boxes); the lidar now sees the car's own meshes, and nothing in tracking shows it. World
+  server up in 74 s (Town01 compiled), each run 42-49 s.
 - **World-server preload** (first render, materials compiled): Town01 + Town02 934 s,
   Town02 alone in its own batch 1052 s, Town03 280 s, Town05 135 s, Town10HD 316 s; a reload
   of a compiled town 26-64 s.

@@ -318,6 +318,44 @@ everything else 10-100 MB/s):
    the first reproduction ran without the bodies: every entity a box and the ego's chassis
    box hidden, so the lidar saw no car body; 045's tracking numbers reproduced regardless.
 
+   **First full run of the script, server139, 2026-10-21** (csb `be62582`): 713 s in all.
+   Levels 5 min 10 s (the commandlet itself 139 s; the editor then hung at exit and was
+   killed after the script's 2 min wait, as it was again on a one-vehicle rerun), all 41
+   blueprints with a level and a CARLA box; export 391 s (commandlet 372 s), 41 of 41;
+   assets 7 s. 2.6 GB, 1.0 MB (bicycles) to 253 MB a vehicle. The Model 3's wheel base
+   3.0046 m, rear axle at x = -1.386, as on the first host. Physics: the dump refuses a
+   synchronous world, and the testbed's CARLA on 2000 is csb's (synchronous whenever `just
+   run` is up), so it ran against a CARLA of its own (`./CarlaUE4.sh -carla-rpc-port=3000
+   -nosound -RenderOffScreen`, Vulkan pinned to NVIDIA, `--port 3000`): 41 vehicles in 2 s,
+   no actor left, settings restored, that server killed by pid. Found and fixed:
+   - `only:=` with a single vehicle failed every time ("was not exported"): SimReady puts a
+     lone map's export straight into `-path`, not in a directory of its own as it does for
+     several. The script now moves it into one; `only:=vehicle.tesla.model3 export:=true`
+     then reproduced that car's `.usda` and `wheels.usda` byte for byte.
+   - `size_mb` in `vehicles.json` counted the wrappers from the second run on (0.1 MB more
+     on four cars); it is now the export's own size, the same on every run.
+   - An ensure in the editor starts CrashReportClient, which uploads to Epic: the engine's
+     `BaseEditorSettings.ini` sets `bSendUnattendedBugReports=True`, and that is what the
+     crash handler reads (`UnixPlatformCrashContext.cpp`; `-Unattended` alone does not stop
+     it). `isaac_vehicles.sh` and `isaac_town.sh` now pass `-ini:EditorSettings:...` turning
+     it and `bSendUsageData` off for their runs (UE's command-line ini override, from the
+     source; not exercised with an ensure). On server139 the same two keys were also set to
+     False in `$CARLA_SRC/UnrealEngine_4.26/Engine/Config/BaseEditorSettings.ini` and
+     `DataRouterUrl` emptied in `Engine/Programs/CrashReportClient/Config/DefaultEngine.ini`
+     (originals kept as `*.orig`); a new host should do the same after building UE. No crash
+     or ensure report was written during these runs; the town exports earlier that day had
+     sent six ensure reports to Epic's data router (`Saved/Logs/CarlaUE4-CRC*.log`: "All
+     uploads done").
+   - `dump_vehicle_physics.py`'s docstring named the old `make_assets.py`, and now says how
+     to run it beside a csb-owned CARLA.
+
+   With the bodies: `just acceptance town01_ego_drive.xosc 3 backend:=isaac` 3/3 PASS, the
+   ego `wears vehicle.tesla.model3 (rear axle at x=-1.386 in the asset, 4 wheel(s))` at the
+   preload and each run (045, "Reproduction on newslab-server139", box against car);
+   `scenarios/bench/town01_npc_20.xosc` on Isaac passed with every NPC a CARLA car
+   (`vehicle.mini.cooper_s_2021`, the nearest to its 4.5 x 2.1 x 1.8 box), 6.0 ms p50 per
+   step (7.1 p95) over 1202 steps.
+
 A first world-server preload compiles the town's materials: Town01 and Town02 together
 934 s, Town02 again in a later batch 1052 s, Town03 280 s, Town05 135 s, Town10HD 316 s
 (all under `ISAAC_READY_TIMEOUT`'s 1800 s); a later load of a compiled town 26-64 s.

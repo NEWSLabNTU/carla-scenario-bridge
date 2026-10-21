@@ -27,7 +27,8 @@
 # CARLA: scripts/dump_vehicle_physics.py --root "$CSB_VEHICLE_USD" (writes physics.json).
 #
 # The editor runs one at a time (isaac_town.sh's exports included): 41 vehicles took 11 min to
-# prepare and 7 min to export on the first host, 2.6 GB in all.
+# prepare and 7 min to export on the first host, 2.6 GB in all; 5 and 6.5 min on
+# newslab-server139 (the preparing editor hangs at exit there and is killed after 2 min).
 set -euo pipefail
 
 usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
@@ -48,7 +49,9 @@ mkdir -p "$root/logs"
 
 # Run a UE editor commandlet in its own process group; $1 log, $2 a line its log must have,
 # the rest the commandlet's arguments. Same handling as isaac_town.sh: it exits 1 on
-# SimReady's material warnings even when done, and sometimes hangs at exit.
+# SimReady's material warnings even when done, and sometimes hangs at exit. An ensure in an
+# editor build starts CrashReportClient, which uploads to Epic unless the editor's privacy
+# settings say no (BaseEditorSettings.ini says yes): `-ini:` overrides them for this run.
 commandlet() {
     local log=$1 done_line=$2; shift 2
     [ -f "$CARLA_SRC/env.sh" ] || { echo "isaac_vehicles: no $CARLA_SRC/env.sh (CARLA_SRC)" >&2; exit 1; }
@@ -61,7 +64,8 @@ commandlet() {
         export VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/nvidia_icd.json}
         exec nice -n 15 "$UE4_ROOT/Engine/Binaries/Linux/UE4Editor-Cmd" \
             "$CARLA_ROOT/Unreal/CarlaUE4/CarlaUE4.uproject" "$@" \
-            -AllowCommandletRendering -log -Unattended -NoSound -RenderOffScreen -vulkan' \
+            -AllowCommandletRendering -log -Unattended -NoSound -RenderOffScreen -vulkan \
+            "-ini:EditorSettings:[/Script/UnrealEd.CrashReportsPrivacySettings]:bSendUnattendedBugReports=False,[/Script/UnrealEd.AnalyticsPrivacySettings]:bSendUsageData=False"' \
         _ "$CARLA_SRC" "$@" > "$log" 2>&1 < /dev/null &
     local pid=$!
     trap "kill -TERM -$pid 2>/dev/null || true" INT TERM
@@ -121,6 +125,12 @@ if [ ${#todo[@]} -gt 0 ]; then
     started=$(date +%s)
     commandlet "$root/logs/export.log" "Execution of commandlet took" \
         -run=SimReadyExport "-maps=$maps" "-path=$raw" -MDL=true -COLLISION=false
+    # SimReady exports several maps into one directory each under -path, a single map straight
+    # into -path: give that one its directory too.
+    s=${todo[0]//./_}
+    if [ ${#todo[@]} -eq 1 ] && [ -f "$raw/$s.usd" ]; then
+        mkdir "$raw/.one" && mv "$raw"/* "$raw/.one/" && mv "$raw/.one" "$raw/$s"
+    fi
     failed=0
     for id in "${todo[@]}"; do
         s=${id//./_}

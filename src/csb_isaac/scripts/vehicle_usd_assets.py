@@ -88,7 +88,9 @@ for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("v
         "rear_axle_x": round(rear_x, 4) if rear_x is not None else None,
         "wheel_base": round(front[0]["pos"][0] - rear_x, 4) if front and rear else None,
         "track": round(abs(rear[0]["pos"][1] - rear[1]["pos"][1]), 4) if len(rear) == 2 else None,
-        "size_mb": round(sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) / 1e6, 1),
+        # the export's own size: the wrappers below exist only from a second run on
+        "size_mb": round(sum(f.stat().st_size for f in d.rglob("*") if f.is_file()
+                             and f.name not in (f"{bp_id}.usda", "wheels.usda")) / 1e6, 1),
     }
     # Wheels alone, each centred on its own origin (x forward, y the axle), materials kept:
     # `wheels.usda</Wheel_Front_Left>` etc. reference the skeletal mesh's prop file whole, with

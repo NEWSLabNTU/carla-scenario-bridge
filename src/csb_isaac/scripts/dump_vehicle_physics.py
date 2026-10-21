@@ -4,8 +4,8 @@
 Connects to a running CARLA 0.9.16 (starts nothing), spawns each blueprint listed in the
 catalogue's `vehicles.json`, reads `get_physics_control()` and writes it into that entry under
 `"physics"`, in the catalogue's frame (the CARLA actor origin, metres, x forward, y left: CARLA's
-Y flipped). Also writes `physics.json` beside it (blueprint id -> physics): `make_assets.py`
-regenerates `vehicles.json` without it, and `vehicle_assets.py` falls back to the sidecar.
+Y flipped). Also writes `physics.json` beside it (blueprint id -> physics):
+`vehicle_usd_assets.py` regenerates `vehicles.json` without it, and `vehicle_assets.py` falls back to the sidecar.
 
     dump_vehicle_physics.py [--root /mnt/disk1/carla-usd/vehicles] [--host H] [--port 2000]
                             [--only vehicle.tesla.model3,...]
@@ -29,7 +29,10 @@ front wheels' spacing), `wheel_radius` (the front wheels'), `rear_axle_x`.
 
 Each actor is destroyed with its children first (none are attached here; CLAUDE.md: never
 destroy a vehicle with sensors on it). The world is put in synchronous mode for the duration
-and restored; refuses if another client already owns the tick.
+and restored; refuses if another client already owns the tick. On a testbed csb's simulation
+side (`just run`) owns it: run against a CARLA of your own on another port instead
+(`./CarlaUE4.sh -carla-rpc-port=3000 -nosound -RenderOffScreen`, Vulkan pinned to NVIDIA,
+then `--port 3000`; 41 vehicles take seconds) and kill that one by pid afterwards.
 """
 import argparse
 import json
