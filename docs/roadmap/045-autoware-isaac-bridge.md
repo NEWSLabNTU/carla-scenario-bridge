@@ -97,9 +97,20 @@ Project Chrono for rough or deformable ground) wait until a need shows.
   and `gnss.launch.xml` take the topic as an argument (`imu_raw_name`, `gnss_fix_name`).
   Bags and logs recorded before carry the old names.
   Pushed before any simulator run (the GPU was taken by another user's job): builds and unit
-  tests pass in all three repos; still to run, Isaac then CARLA, never at once:
-  `town01_ego_drive` 3/3, `tf2_echo base_link imu_link` / `gnss_link`, and the IMU message's
-  `header.frame_id`.
+  tests pass in all three repos.
+  **CARLA leg passed 2026-10-20** (build matching `473729f` / acb `c9ff587`):
+  `town01_ego_drive` 3/3 PASS, 0 MRM, longitudinal 0.008-0.010 m/s^2, cross-track
+  0.042-0.046 m. `tf2_echo base_link imu_link` = [0.900, 0.000, 2.000], q [0.018, 1.000,
+  -0.000, -0.008] (orientation unchanged by the rename); `base_link gnss_link` = [0.797,
+  0.004, 1.802]. `imu_raw` carries `frame_id: imu_link`, `nav_sat_fix` `gnss_link`; no old
+  topic names; gyro_odometer, imu_corrector, gnss_poser and the gyro bias estimator log no
+  frame errors. (EKF-vs-GNSS worst 65.7 m in runs 2 and 3, median 0.95 m: likely a sample
+  across the route reset between runs, not looked into.)
+  **Isaac leg still to run** (stopped 2026-10-21: host RAM taken by other users, ~14 GB
+  available against the world server's ~17.5 GB): `just acceptance
+  src/csb_examples/scenarios/basic/town01_ego_drive.xosc 3 backend:=isaac`, the same
+  `tf2_echo` (should match CARLA's numbers, one spec) and `frame_id` checks. Start only with
+  >= 30 GB RAM available and >= 16 GB GPU free.
 - **Camera images** are stamped in `camera6/camera_optical_link` (REP-103: Autoware's
   projection nodes assume the optical frame). acb stamps `camera_link`, which is likely
   wrong there too. The camera is off on both bridges today.
@@ -197,3 +208,23 @@ agent's then-uncommitted bridge config change, which became `077ca50`); the Town
 its 08:35 rebuild (csb `3c9a4ba`, acb `f10ce12`). On Isaac neither acb_bridge nor the bridge's
 config change is in the ego's path.
 
+
+## Handoff (2026-10-21)
+
+Isaac work paused by the user; where it stands:
+
+- **045** is done except the IMU/GNSS rename's Isaac leg (above, under the rename note):
+  CARLA leg passed, Isaac leg needs >= 30 GB RAM available and >= 16 GB GPU free (other
+  users' CARLA servers and training held ~40 GB RAM on 2026-10-21). Then mark it here.
+- **Workspace state:** a pull on 2026-10-21 moved the acb pin to `25470e4` (descends from
+  `c9ff587`); the checked-out submodule and `install/` are still `c9ff587`. Before the next
+  run: `git submodule update --init --recursive`, rebuild acb then csb (CLAUDE.md).
+- **044** (NPCs and traffic lights on Isaac) not started. Step order: tracked dynamic NPCs
+  (contact verdict matches CARLA), walkers and two-wheelers, signal table / `SetSignals` /
+  lamps / signals to Autoware, then exit runs. It also carries 043's open acceptance item:
+  the new towns' routes on CARLA, compared with Isaac.
+- **Follow-ups, small:** Town03 MRM (`control_validator` latency, see above; only if it
+  recurs); `carla_bench.py` still defaults to Low quality; `town01_traffic_light` hits its
+  300 s timeout; `just build-autoware-overlay` not rebuilt since 042; the 043 screencast
+  (NAS, `autoveh/logs/2026 SSv2 on CARLA/2026-10-19 SSv2 on Isaac Sim screencast/`) shows
+  the pre-aib ego and could be re-recorded.
