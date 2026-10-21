@@ -687,6 +687,16 @@ isaac-msgs:
 isaac-town town *args:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_town.sh" "$@"
 
+# Usage: just isaac-vehicles [only:=<id>,<id>...] [export:=true]
+#
+# SimReady export of each vehicle, render-only asset, vehicles.json, into CSB_VEHICLE_USD;
+# host paths from CARLA_SRC and CSB_VEHICLE_USD. Physics afterwards, with CARLA up:
+# src/csb_isaac/scripts/dump_vehicle_physics.py --root "$CSB_VEHICLE_USD".
+# CARLA's vehicles as Isaac assets (roadmap 043)
+[positional-arguments]
+isaac-vehicles *args:
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_vehicles.sh" "$@"
+
 # Usage: just isaac-world-gen [map_path:=<dir>] [usd:=<file>]
 #
 # The Isaac world for a map (roadmap 038): <map>/isaac/world.yaml

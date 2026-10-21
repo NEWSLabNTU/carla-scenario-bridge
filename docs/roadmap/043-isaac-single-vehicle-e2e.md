@@ -307,10 +307,16 @@ everything else 10-100 MB/s):
    lacks that repair (`download_maps.sh` used to skip everything when the maps were present):
    Town05 and Town10 failed every scenario on the `right_of_way` element, and Town03 lacked
    two joins. `just download-maps` now runs the repairs on maps already present.
-7. **Not reproducible from the repository**: the 41 CARLA vehicle bodies
-   (`$CSB_VEHICLE_USD/vehicles.json`). Commit `05bdd87` says their tools live in that
-   directory, not in git. Without them every entity is a box and the ego's chassis box is
-   hidden, so the lidar sees no car body. 045's tracking numbers reproduced without them.
+7. **Vehicles**: `just isaac-vehicles` (`src/csb_isaac/scripts/isaac_vehicles.sh`) exports
+   the 41 CARLA vehicle bodies into `$CSB_VEHICLE_USD` with the same CARLA editor build:
+   one level per blueprint (`ue_vehicle_levels.py`, the car alone at the origin; 11 min on
+   the first host), one SimReadyExport commandlet for all of them (7 min), then the
+   render-only wrappers and `vehicles.json` (`vehicle_usd_assets.py`, pxr; seconds); 2.6 GB.
+   `only:=<id>,...` does a few, `export:=true` redoes them. Then, with CARLA 0.9.16 up,
+   `src/csb_isaac/scripts/dump_vehicle_physics.py --root "$CSB_VEHICLE_USD"` writes
+   `physics.json`. Until 2026-10-21 these tools lived beside the exports, not in git, and
+   the first reproduction ran without the bodies: every entity a box and the ego's chassis
+   box hidden, so the lidar saw no car body; 045's tracking numbers reproduced regardless.
 
 A first world-server preload compiles the town's materials: Town01 and Town02 together
 934 s, Town02 again in a later batch 1052 s, Town03 280 s, Town05 135 s, Town10HD 316 s
