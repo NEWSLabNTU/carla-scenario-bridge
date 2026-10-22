@@ -42,6 +42,35 @@ Autoware. Stage 2 of three ([design/isaac-stack.svg](../design/isaac-stack.svg),
 
 ## Design (decisions: user, 2026-10-22)
 
+### Who controls what
+
+**SSv2 decides; csb relays; Isaac executes** -- as on CARLA, where csb freezes CARLA's own
+light cycling and gives walkers no AI.
+
+| | decides | relays | executes |
+|---|---|---|---|
+| NPC vehicles, walkers | SSv2: pose and speed each frame | csb (`npc_tracking.rs`) -> world server | Isaac: the body (velocity-driven or kinematic), the walk cycle played at that speed |
+| traffic lights | SSv2: each signal's colour | csb -> `SetSignals` | Isaac: the lamp bulbs; aib's `EgoRos`: the signals to Autoware |
+
+Isaac must not decide: scenario triggers (a walker darting when the ego is 7 s away, a red
+as it approaches) only hold if SSv2 is the authority; SSv2 judges against its own world
+model; and the acceptance compares SSv2's verdict on CARLA and on Isaac per scenario.
+
+Isaac Sim 6.1's built-in automation (installed extensions, checked 2026-10-22) and its use
+here: **Actor SDG** (`isaacsim.replicator.agent.core`, formerly `omni.anim.people`: animated
+characters with Patrol / Idle / LookAround / go-to behaviours for synthetic-data crowds) --
+its character assets are C's fallback, its behaviours are not used; **Navigation**
+(`omni.anim.navigation`: NavMesh, A*) -- not used, SSv2 gives the path; **Animation Graph**
+(`omni.anim.graph`: idle/walk blending on a speed variable) -- plays the walk cycle at SSv2's
+speed (C); **Behavior scripting / OmniGraph action graphs** -- could switch lamp materials on
+`SetSignals`, never cycle them on a timer; **Event Generation**
+(`isaacsim.replicator.incident`) -- workplace incidents for training data, not used. Isaac
+has **no traffic-light or road-traffic controller** (no Traffic Manager equivalent).
+
+Isaac's own automation belongs to background life outside the scenario -- the Isaac
+counterpart of CARLA's simulator autopilot (E, deferred): Actor SDG crowds on a NavMesh
+would be that phase's starting point for pedestrians; road traffic would still be ours.
+
 ### A. Tracked NPCs: velocity-driven dynamic bodies
 
 An NPC vehicle (and a two-wheeler) is a **dynamic rigid body** (mass from the vehicle
