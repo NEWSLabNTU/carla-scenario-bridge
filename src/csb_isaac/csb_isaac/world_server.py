@@ -84,6 +84,9 @@ def main(argv=None):
 
     # Kit uploads a crash's minidump to NVIDIA by default: kept on disk only (its dumpDir).
     config = {"headless": not args.display, "extra_args": ["--/crashreporter/url="]}
+    # Host-specific Kit settings (a host setting, ISAAC_KIT_ARGS): e.g. one GPU on a host
+    # whose other GPU is busy, "--/renderer/multiGpu/enabled=false --/renderer/activeGpu=1".
+    config["extra_args"] += os.environ.get("ISAAC_KIT_ARGS", "").split()
     if args.display and args.follow:
         # A small render keeps the frame inside its 50 ms beside the lidar (1080p: 49.5 ms
         # p50 on a loaded host, 720p: 52); the window scales it up.
