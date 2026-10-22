@@ -714,6 +714,9 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
    missing>`, 1420 s of SimReady export, 14 GB in `$CSB_VEHICLE_USD/walkers/`; `walkers.json`
    has 52, `ue_meta.json` no error, every id's `pick` is its own blueprint. The 8 children are
    1.22-1.35 m. Not yet seen rendered on Isaac (GPU held by other work).
+   The whole set (towns, vehicles, props, walkers) now moves as one directory: relative
+   paths in its indexes, a `MANIFEST.sha256`, `just isaac-assets check|manifest`, obtainable
+   from NEWSLab (docs/design/isaac-assets.md, 2026-10-23).
 4. **Perception on the CenterPoint stack**: the crossing walker is `unknown` on the approach
    (20-30 m), so no crossing is predicted, on both backends; `town01_pedestrian` passes in
    SSv2 while the ego touches the walker (Isaac 4 of 5, CARLA too). The scenario's and the

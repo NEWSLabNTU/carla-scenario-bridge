@@ -761,6 +761,29 @@ isaac-town town *args:
 isaac-vehicles *args:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/scripts/isaac_vehicles.sh" "$@"
 
+# Usage: just isaac-assets <check|manifest> [root:=<dir>]
+#
+# check: the set at root (default CARLA_USD) against its MANIFEST.sha256, each missing or
+# changed file listed. manifest: write README.md and MANIFEST.sha256 there, after the set
+# changes. docs/design/isaac-assets.md: what the set holds and how to obtain or make it.
+# Check or seal the Isaac asset set: CARLA's towns, vehicles, props and walkers as USD
+[positional-arguments]
+isaac-assets command *args:
+    #!/usr/bin/env bash
+    set -e
+    source "{{lib}}"; swb_reject_env
+    command=$1; shift
+    case "$command" in check|manifest) ;; *) echo "isaac-assets: check or manifest, not '$command'" >&2; exit 2 ;; esac
+    root="${CARLA_USD:-/mnt/disk1/carla-usd}"
+    for a in "$@"; do
+        case "$a" in
+            root:=*) root=$(realpath "${a#root:=}") ;;
+            *) echo "isaac-assets: unknown argument '$a' (root:=)" >&2; exit 2 ;;
+        esac
+    done
+    cd "{{justfile_directory()}}/src/isaac_world"
+    python3 -m isaac_world.asset_set "$command" "$root"
+
 # Usage: just isaac-world-gen [map_path:=<dir>] [usd:=<file>]
 #
 # The Isaac world for a map (roadmap 038): <map>/isaac/world.yaml

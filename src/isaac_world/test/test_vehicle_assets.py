@@ -65,5 +65,37 @@ class AssetsTest(unittest.TestCase):
             self.assertAlmostEqual(a, b)
 
 
+class RelocatedSetTest(unittest.TestCase):
+    """An index names its files relative to itself: a set moved elsewhere still resolves."""
+
+    def test_index_paths_resolve_against_the_index(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "moved" / "vehicles"
+            (root / "walkers").mkdir(parents=True)
+            (root / "vehicles.json").write_text(json.dumps([{
+                "id": "vehicle.audi.a2", "wheels_n": 4,
+                "usd": "vehicle.audi.a2/vehicle.audi.a2.usda",
+                "raw_usd": "vehicle.audi.a2/vehicle_audi_a2.usd",
+                "wheels": [{"name": "Wheel_Front_Left", "usd": "vehicle.audi.a2/wheels.usda"}]}]))
+            (root / "walkers" / "walkers.json").write_text(json.dumps([{
+                "id": "bp_walker_maleeuro", "usd": "bp_walker_maleeuro/bp_walker_maleeuro.usda",
+                "cycles": {"walk": {"npz": "bp_walker_maleeuro/walk.npz"}}}]))
+            assets = vehicle_assets.VehicleAssets(root)
+            car = assets.get("vehicle.audi.a2")
+            self.assertEqual(car["usd"], str(root / "vehicle.audi.a2/vehicle.audi.a2.usda"))
+            self.assertEqual(car["raw_usd"], str(root / "vehicle.audi.a2/vehicle_audi_a2.usd"))
+            self.assertEqual(car["wheels"][0]["usd"], str(root / "vehicle.audi.a2/wheels.usda"))
+            walker = assets.walkers[0]
+            self.assertEqual(walker["usd"],
+                             str(root / "walkers/bp_walker_maleeuro/bp_walker_maleeuro.usda"))
+            self.assertEqual(walker["cycles"]["walk"]["npz"],
+                             str(root / "walkers/bp_walker_maleeuro/walk.npz"))
+
+    def test_an_absolute_path_stays(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "vehicles.json").write_text(json.dumps([{"id": "a", "usd": "/old/a.usda"}]))
+            self.assertEqual(vehicle_assets.VehicleAssets(d).get("a")["usd"], "/old/a.usda")
+
+
 if __name__ == "__main__":
     unittest.main()

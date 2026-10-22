@@ -7,7 +7,8 @@ For every `<root>/<blueprint id>/<blueprint_id>.usd` (the SimReady map export of
 holding only that blueprint at the origin), writes `<root>/<blueprint id>/<blueprint id>.usda`:
 default prim `/Vehicle` referencing the export's `/Root`, with the actor's lamps
 (SphereLights), its collision mesh, arrow and bounds box deactivated, and `customData` `swb`
-carrying the geometry below. Writes `<root>/vehicles.json` and `<root>/vehicles.md`.
+carrying the geometry below. Writes `<root>/vehicles.json` (paths relative to `<root>`) and
+`<root>/vehicles.md`.
 
 A two-wheeler's rider (roadmap 044, open item 2), exported in its rest pose, is seated on it:
 `isaac_world.rider` poses it from the bike's Seat, handlebar and pedal joints, with the grip of
@@ -30,6 +31,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # isaac_world
 from isaac_world import rider  # noqa: E402
 
 root = Path(sys.argv[1])
+
+
+def indexed(path):
+    """`path` as the index names it: relative to the root, so the set can move."""
+    return str(Path(path).relative_to(root))
+
+
 meta = {m["id"]: m for m in json.loads((root / "ue_meta.json").read_text())}
 DROP_NAMES = {"CustomCollision", "ArrowHolder", "VehicleBounds"}
 # Emissive lamp meshes the export splits by function: keep the running lamps, drop the ones
@@ -128,7 +136,7 @@ for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("v
     info = {
         "id": bp_id, "blueprint": m.get("class"), "base_type": m.get("base_type"),
         "wheels_n": m.get("wheels_n"),
-        "usd": str(d / f"{bp_id}.usda"), "raw_usd": str(raw), "prim": "/Vehicle",
+        "usd": indexed(d / f"{bp_id}.usda"), "raw_usd": indexed(raw), "prim": "/Vehicle",
         "actor_prim": str(actor.GetPath()).replace("/Root", "/Vehicle", 1),
         "render_min": lo, "render_max": hi,
         "render_size": [round(hi[i] - lo[i], 4) for i in range(3)],
@@ -168,10 +176,10 @@ for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("v
                     else:
                         ws.OverridePrim(q).CreateAttribute(
                             "xformOp:translate", Sdf.ValueTypeNames.Double3).Set(Gf.Vec3d(0, 0, 0))
-                wh["usd"] = str(d / "wheels.usda")
+                wh["usd"] = indexed(d / "wheels.usda")
                 wh["usd_prim"] = "/" + wh["name"]
             wl_layer.Save()
-            info["prop"] = prop[0]
+            info["prop"] = indexed(prop[0])
     seated = seated_rider(actor)
     if seated is not None:
         info["rider_pose"] = {"slide": round(float(seated[5][0]), 3),

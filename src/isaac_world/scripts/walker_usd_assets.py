@@ -15,7 +15,7 @@ playing its walk or idle cycle), writes:
   `translations` (frames x joints x 3), `scales` (joints x 3), `fps`; the world plays them by
   writing one frame into a per-walker SkelAnimation.
 
-and `<root>/walkers.json`: per walker its USD, height and cycles.
+and `<root>/walkers.json`: per walker its USD, height and cycles, paths relative to `<root>`.
 """
 import json
 import sys
@@ -25,6 +25,13 @@ import numpy as np
 from pxr import Sdf, Usd, UsdGeom, UsdLux, UsdSkel
 
 root = Path(sys.argv[1])
+
+
+def indexed(path):
+    """`path` as the index names it: relative to the root, so the set can move."""
+    return str(Path(path).relative_to(root))
+
+
 meta = {m["id"]: m for m in json.loads((root / "ue_meta.json").read_text())}
 
 
@@ -54,7 +61,7 @@ for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("b
         arrays = cycle(usd)
         np.savez(d / f"{c}.npz", **arrays)
         frames = len(arrays["rotations"])
-        cycles[c] = {"npz": str(d / f"{c}.npz"), "frames": frames,
+        cycles[c] = {"npz": indexed(d / f"{c}.npz"), "frames": frames,
                      "length": round((frames - 1) / float(arrays["fps"]), 4)}
     stage = Usd.Stage.Open(str(exports["walk"]))
     top = stage.GetPrimAtPath("/Root")
@@ -78,7 +85,7 @@ for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("b
         w.OverridePrim(str(p).replace("/Root", "/Walker", 1)).SetActive(False)
     layer.Save()
     m = meta.get(wid, {})
-    rows.append({"id": wid, "usd": str(path), "prim": "/Walker", "mesh": m.get("mesh"),
+    rows.append({"id": wid, "usd": indexed(path), "prim": "/Walker", "mesh": m.get("mesh"),
                  "render_min": lo, "render_max": hi, "height": round(hi[2] - lo[2], 4),
                  "cycles": cycles})
     print(f"{wid}: height {rows[-1]['height']} m, walk {cycles['walk']['frames']} frames, "

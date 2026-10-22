@@ -3,7 +3,8 @@
 The assets are CARLA 0.9.16's vehicle blueprints exported with NVIDIA's SimReady converter
 (CARLA's editor, one level per blueprint, `-run=SimReadyExport`), one directory per
 blueprint id under `SWB_VEHICLE_USD` (default `/mnt/disk1/carla-usd/vehicles`), indexed by
-its `vehicles.json`:
+its `vehicles.json` (paths relative to it; the set's layout and how to obtain or make
+it: docs/design/isaac-assets.md):
 
 - `<id>/<id>.usda`, default prim `/Vehicle`: the whole car, lamps and collision mesh off.
   Frame: the CARLA actor origin (on the ground, about mid-length), metres, Z up, x forward,
@@ -40,6 +41,25 @@ PHYSX_WHEELS = {"frontLeft": "Wheel_Front_Left", "frontRight": "Wheel_Front_Righ
                 "rearLeft": "Wheel_Rear_Left", "rearRight": "Wheel_Rear_Right"}
 
 
+def load_index(index):
+    """An index's entries (vehicles.json, props.json, walkers.json) with the files they name
+    as absolute paths. The indexes name them relative to the index's directory, so a set
+    works wherever it is put (docs/design/isaac-assets.md); an absolute path stays as it is."""
+    base = Path(index).parent
+
+    def resolve(d):
+        for key in ("usd", "raw_usd", "npz", "prop"):
+            if isinstance(d.get(key), str) and d[key]:
+                d[key] = str(base / d[key])
+        for w in d.get("wheels") or []:
+            resolve(w)
+        for c in (d.get("cycles") or {}).values():
+            resolve(c)
+        return d
+
+    return [resolve(e) for e in json.loads(Path(index).read_text())]
+
+
 class VehicleAssets:
     """The exported bodies by CARLA blueprint id; empty (every entity a box) without them."""
 
@@ -48,7 +68,7 @@ class VehicleAssets:
         index = self.root / "vehicles.json"
         self.by_id = {}
         if index.exists():
-            self.by_id = {e["id"]: e for e in json.loads(index.read_text())}
+            self.by_id = {e["id"]: e for e in load_index(index)}
             log.info("%d CARLA vehicle bodies from %s", len(self.by_id), index)
         else:
             log.info("no CARLA vehicle bodies (%s missing): entities are boxes", index)
@@ -58,11 +78,11 @@ class VehicleAssets:
         sidecar = self.root / "physics.json"
         self.physics_by_id = json.loads(sidecar.read_text()) if sidecar.exists() else {}
         props = self.root / "props" / "props.json"
-        self.props = {e["id"]: e for e in json.loads(props.read_text())} if props.exists() else {}
+        self.props = {e["id"]: e for e in load_index(props)} if props.exists() else {}
         if self.props:
             log.info("%d CARLA props from %s", len(self.props), props)
         walkers = self.root / "walkers" / "walkers.json"
-        self.walkers = json.loads(walkers.read_text()) if walkers.exists() else []
+        self.walkers = load_index(walkers) if walkers.exists() else []
         if self.walkers:
             log.info("%d CARLA walkers from %s", len(self.walkers), walkers)
 

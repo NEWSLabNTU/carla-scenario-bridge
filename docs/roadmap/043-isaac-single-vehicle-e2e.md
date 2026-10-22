@@ -267,6 +267,11 @@ yet checked: NDT on each town's pcd from the Isaac lidar.
 
 ### A new host
 
+A host that only runs the Isaac backend does not need steps 3, 4, 5's export or 7: the
+finished asset set (towns, vehicles, props, walkers; ~24 GB) can be obtained from NEWSLab,
+checked with `just isaac-assets check` and wired to the maps with `just isaac-town <Town>`
+(docs/design/isaac-assets.md). The steps below build it from nothing.
+
 Everything above was built on one host, whose paths are the scripts' defaults
 (`/mnt/disk1/{isaac-sim,carla-src,carla-usd}`). Set up from nothing on newslab-server139
 (2026-10-21; roadmap 045, "Reproduction on newslab-server139"), in order, with what that

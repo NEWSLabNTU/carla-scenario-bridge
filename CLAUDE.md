@@ -492,7 +492,8 @@ newslab-server139 is laid out differently: `/` is the only fast disk (`/dev/nvme
 free) are both 5.5 TB WD Purple **spinning** disks, idle (1-2 % util) when measured on
 2026-10-21. Large things live under `/mnt/wd/aeon/`, set in its `.env`: `ISAAC_ROOT`
 (`isaac-sim`), `CARLA_SRC` (`carla-src`, the UE 4.26 + CARLA editor build), `CARLA_USD` and
-`SWB_VEHICLE_USD` (`carla-usd`), `AUTOWARE_TENSORRT_LIB`; CARLA 0.9.16 itself is
+`SWB_VEHICLE_USD` (`carla-usd`: the Isaac asset set, `docs/design/isaac-assets.md`; after any
+export into it, `just isaac-assets manifest`), `AUTOWARE_TENSORRT_LIB`; CARLA 0.9.16 itself is
 `/mnt/wd/aeon/carla-simulator/CARLA_0.9.16`. The 045 reproduction ran with
 `SWB_LOG_ROOT=/mnt/wd/aeon/csb-045/play_log` (per command, not in `.env`).
 

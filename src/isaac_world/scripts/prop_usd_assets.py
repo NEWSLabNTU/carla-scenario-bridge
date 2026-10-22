@@ -6,8 +6,9 @@
 For every `<root>/<blueprint id>/<blueprint_id>.usd` (the SimReady map export of a level
 holding only that prop's static mesh at the origin), writes `<root>/<blueprint id>/<blueprint
 id>.usda`: default prim `/Prop` referencing the export's `/Root`, lights off. Writes
-`<root>/props.json`: per prop its USD, render bounds and CARLA box (the mesh's bounds, which
-CARLA's `bounding_box` of a prop actor is), metres, Z up, CARLA's Y flipped.
+`<root>/props.json` (paths relative to `<root>`): per prop its USD, render bounds and CARLA
+box (the mesh's bounds, which CARLA's `bounding_box` of a prop actor is), metres, Z up,
+CARLA's Y flipped.
 """
 import json
 import sys
@@ -16,6 +17,13 @@ from pathlib import Path
 from pxr import Sdf, Usd, UsdGeom, UsdLux
 
 root = Path(sys.argv[1])
+
+
+def indexed(path):
+    """`path` as the index names it: relative to the root, so the set can move."""
+    return str(Path(path).relative_to(root))
+
+
 meta = {m["id"]: m for m in json.loads((root / "ue_meta.json").read_text())}
 rows = []
 for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("static.prop.")):
@@ -37,7 +45,8 @@ for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("s
         o, e = bb["origin"], bb["extent"]
         carla_bbox = {"center": [round(o[0] / 100, 4), round(-o[1] / 100, 4), round(o[2] / 100, 4)],
                       "extent": [round(v / 100, 4) for v in e]}
-    info = {"id": bp_id, "usd": str(d / f"{bp_id}.usda"), "raw_usd": str(raw), "prim": "/Prop",
+    info = {"id": bp_id, "usd": indexed(d / f"{bp_id}.usda"), "raw_usd": indexed(raw),
+            "prim": "/Prop",
             "render_min": lo, "render_max": hi,
             "render_size": [round(hi[i] - lo[i], 4) for i in range(3)],
             "carla_bbox": carla_bbox,
