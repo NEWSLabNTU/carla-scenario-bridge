@@ -457,7 +457,7 @@ in its Blueprint graph (`MakePedestrianDefinitions`); its CDO has no `Parameters
 `ParameterArray` property and `GenerateDefinitions()` returns none in a commandlet. So a
 walker id picks among the exported walkers by its number (`csb_isaac.walkers.pick`: stable,
 spread), a pedestrian with no CARLA key by its name; a key that is an exported walker
-(`bp_walker_*`) is that walker. Three are exported (`bp_walker_female1_v1`,
+(`bp_walker_*`) is that walker. Three were exported at first (all 52 since; open item 3) (`bp_walker_female1_v1`,
 `bp_walker_maleeuro`, `bp_walker_ab001_g3`, 255 s); `isaac_vehicles.sh walkers:=true` takes
 any `BP_Walker*` with a Gen2 or Gen3 cycle for its skeleton.
 
@@ -710,6 +710,10 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
    the police officer, 0049 a child). The table is `csb_isaac/walker_blueprints.json`.
    `pick`: the id's own blueprint when it is exported; else an exported walker of the same
    gender and age, then the same age; else the numeric spread as before.
+   **All 52 exported (2026-10-23):** `just isaac-vehicles walkers:=true only:=<the 49
+   missing>`, 1420 s of SimReady export, 14 GB in `$CSB_VEHICLE_USD/walkers/`; `walkers.json`
+   has 52, `ue_meta.json` no error, every id's `pick` is its own blueprint. The 8 children are
+   1.22-1.35 m. Not yet seen rendered on Isaac (GPU held by other work).
 4. **Perception on the CenterPoint stack**: the crossing walker is `unknown` on the approach
    (20-30 m), so no crossing is predicted, on both backends; `town01_pedestrian` passes in
    SSv2 while the ego touches the walker (Isaac 4 of 5, CARLA too). The scenario's and the
