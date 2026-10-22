@@ -583,3 +583,13 @@ fn a_misc_object_wears_its_model_or_the_street_barrier() {
     assert_eq!(misc_object_model(""), "static.prop.streetbarrier");
     assert_eq!(misc_object_model("obstacle"), "static.prop.streetbarrier");
 }
+
+#[test]
+fn a_pedestrian_names_its_walker_only_when_the_key_is_one() {
+    assert_eq!(
+        pedestrian_model("walker.pedestrian.0001"),
+        "walker.pedestrian.0001"
+    );
+    assert_eq!(pedestrian_model("pedestrian"), "");
+    assert_eq!(pedestrian_model(""), "");
+}

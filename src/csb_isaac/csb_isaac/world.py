@@ -7,7 +7,9 @@ from PhysX after the step, so the state csb gets is the physics engine's, not an
 tracked body (roadmap 044) is dynamic -- gravity, mass, the road under it -- and driven by
 the velocity csb sends, written through PhysX's tensor API before the substeps, as CARLA's
 `set_target_velocity` is before its tick; csb's fallback can make it kinematic for good. The
-ego and tracked bodies report contacts; the scene reports kinematic pairs too.
+ego and tracked bodies report contacts; the scene reports kinematic pairs too. A pedestrian
+stays a kinematic box and wears a CARLA walker that plays its walk or idle cycle by the speed
+SSv2 moves it at (044 C, `walkers`).
 Contacts with the ground (the flat plane, or a world's `ground_paths`) are not reported: a
 body resting on its road is not a contact.
 
@@ -30,6 +32,7 @@ from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics
 
 from . import motion as body_motion, signals as signal_table, vehicle_assets
+from . import walkers as walker_gait
 from .catalogue import check_ego, ego_model, load_ego
 
 log = logging.getLogger("csb_isaac")
@@ -154,6 +157,8 @@ class IsaacWorld:
         # Tracked bodies spawned since the last step: not in PhysX until it simulates, so
         # their first drive goes through USD (pose, initial velocity), read at their creation.
         self.fresh = set()
+        self.walking = {}  # handle -> a pedestrian's walker: its cycles, SkelAnimation, gait (044 C)
+        self.walker_cycles = {}  # walker id -> its cycles, loaded once
         self.ground_cache = {}  # prim path -> whether it is ground (contacts)
         self.signal_table = []  # the map's signals, as LoadWorld gave them (044 B)
         self.signal_colours = {}  # OpenDRIVE id -> colour shown
@@ -422,7 +427,20 @@ class IsaacWorld:
             asset = self.vehicle_assets.by_id.get(model)
             if asset is None:
                 prop = self.vehicle_assets.prop(model)
-        if asset is not None:
+        walker = None
+        if kind == "PEDESTRIAN":
+            walker = walker_gait.pick(self.vehicle_assets.walkers, model, name)
+        if walker is not None:
+            cycles = self._walker_cycles(walker)
+            anim = vehicle_assets.add_walker_body(
+                self.stage, path, walker, cycles["joints"], cycles["scales"], center, dims,
+                collider=cube.GetPrim())
+            if anim is not None:
+                self.walking[handle] = {
+                    "cycles": cycles, "anim": anim, "previous": tuple(pose[0]),
+                    "gait": walker_gait.Gait(cycles["walk"].length, cycles["idle"].length)}
+                self._pose_walker(handle, 0.0)
+        elif asset is not None:
             vehicle_assets.add_npc_body(self.stage, path, asset, center, collider=cube.GetPrim())
         elif prop is not None:
             vehicle_assets.add_prop_body(self.stage, path, prop, center, dims,
@@ -447,10 +465,34 @@ class IsaacWorld:
             self.reporters.add(handle)
         self.entities[handle] = (path, translate, orient)
         self.by_path[path] = handle
-        body = asset or prop
+        body = asset or prop or walker
         log.info("spawned %s %r as %s (box %s at %s%s%s)", kind, name, path, dims, center,
                  f", body {body['id']}" if body is not None else "",
                  f", tracked, {mass:.0f} kg" if tracked else "")
+
+    def _walker_cycles(self, walker):
+        """A walker's cycles (`walkers.Cycle`) and skeleton arrays, loaded once."""
+        cycles = self.walker_cycles.get(walker["id"])
+        if cycles is None:
+            import numpy as np
+
+            walk = np.load(walker["cycles"]["walk"]["npz"])
+            cycles = {"walk": walker_gait.Cycle(walk["rotations"], walk["translations"],
+                                                walk["fps"]),
+                      "idle": walker_gait.Cycle.load(walker["cycles"]["idle"]["npz"]),
+                      "joints": list(walk["joints"]), "scales": walk["scales"]}
+            self.walker_cycles[walker["id"]] = cycles
+        return cycles
+
+    def _pose_walker(self, handle, speed, dt=0.0):
+        """Advance a walker's gait by `dt` at `speed` and write its skeleton's pose."""
+        from pxr import Vt
+
+        w = self.walking[handle]
+        cycle, phase = w["gait"].advance(speed, dt)
+        rotations, translations = w["cycles"][cycle].sample(phase)
+        w["anim"].GetRotationsAttr().Set(Vt.QuatfArray.FromNumpy(rotations))
+        w["anim"].GetTranslationsAttr().Set(Vt.Vec3fArray.FromNumpy(translations))
 
     def _skids(self, path, cube, center, dims):
         """A tracked body's box raised on two capsules (`motion.skids`), all with the tracked
@@ -600,6 +642,7 @@ class IsaacWorld:
             # invalidates the whole simulation view (044 step 3).
             self.tracked_view = None
         self.fresh.discard(handle)
+        self.walking.pop(handle, None)
         self.stage.RemovePrim(path)
 
     def step(self, drives, substeps, dt, render, sim_time=0.0):
@@ -619,6 +662,15 @@ class IsaacWorld:
                 _, translate, orient = self.entities[handle]
                 translate.Set(Gf.Vec3d(*position))
                 orient.Set(_quat(quat))
+            # Walkers play their cycles at the speed SSv2 moved them (044 C).
+            for handle, w in self.walking.items():
+                d = drives.get(handle)
+                if d is None or d.pose is None:
+                    speed = 0.0
+                else:
+                    speed = walker_gait.horizontal_speed(w["previous"], d.pose[0], substeps * dt)
+                    w["previous"] = tuple(d.pose[0])
+                self._pose_walker(handle, speed, substeps * dt)
         self._drive_tracked(drives)
         for handle, d in drives.items():
             if handle in self.egos and d.pose is not None:

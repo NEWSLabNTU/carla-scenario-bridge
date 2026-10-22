@@ -7,7 +7,14 @@ and their entries replace theirs in an existing CSB_VEH_META.
 
 With CSB_VEH_KIND=props (roadmap 044) the same for CARLA's props instead: every
 `static.prop.*` blueprint of Content/Carla/Config/Default.Package.json, its static mesh alone
-at the origin, under /Game/CSBPropExport/; the metadata has the mesh's bounds."""
+at the origin, under /Game/CSBPropExport/; the metadata has the mesh's bounds.
+
+With CSB_VEH_KIND=walkers (roadmap 044 C), CARLA's walkers: per `BP_Walker*` blueprint two
+levels under /Game/CSBWalkerExport/, `<id>_walk` and `<id>_idle`, each a plain
+SkeletalMeshActor of the walker's mesh playing a walk or an idle cycle in single-node mode
+(SimReady exports that as a SkelAnimation; the blueprint's own anim blueprint it does not).
+The id is the blueprint's name, lower case: which `walker.pedestrian.NNNN` a blueprint is
+lives in WalkerFactory's graph, not in a property an editor script reads."""
 import json
 import os
 import sys
@@ -73,6 +80,78 @@ if KIND == "props":
         entry["carla_bbox"] = {"origin": v(b.origin), "extent": v(b.box_extent)}
         unreal.EditorLevelLibrary.save_current_level()
         unreal.log("CSB: saved %s" % level)
+        meta.append(entry)
+    write_meta(meta)
+
+
+# Walk and idle cycles, by the skeleton they are for (044 C).
+WALKER_ANIMS = [
+    ("/Game/Carla/Static/Pedestrian/Animations/GEN3/AS_walking04_G3",
+     "/Game/Carla/Static/Pedestrian/Animations/GEN3/AS_idleAXz02_G3"),
+    ("/Game/Carla/Static/Pedestrian/Animations/Female/AS_Carla_WalkCicle",
+     "/Game/Carla/Static/Pedestrian/Animations/Female/AS_Carla_Idle0B"),
+    ("/Game/Carla/Static/Pedestrian/Animations/Male/AS_male_walkCicle0E",
+     "/Game/Carla/Static/Pedestrian/Animations/Male/AS_male_IdleCicle0C"),
+]
+
+
+def walkers():
+    reg = unreal.AssetRegistryHelpers.get_asset_registry()
+    bps = sorted(str(a.asset_name) for a in reg.get_assets_by_path("/Game/Carla/Blueprints/Walkers")
+                 if str(a.asset_name).startswith("BP_Walker") and str(a.asset_name) != "BP_Walker")
+    anims = [(unreal.EditorAssetLibrary.load_asset(w), unreal.EditorAssetLibrary.load_asset(i))
+             for w, i in WALKER_ANIMS]
+    meta = []
+    xf = unreal.Transform(unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0), unreal.Vector(1, 1, 1))
+    for bp in bps:
+        wid = bp.lower()
+        if ONLY and wid not in ONLY:
+            continue
+        cls = unreal.EditorAssetLibrary.load_blueprint_class("/Game/Carla/Blueprints/Walkers/" + bp)
+        entry = {"id": wid, "class": cls.get_path_name() if cls else None}
+        blank_level("/Game/CSBWalkerExport/_probe")
+        actor = unreal.OpenDriveToMap.spawn_actor_with_check_no_collisions(cls, xf) if cls else None
+        sk = actor.get_components_by_class(unreal.SkeletalMeshComponent) if actor else []
+        mesh = sk[0].get_editor_property("skeletal_mesh") if sk else None
+        if mesh is None:
+            entry["error"] = "no skeletal mesh"
+            meta.append(entry)
+            continue
+        skel = mesh.get_editor_property("skeleton")
+        entry["mesh"] = mesh.get_path_name()
+        # The blueprint's mesh sits below and turned from the actor (capsule centre, x ahead).
+        entry["mesh_rel"] = {"z": sk[0].get_editor_property("relative_location").z,
+                             "yaw": sk[0].get_editor_property("relative_rotation").yaw}
+        entry["skeleton"] = skel.get_path_name() if skel else None
+        b = mesh.get_bounds()
+        entry["mesh_bounds"] = {"origin": v(b.origin), "extent": v(b.box_extent)}
+        pair = next(((w, i) for w, i in anims if w and i
+                     and w.get_editor_property("skeleton") == skel
+                     and i.get_editor_property("skeleton") == skel), None)
+        if pair is None:
+            entry["error"] = "no walk/idle cycle for skeleton %s" % entry["skeleton"]
+            meta.append(entry)
+            continue
+        entry["levels"], entry["anims"] = {}, {}
+        for which, anim in zip(("walk", "idle"), pair):
+            level = "/Game/CSBWalkerExport/%s_%s" % (wid, which)
+            blank_level(level)
+            a = unreal.OpenDriveToMap.spawn_actor_with_check_no_collisions(unreal.SkeletalMeshActor, xf)
+            c = a.skeletal_mesh_component
+            c.set_skeletal_mesh(mesh)
+            c.set_editor_property("animation_mode", unreal.AnimationMode.ANIMATION_SINGLE_NODE)
+            data = unreal.SingleAnimationPlayData()
+            data.set_editor_property("anim_to_play", anim)
+            data.set_editor_property("saved_looping", True)
+            data.set_editor_property("saved_playing", True)
+            c.set_editor_property("animation_data", data)
+            c.set_animation_mode(unreal.AnimationMode.ANIMATION_SINGLE_NODE)
+            c.set_animation(anim)
+            unreal.EditorLevelLibrary.save_current_level()
+            entry["levels"][which] = level
+            entry["level"] = True
+            entry["anims"][which] = {"path": anim.get_path_name(),
+                                     "length": anim.get_editor_property("sequence_length")}
         meta.append(entry)
     write_meta(meta)
 
@@ -170,5 +249,7 @@ def vehicles():
     write_meta(meta)
 
 
-if KIND != "props":
+if KIND == "walkers":
+    walkers()
+elif KIND != "props":
     vehicles()

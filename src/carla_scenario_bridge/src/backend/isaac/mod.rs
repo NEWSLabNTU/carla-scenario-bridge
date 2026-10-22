@@ -908,6 +908,16 @@ fn misc_object_model(key: &str) -> &str {
     }
 }
 
+/// The walker a pedestrian wears: its asset key when that names a CARLA walker, else none
+/// (the world server picks one by the entity's name, 044 C).
+fn pedestrian_model(key: &str) -> &str {
+    if key.starts_with("walker.") {
+        key
+    } else {
+        ""
+    }
+}
+
 fn kind_name(t: EntityType) -> &'static str {
     match t {
         EntityType::Ego => "ego",
@@ -1177,7 +1187,8 @@ impl SimBackend for IsaacBackend {
         };
         // The body's look: the CARLA blueprint the CARLA backend would spawn for the asset key
         // (`blueprint_map` first, else the key itself). A MiscObject names a vehicle or a
-        // prop (`model3d`), else it is CARLA's default MiscObject, the street barrier (044 D).
+        // prop (`model3d`), else it is CARLA's default MiscObject, the street barrier (044 D). A
+        // pedestrian names its walker when the key is one (044 C).
         let key = self
             .config
             .blueprint_for(&req.asset_key)
@@ -1185,7 +1196,7 @@ impl SimBackend for IsaacBackend {
         let model = match entity_type {
             EntityType::Ego | EntityType::Vehicle => key.to_string(),
             EntityType::MiscObject => misc_object_model(key).to_string(),
-            EntityType::Pedestrian => String::new(),
+            EntityType::Pedestrian => pedestrian_model(key).to_string(),
         };
         let pose = req.pose.unwrap_or(Pose {
             position: Some(geometry_msgs::Point::default()),

@@ -22,7 +22,9 @@ Two-wheelers (roadmap 044 D): a bicycle or motorcycle box with no model wears th
 exported two-wheeler of its kind (CARLA's `base_type`), by length -- their CARLA boxes are
 degenerate in the export's metadata and their render width is the rider's. CARLA's props
 (`isaac_vehicles.sh props:=true`, `<root>/props/props.json`) dress MiscObjects that name a
-`static.prop.*` blueprint; one naming a vehicle wears that vehicle.
+`static.prop.*` blueprint; one naming a vehicle wears that vehicle. CARLA's walkers
+(`isaac_vehicles.sh walkers:=true`, `<root>/walkers/walkers.json`, roadmap 044 C) dress
+pedestrians, played by `csb_isaac.walkers`.
 """
 import json
 import logging
@@ -58,6 +60,10 @@ class VehicleAssets:
         self.props = {e["id"]: e for e in json.loads(props.read_text())} if props.exists() else {}
         if self.props:
             log.info("%d CARLA props from %s", len(self.props), props)
+        walkers = self.root / "walkers" / "walkers.json"
+        self.walkers = json.loads(walkers.read_text()) if walkers.exists() else []
+        if self.walkers:
+            log.info("%d CARLA walkers from %s", len(self.walkers), walkers)
 
     def physics(self, model):
         """CARLA's `get_physics_control()` for `model`, in the catalogue's frame, or None."""
@@ -188,3 +194,37 @@ def add_prop_body(stage, entity_path, entry, center, dims, collider=None):
     if collider is not None:
         _invisible(collider)
     return prim
+
+
+# The walker export faces -y (CARLA's blueprint turns its mesh -90 degrees): this turns it to
+# face the entity's x, degrees about z.
+WALKER_YAW = 90.0
+
+
+def add_walker_body(stage, entity_path, entry, joints, scales, center, dims, collider=None):
+    """`entry`'s walker under the entity Xform, feet on the declared box's bottom, centred on
+    it in x and y, facing x; with its own SkelAnimation (`<entity>/walkerAnim`) bound to its
+    skeleton (`joints`, `scales`: the export's), which the world writes each frame. Not instanceable: each walker poses its own
+    skeleton. `collider`, the box, is made invisible. Returns the SkelAnimation."""
+    from pxr import Gf, Usd, UsdGeom, UsdSkel, Vt
+
+    x = UsdGeom.Xform.Define(stage, f"{entity_path}/model")
+    x.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble).Set(
+        Gf.Vec3d(center[0], center[1], center[2] - dims[2] / 2))
+    x.AddRotateZOp().Set(WALKER_YAW)
+    prim = x.GetPrim()
+    prim.GetReferences().AddReference(entry["usd"])
+    skel_root = next((p for p in Usd.PrimRange(prim) if p.IsA(UsdSkel.Root)), None)
+    if skel_root is None:
+        log.warning("walker %s has no SkelRoot: it stands still", entry["id"])
+        anim = None
+    else:
+        anim = UsdSkel.Animation.Define(stage, f"{entity_path}/walkerAnim")
+        anim.CreateJointsAttr(Vt.TokenArray([str(j) for j in joints]))
+        anim.CreateScalesAttr(Vt.Vec3hArray([Gf.Vec3h(*map(float, v)) for v in scales]))
+        anim.CreateRotationsAttr()
+        anim.CreateTranslationsAttr()
+        UsdSkel.BindingAPI.Apply(skel_root).CreateAnimationSourceRel().SetTargets([anim.GetPath()])
+    if collider is not None:
+        _invisible(collider)
+    return anim

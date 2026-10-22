@@ -415,6 +415,65 @@ and 0.001 grey where not.
 `town01_pedestrian` is C's: its pedestrian is still 037's kinematic yellow box, which the ego
 ran into; the barriers did their part. It is rerun in step 6.
 
+## Step 6: C
+
+**Plan** (2026-10-22). Spike first, time-boxed to about half a day.
+
+- **CARLA's walkers through SimReady.** SimReady can export animation: its level export writes
+  a `SkelAnimation` for a skeletal mesh component that plays an animation asset in
+  single-node mode (`FSimReadyUSDHelper::ExportAnimationAssetAsUSDToPathInternal`). The spike:
+  per walker (`WalkerFactory` definitions; `walker.pedestrian.0001` first), two levels with a
+  plain `SkeletalMeshActor` of its mesh at the origin playing its walk and its idle sequence
+  (CARLA's `GEN3/AS_walking04_G3` / `AS_idleAXz02_G3`, or the Gen2 female / male cycles, as the
+  skeleton allows), exported by the same commandlet. It works when the USD has a
+  `SkelAnimation` bound to the walker's skeleton and Isaac renders the walker in stride.
+- **Playing it at SSv2's speed** without Isaac's timeline (one clock for every walker, and
+  the world server's own): each walker gets its own `SkelAnimation` prim whose joint
+  rotations and translations are set each step from the exported walk (or idle, below
+  `WALKER_SPEED_FLOOR`) sampled at the walker's own phase, advanced by `speed / v0` (v0 the
+  walk's own speed). `omni.anim.graph` is the alternative if writing the joints per step
+  costs too much.
+- **Fallback**, if CARLA's animation does not come through: Isaac's own characters
+  (`Isaac/People/Characters`, Actor SDG's assets) chosen by the box's height, with their
+  walk and idle, played the same way.
+- Either way the collider stays the declared box, the walker gets a `model` and a
+  `walkers.json` index as vehicles do, and a standing walker faces SSv2's heading. Runs:
+  incident 2, `town01_pedestrian`, `UC-AEB-001`.
+
+**Spike result: CARLA's walkers come through; no fallback.** SimReady's level export writes
+the single-node `SkelAnimation` (female walk 41 samples at 30 fps over 66 joints, G3 walk 73
+over 26; idles 591 and 791). The cycles are in place (the root joint does not move), so a
+walker is played, not driven by them. Isaac renders a referenced walker with its skeleton
+bound to a per-walker `SkelAnimation` whose default rotations and translations are written
+each frame: correct pose, ~1 ms for three walkers' writes through `Vt.*Array.FromNumpy`
+(`omni.anim.graph` is not needed). The export faces -y (CARLA's blueprint turns its mesh
+-90 degrees): the walker goes on turned +90 degrees about z, feet on the declared box's bottom.
+
+**What `walker.pedestrian.NNNN` is, is not readable.** WalkerFactory builds its definitions
+in its Blueprint graph (`MakePedestrianDefinitions`); its CDO has no `Parameters` /
+`ParameterArray` property and `GenerateDefinitions()` returns none in a commandlet. So a
+walker id picks among the exported walkers by its number (`csb_isaac.walkers.pick`: stable,
+spread), a pedestrian with no CARLA key by its name; a key that is an exported walker
+(`bp_walker_*`) is that walker. Three are exported (`bp_walker_female1_v1`,
+`bp_walker_maleeuro`, `bp_walker_ab001_g3`, 255 s); `isaac_vehicles.sh walkers:=true` takes
+any `BP_Walker*` with a Gen2 or Gen3 cycle for its skeleton.
+
+**Built:**
+
+- `isaac_vehicles.sh walkers:=true` (`ue_vehicle_levels.py` walkers mode: per blueprint a
+  `_walk` and an `_idle` level; `walker_usd_assets.py`: `/Walker` wrappers, the cycles as
+  `.npz`, `$CSB_VEHICLE_USD/walkers/walkers.json`).
+- `csb_isaac.walkers`: `Cycle.sample` (nlerp between recorded frames, shorter arc), `Gait`
+  (speed smoothed over 0.2 s; idle below 0.2 m/s; walk at `speed / 1.3 m/s` times its
+  recorded rate, at most 2.5x; a change of cycle starts it from the top), `pick`. Unit tests.
+- The world: a pedestrian's box (kinematic, collider) goes invisible under its walker; each
+  step the walker's speed is its pose's ground-plane change over the frame. csb sends a
+  pedestrian's asset key as `model` when it names a `walker.*`.
+
+Measured in an empty world (`spike_walkers2`, three pedestrians at 1.3, 0 and 2.5 m/s, 90
+frames of 2 substeps): step p50 1.10 ms, p95 1.95; gaits walk / idle / walk. Picture:
+`/mnt/wd/aeon/csb-044/walkers_in_isaac.png`.
+
 ## Acceptance
 
 - `town01_traffic_light`, `basic/*` (except `town01_simulator_autopilot`, deferred),
