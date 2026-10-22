@@ -1240,8 +1240,9 @@ fallback). Kept as the take; not re-taken.
 
 Files: `/mnt/wd/aeon/csb-demo-tour/2026-10-21/demo-tour-40kmh-take1.mp4` (cut) and
 `...-take1-raw.mp4` (as recorded), with a README (commits, stacks, scenario, result);
-`play_log/demo-tour/2026-10-21_11-46-51/` (captions, logs). The NAS copy was not made:
-`~/nas/autoveh/logs` answers `Input/output error` (not remounted).
+`play_log/demo-tour/2026-10-21_11-46-51/` (captions, logs). On the lab NAS (2026-10-22, checksums
+verified): `autoveh/logs/2026 SSv2 on CARLA/2026-10-21 Demo tour 40 kmh/` -- the cut, the raw
+take, a 540p preview (26 MB) and the README.
 
 Runs: `rh_1`, `rh_2`, `rh_3`, `rh_3b`, `take_1` (context, ego planning log, SSv2 execution
 times, trace, judge per incident, oracle, captions, load) and the step 8 runs `r8_1`-`r8_4`,
