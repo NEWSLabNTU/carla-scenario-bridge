@@ -79,3 +79,30 @@ def test_pick_is_stable_and_spread():
 def test_horizontal_speed():
     assert walkers.horizontal_speed(None, (1, 1, 1), 0.1) == 0.0
     assert walkers.horizontal_speed((0, 0, 0), (3, 4, 9), 1.0) == pytest.approx(5.0)
+
+
+def test_pick_by_carla_blueprint():
+    table = {
+        "walker.pedestrian.0001": {"blueprint": "BP_Walker_Female1_v1", "gender": "female", "age": "adult"},
+        "walker.pedestrian.0002": {"blueprint": "BP_Walker_Male1_v1", "gender": "male", "age": "adult"},
+        "walker.pedestrian.0012": {"blueprint": "BP_WalkerKid1_v1", "gender": "male", "age": "child"},
+        "walker.pedestrian.0050": {"blueprint": "BP_Walker_AG001_G3", "gender": "female", "age": "child"},
+        "walker.pedestrian.0051": {"blueprint": "BP_Walker_AB001_G3", "gender": "male", "age": "child"},
+        "walker.pedestrian.0016": {"blueprint": "BP_Walker_MaleEuro", "gender": "male", "age": "adult"},
+    }
+    ws = [{"id": i} for i in ("bp_walker_female1_v1", "bp_walker_maleeuro", "bp_walker_ab001_g3")]
+    pick = lambda model: walkers.pick(ws, model, "x", table)["id"]
+    assert pick("walker.pedestrian.0001") == "bp_walker_female1_v1"  # its own blueprint
+    assert pick("walker.pedestrian.0002") == "bp_walker_maleeuro"  # same gender and age
+    assert pick("walker.pedestrian.0012") == "bp_walker_ab001_g3"  # a boy for a boy
+    assert pick("walker.pedestrian.0050") == "bp_walker_ab001_g3"  # a girl: still a child
+    assert pick("walker.pedestrian.9999") in {w["id"] for w in ws}  # not CARLA's: spread
+
+
+def test_blueprint_table():
+    t = walkers.blueprints()
+    assert len(t) == 52
+    assert t["walker.pedestrian.0001"]["blueprint"] == "BP_Walker_Female1_v1"
+    assert t["walker.pedestrian.0030"]["blueprint"] == "BP_Walker_MaleAmer_Cop"
+    assert t["walker.pedestrian.0012"]["age"] == "child"
+    assert len({e["blueprint"] for e in t.values()}) == 52

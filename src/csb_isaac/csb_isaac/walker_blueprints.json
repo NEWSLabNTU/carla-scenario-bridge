@@ -1,0 +1,314 @@
+{
+ "walker.pedestrian.0001": {
+  "blueprint": "BP_Walker_Female1_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Female1_v1.BP_Walker_Female1_v1_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0002": {
+  "blueprint": "BP_Walker_Male1_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male1_v1.BP_Walker_Male1_v1_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0003": {
+  "blueprint": "BP_Walker_Male1_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male1_v2.BP_Walker_Male1_v2_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0004": {
+  "blueprint": "BP_Walker_Male1_v3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male1_v3.BP_Walker_Male1_v3_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0005": {
+  "blueprint": "BP_Walker_Female1_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Female1_v2.BP_Walker_Female1_v2_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0006": {
+  "blueprint": "BP_Walker_Female1_v3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Female1_v3.BP_Walker_Female1_v3_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0007": {
+  "blueprint": "BP_Walker_Female1_v4",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Female1_v4.BP_Walker_Female1_v4_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0008": {
+  "blueprint": "BP_Walker_Female1_v5",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Female1_v5.BP_Walker_Female1_v5_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0009": {
+  "blueprint": "BP_WalkerGirl1_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_WalkerGirl1_v1.BP_WalkerGirl1_v1_C",
+  "gender": "female",
+  "age": "child"
+ },
+ "walker.pedestrian.0010": {
+  "blueprint": "BP_WalkerGirl1_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_WalkerGirl1_v2.BP_WalkerGirl1_v2_C",
+  "gender": "female",
+  "age": "child"
+ },
+ "walker.pedestrian.0011": {
+  "blueprint": "BP_WalkerGirl1_v3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_WalkerGirl1_v3.BP_WalkerGirl1_v3_C",
+  "gender": "female",
+  "age": "child"
+ },
+ "walker.pedestrian.0012": {
+  "blueprint": "BP_WalkerKid1_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_WalkerKid1_v1.BP_WalkerKid1_v1_C",
+  "gender": "male",
+  "age": "child"
+ },
+ "walker.pedestrian.0013": {
+  "blueprint": "BP_WalkerKid1_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_WalkerKid1_v2.BP_WalkerKid1_v2_C",
+  "gender": "male",
+  "age": "child"
+ },
+ "walker.pedestrian.0014": {
+  "blueprint": "BP_WalkerKid1_v3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_WalkerKid1_v3.BP_WalkerKid1_v3_C",
+  "gender": "male",
+  "age": "child"
+ },
+ "walker.pedestrian.0015": {
+  "blueprint": "BP_Walker_FemaleAfro",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro.BP_Walker_FemaleAfro_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0016": {
+  "blueprint": "BP_Walker_MaleEuro",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleEuro.BP_Walker_MaleEuro_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0017": {
+  "blueprint": "BP_Walker_MaleEuro_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleEuro_v2.BP_Walker_MaleEuro_v2_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0018": {
+  "blueprint": "BP_Walker_MaleAfro_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleAfro_v1.BP_Walker_MaleAfro_v1_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0019": {
+  "blueprint": "BP_Walker_FemaleAfro_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro_v2.BP_Walker_FemaleAfro_v2_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0020": {
+  "blueprint": "BP_Walker_FemaleEuro",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleEuro.BP_Walker_FemaleEuro_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0021": {
+  "blueprint": "BP_Walker_FemaleEuro_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleEuro_v2.BP_Walker_FemaleEuro_v2_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0022": {
+  "blueprint": "BP_Walker_FemaleAsia_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAsia_v1.BP_Walker_FemaleAsia_v1_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0023": {
+  "blueprint": "BP_Walker_FemaleAsia_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAsia_v2.BP_Walker_FemaleAsia_v2_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0024": {
+  "blueprint": "BP_Walker_MaleAsia_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleAsia_v1.BP_Walker_MaleAsia_v1_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0025": {
+  "blueprint": "BP_Walker_MaleAsia_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleAsia_v2.BP_Walker_MaleAsia_v2_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0026": {
+  "blueprint": "BP_Walker_MaleAfro_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleAfro_v2.BP_Walker_MaleAfro_v2_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0027": {
+  "blueprint": "BP_Walker_MaleAmer_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleAmer_v1.BP_Walker_MaleAmer_v1_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0028": {
+  "blueprint": "BP_Walker_MaleAmer_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleAmer_v2.BP_Walker_MaleAmer_v2_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0029": {
+  "blueprint": "BP_Walker_MaleAmer_v3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleAmer_v3.BP_Walker_MaleAmer_v3_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0030": {
+  "blueprint": "BP_Walker_MaleAmer_Cop",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_MaleAmer_Cop.BP_Walker_MaleAmer_Cop_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0031": {
+  "blueprint": "BP_Walker_FemaleAfro02",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro02.BP_Walker_FemaleAfro02_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0032": {
+  "blueprint": "BP_Walker_FemaleAfro02_Cop",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro02_Cop.BP_Walker_FemaleAfro02_Cop_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0033": {
+  "blueprint": "BP_Walker_FemaleAfro02B",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro02B.BP_Walker_FemaleAfro02B_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0034": {
+  "blueprint": "BP_Walker_Male_EuroW_Owv",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male_EuroW_Owv.BP_Walker_Male_EuroW_Owv_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0035": {
+  "blueprint": "BP_Walker_Female_Euro_Owv_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Female_Euro_Owv_v1.BP_Walker_Female_Euro_Owv_v1_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0036": {
+  "blueprint": "BP_Walker_Female_Euro_Owv_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Female_Euro_Owv_v2.BP_Walker_Female_Euro_Owv_v2_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0037": {
+  "blueprint": "BP_Walker_Female_Euro_Owv_v3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Female_Euro_Owv_v3.BP_Walker_Female_Euro_Owv_v3_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0038": {
+  "blueprint": "BP_Walker_Male_EuroW_Owv_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male_EuroW_Owv_v2.BP_Walker_Male_EuroW_Owv_v2_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0039": {
+  "blueprint": "BP_Walker_Male_Afro02_S_Ov",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male_Afro02_S_Ov.BP_Walker_Male_Afro02_S_Ov_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0040": {
+  "blueprint": "BP_Walker_FemaleAfro02C",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro02C.BP_Walker_FemaleAfro02C_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0041": {
+  "blueprint": "BP_Walker_FemaleAfro02D",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro02D.BP_Walker_FemaleAfro02D_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0042": {
+  "blueprint": "BP_Walker_FemaleAfro03_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro03_v1.BP_Walker_FemaleAfro03_v1_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0043": {
+  "blueprint": "BP_Walker_FemaleAfro03_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro03_v2.BP_Walker_FemaleAfro03_v2_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0044": {
+  "blueprint": "BP_Walker_FemaleAfro03_v3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_FemaleAfro03_v3.BP_Walker_FemaleAfro03_v3_C",
+  "gender": "female",
+  "age": "adult"
+ },
+ "walker.pedestrian.0045": {
+  "blueprint": "BP_Walker_Male_Asia02_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male_Asia02_v1.BP_Walker_Male_Asia02_v1_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0046": {
+  "blueprint": "BP_Walker_Male_Asia02_v2",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male_Asia02_v2.BP_Walker_Male_Asia02_v2_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0047": {
+  "blueprint": "BP_Walker_Male_Asia02_v3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_Male_Asia02_v3.BP_Walker_Male_Asia02_v3_C",
+  "gender": "male",
+  "age": "adult"
+ },
+ "walker.pedestrian.0048": {
+  "blueprint": "BP_WalkerEuGirl02_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_WalkerEuGirl02_v1.BP_WalkerEuGirl02_v1_C",
+  "gender": "female",
+  "age": "child"
+ },
+ "walker.pedestrian.0049": {
+  "blueprint": "BP_WalkerEuBoy02_v1",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_WalkerEuBoy02_v1.BP_WalkerEuBoy02_v1_C",
+  "gender": "female",
+  "age": "child"
+ },
+ "walker.pedestrian.0050": {
+  "blueprint": "BP_Walker_AG001_G3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_AG001_G3.BP_Walker_AG001_G3_C",
+  "gender": "female",
+  "age": "teenager"
+ },
+ "walker.pedestrian.0051": {
+  "blueprint": "BP_Walker_AB001_G3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_AB001_G3.BP_Walker_AB001_G3_C",
+  "gender": "male",
+  "age": "teenager"
+ },
+ "walker.pedestrian.0052": {
+  "blueprint": "BP_Walker_AsiaM03_G3",
+  "class": "/Game/Carla/Blueprints/Walkers/BP_Walker_AsiaM03_G3.BP_Walker_AsiaM03_G3_C",
+  "gender": "male",
+  "age": "adult"
+ }
+}

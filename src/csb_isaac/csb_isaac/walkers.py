@@ -11,7 +11,9 @@ SkelAnimation. Below `SPEED_FLOOR` the walker idles; walking, the cycle runs at
 `speed / REFERENCE_SPEED` times its recorded rate (CARLA's walk cycles are in place, no root
 motion, recorded at about a walking pace).
 """
+import json
 import zlib
+from pathlib import Path
 
 import numpy as np
 
@@ -87,11 +89,21 @@ class Gait:
         return self.cycle, self.phase
 
 
-def pick(walkers, model, name):
-    """The walker a pedestrian wears: the one exported for `model` when there is one (a
-    walker id, `bp_walker_*`), else one chosen by `model` (CARLA's `walker.pedestrian.NNNN`;
-    which blueprint CARLA gives that id is in WalkerFactory's graph, not exported) or, with
-    no model, by `name`: stable across runs, spread over the exported walkers."""
+def blueprints(path=Path(__file__).with_name("walker_blueprints.json")):
+    """CARLA's `walker.pedestrian.NNNN` -> its blueprint, gender and age, read from
+    WalkerFactory's package (`scripts/walker_factory_ids.py`; 044, open item 3)."""
+    return json.loads(Path(path).read_text())
+
+
+BLUEPRINTS = blueprints()
+
+
+def pick(walkers, model, name, table=BLUEPRINTS):
+    """The walker a pedestrian wears: the one exported for `model` (an exported walker's id,
+    `bp_walker_*`, or CARLA's `walker.pedestrian.NNNN` whose blueprint is exported); else one
+    of the exported walkers of that id's gender and age, then of its age (a child stays a
+    child); else, as for a pedestrian with no model (by `name`), one chosen stably and spread
+    over the exported walkers."""
     if not walkers:
         return None
     by_id = {w["id"]: w for w in walkers}
@@ -101,6 +113,17 @@ def pick(walkers, model, name):
     key = model or name or ""
     digits = "".join(c for c in key.rsplit(".", 1)[-1] if c.isdigit())
     n = int(digits) if model and digits else zlib.crc32(key.encode())
+    wanted = table.get(model)
+    if wanted is not None:
+        own = wanted["blueprint"].lower()
+        if own in by_id:
+            return by_id[own]
+        kinds = {e["blueprint"].lower(): (e["gender"], e["age"]) for e in table.values()}
+        for same in (lambda k: k == (wanted["gender"], wanted["age"]),
+                     lambda k: k[1] == wanted["age"]):
+            alike = [i for i in ordered if i in kinds and same(kinds[i])]
+            if alike:
+                return by_id[alike[n % len(alike)]]
     return by_id[ordered[n % len(ordered)]]
 
 

@@ -698,9 +698,18 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
      `vehicle.diamondback.century` with its rider seated, not instanceable, and tracks 4 m/s
      over 150 frames (error p95 0.016 m, step p50 2.0 ms with a render every third frame),
      then despawns cleanly. Owed: one `town01_i6_cyclist_inside` run when the GPU is free.
-3. **`walker.pedestrian.NNNN` -> blueprint is unreadable** (step 6): WalkerFactory builds it
-   in its Blueprint graph, so `csb_isaac.walkers.pick` chooses by the id's number. Either a
-   table taken from CARLA's source, or keep the numeric pick.
+3. **`walker.pedestrian.NNNN` -> blueprint** (step 6 found it unreadable from the editor:
+   WalkerFactory builds it in its Blueprint graph, so `csb_isaac.walkers.pick` chose by the
+   id's number). **Read from the package instead (2026-10-22).** The graph compiles each
+   `FPedestrianParameters` to bytecode in `WalkerFactory.uasset`: `EX_StringConst` with the id
+   (`"0001"`), `EX_ObjectConst` with the class (an import), `EX_ByteConst` gender and age.
+   `scripts/walker_factory_ids.py` parses the package's name and import tables (UE 4.26,
+   version 522: 36-byte imports, the editor-only `PackageName` included) and that bytecode:
+   52 ids, `0001` = `BP_Walker_Female1_v1` ... `0052` = `BP_Walker_AsiaM03_G3`, every one a
+   distinct blueprint; CARLA's catalogue agrees where it says (0009 and 0012 children, 0030
+   the police officer, 0049 a child). The table is `csb_isaac/walker_blueprints.json`.
+   `pick`: the id's own blueprint when it is exported; else an exported walker of the same
+   gender and age, then the same age; else the numeric spread as before.
 4. **Perception on the CenterPoint stack**: the crossing walker is `unknown` on the approach
    (20-30 m), so no crossing is predicted, on both backends; `town01_pedestrian` passes in
    SSv2 while the ego touches the walker (Isaac 4 of 5, CARLA too). The scenario's and the
