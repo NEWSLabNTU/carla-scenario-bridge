@@ -260,7 +260,7 @@ impl Coordinator {
         self.backend.set_weather(request)
     }
 
-    pub fn get_weather(&self) -> WeatherReply {
+    pub fn get_weather(&mut self) -> WeatherReply {
         self.backend.get_weather()
     }
 

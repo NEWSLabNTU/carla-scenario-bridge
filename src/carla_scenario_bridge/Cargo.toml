@@ -3,18 +3,24 @@ name = "carla_scenario_bridge"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "SSv2 ZMQ+Protobuf backend adapter for CARLA simulator"
+description = "The scenario bridge: SSv2 on one side, a world server over the world protocol on the other"
 
 [[bin]]
 name = "carla_scenario_bridge"
 path = "src/main.rs"
 
+# Probe or check a world server (roadmap 046).
+[[bin]]
+name = "csb_world_check"
+path = "src/bin/csb_world_check.rs"
+
 [package.metadata.ros]
 install_to_share = ["config", "launch"]
 
 [dependencies]
-# CARLA
-carla.workspace = true
+# The simulator-free core: SSv2's protocol, the world protocol, the policy (roadmap 046). No
+# simulator's client library anywhere in this package's dependency graph.
+csb_core = { path = "../csb_core" }
 
 # ZMQ
 zmq = "0.10"
@@ -25,33 +31,14 @@ rclrs = "0.7"
 csb_interfaces = "*"
 futures = "0.3"
 
-# Protobuf
 prost = "0.13"
-
-# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"
-
-# Lanelet2 maps are OSM XML; roxmltree matches acb_bridge's parser choice
-roxmltree = "0.20"
-
-# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-
-# Error handling
 eyre = "0.6"
 color-eyre = "0.6"
-
-# Math (must match carla-rust)
-nalgebra = "0.34.1"
-
-# Utilities
 ctrlc = { version = "3", features = ["termination"] }
-# `_exit` after a hung CARLA call (roadmap 034): no atexit handlers, no static destructors
-# that could wait on the Traffic Manager mutex the hung thread holds.
+# `_exit` after a request that never returned (roadmap 034).
 libc = "0.2"
-
-[build-dependencies]
-prost-build = "0.13"

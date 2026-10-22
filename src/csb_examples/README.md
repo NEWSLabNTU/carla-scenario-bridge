@@ -54,20 +54,20 @@ Town01's point-cloud map as voxels, generated once per host:
 
 ```bash
 just isaac-msgs && just isaac-world-gen # once: Autoware's messages for Isaac, the Town01 world
-just scenario basic/town01_ego_drive.xosc backend:=isaac   # starts what is missing, then runs
+just scenario basic/town01_ego_drive.xosc sim:=isaac   # starts what is missing, then runs
 ```
 
-`backend:=isaac` brings up the world server (`just isaac-world`, under play_launch with
-respawn, web 8085, logs in `play_log/isaac/`), csb on it (`just run backend:=isaac`, 8084) and
+`sim:=isaac` brings up the world server (`just isaac-world`, under play_launch with
+respawn, web 8085, logs in `play_log/isaac/`), csb on it (`just run sim:=isaac`, 8084) and
 the ego's Autoware (`just ego-isaac`, 8082), each waited for, and leaves them up for the next
 run; a cold host takes about 8 minutes before the scenario starts. `just acceptance <xosc> 3
-backend:=isaac` scores runs with acb's checks and limits from one bag of the ego's domain
-(`scripts/acceptance_bag.py`); `just e2e <xosc> backend:=isaac` also stops the stacks it
+sim:=isaac` scores runs with acb's checks and limits from one bag of the ego's domain
+(`scripts/acceptance_bag.py`); `just e2e <xosc> sim:=isaac` also stops the stacks it
 started. To start them by hand instead (DISPLAY=:8 and `follow:=true` to watch on VNC):
 
 ```bash
 just isaac-world world:=data/carla-autoware-bridge/Town01 &  # world server; `just isaac-health` says when it answers
-just run backend:=isaac &                 # csb on it
+just run sim:=isaac &                 # csb on it
 just ego-isaac &                          # Autoware, domain 1
 ros2 run csb_launch run_suite basic/town01_ego_drive.xosc --output <dir>
 ```
@@ -82,7 +82,7 @@ limits) and run with `managed_ego:=false` and no agent pre-flight:
 
 ```bash
 just isaac-world ego:=none &            # the world server, kinematic ego
-just run backend:=isaac &               # csb on it
+just run sim:=isaac &               # csb on it
 ros2 run csb_launch run_suite isaac/ --output <dir> --no-preflight -- managed_ego:=false
 ```
 

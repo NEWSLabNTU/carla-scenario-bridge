@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Bring up what a scenario on Isaac Sim needs, reusing whatever already runs (roadmap 043):
-# the world server (`just isaac-world`, web CSB_WEB_PORT+5), the simulation side on backend
-# isaac (`just run backend:=isaac`, +4) and the ego's Autoware (`just ego-isaac`, +2),
-# in that order, each waited for. Run by `just scenario|acceptance|e2e ... backend:=isaac`.
+# the world server (`just isaac-world`, web CSB_WEB_PORT+5), the simulation side on Isaac
+# (`just run sim:=isaac`, +4) and the ego's Autoware (`just ego-isaac`, +2), in that
+# order, each waited for. Run by `just scenario|acceptance|e2e ... sim:=isaac` (roadmap 046:
+# each simulator's bring-up is scripts/<sim>_up.sh, with this contract; carla_up.sh is CARLA's).
 #
 #   scripts/isaac_up.sh <map dir> [<world>[,<world>...]]
 #
 # The worlds are what a world server started here preloads (default: the map dir's); an
 # already running one is used as it is. A stack on one of those ports that is not the Isaac
 # kind (the CARLA bridge, `just ego-av`) is refused, not replaced. Stacks started here stay
-# up for the next run; their pids are appended to $ISAAC_UP_STARTED when that is set, so a
+# up for the next run; their pids are appended to $SIM_UP_STARTED when that is set, so a
 # caller can take them down (`just e2e`).
 #
 # Environment, host settings all (from the justfile): ISAAC_PORT, SSV2_PORT, AGENT_PORT,
@@ -40,7 +41,7 @@ stack_on_port() {
     return 1
 }
 cmdline() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
-started() { [ -n "${ISAAC_UP_STARTED:-}" ] && echo "$1" >> "$ISAAC_UP_STARTED"; return 0; }
+started() { [ -n "${SIM_UP_STARTED:-}" ] && echo "$1" >> "$SIM_UP_STARTED"; return 0; }
 # `setsid` so each stack is its own process group (kill -TERM -<pid> takes the whole tree).
 start() {
     local name="$1"; shift
@@ -53,7 +54,7 @@ start() {
 alive() { kill -0 "$1" 2>/dev/null; }
 
 # 1. The world server: ready when it answers Hello.
-if just isaac-health > /dev/null 2>&1; then
+if just world-health sim:=isaac > /dev/null 2>&1; then
     say "world server on $isaac_port is up"
 else
     if pid=$(stack_on_port "$web_isaac"); then
@@ -76,7 +77,7 @@ else
         pid=$(start isaac isaac-world "${world_args[@]}")
     fi
     deadline=$((SECONDS + ${ISAAC_READY_TIMEOUT:-1800}))
-    until just isaac-health > /dev/null 2>&1; do
+    until just world-health sim:=isaac > /dev/null 2>&1; do
         if ! alive "$pid"; then
             say "the world server launch exited before answering; see $logs/isaac.console" \
                 "and $logs/isaac/latest/"
@@ -91,23 +92,23 @@ else
     say "world server on $isaac_port is up ($((SECONDS)) s)"
 fi
 
-# 2. The simulation side, on backend isaac: ready when the bridge and relay listen.
+# 2. The simulation side on Isaac: ready when the bridge and relay listen.
 listening() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
 if pid=$(stack_on_port "$web_bridge"); then
-    if ! cmdline "$pid" | grep -q "backend:=isaac"; then
-        say "the simulation side on $web_bridge (pid $pid) is not on backend isaac:"
+    if ! cmdline "$pid" | grep -q "isaac_simulation.launch.xml"; then
+        say "the simulation side on $web_bridge (pid $pid) is not the Isaac one:"
         say "  $(cmdline "$pid" | cut -c1-200)"
-        say "stop it (kill $pid) and run again, or start it with \`just run backend:=isaac\`"
+        say "stop it (kill $pid) and run again, or start it with \`just run sim:=isaac\`"
         exit 1
     fi
-    say "simulation side (pid $pid) is up on backend isaac"
+    say "simulation side (pid $pid) is up on Isaac"
 else
     if listening "$ssv2_port"; then
         say "something outside play_launch holds port $ssv2_port:"
         ss -ltnp 2>/dev/null | grep ":$ssv2_port " || true
         exit 1
     fi
-    pid=$(start bridge run backend:=isaac)
+    pid=$(start bridge run sim:=isaac)
 fi
 deadline=$((SECONDS + 120))
 until listening "$ssv2_port" && listening "$agent_port"; do

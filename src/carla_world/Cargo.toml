@@ -1,0 +1,35 @@
+[package]
+name = "carla_world"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "The CARLA world server: CARLA behind the world protocol, for the scenario bridge"
+
+[[bin]]
+name = "carla_world"
+path = "src/main.rs"
+
+[package.metadata.ros]
+install_to_share = ["config", "launch"]
+
+[dependencies]
+csb_core = { path = "../csb_core" }
+# CARLA: the version is the workspace's feature (CLAUDE.md, "The CARLA version is a Cargo
+# feature").
+carla.workspace = true
+zmq = "0.10"
+prost = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+roxmltree = "0.20"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+eyre = "0.6"
+color-eyre = "0.6"
+# Math (must match carla-rust)
+nalgebra = "0.34.1"
+ctrlc = { version = "3", features = ["termination"] }
+# `_exit` after a hung CARLA call (roadmap 034): no atexit handlers, no static destructors
+# that could wait on the Traffic Manager mutex the hung thread holds.
+libc = "0.2"

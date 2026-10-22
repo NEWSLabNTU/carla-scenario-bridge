@@ -8,9 +8,9 @@ judgement -- the scenario's verdict, the ego drove and got somewhere, no node di
 acceptance.py's own tracking formulas and limits -- but records the ego's domain once across
 the batch (`tracking_probe.py`'s topics, plus the MRM state: 043 wants none) and scores each
 run from the message stamps afterwards. The stacks must be up or startable: each run is
-`just scenario <xosc> backend:=<backend>`.
+`just scenario <xosc> sim:=<sim>`.
 
-    acceptance_bag.py --scenario x.xosc [--runs 3] [--backend isaac] [--worlds Town01,Town02]
+    acceptance_bag.py --scenario x.xosc [--runs 3] [--sim isaac] [--worlds Town01,Town02]
                       [--domain 1] [--out DIR] [--json FILE]
 
 Exit status is 0 only if every run passed every check.
@@ -122,7 +122,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--scenario", required=True)
     ap.add_argument("--runs", type=int, default=1)
-    ap.add_argument("--backend", default="isaac")
+    ap.add_argument("--sim", default="isaac")
     ap.add_argument("--worlds", default="", help="passed on as `just scenario worlds:=`")
     ap.add_argument("--domain", type=int, default=1, help="the ego's ROS domain")
     ap.add_argument("--out", help="run outputs and the bag (default $CSB_LOG_ROOT/acceptance/<time>)")
@@ -138,13 +138,13 @@ def main() -> int:
                / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")).resolve()
     out.mkdir(parents=True, exist_ok=True)
     scenario = str(Path(args.scenario).resolve())
-    extra = [f"backend:={args.backend}"] + ([f"worlds:={args.worlds}"] if args.worlds else [])
-    print(f"=== {Path(scenario).name} x{args.runs} on {args.backend}, ego domain {args.domain};"
+    extra = [f"sim:={args.sim}"] + ([f"worlds:={args.worlds}"] if args.worlds else [])
+    print(f"=== {Path(scenario).name} x{args.runs} on {args.sim}, ego domain {args.domain};"
           f" output in {out}", flush=True)
 
     # Bring the stacks up (and wait for them) before the recorder joins, through the first
     # run's own bring-up path: `just scenario` of the Isaac backend starts what is missing.
-    if args.backend == "isaac":
+    if args.sim == "isaac":
         maps = os.environ.get("CARLA_MAPS", str(PROJECT / "data/carla-autoware-bridge"))
         map_dir = subprocess.run(["just", "_scenario-map", scenario], capture_output=True,
                                  text=True, env=dict(os.environ, CARLA_MAPS=maps),
@@ -210,7 +210,7 @@ def main() -> int:
             print("    - %s" % w)
     passed = sum(r["ok"] for r in results)
     print(f"\n{passed}/{len(results)} runs passed")
-    doc = {"scenario": scenario, "backend": args.backend, "runs": results,
+    doc = {"scenario": scenario, "sim": args.sim, "runs": results,
            "limits": {"longitudinal": acceptance.MAX_LONGITUDINAL_ERROR,
                       "cross_track": acceptance.MAX_CROSS_TRACK,
                       "localization_gap": acceptance.MAX_LOCALIZATION_GAP}}

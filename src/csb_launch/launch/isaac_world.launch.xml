@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The Isaac Sim world server csb's backend:=isaac drives (roadmaps 037, 038, 043), supervised:
+  The Isaac Sim world server the bridge drives under sim:=isaac (roadmaps 037, 038, 043), supervised:
   respawned when it dies, its output in the launch's log directory. Long-lived like the
-  simulation side: start it once, before `simulation.launch.xml backend:=isaac` and the
+  simulation side: start it once, before `isaac_simulation.launch.xml` and the
   ego's stack (the ego's /clock comes from here).
 
     play_launch launch FLAGS \
@@ -20,8 +20,9 @@
 
   The server answers nothing until every world in world:= is loaded and rendered once (a
   town's first render compiles its materials: minutes the first time on a host). Ready means
-  it answers Hello: `just isaac-health`. A respawned server preloads again; csb's bridge
-  finds its connection gone, exits and is respawned against the new one (exit 75).
+  it answers Hello: `just world-health sim:=isaac`. A respawned server preloads again; the
+  bridge sees a new instance in its next probe, forgets the old one's entities and takes the
+  new one over (roadmap 046). One bridge owns it at a time; it ends with its supervisor.
 -->
 <launch>
   <arg name="ego" default="default"

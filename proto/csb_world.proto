@@ -1,20 +1,37 @@
-// csb's world protocol (roadmap 037): carla-scenario-bridge (`IsaacBackend`, REQ) and the
-// Isaac Sim world server (`src/csb_isaac`, REP), ZMQ on localhost, one Request and one Reply
-// per round trip.
+// The world protocol (roadmaps 037, 046): the one interface between the scenario bridge
+// (`RemoteBackend`, REQ) and a simulator's world server (REP): the Isaac Sim world server
+// (`src/csb_isaac`, on the Python shell `csb_world_server`) and the CARLA world server
+// (`src/carla_world`, on the Rust shell `csb_core::world_server`). ZMQ, one Request and one
+// Reply per round trip.
 //
-// Frames: the server's world frame is right-handed and Z-up, metres and radians (ROS's); csb
-// subtracts the map origin, so the server never sees map coordinates. Poses are at the SSv2
-// entity origin; the declared box sits around it.
+// Frames: the server's world frame is right-handed and Z-up, metres and radians (ROS's); the
+// bridge subtracts the map origin (`<map dir>/<simulator>/world.yaml`), so the server sees
+// map coordinates only when it reads map files itself (`LoadWorld.map_origin`). A simulator
+// with another convention (CARLA: left-handed) converts inside its server. Poses are at the
+// SSv2 entity origin; the declared box sits around it.
 //
-// Lockstep: nothing advances between requests. `Step` applies the poses it carries, runs
-// `substeps` physics steps of `dt` (rendering on the last when `render`), and replies with
-// every entity's state after them and the contacts they had.
+// Lockstep, two requests per SSv2 frame, as SSv2 sends them: `Apply` (SSv2's
+// `UpdateEntityStatus`) hands the server every entity's drive for the coming step and gets
+// back what the server moves itself; `Step` (SSv2's `UpdateFrame`) advances the world and
+// replies with every entity's state after it and the contacts it had. Nothing advances
+// between requests.
 //
-// Bump PROTOCOL_VERSION (csb `backend/isaac`, server `csb_isaac/protocol.py`) on any change a
-// peer of the other version would misread; `Hello` refuses a mismatch with both versions.
-// Version 2 (roadmap 044): tracked bodies (`Motion`, `Twist`, teleport, the kinematic
-// fallback) and contacts per reporting side. Version 3: traffic signals (`LoadWorld.signals`,
-// `SetSignals`).
+// Capabilities (`HelloReply.capabilities`) say what a server does beyond the core (spawn,
+// pose, step, despawn): the bridge never sends a request or a drive a server did not declare,
+// and refuses SSv2's request instead, naming the missing capability.
+//
+// Ownership (roadmap 046): one bridge drives a server at a time. A `Hello` that is not a
+// probe makes its sender the owner when there is none (the server's world is reset), the
+// owner's own `Hello` refreshes its lease, and another client's is refused unless the owner
+// is provably gone (same host, its pid dead or reused) or silent for longer than the lease.
+// Every other request names its client and is refused from a non-owner.
+//
+// Versions: bump PROTOCOL_VERSION (the bridge's `backend::remote`, `csb_world_server`'s
+// `protocol.py`, `csb_core::world_server`) on any change a peer of the other version would
+// misread; `Hello` refuses a mismatch with both versions. 2 (044): tracked bodies, contacts per
+// reporting side. 3: traffic signals. 4 (046): the unified interface -- capabilities, the
+// owner lease, `Apply`, `SetStepTime`, `SetGoal`, the weather, `Release`, the rich spawn and
+// read-back a server that moves its own bodies needs.
 
 syntax = "proto3";
 
@@ -36,6 +53,9 @@ message Quat {
 message Pose {
   Vec3 position = 1;
   Quat orientation = 2;
+  // Roll, pitch, yaw (rad), when the simulator holds its orientation as Euler angles: then
+  // authoritative, so a reader does not round-trip through the quaternion.
+  Vec3 rpy = 3;
 }
 
 enum Kind {
@@ -46,27 +66,92 @@ enum Kind {
   MISC_OBJECT = 4;
 }
 
+// What a server offers beyond the core (named below without the prefix: `SIGNALS` is
+// `CAPABILITY_SIGNALS`).
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  // `LoadWorld.signals` and `SetSignals` drive lamps.
+  CAPABILITY_SIGNALS = 1;
+  // `Motion.AUTOPILOT` bodies and `SetGoal`: the simulator's own traffic drives a vehicle.
+  CAPABILITY_AUTOPILOT = 2;
+  // `Motion.EXTERNAL` vehicles that are not the ego: another client (an agent's vehicle
+  // bridge) drives them through the simulator.
+  CAPABILITY_AGENT_VEHICLES = 3;
+  // `Motion.TRACKED` bodies driven by the bridge's velocity (`EntityPose.twist`).
+  CAPABILITY_TRACKED_MOTION = 4;
+  // `Motion.TRACKED` bodies the server tracks itself, from SSv2's pose and twist
+  // (`EntityPose.pose`, `EntityPose.ssv2_twist`); it reports each one's `TrackingSample`.
+  CAPABILITY_TRACKS_TARGETS = 5;
+  // `ApplyReply.read_back`: the server reads back what it moves (the ego, `EXTERNAL` and
+  // `AUTOPILOT` bodies) as SSv2 wants them, with acceleration and jerk.
+  CAPABILITY_READS_BACK = 6;
+  // `SetWeather`, `GetWeather`.
+  CAPABILITY_WEATHER = 7;
+  // `StepReply.contacts`.
+  CAPABILITY_CONTACTS = 8;
+}
+
+// Who sends a request: what the owner lease is checked against.
+message ClientId {
+  string host = 1;
+  uint32 pid = 2;
+  // The process's start time (`/proc/<pid>/stat` field 22, clock ticks since boot), so a
+  // reused pid is not taken for the owner.
+  uint64 start_time = 3;
+}
+
 message Hello {
   uint32 protocol_version = 1;
+  // A health check: answered, and nothing changes (no ownership taken, no lease refreshed).
+  bool probe = 2;
 }
 
 message HelloReply {
   uint32 protocol_version = 1;
-  // Isaac Sim's version, for the log.
-  string isaac_version = 2;
+  // The simulator's version, for the log.
+  string simulator_version = 2;
+  // `carla`, `isaac`, ...: the map directory's `<name>/world.yaml` is this server's.
+  string simulator_name = 3;
+  repeated Capability capabilities = 4;
+  // The owner after this Hello (unset: none).
+  ClientId owner = 5;
+  // Unique per server process: a bridge that sees it change knows the server restarted and
+  // every entity it had is gone.
+  string instance = 6;
+  // The longest physics step the server takes, s: the bridge splits SSv2's step into
+  // substeps no longer than this (`Step.substeps`, `Step.dt`). 0: the server splits it.
+  double max_physics_dt = 7;
+  // Whether the server can load a world now (CARLA: connected to its server).
+  bool ready = 8;
+  string not_ready_reason = 9;
 }
 
 // Replace the world: every entity is gone after it, the clock goes on.
 message LoadWorld {
-  // A USD stage to reference as the environment; empty is a flat ground plane at z = 0.
-  string usd = 1;
+  // The world, as the server's `world.yaml` names it: a USD stage (Isaac), a town (CARLA).
+  // Empty: the server's default for the map (a flat ground plane; CARLA: the town named by
+  // the map directory).
+  string world = 1;
   // Prims of the environment a body rests on (terrain, road surface). Contacts with them
   // are not reported; the flat ground plane is always one.
   repeated string ground_paths = 2;
-  // The map's traffic signals (roadmap 044), from `<map>/carla/traffic_lights.yaml`: the
+  // The map's traffic signals (roadmap 044), from `<map dir>/traffic_lights.yaml`: the
   // server finds each one's lamp in the world and holds its colour (green until
-  // `SetSignals`, as the CARLA backend sets every mapped light).
+  // `SetSignals`). Sent to a server with `SIGNALS` only.
   repeated Signal signals = 3;
+  // SSv2's map: its directory and Lanelet2 file, for a server that reads map files itself.
+  string map_dir = 4;
+  string lanelet2_map_path = 5;
+  // Where the world frame's origin sits in the map frame, m.
+  Vec3 map_origin = 6;
+  // SSv2's `Initialize`.
+  double step_time = 7;
+  double realtime_factor = 8;
+}
+
+message LoadWorldReply {
+  // The simulation time the first step starts from, ns; monotonic over the server's life.
+  int64 sim_time_ns = 1;
 }
 
 // One traffic light of the map: a Lanelet2 traffic light way and the lamp that shows it.
@@ -101,14 +186,31 @@ message SetSignals {
   repeated SignalState states = 1;
 }
 
-// How a body moves (roadmap 044).
+// How a body moves.
 enum Motion {
-  // Kinematic: posed by every `EntityPose`, pushed by nothing (037's every entity).
+  // Kinematic: posed by every `EntityPose`, pushed by nothing.
   KINEMATIC = 0;
-  // A dynamic body under gravity on the road, driven by the velocity each `EntityPose`
-  // carries (`twist`), as CARLA's `set_target_velocity`: contacts hold it back and push it.
-  // It reports its contacts, and its state carries its velocity.
+  // A dynamic body under gravity following SSv2's pose: by the velocity the bridge computes
+  // (`TRACKED_MOTION`) or by the server's own tracking (`TRACKS_TARGETS`). It reports its
+  // contacts, and its state carries its velocity.
   TRACKED = 1;
+  // The simulator's physics moves it and something else drives it: the ego (its vehicle
+  // bridge), an agent's vehicle (`AGENT_VEHICLES`). Read back, never posed.
+  EXTERNAL = 2;
+  // The simulator's own traffic drives it toward `SetGoal`'s goal (`AUTOPILOT`).
+  AUTOPILOT = 3;
+}
+
+message Axles {
+  // Declared front and rear axle `positionX`, m from the entity origin.
+  double front = 1;
+  double rear = 2;
+}
+
+message Performance {
+  // Declared maxAcceleration and maxDeceleration, m/s2.
+  double max_acceleration = 1;
+  double max_deceleration = 2;
 }
 
 // One entity: a body at `pose` with a box collider, moving as `motion` says. The ego and
@@ -122,17 +224,47 @@ message Spawn {
   Vec3 box_center = 4;
   Vec3 box_dimensions = 5;
   Pose pose = 6;
-  // What the body looks like: a CARLA blueprint id (`vehicle.tesla.model3`), SSv2's asset
-  // key after csb's `blueprint_map`. A server with that vehicle's exported USD renders it on
-  // the entity (render only: the box stays the collider); empty or unknown, the box shows.
-  // Added without a version bump: a server that predates it ignores it.
+  // What the body looks like: SSv2's asset key after the bridge's asset map (a CARLA
+  // blueprint id, `vehicle.tesla.model3`, is what both servers know). Empty or unknown: the
+  // server's default for the kind.
   string model = 7;
   Motion motion = 8;
+  // The name the simulator knows the vehicle by, for whoever attaches to it (the ego's
+  // configured role name, an agent vehicle's entity name); empty for the rest.
+  string role_name = 9;
+  // SSv2's asset key as the scenario wrote it, before the asset map.
+  string asset_key = 10;
+  Axles axles = 11;
+  Performance performance = 12;
+  // Whether `box_center` and `box_dimensions` were declared (else the kind's default).
+  bool box_declared = 13;
+}
+
+// The body a server chose for an entity, for the gap trace's `entity` record.
+message Body {
+  // The simulator's id for it (CARLA's actor id), 0 when it has none but the handle.
+  uint32 sim_id = 1;
+  // The model the body is: a blueprint id, `isaac:box`, ...
+  string model = 2;
+  // The model's own box: its centre and half extents in the body's frame, m; only when
+  // `has_box`.
+  Vec3 box_location = 3;
+  Vec3 box_extent = 4;
+  bool has_box = 8;
+  // From the SSv2 entity origin to the body's origin, entity frame, m, and the body's turn
+  // from the entity's heading, rad (a prop spawned turned).
+  Vec3 origin_offset = 5;
+  double origin_yaw = 6;
+  // The declared box as the server took it (centre from the entity origin; length, width,
+  // height, all 0 when none was declared).
+  Vec3 declared_center = 9;
+  Vec3 declared_dimensions = 10;
 }
 
 message SpawnReply {
   // Nonzero, unique for the server's lifetime.
   uint32 handle = 1;
+  Body body = 2;
 }
 
 message Despawn {
@@ -140,37 +272,101 @@ message Despawn {
 }
 
 message Twist {
-  // World frame, at the entity origin: m/s and rad/s.
+  // World frame, at the entity origin: m/s and rad/s (unless a field says otherwise).
   Vec3 linear = 1;
   Vec3 angular = 2;
 }
 
 // What the next step does with one body. A kinematic body goes to `pose`. A tracked body
-// takes `twist` before the substeps (its pose is ignored unless `teleport`); with `teleport`
-// it is first put at `pose`; with `kinematic` it is kinematic from this step on (csb's
-// fallback for a blocked body, 044) and goes to `pose`.
+// under `TRACKED_MOTION` takes `twist` before the substeps (its pose is ignored unless
+// `teleport`); with `teleport` it is first put at `pose`; with `kinematic` it is kinematic
+// from this step on (the bridge's fallback for a blocked body) and goes to `pose`. A tracked
+// body under `TRACKS_TARGETS` is given SSv2's `pose` and `ssv2_twist`, and the server
+// decides. `EXTERNAL` and `AUTOPILOT` bodies are listed with nothing set, so the server
+// knows SSv2 still has them this frame.
 message EntityPose {
   uint32 handle = 1;
   Pose pose = 2;
   Twist twist = 3;
   bool teleport = 4;
   bool kinematic = 5;
+  // SSv2's twist for the entity, its own frame (x forward): set for a server that tracks
+  // (`TRACKS_TARGETS`) once SSv2's NPC logic has started.
+  Twist ssv2_twist = 6;
 }
 
-message Step {
+// SSv2's `UpdateEntityStatus`: every entity's drive for the coming step.
+message Apply {
   repeated EntityPose poses = 1;
+  bool npc_logic_started = 2;
+  bool overwrite_ego_status = 3;
+}
+
+// One body the server moves, read back as SSv2 wants it (`READS_BACK`).
+message ReadBack {
+  uint32 handle = 1;
+  // World frame, at the entity origin.
+  Pose pose = 2;
+  // The entity's own frame (x forward): m/s, rad/s, m/s2, m/s3.
+  Twist twist = 3;
+  Vec3 accel = 4;
+  double linear_jerk = 5;
+}
+
+// One tracked body's frame, from a server that tracks (`TRACKS_TARGETS`).
+message TrackingSample {
+  uint32 handle = 1;
+  // Held this frame: an ego contact, or another body within the proximity hold.
+  bool held = 2;
+  // Handed to kinematic after a blocked snap: posed by SSv2 from now on.
+  bool kinematic = 3;
+  // This frame's tracking, for the bridge's statistics (the contact report's `tracking`):
+  // `measured` when the server compared the body with SSv2's pose (in-plane `error`, m;
+  // `yaw_error`, degrees, when `has_yaw_error`: not for walkers, whose yaw the simulator
+  // turns), and whether it `snapped`; `missed` when the body could not be read this frame;
+  // `fallback` when it was posed kinematic after a blocked fallback.
+  bool measured = 4;
+  double error = 5;
+  bool has_yaw_error = 6;
+  double yaw_error = 7;
+  bool snapped = 8;
+  bool missed = 9;
+  bool fallback = 10;
+}
+
+message ApplyReply {
+  repeated ReadBack read_back = 1;
+  repeated TrackingSample tracking = 2;
+  // What failed, for SSv2's reply (a teleport, the autopilot); empty when nothing did.
+  string failure = 3;
+  // Contacts the server learned of since the last reply (a simulator that reports them
+  // asynchronously, as CARLA's collision sensors do), belonging to the last step.
+  repeated Contact contacts = 4;
+}
+
+// SSv2's `UpdateFrame`: advance the world by one step.
+message Step {
+  // Unused since 4 (drives come by `Apply`); kept so a v3 field number is not reused.
+  repeated EntityPose poses = 1;
+  // The physics steps of this SSv2 step, when the bridge splits it (`max_physics_dt`).
   uint32 substeps = 2;
   // Physics step, s.
   double dt = 3;
   bool render = 4;
+  // SSv2's own clock, s, for the record.
+  double current_simulation_time = 5;
+  // Whether the reply must carry every entity's state (the bridge records the gap trace,
+  // or reads bodies back itself). A server that has them anyway may always send them.
+  bool want_states = 6;
 }
 
 message EntityState {
   uint32 handle = 1;
-  // The physics engine's pose of the body after the step.
+  // The body's pose after the step, world frame, at the body's origin (`Body.origin_offset`
+  // from the entity origin).
   Pose pose = 2;
-  // The body's velocity after the step, at its origin: a tracked body's and an ego vehicle's
-  // (aib's, from its last substep); unset for kinematic bodies.
+  // The body's velocity after the step, world frame: a tracked body's and an ego vehicle's;
+  // unset for kinematic bodies on a server that does not measure them.
   Twist twist = 3;
 }
 
@@ -178,22 +374,73 @@ message EntityState {
 // once per pair and reporting side: two reporters touching each other are two contacts.
 message Contact {
   uint32 handle = 1;
-  // The other entity's handle; 0 for the environment.
+  // The other entity's handle; 0 for the environment or a body the bridge did not spawn.
   uint32 other = 2;
   // The other prim's path (the environment's, when `other` is 0).
   string other_path = 3;
   // Total normal impulse over the step, N s.
   double impulse = 4;
+  // The simulator's id and type of the other body (CARLA: actor id, type id), when it has
+  // them.
+  uint32 other_sim_id = 5;
+  string other_type = 6;
+  // The server frame and simulation time the contact was seen at, when it knows them.
+  uint64 frame = 7;
+  double sim_time = 8;
 }
 
 message StepReply {
   // Simulation time after the step, s: monotonic over the server's lifetime.
   double sim_time = 1;
-  // Steps served, over the server's lifetime.
+  // The server's frame counter after the step.
   uint64 frame = 2;
   repeated EntityState states = 3;
   repeated Contact contacts = 4;
+  // The simulation time in ns, when the server keeps it so (exact); 0: from `sim_time`.
+  int64 sim_time_ns = 5;
+  // Time the server spent stepping the simulator, s, for the bridge's frame budget.
+  double tick_seconds = 6;
 }
+
+// SSv2's `UpdateStepTime`.
+message SetStepTime {
+  double step_time = 1;
+}
+
+// SSv2's `UpdateEntityGoal` for an `AUTOPILOT` body.
+message SetGoal {
+  uint32 handle = 1;
+  // World frame, entity origin; the last is the goal.
+  repeated Pose waypoints = 2;
+  bool clear = 3;
+  bool has_target_speed = 4;
+  double target_speed = 5;
+}
+
+// A weather: a preset name, or parameters by name (CARLA's `WeatherParameters` fields).
+message Weather {
+  string preset = 1;
+  map<string, double> parameters = 2;
+  // Whether `parameters` were given (else the preset).
+  bool use_parameters = 3;
+}
+
+message SetWeather {
+  Weather weather = 1;
+}
+
+message GetWeather {}
+
+message WeatherReply {
+  bool success = 1;
+  string message = 2;
+  // The weather now in effect, when known.
+  Weather weather = 3;
+}
+
+// The owner leaves: the server undoes what it did for it (entities destroyed, the simulator's
+// settings restored) and has no owner after. The world stays loaded.
+message Release {}
 
 message Shutdown {}
 
@@ -206,16 +453,30 @@ message Request {
     Step step = 5;
     Shutdown shutdown = 6;
     SetSignals set_signals = 7;
+    Apply apply = 8;
+    SetStepTime set_step_time = 9;
+    SetGoal set_goal = 10;
+    SetWeather set_weather = 11;
+    GetWeather get_weather = 12;
+    Release release = 13;
   }
+  // The sender (every request, `Hello` included).
+  ClientId client = 100;
 }
 
 message Reply {
   bool ok = 1;
-  // Why not, when `ok` is false: csb's reply to SSv2 carries it.
+  // Why not, when `ok` is false: the bridge's reply to SSv2 carries it.
   string error = 2;
   oneof reply {
     HelloReply hello = 3;
     SpawnReply spawn = 4;
     StepReply step = 5;
+    ApplyReply apply = 6;
+    LoadWorldReply load_world = 7;
+    WeatherReply weather = 8;
   }
+  // The server cannot go on (a hung simulator call, its simulator gone): it exits after this
+  // reply, and the bridge ends as after a request that timed out.
+  bool fatal = 9;
 }

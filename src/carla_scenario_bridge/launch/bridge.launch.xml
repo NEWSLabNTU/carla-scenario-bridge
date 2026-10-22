@@ -1,65 +1,60 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  carla-scenario-bridge: CARLA's adapter for scenario_simulator_v2 (SSv2's simulation protocol
-  on ZMQ). Long-lived: start it once, run any number of scenarios against it.
+  The scenario bridge (roadmap 046): scenario_simulator_v2's simulation protocol (ZMQ) on one
+  side, one world server over the world protocol on the other: whichever simulator answers
+  at world_endpoint. Long-lived: start it once, run any number of scenarios against it. A
+  simulator's simulation launch includes this with its world server's endpoint
+  (csb_launch carla_simulation.launch.xml, isaac_simulation.launch.xml).
 
-    play_launch launch carla_scenario_bridge bridge.launch.xml [config_file:=...] [carla_host:=...]
-        [weather:=ClearNoon] [gap_trace_dir:=DIR] [npc_contact_sensors:=false]
-        [backend:=isaac] [isaac_request_timeout_seconds:=60] [isaac_render:=true]
+    play_launch launch carla_scenario_bridge bridge.launch.xml world_endpoint:=tcp://127.0.0.1:5591
+        [config_file:=...] [ssv2_port:=5555] [weather:=ClearNoon] [gap_trace_dir:=DIR]
 
-  Serves /carla/set_weather and /carla/get_weather (csb_interfaces) in its ROS domain.
+  The bridge binds the SSv2 port only once a world server has taken it as its owner, and
+  serves /carla/set_weather and /carla/get_weather (csb_interfaces) in its ROS domain for a
+  world server that has weather.
 
-  respawn: a crash inside LibCarla cannot be caught in-process; the launch restarts the
-  bridge, which then resumes its episode clock and reaps what the dead one left
-  (docs/design/failure-and-frame-budget.md). Empty arguments keep the config file's value.
+  respawn: a request the world server does not answer in time, or a reply it marks fatal,
+  ends the bridge with status 75; the launch restarts it, and the new one takes the world
+  server over from the dead one at once (the owner lease). Empty arguments keep the config
+  file's value.
 -->
 <launch>
-  <arg name="backend" default=""
-       description="carla | isaac: the simulator csb drives (roadmap 035); empty keeps the config file's (default carla; isaac is roadmap 037)"/>
-  <arg name="isaac_endpoint" default=""
-       description="backend isaac: the world server's ZMQ endpoint; empty keeps the config file's (default tcp://127.0.0.1:5590)"/>
-  <arg name="isaac_render" default=""
-       description="backend isaac: true | false, render every frame (for watching; an ego with a lidar renders anyway); empty keeps the config file's (default false)"/>
-  <arg name="isaac_request_timeout_seconds" default=""
-       description="backend isaac: how long a world server request may take before the bridge is wedged and exits for a fresh one; empty keeps the config file's (default 10)"/>
-  <arg name="isaac_load_timeout_seconds" default=""
-       description="backend isaac: the same for LoadWorld and an ego's Spawn; empty keeps the config file's (default 120)"/>
+  <arg name="world_endpoint" default=""
+       description="the world server's ZMQ endpoint; empty keeps the config file's (default tcp://127.0.0.1:5590)"/>
+  <arg name="world_render" default=""
+       description="true | false: ask the world server to render every frame (Isaac: for watching; an ego with a lidar renders anyway); empty keeps the config file's (default false)"/>
+  <arg name="world_request_timeout_seconds" default=""
+       description="how long a world server request may take before the bridge is wedged and exits for a fresh one; empty keeps the config file's (default 10)"/>
+  <arg name="world_load_timeout_seconds" default=""
+       description="the same for LoadWorld, an ego's Spawn and the weather; empty keeps the config file's (default 120)"/>
   <arg name="config_file" default="$(find-pkg-share carla_scenario_bridge)/config/bridge_config.yaml"
-       description="bridge_config.yaml (CARLA, blueprint and map aliases, Traffic Manager, agent relay)"/>
-  <arg name="carla_host" default="" description="CARLA host; empty keeps the config file's"/>
-  <arg name="carla_port" default="" description="CARLA RPC port; empty keeps the config file's"/>
+       description="bridge_config.yaml (the world server, the agent relay, asset map, traces)"/>
   <arg name="ssv2_port" default="" description="ZMQ port SSv2 connects to; empty keeps the config file's"/>
   <arg name="agent_relay" default=""
        description="tcp://host:port of the agent relay that drives entities with controller `agent`; empty keeps the config file's (default tcp://localhost:5560)"/>
   <arg name="npc_motion" default=""
-       description="kinematic | tracked: how SSv2-driven NPC vehicles and pedestrians move in CARLA (roadmap 023); empty keeps the config file's (default tracked)"/>
+       description="kinematic | tracked: how SSv2-driven NPCs move (roadmaps 023, 044); empty keeps the config file's (default tracked)"/>
   <arg name="weather" default=""
-       description="CARLA weather preset (ClearNoon, CloudySunset, HardRainNight, ...) applied on connect and after every map load; empty keeps the config file's (default: leave CARLA's). Change at run time with /carla/set_weather"/>
+       description="weather preset (ClearNoon, CloudySunset, HardRainNight, ...) for a world server with weather, kept across map loads; empty keeps the config file's (default: leave the simulator's). Change at run time with /carla/set_weather"/>
   <arg name="gap_trace_dir" default=""
        description="where each episode's gap trace (roadmap 024) is written for gap_oracle; empty keeps the config file's (default: no trace)"/>
-  <arg name="npc_contact_sensors" default=""
-       description="true | false: a collision sensor on every tracked NPC vehicle, for the gap trace and oracle (roadmap 032); empty keeps the config file's (default true)"/>
   <arg name="contact_report_dir" default=""
-       description="where each ego run's CARLA contacts are written for physical_verdict (roadmap 021); 'off' disables; empty keeps the config file's (default ~/.ros/csb/contacts)"/>
+       description="where each ego run's contacts are written for physical_verdict (roadmap 021); 'off' disables; empty keeps the config file's (default ~/.ros/csb/contacts)"/>
 
   <node pkg="carla_scenario_bridge" exec="carla_scenario_bridge" name="carla_scenario_bridge"
         output="screen" respawn="true" respawn_delay="2.0">
     <!-- respawn_delay is a literal: stock `ros2 launch` (Humble) compares it as a float and
          rejects a substitution ('<' not supported between 'str' and 'float'). -->
-    <param name="backend" value="$(var backend)"/>
     <param name="config_file" value="$(var config_file)"/>
-    <param name="isaac_endpoint" value="$(var isaac_endpoint)"/>
-    <param name="isaac_render" value="$(var isaac_render)"/>
-    <param name="isaac_request_timeout_seconds" value="$(var isaac_request_timeout_seconds)"/>
-    <param name="isaac_load_timeout_seconds" value="$(var isaac_load_timeout_seconds)"/>
-    <param name="carla_host" value="$(var carla_host)"/>
-    <param name="carla_port" value="$(var carla_port)"/>
+    <param name="world_endpoint" value="$(var world_endpoint)"/>
+    <param name="world_render" value="$(var world_render)"/>
+    <param name="world_request_timeout_seconds" value="$(var world_request_timeout_seconds)"/>
+    <param name="world_load_timeout_seconds" value="$(var world_load_timeout_seconds)"/>
     <param name="ssv2_port" value="$(var ssv2_port)"/>
     <param name="agent_relay" value="$(var agent_relay)"/>
     <param name="weather" value="$(var weather)"/>
     <param name="npc_motion" value="$(var npc_motion)"/>
     <param name="contact_report_dir" value="$(var contact_report_dir)"/>
     <param name="gap_trace_dir" value="$(var gap_trace_dir)"/>
-    <param name="npc_contact_sensors" value="$(var npc_contact_sensors)"/>
   </node>
 </launch>

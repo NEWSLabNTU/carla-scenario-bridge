@@ -10,7 +10,7 @@
 CSB_RETIRED_ENV=(
     "MAP_NAME|map_path:=<dir> (ego-av, bg-av, ego-isaac, isaac-world-gen) or the map argument (e2e)"
     "CSB_CONFIG_DIR|config_file:=<dir>/bridge_config.yaml (just run)"
-    "CSB_BACKEND|backend:=carla|isaac (just run)"
+    "CSB_BACKEND|sim:=carla|isaac (just run)"
     "WEATHER|weather:=<preset> (just run)"
     "GAP_TRACE_DIR|gap_trace_dir:=<dir> (just run)"
     "NPC_CONTACT_SENSORS|npc_contact_sensors:=<value> (just run)"

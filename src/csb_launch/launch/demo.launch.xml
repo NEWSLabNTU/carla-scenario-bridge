@@ -11,9 +11,12 @@
   <arg name="carla_port" default="2000" />
   <arg name="ssv2_port" default="5555" />
 
-  <include file="$(find-pkg-share csb_launch)/launch/simulation.launch.xml">
+  <arg name="world_port" default="5591" />
+
+  <include file="$(find-pkg-share csb_launch)/launch/carla_simulation.launch.xml">
     <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="world_port" value="$(var world_port)" />
     <arg name="ssv2_port" value="$(var ssv2_port)" />
   </include>
 

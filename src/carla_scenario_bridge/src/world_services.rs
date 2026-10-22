@@ -36,39 +36,16 @@ pub enum WorldCommand {
     GetWeather(oneshot::Sender<WeatherReply>),
 }
 
-/// The answer to either weather service.
-#[derive(Debug, Clone, PartialEq)]
-pub struct WeatherReply {
-    pub success: bool,
-    pub message: String,
-    pub weather: Option<Weather>,
-}
+pub use crate::weather::WeatherReply;
 
-impl WeatherReply {
-    pub fn ok(weather: Weather, message: impl Into<String>) -> Self {
-        Self {
-            success: true,
-            message: message.into(),
-            weather: Some(weather),
-        }
-    }
-
-    pub fn failed(message: impl Into<String>, weather: Option<Weather>) -> Self {
-        Self {
-            success: false,
-            message: message.into(),
-            weather,
-        }
-    }
-
-    fn msg_fields(&self) -> (WeatherMsg, String) {
-        match &self.weather {
-            Some(w) => (
-                to_msg(w),
-                weather::matching_preset(w).unwrap_or_default().to_string(),
-            ),
-            None => (WeatherMsg::default(), String::new()),
-        }
+/// A reply's weather as the message, and the preset it matches.
+fn msg_fields(reply: &WeatherReply) -> (WeatherMsg, String) {
+    match &reply.weather {
+        Some(w) => (
+            to_msg(w),
+            weather::matching_preset(w).unwrap_or_default().to_string(),
+        ),
+        None => (WeatherMsg::default(), String::new()),
     }
 }
 
@@ -189,7 +166,7 @@ async fn set_weather(
             Ok(request) => ask(tx, |r| WorldCommand::SetWeather(request, r)).await,
             Err(e) => WeatherReply::failed(e, None),
         };
-    let (weather, preset) = reply.msg_fields();
+    let (weather, preset) = msg_fields(&reply);
     tracing::info!("{SET_WEATHER} {:?} -> {}", req.preset, reply.message);
     SetWeather_Response {
         success: reply.success,
@@ -201,7 +178,7 @@ async fn set_weather(
 
 async fn get_weather(tx: mpsc::Sender<WorldCommand>) -> GetWeather_Response {
     let reply = ask(tx, WorldCommand::GetWeather).await;
-    let (weather, preset) = reply.msg_fields();
+    let (weather, preset) = msg_fields(&reply);
     GetWeather_Response {
         success: reply.success,
         message: reply.message,
@@ -227,13 +204,13 @@ mod tests {
     #[test]
     fn reply_names_the_matching_preset() {
         let (_, w) = weather::preset("ClearNoon").unwrap();
-        let (_, preset) = WeatherReply::ok(w, "").msg_fields();
+        let (_, preset) = msg_fields(&WeatherReply::ok(w, ""));
         assert_eq!(preset, "ClearNoon");
         let custom = w.with_user_fields([1.0; 9]);
-        let (m, preset) = WeatherReply::ok(custom, "").msg_fields();
+        let (m, preset) = msg_fields(&WeatherReply::ok(custom, ""));
         assert_eq!(preset, "");
         assert_eq!(m.wetness, 1.0);
-        let (_, preset) = WeatherReply::failed("x", None).msg_fields();
+        let (_, preset) = msg_fields(&WeatherReply::failed("x", None));
         assert_eq!(preset, "");
     }
 }

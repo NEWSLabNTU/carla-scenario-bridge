@@ -35,6 +35,8 @@ from isaacsim.core.api import World
 from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics
 
+from csb_world_server.world import World as WorldBase
+
 from . import motion as body_motion, signals as signal_table, surfaces, vehicle_assets
 from . import walkers as walker_gait
 from .catalogue import check_ego, ego_model, load_ego
@@ -97,7 +99,18 @@ def _quat(wxyz):
     return Gf.Quatd(w / n, x / n, y / n, z / n)
 
 
-class IsaacWorld:
+class IsaacWorld(WorldBase):
+    """The world protocol's `World` on Isaac Sim (roadmap 046: `csb_world_server`)."""
+
+    simulator_name = "isaac"
+    capabilities = ("SIGNALS", "TRACKED_MOTION", "CONTACTS")
+    # The bridge splits SSv2's step into PhysX steps of at most Isaac's default 60 Hz.
+    max_physics_dt = 1 / 60
+
+    @property
+    def simulator_version(self):
+        return f"Isaac Sim {self.isaac_version}"
+
     def __init__(self, physics_dt=1 / 60, ego_config=None, ego_domain=None, follow=False,
                  surface_maps=None):
         """`surface_maps`: `{usd realpath: (surfaces.yaml, map origin)}`
@@ -196,7 +209,7 @@ class IsaacWorld:
 
     # --- World -----------------------------------------------------------------------------
 
-    def load(self, usd, ground_paths, signals=()):
+    def load(self, usd, ground_paths, signals=(), request=None):
         self._load_env(usd, ground_paths)
         self._load_signals(list(signals))
 

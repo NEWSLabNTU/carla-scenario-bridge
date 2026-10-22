@@ -1,8 +1,10 @@
-"""csb's Isaac Sim world server (roadmap 037): `python -m csb_isaac.world_server`.
+"""The Isaac Sim world server (roadmaps 037, 046): `python -m csb_isaac.world_server`.
 
-Starts Isaac Sim (headless unless `--display`), builds the world, and serves csb's world
-protocol on a ZMQ REP socket bound to localhost until csb sends `Shutdown` or the process
-gets SIGINT/SIGTERM. Run it through `just isaac-world`, which sets Isaac's environment.
+Starts Isaac Sim (headless unless `--display`), builds the world, and serves the world
+protocol on a ZMQ REP socket bound to localhost (the shell `csb_world_server`, which holds the
+owner lease) until a client sends `Shutdown` or the process gets SIGINT/SIGTERM; it also
+ends when its parent does (a supervisor killed hard). Run it through `just isaac-world`, which
+sets Isaac's environment.
 
     python -m csb_isaac.world_server --port 5590 [--display :8] [--ego <aib ego config>]
         [--world <world>[,<world>...]] [--follow]
@@ -17,7 +19,6 @@ world its surface map, checked here before Isaac starts.
 import argparse
 import logging
 import os
-import signal
 import sys
 import time
 
@@ -78,11 +79,16 @@ def main(argv=None):
                     help="the ego's ROS domain, over the ego config's (the ego stack's "
                          "ROS_DOMAIN_ID); 0: the config's")
     args = ap.parse_args(argv)
+    from csb_world_server import lifetime
+    from csb_world_server.server import bind, run
+
+    lifetime.die_with_parent()
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = logging.getLogger("csb_isaac")
 
     preload = preload_list(args.world)
+    socket = bind(args.port)
     from .surface_layer import register
     from .surfaces import SurfaceError
 
@@ -113,36 +119,17 @@ def main(argv=None):
                       window_height=1080)
     app = SimulationApp(config)
 
-    import zmq
-
-    from .server import WorldServer, serve
     from .world import IsaacWorld
 
     world = IsaacWorld(ego_config=args.ego or None, ego_domain=args.ego_domain or None,
                        follow=bool(args.display and args.follow), surface_maps=surface_maps)
-    # The first listed is preloaded last, so it is the one loaded when csb first asks.
+    # The first listed is preloaded last, so it is the one loaded when the bridge first asks.
     for usd in reversed(preload):
         world.preload(usd)
-    server = WorldServer(world)
-    socket = zmq.Context.instance().socket(zmq.REP)
-    socket.bind(f"tcp://127.0.0.1:{args.port}")
-    stop = {"now": False}
-
-    def on_signal(signum, _frame):
-        log.info("signal %d: stopping", signum)
-        stop["now"] = True
-
-    signal.signal(signal.SIGINT, on_signal)
-    signal.signal(signal.SIGTERM, on_signal)
-    log.info("Isaac Sim %s up in %.1f s; world server ready on tcp://127.0.0.1:%d",
-             world.isaac_version, time.monotonic() - started, args.port)
+    log.info("Isaac Sim %s up in %.1f s", world.isaac_version, time.monotonic() - started)
     try:
-        serve(socket, server, should_stop=lambda: stop["now"] or not app.is_running())
+        run(world, socket, should_stop=lambda: not app.is_running())
     finally:
-        log.info("world server stopping after %d step(s), sim time %.3f s",
-                 server.frame, server.sim_time)
-        socket.close(linger=0)
-        world.close()
         app.close()
 
 

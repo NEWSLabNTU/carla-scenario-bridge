@@ -1,0 +1,146 @@
+# The CARLA world server's configuration (roadmap 046): CARLA behind the world protocol.
+#
+# carla_world reads the file its ROS parameter `config_file` names (default this installed
+# copy); per-map files (blueprint_boxes_<version>.yaml) sit beside it. Precedence: ROS
+# parameters (carla_host, carla_port, ssv2_port, port) > environment (CARLA_HOST, CARLA_PORT,
+# SSV2_PORT) > this file > built-in default. A missing file is fine; a malformed one is fatal,
+# and so is a key that belongs to the bridge's bridge_config.yaml.
+
+# CARLA connection. Overridden by CARLA_HOST / CARLA_PORT.
+carla:
+  host: "localhost"
+  port: 2000
+  # Initialize waits this long for a CARLA that is gone (restarting) before failing the
+  # scenario. A restart with Vulkan pinned to the NVIDIA card serves RPC in ~50 s; 120 is
+  # twice that, and a scenario started with no CARLA at all fails in two minutes. Raise it
+  # on a host where CARLA takes longer (a cold headless start at Epic took 182 s).
+  # docs/design/failure-and-frame-budget.md
+  reconnect_wait_seconds: 120
+# SSv2's port, from which the sensor-release sockets below are derived (+1, +2) when left at
+# their defaults: acb derives the same two from it. Overridden by SSV2_PORT.
+ssv2:
+  port: 5555
+
+# The scenario ego.
+ego:
+  # The name the simulator gives the ego vehicle (CARLA's role_name): its vehicle bridge
+  # finds it by this. The CARLA world server's carla_world.yaml must say the same.
+  role_name: "hero"
+# SSv2 asset key -> CARLA blueprint.
+#
+# SSv2 asset keys are not CARLA blueprint names in general. A key that already names a
+# blueprint (e.g. vehicle.volkswagen.t2) passes straight through and needs no entry here;
+# anything else needs a translation, or the spawn falls back to a default for its kind and
+# warns.
+blueprint_map:
+  sample_vehicle: "vehicle.tesla.model3"
+# Body colour per entity, keyed by the role_name it spawns with (the ego's role_name above,
+# an agent's entity name): CARLA's `color` attribute, "R,G,B" with 0-255 values. Unlisted
+# entities, and blueprints without the attribute, keep the blueprint's default colour.
+#   actor_colors:
+#     hero: "255,110,0"
+actor_colors: {}
+
+# Map directory name -> CARLA town.
+#
+# The town is normally recovered from the scenario's lanelet2_map_path, whose final directory
+# is the town name. Add an entry only for maps that break that convention.
+# data/carla-autoware-bridge/Town10 is CARLA 0.9.16's Town10HD (CARLA matches a map name
+# exactly, so "Town10" alone does not load).
+map_alias:
+  Town10: "Town10HD"
+#  kashiwanoha: "Town01"
+
+# NPC contact sensors (roadmap 032 step 5): a sensor.other.collision on every tracked NPC
+# vehicle (not walkers), so an NPC's contacts with the static world and other NPCs -- which
+# the ego's sensor cannot see -- reach the bridge's gap trace (contact lines with `subject`),
+# the oracle (low-priority G2) and the contact report's `npc_contacts`. Never the ego's
+# `contacts`, so run_suite's carla_contact verdict is unchanged. Needs collision_monitor.
+# Unset = on. The ROS parameter / launch arg `npc_contact_sensors` overrides it.
+# npc_contact_sensors: true
+
+# Telling the sensor bridges before we despawn something.
+#
+# acb attaches sensors to the vehicles this bridge spawns and listens to their streams, so
+# it owns those stream sessions. Despawning the vehicle destroys the sensors with it, and a
+# sensor destroyed while still being listened to leaves that client retrying a dead stream
+# forever -- CARLA 0.9.16 answers at ~48,000 "Invalid session: no stream available with id
+# N" a second, until the server segfaults.
+#
+# Neither side can fix that alone: the listener cannot unsubscribe after the fact, and this
+# bridge cannot stop a stream it never subscribed to. So we announce first and wait briefly.
+# See src/autoware_carla_bridge/docs/issues/015-*.
+sensor_release:
+  enabled: true
+  # Ours to bind. Sensor bridges connect to these; acb takes the same two as ROS
+  # parameters (release_notify_endpoint, release_ack_endpoint). Left at these defaults
+  # they follow the launch's ssv2_port (+1, +2; `just run` passes SSV2_PORT), as acb's
+  # launch derives them from the same port.
+  notify_endpoint: "tcp://127.0.0.1:5556"
+  ack_endpoint: "tcp://127.0.0.1:5557"
+  # Paid once per despawned entity that nobody acknowledges -- an entity with no sensor
+  # bridge, which is every entity in a run with no Autoware. Long enough for a local round
+  # trip, short enough not to matter to a scenario.
+  timeout_ms: 300
+
+# CARLA's view of the ego's collisions (roadmap 014, gap 3). Default true.
+#
+# Attaches a sensor.other.collision to the ego at spawn. Every contact is logged at WARN --
+# at most once a second per other actor, with the SSv2 frame, the other actor's SSv2 name
+# (or CARLA type and id), and the normal impulse -- and at the end of the run (ego despawn
+# or the next Initialize) an INFO table lists each other actor's first frame, contact count
+# and max impulse.
+#
+# DIAGNOSTIC ONLY. SSv2's CollisionCondition stays the verdict and nothing here fails a
+# request. SSv2 judges collisions from declared bounding boxes; CARLA from PhysX colliders
+# (tracked NPCs are physics bodies, kinematic ones keep theirs), so the two can disagree.
+# SSv2 does not report its verdict to the simulator; the bridge's contact report lets the
+# runner join the two.
+collision_monitor: true
+
+# CARLA ticks per SSv2 frame. 2 is the default: the SSv2 frame is delivered in two CARLA
+# ticks at half the step, so the scenario's timeline is unchanged while sensors and control
+# are serviced twice as often. Set to 1 for the historical one-tick-per-frame behaviour.
+#
+# Why 2. The ego IMU fires once per tick, so at a 0.1 s frame its samples sit 100 ms apart
+# against gyro_odometer's 0.2 s tolerance -- one dropped sample trips it, and the resulting
+# localization wobble is what made every run after a stack's first fail about half the time.
+# Interleaved A/B across five stacks: later runs pass 7 of 7 real drives at 2 against 2 of 10
+# at 1, with lateral tracking spread 0.016-0.135 against 0.211-1.564 and no overlap
+# (p = 0.003). See src/autoware_carla_bridge/docs/issues/016.
+#
+# Raising this divides the CARLA time step and ticks that many times per frame, so the
+# scenario's timeline is unchanged while control commands are picked up more often. Autoware
+# publishes control at 20 Hz on its own clock and nothing synchronises it to the frame, so a
+# command waits up to a full step before it can take effect -- measured at ~200 ms end to
+# end, of which one tick is irreducible. At 2 substeps that worst-case wait halves.
+#
+# Costs, before turning it on:
+#   - sensors configured to publish per frame rather than on a timer fire twice as often.
+#     The ego LiDAR is one (sensor_tick: 0.0), so its point clouds double to 20 Hz. That
+#     suits the sensor -- rotation_frequency is 20 Hz, so each scan becomes exactly one
+#     rotation instead of two -- but it doubles the point cloud rate into Autoware.
+#   - physics runs at the finer delta: more accurate, more expensive.
+#
+# See src/autoware_carla_bridge/docs/issues/016 for the latency measurements.
+substeps: 2
+# Target CARLA tick, which takes precedence over `substeps`: the bridge ticks
+# round(step_time / carla_tick_seconds) times per SSv2 frame (at least once), so the tick
+# stays 0.05 s whatever global_frame_rate SSv2 runs at -- 2 ticks per frame at 10 Hz, 1 at
+# 20 Hz. The ego LiDAR fires per tick at a 20 Hz rotation, so a 0.05 s tick is one full
+# sweep per scan; a fixed `substeps: 2` at 20 Hz would give 0.025 s ticks and half-rotation
+# scans at 40 Hz. Remove this line to go back to the fixed `substeps` above.
+carla_tick_seconds: 0.05
+# CARLA's Traffic Manager drives every scenario entity whose controller is
+# `simulator_autopilot`. Its port follows CARLA's (CARLA_PORT + 6000, so 8000 for 2000)
+# unless set here to something else than 8000. The rest:
+# `simulator_autopilot` (docs/design/scenario-authoring.md). csb runs it in its own process
+# and ticks it with the world, synchronously; `seed` is applied at every Initialize so the
+# simulator-driven traffic repeats run to run.
+# `serve: true` (or CSB_TM_SERVE=1) also serves it to other clients: it starts with the
+# synchronous world and stays for the bridge's lifetime, so a process that follows csb's
+# frames can drive vehicles through it as a TM-Client, stepped by csb's tick.
+traffic_manager:
+  port: 8000
+  seed: 2017
+  serve: false

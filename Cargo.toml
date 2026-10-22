@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "src/csb_core",
     "src/carla_scenario_bridge",
+    "src/carla_world",
 ]
 
 [workspace.dependencies]

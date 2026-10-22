@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The CARLA world server (roadmap 046): CARLA behind the world protocol, on 127.0.0.1:<port>.
+  Included by csb_launch carla_simulation.launch.xml, beside the bridge and the agent relay,
+  so the three share one launch, one process group and one stop.
+
+    play_launch launch carla_world carla_world.launch.xml [port:=5591] [carla_host:=localhost]
+        [carla_port:=2000] [ssv2_port:=5555] [config_file:=...] [npc_contact_sensors:=false]
+
+  One per CARLA server: a second against the same CARLA, or on the same port, exits 1 at once
+  (it holds /tmp/swb-locks/carla-<host>-<port>.lock and binds its port first). A hung CARLA
+  call or a CARLA that went away ends it with status 75, and the launch restarts it; it then
+  waits for CARLA, answering the bridge's probes meanwhile. Empty arguments keep the config
+  file's value.
+-->
+<launch>
+  <arg name="port" default="5591" description="the world protocol's REP port on 127.0.0.1"/>
+  <arg name="config_file" default="$(find-pkg-share carla_world)/config/carla_world.yaml"
+       description="carla_world.yaml (CARLA, blueprints, map aliases, ticks, Traffic Manager, sensor release)"/>
+  <arg name="carla_host" default="" description="CARLA host; empty keeps the config file's"/>
+  <arg name="carla_port" default="" description="CARLA RPC port; empty keeps the config file's"/>
+  <arg name="ssv2_port" default=""
+       description="SSv2's port, from which the sensor-release sockets acb connects to follow (+1, +2); empty keeps the config file's"/>
+  <arg name="npc_contact_sensors" default=""
+       description="true | false: a collision sensor on every tracked NPC vehicle, for the gap trace and oracle (roadmap 032); empty keeps the config file's (default true)"/>
+
+  <node pkg="carla_world" exec="carla_world" name="carla_world"
+        output="screen" respawn="true" respawn_delay="2.0">
+    <param name="port" value="$(var port)"/>
+    <param name="config_file" value="$(var config_file)"/>
+    <param name="carla_host" value="$(var carla_host)"/>
+    <param name="carla_port" value="$(var carla_port)"/>
+    <param name="ssv2_port" value="$(var ssv2_port)"/>
+    <param name="npc_contact_sensors" value="$(var npc_contact_sensors)"/>
+  </node>
+</launch>
