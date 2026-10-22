@@ -496,6 +496,25 @@ Step 5's run with the plain yellow box failed the same way (and then SSv2 failed
 the walker does not cause it. Why CenterPoint loses the class at that range on Isaac's lidar
 and not on CARLA's is left open (the lidar's returns off a skinned mesh, intensity).
 
+## Step 7: F
+
+**Plan** (2026-10-22). One run of every acceptance scenario on each backend with the final
+code (steps 3-6 ran the A-D scenarios twice each as they were built), SSv2's verdict side by
+side, and the oracle's physical verdict. One backend at a time.
+
+1. **Isaac, Town01** (the stacks steps 3-6 used: CenterPoint ego at `max_velocity:=11.11`):
+   `basic/town01_*` except `town01_simulator_autopilot`, `demo/incidents/*`, `UC-ACC-001`
+   and `UC-AEB-001` (one variant each, as in steps 3 and 6).
+2. **Isaac, the other towns**: Isaac stacks stopped, then `town02_episode_change`,
+   `town02_ego_drive`, `town03_ego_drive`, `town05_ego_drive`, `town10_ego_drive`, each with
+   `just scenario <xosc> backend:=isaac` bringing up the town's stacks (`isaac_up.sh`), which
+   are stopped before the next town.
+3. **CARLA**: Isaac stacks stopped and reaped, our CARLA simulation side back on 8084
+   (`just run weather:=ClearNoon`), then the same list on `just ego-av` (Town01; for the
+   other towns an ego stack on that town's map), the 043 routes scored for tracking with
+   `just acceptance <xosc> 1` as 043 scored them on Isaac. `town10_ego_drive` is the first
+   CARLA run through the `Town10: Town10HD` alias.
+
 ## Acceptance
 
 - `town01_traffic_light`, `basic/*` (except `town01_simulator_autopilot`, deferred),
