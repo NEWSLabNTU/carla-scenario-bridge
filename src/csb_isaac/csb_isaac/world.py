@@ -54,6 +54,8 @@ GROUND_PLANE = "/World/defaultGroundPlane"
 # over the frame's substeps; a body held back by a contact is held by the contact, not this.
 TRACKED_MATERIAL = "/World/Looks/csbTrackedBody"
 TRACKED_FRICTION = float(os.environ.get("CSB_TRACKED_FRICTION", "0.1"))
+# Where a despawned tracked body spends its last step (`despawn`), m.
+BURY_Z = -1000.0
 # Traffic signals (roadmap 044 B): the lamps' bulbs in a CARLA town's SimReady export, by
 # the colour they show (nested Green -> Yellow -> Red), and the materials their lenses wear.
 SIGNAL_ID_ATTR = "omni:simready:signalID"
@@ -157,6 +159,7 @@ class IsaacWorld:
         # Tracked bodies spawned since the last step: not in PhysX until it simulates, so
         # their first drive goes through USD (pose, initial velocity), read at their creation.
         self.fresh = set()
+        self.buried = []  # despawned tracked bodies' paths, deleted after the next step
         self.walking = {}  # handle -> a pedestrian's walker: its cycles, SkelAnimation, gait (044 C)
         self.walker_cycles = {}  # walker id -> its cycles, loaded once
         self.ground_cache = {}  # prim path -> whether it is ground (contacts)
@@ -253,7 +256,10 @@ class IsaacWorld:
                     if not mesh.IsA(UsdGeom.Mesh):
                         continue
                     mat = UsdShade.MaterialBindingAPI(mesh).ComputeBoundMaterial()[0]
-                    if mat and "streetlight" in mat.GetPrim().GetName().lower():
+                    # CARLA's lens material, or ours when the world stayed loaded since an
+                    # earlier LoadWorld bound it.
+                    if mat and ("streetlight" in mat.GetPrim().GetName().lower()
+                                or mat.GetPath().HasPrefix(Sdf.Path(SIGNAL_LOOKS))):
                         out[colour].append(mesh)
         return out
 
@@ -356,6 +362,10 @@ class IsaacWorld:
 
     def spawn(self, handle, name, kind, subtype, center, dims, pose, model="", motion="KINEMATIC"):
         path = f"{ENTITIES}/e{handle}"
+        if path in self.buried:  # a handle used again before its old body's last step
+            self.tracked_view = None
+            self.stage.RemovePrim(path)
+            self.buried.remove(path)
         if kind == "EGO" and self.ego_config is not None:
             from aib.isaac.ego import Ego
 
@@ -621,29 +631,47 @@ class IsaacWorld:
             # UsdPhysics' angular velocity is in degrees per second.
             body.GetAngularVelocityAttr().Set(Gf.Vec3f(*(math.degrees(c) for c in w)))
 
-    def _to_kinematic(self, handle):
-        """csb's fallback: the tracked body is kinematic from now on."""
-        path, _, _ = self.entities[handle]
+    def _to_kinematic(self, handle, path=None):
+        """csb's fallback: the tracked body is kinematic from now on (`path` given: it is
+        being despawned)."""
+        quiet = path is not None
+        path = path or self.entities[handle][0]
         UsdPhysics.RigidBodyAPI(self.stage.GetPrimAtPath(path)).GetKinematicEnabledAttr().Set(True)
         del self.tracked[handle]
         self.fresh.discard(handle)
         self.tracked_view = None
-        log.info("%s: tracked body handed to kinematic (csb's fallback)", path)
+        if not quiet:
+            log.info("%s: tracked body handed to kinematic (csb's fallback)", path)
 
     def despawn(self, handle):
-        path, _, _ = self.entities.pop(handle)
+        path, translate, _ = self.entities.pop(handle)
         self.by_path.pop(path, None)
         ego = self.egos.pop(handle, None)
         if ego is not None:
             ego.close()
         self.reporters.discard(handle)
-        if self.tracked.pop(handle, None) is not None:
-            # Released before the prim goes: a prim deleted under a live rigid body view
-            # invalidates the whole simulation view (044 step 3).
-            self.tracked_view = None
-        self.fresh.discard(handle)
         self.walking.pop(handle, None)
+        if handle in self.tracked:
+            # A dynamic body deleted where it stands stays in the RTX lidar's scene, at its
+            # last pose: Autoware saw every despawned tracked NPC as an obstacle for the rest
+            # of the server's life (044 step 7). So it goes kinematic, under the world, for
+            # one step, and is deleted after it (`_bury`).
+            self._to_kinematic(handle, path)
+            translate.Set(Gf.Vec3d(0.0, 0.0, BURY_Z))
+            UsdGeom.Imageable(self.stage.GetPrimAtPath(path)).MakeInvisible()
+            self.buried.append(path)
+            return
+        self.fresh.discard(handle)
         self.stage.RemovePrim(path)
+
+    def _bury(self):
+        """Delete the tracked bodies `despawn` moved under the world, now that a step has
+        moved them there."""
+        if self.buried:
+            self.tracked_view = None
+            for path in self.buried:
+                self.stage.RemovePrim(path)
+            self.buried = []
 
     def step(self, drives, substeps, dt, render, sim_time=0.0):
         """`drives`: `{handle: server.Drive}`. `sim_time`: the server's clock at the start of
@@ -692,6 +720,7 @@ class IsaacWorld:
         if self.fresh:  # simulated once: PhysX has them now
             self.fresh.clear()
             self.tracked_view = None
+        self._bury()
         states = []
         tracked = self._tracked_states()
         for handle, (path, _, _) in self.entities.items():
