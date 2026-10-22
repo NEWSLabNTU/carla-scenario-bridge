@@ -73,7 +73,7 @@ enum SpawnKind {
     /// A scenario NPC vehicle. SSv2 computes its path and teleports it each frame.
     Npc,
     /// A scenario NPC vehicle whose controller is `simulator_autopilot`: CARLA PhysX moves
-    /// it, Traffic Manager steers it, and SSv2 adopts the pose csb reads back (`autopilot`).
+    /// it, Traffic Manager steers it, and SSv2 adopts the pose swb reads back (`autopilot`).
     AutopilotNpc,
     /// A scenario pedestrian. Also teleported -- SSv2's behaviour plugins own the walk.
     Pedestrian,
@@ -81,7 +81,7 @@ enum SpawnKind {
     MiscObject,
     /// A scenario vehicle whose controller is `agent`: CARLA PhysX moves it under the
     /// control of the autopilot behind the agent registered as its entity name (typically
-    /// a full Autoware); SSv2 adopts the pose csb reads back (`agent_link`).
+    /// a full Autoware); SSv2 adopts the pose swb reads back (`agent_link`).
     AgentVehicle,
 }
 
@@ -463,7 +463,7 @@ impl std::fmt::Display for TickFailure {
     }
 }
 
-/// How long csb waits at connect for a frame of a world CARLA ticks by itself, to write
+/// How long swb waits at connect for a frame of a world CARLA ticks by itself, to write
 /// the epoch marker (`write_epoch_marker_at_connect`). One tick of a loaded server is well
 /// under a second.
 const CONNECT_FRAME_WAIT: Duration = Duration::from_secs(2);
@@ -474,7 +474,7 @@ fn carla_state_for_log(world: &World) -> String {
     let world = world.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new()
-        .name("csb-hung-state".into())
+        .name("swb-hung-state".into())
         .spawn(move || {
             let frame = world
                 .snapshot()
@@ -550,7 +550,7 @@ struct Census {
 }
 
 /// The test-only spawn timeout hook's variable (034 step 4).
-const SPAWN_TIMEOUT_ENV: &str = "CSB_TEST_SPAWN_TIMEOUT_MS";
+const SPAWN_TIMEOUT_ENV: &str = "SWB_TEST_SPAWN_TIMEOUT_MS";
 
 fn spawn_timeout_hook_from_env() -> Option<Duration> {
     parse_spawn_timeout_hook(std::env::var(SPAWN_TIMEOUT_ENV).ok().as_deref())
@@ -563,7 +563,7 @@ fn parse_spawn_timeout_hook(value: Option<&str>) -> Option<Duration> {
 
 /// How far above the id watermark a timed-out spawn's actor is looked for: actor ids are
 /// handed out one per actor server-wide, so this covers every actor anybody (acb's sensors,
-/// other clients) created since the last id csb saw.
+/// other clients) created since the last id swb saw.
 const LATE_ACTOR_ID_MARGIN: u32 = 4096;
 
 /// CARLA's error for a spawn blocked at its point (`ActorSpawnResult.cpp`).
@@ -624,7 +624,7 @@ impl spawn_ladder::SpawnBackend for CarlaSpawn<'_> {
         let ids: Vec<u32> = (watermark.saturating_add(1)
             ..=watermark.saturating_add(LATE_ACTOR_ID_MARGIN))
             .collect();
-        // Through a client of its own: csb's answers from its actor cache first, which still
+        // Through a client of its own: swb's answers from its actor cache first, which still
         // holds actors destroyed since -- the previous scenario's `hero` was adopted that way
         // in the first live run (034 step 4 results).
         let probe = self
@@ -682,9 +682,9 @@ enum FrameAction {
 /// server is gone or hung, and the next call will wait just as long.
 const SLOW_FAILURE: Duration = Duration::from_secs(5);
 
-/// The `role_name` prefix csb puts on every actor it spawns for an SSv2 entity that has no
+/// The `role_name` prefix swb puts on every actor it spawns for an SSv2 entity that has no
 /// configured role, so a later bridge can tell them from everybody else's actors.
-const ENTITY_ROLE_PREFIX: &str = "csb_entity:";
+const ENTITY_ROLE_PREFIX: &str = "swb_entity:";
 
 fn entity_role_name(entity: &str) -> String {
     format!("{ENTITY_ROLE_PREFIX}{entity}")
@@ -725,7 +725,7 @@ fn agent_role_conflict(entity: &str, ego_role: &str) -> Option<String> {
         ));
     }
     if is_entity_role_name(entity) {
-        return Some(format!("'{entity}' collides with csb's own entity marks"));
+        return Some(format!("'{entity}' collides with swb's own entity marks"));
     }
     None
 }
@@ -1056,7 +1056,7 @@ pub struct CarlaBackend {
     /// actor: physics off, teleported to SSv2's pose every frame for the rest of the
     /// episode, flagged `kinematic` in the gap trace.
     kinematic_fallback: HashSet<u32>,
-    /// The box of every physics body csb spawned (ego, tracked NPCs, simulator- and
+    /// The box of every physics body swb spawned (ego, tracked NPCs, simulator- and
     /// agent-driven vehicles), by actor: what a tracked NPC's proximity hold measures
     /// against (roadmap 032 N2).
     body_boxes: HashMap<u32, BodyBox>,
@@ -1070,7 +1070,7 @@ pub struct CarlaBackend {
     /// The tick gate (`tick_gate`, [`crate::tick_gate`]): a follower that joined it is
     /// waited for before every tick.
     tick_gate: Option<crate::tick_gate::TickGate>,
-    /// Test-only: every spawn RPC's timeout (`CSB_TEST_SPAWN_TIMEOUT_MS`, 034 step 4), to
+    /// Test-only: every spawn RPC's timeout (`SWB_TEST_SPAWN_TIMEOUT_MS`, 034 step 4), to
     /// force the timed-out spawn that is then adopted. `None` in every product run.
     spawn_timeout_hook: Option<Duration>,
     /// Set when a tick never returned: the reason, for the error every later request gets
@@ -1089,7 +1089,7 @@ pub struct CarlaBackend {
     episode_clock: EpisodeClock,
     /// Why the world's epoch marker is still to be checked against `episode_clock`
     /// (`epoch_marker`), if it is: set at start-up and on every episode change, cleared once
-    /// csb could see the world's actors.
+    /// swb could see the world's actors.
     epoch_marker_due: Option<&'static str>,
     /// Lanelet2 signal ID to OpenDRIVE sign ID for the loaded town.
     signal_map: SignalMap,
@@ -1107,7 +1107,7 @@ pub struct CarlaBackend {
     /// different one is talking to a restarted server (or a world someone else loaded): the
     /// old actor ids mean nothing there and the old episode's clock has ended.
     world_id: Option<u64>,
-    /// Where the episode clock is recorded for the next csb process (clock_store).
+    /// Where the episode clock is recorded for the next swb process (clock_store).
     clock_path: PathBuf,
     /// Generator mode: write `<map dir>/traffic_lights.yaml` instead of checking it.
     generate_signal_table: bool,
@@ -1134,7 +1134,7 @@ pub struct CarlaBackend {
     miss_watch: npc_tracking::MissWatch,
     /// CARLA's Traffic Manager, created on the first `simulator_autopilot` spawn. LibCarla
     /// ticks it inside `world.tick()` when it is synchronous (verified on 0.9.16: a
-    /// registered vehicle drives with only world ticks), so csb stays the only ticker.
+    /// registered vehicle drives with only world ticks), so swb stays the only ticker.
     traffic_manager: Option<carla::traffic_manager::TrafficManager>,
     /// The loaded town's map and lane graph, for routing simulator-driven vehicles. Built
     /// on first use, dropped when the world changes.
@@ -1148,10 +1148,10 @@ pub struct CarlaBackend {
     agent_link: Option<AgentLink>,
     /// The entities agents drive (controller `agent`), by SSv2 name = CARLA role_name.
     agent_vehicles: HashSet<String>,
-    /// Where their role names are recorded for a later csb's reaper (`agent_link`).
+    /// Where their role names are recorded for a later swb's reaper (`agent_link`).
     agent_ledger: PathBuf,
     /// The weather the user asked for -- the `weather` parameter, then the last
-    /// `/carla/set_weather` -- with a label for logs. Re-applied after every map load and
+    /// `/scenario_world_bridge/set_weather` -- with a label for logs. Re-applied after every map load and
     /// reconnect, because CARLA resets it with the world. `None`: leave CARLA's.
     requested_weather: Option<(String, Weather)>,
     /// Measured blueprint boxes for this CARLA version (roadmap 022); `None` spawns as
@@ -1471,7 +1471,7 @@ impl CarlaBackend {
             .map_err(|e| eyre::eyre!("get weather: {e}"))
     }
 
-    /// `/carla/set_weather`: remember the request, apply it, and report what CARLA holds
+    /// `/scenario_world_bridge/set_weather`: remember the request, apply it, and report what CARLA holds
     /// afterwards. Remembered even when applying fails (CARLA unreachable), so the next
     /// reconnect applies it.
     pub fn set_weather(&mut self, request: WeatherRequest) -> WeatherReply {
@@ -1499,7 +1499,7 @@ impl CarlaBackend {
         }
     }
 
-    /// `/carla/get_weather`.
+    /// `/scenario_world_bridge/get_weather`.
     pub fn get_weather(&self) -> WeatherReply {
         match self.weather() {
             Ok(w) => {
@@ -1599,7 +1599,7 @@ impl CarlaBackend {
     /// them standing where the next scenario drives (roadmap 016).
     ///
     /// Agent-driven vehicles carry their entity name as role_name (the vehicle side finds
-    /// them by it), not the mark, so every csb records those names in a ledger on tmpfs
+    /// them by it), not the mark, so every swb records those names in a ledger on tmpfs
     /// (`agent_link::ledger_path`) and the reaper reads it.
     ///
     /// Only the ego's role name, the ledger's names and marked entities are touched.
@@ -1731,7 +1731,7 @@ impl CarlaBackend {
     }
 
     /// A short-lived client and its world, for lookups by id that must not be answered from
-    /// csb's own actor cache (`actor_census`). Keep the client alive while using the world.
+    /// swb's own actor cache (`actor_census`). Keep the client alive while using the world.
     fn probe_world(&self, timeout: Duration) -> Result<(Client, World)> {
         let mut client = Client::connect(&self.carla_host, self.carla_port, None)
             .map_err(|e| eyre::eyre!("connect a lookup client: {e}"))?;
@@ -1768,7 +1768,7 @@ impl CarlaBackend {
     }
 
     /// Record the agent-driven vehicles this process has in the world, for the reaper of
-    /// a later csb should this one die without tearing them down.
+    /// a later swb should this one die without tearing them down.
     fn store_agent_ledger(&self) {
         if let Err(e) = agent_link::store_ledger(&self.agent_ledger, &self.agent_vehicles) {
             tracing::warn!("Could not record agent-driven vehicles: {e:#}");
@@ -1993,7 +1993,7 @@ impl CarlaBackend {
             self.forget_actor_samples(actor_id);
         }
         // Their names stay in the ledger while a destroy may have failed: the reaper of the
-        // next Initialize (or csb) finishes the job.
+        // next Initialize (or swb) finishes the job.
         if had_agent_vehicles && report.failed == 0 {
             self.store_agent_ledger();
         }
@@ -2093,7 +2093,7 @@ impl CarlaBackend {
             self.set_client_timeout(load_timeout);
             let prepared = self.reload_as_pause(&town, &current_town);
             self.set_client_timeout(budgets::CLIENT_RPC_TIMEOUT);
-            // CARLA stays synchronous across the load (reset_settings = false), and csb stays
+            // CARLA stays synchronous across the load (reset_settings = false), and swb stays
             // its only ticker. Re-apply the settings to the new world anyway: the step and
             // physics substeps are this bridge's, and a failed load left the old world.
             self.sync_mode_enabled = false;
@@ -2127,7 +2127,7 @@ impl CarlaBackend {
             self.stale_snapshots = 0;
             // `sync_mode_enabled` is left as `enable_sync_mode` above set it. It used to be
             // cleared here (a line from before the load re-applied synchronous mode), which
-            // left CARLA synchronous with csb believing it async: frames waited for an ego
+            // left CARLA synchronous with swb believing it async: frames waited for an ego
             // without ticking, so after a map change a scenario with no ego never advanced
             // and its NPCs never reached a snapshot (roadmap 023, "a stale snapshot fails
             // the frame"), and spawns skipped their settling tick.
@@ -2148,7 +2148,7 @@ impl CarlaBackend {
     /// read and the reload. acb applies the same epoch rule from the last `on_tick` it
     /// received; with CARLA synchronous, the frame read here is that frame, so both bridges
     /// land on the same epoch with no channel between them. Read in async mode instead and
-    /// CARLA could tick once more before the load, putting acb one step ahead of csb.
+    /// CARLA could tick once more before the load, putting acb one step ahead of swb.
     fn reload_as_pause(&mut self, town: &str, current_town: &str) -> Result<carla::client::World> {
         let mut backend = CarlaReload {
             backend: self,
@@ -2161,7 +2161,7 @@ impl CarlaBackend {
         if let Some(e) = &out.sync_error {
             tracing::warn!(
                 "Could not switch CARLA to synchronous mode before reloading ({e}); acb may \
-                 see a later last frame and its epoch may differ from csb's"
+                 see a later last frame and its epoch may differ from swb's"
             );
         }
         if let Some(e) = &out.read_error {
@@ -2169,7 +2169,7 @@ impl CarlaBackend {
         }
         let world = out.world?;
 
-        // The snapshot csb read is not the old episode's last frame: CARLA's LoadEpisode
+        // The snapshot swb read is not the old episode's last frame: CARLA's LoadEpisode
         // ticked it again while waiting. Count the extra frames from the new world's first
         // snapshot (see `old_episode_last_elapsed`), so the epoch lands where acb's does.
         let counted = match (out.last_frame, f0, world.snapshot()) {
@@ -2262,7 +2262,7 @@ impl CarlaBackend {
 
         tracing::info!("Loading map '{town}' (CARLA currently holds '{current_town}')");
         // reset_settings = false: the new world stays synchronous, so it advances only when
-        // csb ticks it -- csb is the only ticker (docs/design/time-and-ticking.md) -- and
+        // swb ticks it -- swb is the only ticker (docs/design/time-and-ticking.md) -- and
         // the frame count after the load is exact. The default reverts it to async, where it
         // free-runs until someone reads it (and loads took 44 s to over 120 s).
         let client = self.client.clone();
@@ -2375,7 +2375,7 @@ impl CarlaBackend {
     /// artifact acb publishes signals from (roadmap 017: the map dir is read-only at run
     /// time). In generator mode (`generate_signal_table`) write it instead.
     ///
-    /// A missing table is a warning -- csb still applies the scenario's signals to CARLA,
+    /// A missing table is a warning -- swb still applies the scenario's signals to CARLA,
     /// only acb has nothing to publish them from -- but a different one fails Initialize:
     /// acb would report the state of the wrong lights to Autoware.
     fn check_resolved_signals(
@@ -2425,7 +2425,7 @@ impl CarlaBackend {
                 tracing::warn!(
                     "No traffic light table at {} ({summary} resolved): acb_bridge will \
                      publish no signals. Generate it once per map: \
-                     ros2 run carla_scenario_bridge carla_scenario_bridge \
+                     ros2 run scenario_world_bridge scenario_world_bridge \
                      --generate-signal-table {}",
                     path.display(),
                     map_dir.display()
@@ -2435,7 +2435,7 @@ impl CarlaBackend {
             rs::Check::Differs(why) => eyre::bail!(
                 "The traffic light table {} does not match CARLA's lights ({why}; resolved: \
                  {summary}). acb_bridge would publish the wrong lights. Regenerate it: \
-                 ros2 run carla_scenario_bridge carla_scenario_bridge \
+                 ros2 run scenario_world_bridge scenario_world_bridge \
                  --generate-signal-table {}",
                 path.display(),
                 map_dir.display()
@@ -2862,7 +2862,7 @@ impl CarlaBackend {
     }
 
     /// `--generate-signal-table <map dir>`: load the map's town in CARLA, resolve its signals
-    /// and write `<map dir>/traffic_lights.yaml`. The one place csb writes a map dir.
+    /// and write `<map dir>/traffic_lights.yaml`. The one place swb writes a map dir.
     pub fn generate_signal_table(&mut self, map_dir: &std::path::Path) -> Result<()> {
         self.generate_signal_table = true;
         let result = self.load_scenario_map(&map_dir.to_string_lossy());
@@ -2870,7 +2870,7 @@ impl CarlaBackend {
         result
     }
 
-    /// The clock a new csb starts with: the previous process's, if it left one.
+    /// The clock a new swb starts with: the previous process's, if it left one.
     fn resume_clock(path: &std::path::Path, world_id: Option<u64>) -> EpisodeClock {
         use crate::clock_store::{load, resume, Resume};
         let Some(stored) = load(path) else {
@@ -2883,14 +2883,14 @@ impl CarlaBackend {
         match resume(stored, world_id) {
             Resume::SameEpisode(clock) => {
                 tracing::info!(
-                    "Episode clock: resumed epoch {} from the previous csb (same CARLA episode)",
+                    "Episode clock: resumed epoch {} from the previous swb (same CARLA episode)",
                     fmt_ns(clock.epoch())
                 );
                 clock
             }
             Resume::NewEpisode(clock) => {
                 tracing::warn!(
-                    "Episode clock: CARLA is in another episode than the previous csb recorded \
+                    "Episode clock: CARLA is in another episode than the previous swb recorded \
                      ({:?} -> {world_id:?}); epoch {} -> {}, sim_time continues at {}",
                     stored.world_id,
                     fmt_ns(stored.epoch_ns),
@@ -2902,7 +2902,7 @@ impl CarlaBackend {
         }
     }
 
-    /// Record the episode clock for the next csb process. Cheap (tmpfs); called after every
+    /// Record the episode clock for the next swb process. Cheap (tmpfs); called after every
     /// change to it.
     fn record_clock(&mut self) {
         let Some(world_id) = self.world_id else {
@@ -2916,7 +2916,7 @@ impl CarlaBackend {
         if let Err(e) = crate::clock_store::save(&self.clock_path, &stored) {
             if !std::mem::replace(&mut self.warned_clock_store, true) {
                 tracing::warn!(
-                    "Could not record the episode clock at {} ({e}); a restarted csb would \
+                    "Could not record the episode clock at {} ({e}); a restarted swb would \
                      start from epoch 0",
                     self.clock_path.display()
                 );
@@ -2943,7 +2943,7 @@ impl CarlaBackend {
     /// Actor ids from the old server name nothing, or worse something else, on the new one,
     /// so the ledger is forgotten, not torn down: destroying by stale id could take a new
     /// server's traffic light or another client's car. Time continues by the episode rule
-    /// applied to the last frame csb observed, anchored at the new episode's elapsed 0 --
+    /// applied to the last frame swb observed, anchored at the new episode's elapsed 0 --
     /// the rule acb applies to the last frame it received (docs/design/time-and-ticking.md).
     fn forget_previous_server(&mut self) {
         let forgotten = self.spawned_actors.len();
@@ -2991,9 +2991,9 @@ impl CarlaBackend {
         self.write_epoch_marker();
     }
 
-    /// Leave exactly one epoch marker in the world, recording csb's epoch (`epoch_marker`),
-    /// if one is due. Stays due while csb cannot see the world's actors: the client's actor
-    /// list is only as new as the last frame it received, and a csb that has not ticked yet
+    /// Leave exactly one epoch marker in the world, recording swb's epoch (`epoch_marker`),
+    /// if one is due. Stays due while swb cannot see the world's actors: the client's actor
+    /// list is only as new as the last frame it received, and a swb that has not ticked yet
     /// (start-up, CARLA paused) has none -- it would spawn a duplicate, or miss a stale one.
     fn write_epoch_marker(&mut self) {
         let Some(why) = self.epoch_marker_due else {
@@ -3028,8 +3028,8 @@ impl CarlaBackend {
         if epoch == 0 {
             if let Some(&(id, recorded)) = markers.iter().max_by_key(|&&(id, _)| id) {
                 tracing::warn!(
-                    "Epoch marker ({why}): csb's epoch is 0 but the world records {} (actor \
-                     {id}); a vehicle side started now adopts that. csb probably lost its \
+                    "Epoch marker ({why}): swb's epoch is 0 but the world records {} (actor \
+                     {id}); a vehicle side started now adopts that. swb probably lost its \
                      clock record ({}); left in place",
                     fmt_ns(recorded),
                     self.clock_path.display()
@@ -3041,7 +3041,7 @@ impl CarlaBackend {
         for &(id, recorded) in &plan.stale {
             if recorded != epoch {
                 tracing::warn!(
-                    "Epoch marker ({why}): the world records {} (actor {id}), csb's epoch is \
+                    "Epoch marker ({why}): the world records {} (actor {id}), swb's epoch is \
                      {}; replacing it",
                     fmt_ns(recorded),
                     fmt_ns(epoch)
@@ -3104,13 +3104,13 @@ impl CarlaBackend {
         }
     }
 
-    /// The start-up marker, written when csb connects rather than at the first scenario
+    /// The start-up marker, written when swb connects rather than at the first scenario
     /// tick, so that a vehicle side started before any scenario reads the right epoch.
     ///
-    /// A world CARLA ticks by itself (asynchronous: the state csb leaves on shutdown) sends
-    /// a frame within one of its ticks; csb waits for it and writes the marker as after any
-    /// change. A paused synchronous world (a csb that did not shut down cleanly left it so)
-    /// sends none until csb ticks, and csb does not tick outside a scenario. There csb
+    /// A world CARLA ticks by itself (asynchronous: the state swb leaves on shutdown) sends
+    /// a frame within one of its ticks; swb waits for it and writes the marker as after any
+    /// change. A paused synchronous world (a swb that did not shut down cleanly left it so)
+    /// sends none until swb ticks, and swb does not tick outside a scenario. There swb
     /// spawns its marker without looking: acb reads the newest marker, so the new one
     /// wins over a stale one, and the marker stays due, so the first tick removes the
     /// stale ones and collapses duplicates.
@@ -3196,7 +3196,7 @@ impl CarlaBackend {
             }
         }
 
-        // Synchronous from here on, with csb the only ticker: nothing advances the world
+        // Synchronous from here on, with swb the only ticker: nothing advances the world
         // between scenarios or before the ego spawns, so idle time is a pause and a server
         // stall cannot reach /clock as a leap (docs/design/time-and-ticking.md). acb needs no
         // free-running world to find its vehicle; it follows on_tick, and the spawn's tick
@@ -3285,7 +3285,7 @@ impl CarlaBackend {
         }
 
         tracing::info!(
-            "Initialized (step_time={}). CARLA synchronous; csb is its only ticker.",
+            "Initialized (step_time={}). CARLA synchronous; swb is its only ticker.",
             req.step_time
         );
         // CARLA is paused here: this is the frame SSv2's first UpdateFrame steps from.
@@ -3456,7 +3456,7 @@ impl CarlaBackend {
         );
         let frame = frame?;
         // A marker still due (start-up, or a paused world after a change) can be written
-        // now: csb sees the world's actors from its first tick on.
+        // now: swb sees the world's actors from its first tick on.
         self.write_epoch_marker();
         Ok(match frame {
             Ok((elapsed, delta)) => self.episode_clock.observe(elapsed, delta),
@@ -3543,7 +3543,7 @@ impl CarlaBackend {
         let state = carla_state_for_log(&self.world);
         let reason = format!(
             "CARLA's {call} in {step} did not return (waited {waited}, bound {} s); {state}; \
-             last tick returned CARLA frame {:?}, Traffic Manager {}. csb ends this bridge so \
+             last tick returned CARLA frame {:?}, Traffic Manager {}. swb ends this bridge so \
              its supervisor starts a fresh one",
             bound.as_secs(),
             self.last_tick_frame,
@@ -3757,7 +3757,7 @@ impl CarlaBackend {
         result
     }
 
-    /// The highest actor id csb knows of: CARLA hands ids out in increasing order and never
+    /// The highest actor id swb knows of: CARLA hands ids out in increasing order and never
     /// reuses them, so an actor created after this has a higher one.
     fn id_watermark(&self) -> Option<u32> {
         let seen = self
@@ -5887,7 +5887,7 @@ impl CarlaBackend {
     }
 
     /// The smallest box-to-box clearance in the plane between `actor_id`'s body and every
-    /// other physics body csb spawned, from `snapshot` (roadmap 032 N2). `None` when its own
+    /// other physics body swb spawned, from `snapshot` (roadmap 032 N2). `None` when its own
     /// box or pose is unknown, or no other body is in the snapshot.
     fn clearance_to_bodies(
         &self,
@@ -6557,9 +6557,9 @@ mod tests {
 
     #[test]
     fn entity_marks_are_recognised_and_configured_roles_are_not() {
-        assert_eq!(entity_role_name("npc_3"), "csb_entity:npc_3");
+        assert_eq!(entity_role_name("npc_3"), "swb_entity:npc_3");
         assert!(is_entity_role_name(&entity_role_name("walker")));
-        for role in ["hero", "bg_av_1", "autopilot", "", "csb_entity"] {
+        for role in ["hero", "bg_av_1", "autopilot", "", "swb_entity"] {
             assert!(!is_entity_role_name(role), "{role}");
         }
     }
@@ -6733,13 +6733,13 @@ mod tests {
     /// `acb_bridge` finds its vehicle by role_name. Only the ego should carry one -- an NPC
     /// tagged `hero` would be picked up by a bridge as if it were an Autoware vehicle.
     /// An agent-driven vehicle's role_name is its entity name, so it may not take the ego's
-    /// or look like one of csb's marks.
+    /// or look like one of swb's marks.
     #[test]
     fn an_agent_vehicle_needs_a_role_name_of_its_own() {
         assert_eq!(agent_role_conflict("bg_av_1", "hero"), None);
         assert!(agent_role_conflict("hero", "hero").unwrap().contains("ego"));
         assert!(agent_role_conflict("", "hero").is_some());
-        assert!(agent_role_conflict("csb_entity:x", "hero").is_some());
+        assert!(agent_role_conflict("swb_entity:x", "hero").is_some());
     }
 
     #[test]

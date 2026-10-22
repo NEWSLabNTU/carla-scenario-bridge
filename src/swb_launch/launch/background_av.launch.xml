@@ -1,0 +1,86 @@
+<launch>
+  <!--
+    The vehicle side of one background AV: Autoware + acb_bridge + the vehicle agent, i.e.
+    the acb CARLA profile (acb_launch/carla_simulator.launch.xml), exactly like the ego's
+    (ego_av.launch.xml) but for a scenario entity whose controller is `agent`.
+
+    The scenario declares the vehicle (roadmap 017):
+
+      <ScenarioObject name="bg_av_1"> ... <Controller name="agent"> ...
+
+    scenario_world_bridge spawns it with role_name = the entity name and drives it through
+    the agent relay: `teleported` with its spawn pose, then the scenario's
+    AcquirePositionAction / AssignRouteAction as `set_goal`. This stack's agent registers
+    with that relay as `entity` and drives Autoware locally; acb_bridge attaches to the CARLA
+    vehicle named `vehicle_name`. So entity and vehicle_name are the same name (the default).
+
+    Run it in its own ROS domain, different from the ego's and the scenario's: the scenario
+    reaches it only through the relay's TCP port. Domains used by `just`: 9 scenario, 1 ego,
+    2 and up background AVs; 0 stays empty so that no unconfigured ROS process on the host can
+    join a run. `just bg-av` does this for you.
+
+      ROS_DOMAIN_ID=2 play_launch launch FLAGS \
+          swb_launch background_av.launch.xml \
+          entity:=bg_av_1 map_path:=/path/to/Town01 relay:=tcp://sim-host:5560
+
+    FLAGS are the play_launch options container-mode isolated, composable-respawn on-crash,
+    web-addr 127.0.0.1:<SWB_WEB_PORT+3> (8083)
+    (each with a double-hyphen prefix, which an XML comment cannot contain);
+    docs/user-guide.md section 4 says why.
+
+    Long-lived, like the ego stack: one start serves consecutive scenarios, and it may come
+    up before or after a scenario starts (the bridge tells the agent where its vehicle is as
+    soon as it registers). publish_clock is true: acb publishes CARLA's time as /clock in
+    this domain, as in every domain (roadmap 015).
+
+    With relay:=none (an empty relay:= is rejected by launch) the agent instead drives once
+    to `goal_poses_file` (local mode, acb_pilot poses format): a check that the stack and
+    CARLA work, no scenario.
+  -->
+  <arg name="entity" default="bg_av_1" description="the scenario entity this vehicle is (controller `agent`)" />
+  <arg name="vehicle_name" default="$(var entity)"
+       description="CARLA role_name of the vehicle; the bridge names an agent-driven vehicle after its entity" />
+  <arg name="relay" default="tcp://localhost:5560" description="the scenario's agent relay; none = local mode" />
+  <arg name="goal_poses_file" default="" description="local mode's goal when relay is none" />
+  <arg name="map_path" description="Directory with lanelet2_map.osm and pointcloud_map.pcd" />
+  <arg name="carla_host" default="localhost" />
+  <arg name="carla_port" default="2000" />
+  <arg name="release_notify_endpoint" default="tcp://127.0.0.1:5556"
+       description="scenario_world_bridge's release PUB socket (ssv2_port + 1)" />
+  <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557"
+       description="scenario_world_bridge's release PULL socket (ssv2_port + 2)" />
+  <arg name="vehicle_model" default="acb_vehicle" />
+  <arg name="sensor_model" default="acb_sensor_kit" />
+  <arg name="launch_rviz" default="false" />
+  <arg name="rviz_config" default="$(find-pkg-share autoware_launch)/rviz/autoware.rviz"
+       description="RViz config when launch_rviz (a screencast passes its own window layout)" />
+  <!-- Same CPU-only choices as ego_av.launch.xml: this host shares its GPU, and a second
+       TensorRT centerpoint does not fit beside CARLA and the ego's stack. -->
+  <arg name="lidar_detection_model" default="clustering" />
+  <arg name="occupancy_grid_map_method" default="laserscan_based" />
+  <!-- Signal state comes from acb (CARLA's lights, roadmap 015), so traffic light recognition
+       runs fusion-only and the camera that only fed it is not spawned. false brings both back. -->
+  <arg name="traffic_light_fusion_only" default="true" description="signals from acb only; no traffic light camera"/>
+
+  <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
+    <arg name="traffic_light_fusion_only" value="$(var traffic_light_fusion_only)" />
+    <arg name="map_path" value="$(var map_path)" />
+    <arg name="vehicle_model" value="$(var vehicle_model)" />
+    <arg name="sensor_model" value="$(var sensor_model)" />
+    <arg name="rviz" value="$(var launch_rviz)" />
+    <arg name="rviz_config" value="$(var rviz_config)" />
+    <arg name="lidar_detection_model" value="$(var lidar_detection_model)" />
+    <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)" />
+    <!-- The vehicle agent, started by the profile: registers with the relay as `entity`. -->
+    <arg name="relay" value="$(eval '&quot;&quot; if &quot;$(var relay)&quot; == &quot;none&quot; else &quot;$(var relay)&quot;')" />
+    <arg name="entity" value="$(var entity)" />
+    <arg name="goal_poses_file" value="$(var goal_poses_file)" />
+    <!-- acb_bridge for this vehicle, started by the profile. -->
+    <arg name="carla_host" value="$(var carla_host)" />
+    <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="release_notify_endpoint" value="$(var release_notify_endpoint)" />
+    <arg name="release_ack_endpoint" value="$(var release_ack_endpoint)" />
+    <arg name="vehicle_name" value="$(var vehicle_name)" />
+    <arg name="publish_clock" value="true" />
+  </include>
+</launch>

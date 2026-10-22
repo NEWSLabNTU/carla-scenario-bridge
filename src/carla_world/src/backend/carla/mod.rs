@@ -2,7 +2,7 @@
 //!
 //! Everything that knows CARLA lives under this module -- its left-handed frame, actor ids,
 //! blueprints, towns, synchronous mode and the Traffic Manager, the lights and their table
-//! for acb, the collision sensors, and the gap trace's CARLA half from its snapshots. The rest of csb
+//! for acb, the collision sensors, and the gap trace's CARLA half from its snapshots. The rest of swb
 //! sees it through [`crate::backend::SimBackend`].
 
 mod backend;

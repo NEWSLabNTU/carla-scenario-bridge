@@ -22,7 +22,7 @@ sources of disagreement (catalogue: [ssv2-feature-completeness.md](ssv2-feature-
 | Source | SSv2 sees | CARLA has | Fixed in |
 |---|---|---|---|
 | Declared box vs blueprint box | the box the scenario declares (a 12 m truck) | the blueprint's box: `model3d` passes through when it names a blueprint, else `blueprint_map`, else `vehicle.tesla.model3` (4.7 m) whatever the declared size | [022](../roadmap/022-entity-geometry-parity.md): size-matched blueprint, residual reported |
-| Pose reference | the entity origin, shifted by the declared `bounding_box.center` ([`OriginOffset`](../../src/carla_scenario_bridge/src/entity_manager.rs)) | the actor transform, snapped to ground; walkers lifted | [023](../roadmap/023-npc-motion-parity.md): z left to physics |
+| Pose reference | the entity origin, shifted by the declared `bounding_box.center` ([`OriginOffset`](../../src/scenario_world_bridge/src/entity_manager.rs)) | the actor transform, snapped to ground; walkers lifted | [023](../roadmap/023-npc-motion-parity.md): z left to physics |
 | Static world | nothing: no curbs, poles, walls | PhysX colliders for all of it | [021](../roadmap/021-physical-verdict.md): contact joined into the verdict |
 | NPC motion | the NPC's speed | by default a physics body tracking SSv2's pose (p95 ≤ 0.2 m) at its real velocity; under `npc_motion: kinematic` a teleported actor at velocity 0 | [023](../roadmap/023-npc-motion-parity.md): tracked physics, default since 2026-10-13 |
 | Contact | `CollisionCondition`: a 2D box overlap in its own geometry (`api.cpp:345`) | contact events between the physical ego and the NPCs' bodies (tracked by default, kinematic colliders under `npc_motion: kinematic`) | [021](../roadmap/021-physical-verdict.md) |
@@ -153,9 +153,9 @@ and is useful on its own.
 The per-episode record the bridge writes and the oracle reads
 ([024](../roadmap/024-gap-trace-and-oracle.md)): JSON Lines, one file per `Initialize`,
 `<gap_trace_dir>/<UTC time>_<episode>.jsonl`, one JSON object per line, each with a `type`.
-The reader is `src/csb_launch/scripts/gap_trace.py` (typed records, validation); the box
+The reader is `src/swb_launch/scripts/gap_trace.py` (typed records, validation); the box
 geometry the oracle judges with is `gap_geometry.py` next to it. Both are stdlib Python and
-installed beside the `csb_launch` scripts.
+installed beside the `swb_launch` scripts.
 
 **Conventions.** Everything is in the **ROS map frame** (x east, y north, right-handed, the
 frame SSv2 works in): metres, radians, m/s. CARLA values go through the bridge's existing

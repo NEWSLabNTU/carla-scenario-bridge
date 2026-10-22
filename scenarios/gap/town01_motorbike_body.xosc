@@ -19,7 +19,7 @@
 	pass. To reproduce the old body, set MotorbikeBody to vehicle.tesla.model3.
 -->
 <OpenSCENARIO>
-	<FileHeader author="carla-scenario-bridge" date="2026-10-12T00:00:00+00:00" description="Town01 motorbike holding 0.9 m behind the driving ego, for the entity geometry reproducer" revMajor="1" revMinor="2" />
+	<FileHeader author="scenario-world-bridge" date="2026-10-12T00:00:00+00:00" description="Town01 motorbike holding 0.9 m behind the driving ego, for the entity geometry reproducer" revMajor="1" revMinor="2" />
 	<ParameterDeclarations>
 		<!-- Empty: the bridge picks the body by size. vehicle.tesla.model3: the pre-022 body. -->
 		<ParameterDeclaration name="MotorbikeBody" parameterType="string" value="" />

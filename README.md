@@ -40,7 +40,7 @@ the pedestrian, the car ahead and the traffic light.
   <img src="docs/architecture.svg" alt="System architecture" width="820">
 </p>
 
-- **Simulation side** -- SSv2 runs the scenario; **carla-scenario-bridge** (this project)
+- **Simulation side** -- SSv2 runs the scenario; **scenario-world-bridge** (this project)
   translates SSv2's requests into CARLA (spawns, motion, traffic lights, time); an **agent
   relay** passes the scenario's goals to whatever drives the ego.
 - **Vehicle side** -- your Autoware with
@@ -79,8 +79,8 @@ the pedestrian, the car ahead and the traffic light.
 ## Setup
 
 ```bash
-git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-bridge.git
-cd carla-scenario-bridge
+git clone --recurse-submodules https://github.com/NEWSLabNTU/scenario-world-bridge.git
+cd scenario-world-bridge
 source /opt/ros/humble/setup.bash
 source /opt/autoware/1.5.0/setup.bash        # your Autoware
 rosdep install --from-paths src --ignore-src -y   # installs apt packages: needs sudo
@@ -105,25 +105,25 @@ Four terminals, each with Autoware's and this workspace's `setup.bash` sourced, 
 <CARLA_0.9.16>/CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000
 
 # 2. Simulation side: the bridge and the agent relay (long-lived)
-ROS_DOMAIN_ID=9 ros2 launch csb_launch simulation.launch.xml
+ROS_DOMAIN_ID=9 ros2 launch swb_launch simulation.launch.xml
 
 # 3. Vehicle side: Autoware on CARLA, registered with the relay
 ROS_DOMAIN_ID=1 ros2 launch acb_launch carla_simulator.launch.xml \
     map_path:=$CARLA_MAPS/Town01 vehicle_name:=hero relay:=tcp://localhost:5560
 
 # 4. A scenario -- the launch ends with the scenario; the verdict is a JUnit file
-ROS_DOMAIN_ID=9 ros2 launch csb_launch scenario.launch.xml \
-    scenario:=$(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic/town01_ego_drive.xosc \
-    output_directory:=/tmp/csb_run
-cat /tmp/csb_run/scenario_test_runner/result.junit.xml
+ROS_DOMAIN_ID=9 ros2 launch swb_launch scenario.launch.xml \
+    scenario:=$(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/basic/town01_ego_drive.xosc \
+    output_directory:=/tmp/swb_run
+cat /tmp/swb_run/scenario_test_runner/result.junit.xml
 ```
 
 A whole directory of scenarios, with CARLA's own collision check next to SSv2's verdict:
 
 ```bash
-ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
-    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic \
-    --output ~/csb_results/basic --physical-verdict
+ROS_DOMAIN_ID=9 ros2 run swb_launch run_suite \
+    $(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/basic \
+    --output ~/swb_results/basic --physical-verdict
 ```
 
 Wait for each part before starting the next: CARLA serves port 2000; the bridge logs
@@ -131,7 +131,7 @@ Wait for each part before starting the next: CARLA serves port 2000; the bridge 
 tutorial](docs/tutorials/01-first-run.md) shows what each looks like.
 
 **Recommended: [play_launch](https://pypi.org/project/play-launch/) as a drop-in for
-`ros2 launch`.** Same packages, files and arguments -- `play_launch launch csb_launch
+`ros2 launch`.** Same packages, files and arguments -- `play_launch launch swb_launch
 simulation.launch.xml` -- plus a log directory per node and a web UI (`--web-addr
 127.0.0.1:8084`) for the ~90 processes of an Autoware stack. `pip install
 'play_launch>=0.15.1'`; `run_suite` uses it when it is installed.

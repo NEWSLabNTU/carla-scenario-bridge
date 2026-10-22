@@ -28,7 +28,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parent
 # Where the stacks log (a host setting, as in the justfile)
-LOG_ROOT = Path(os.environ.get("CSB_LOG_ROOT") or PROJECT / "play_log")
+LOG_ROOT = Path(os.environ.get("SWB_LOG_ROOT") or PROJECT / "play_log")
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(PROJECT / "src/autoware_carla_bridge/scripts"))
 
@@ -125,7 +125,7 @@ def main() -> int:
     ap.add_argument("--sim", default="isaac")
     ap.add_argument("--worlds", default="", help="passed on as `just scenario worlds:=`")
     ap.add_argument("--domain", type=int, default=1, help="the ego's ROS domain")
-    ap.add_argument("--out", help="run outputs and the bag (default $CSB_LOG_ROOT/acceptance/<time>)")
+    ap.add_argument("--out", help="run outputs and the bag (default $SWB_LOG_ROOT/acceptance/<time>)")
     ap.add_argument("--play-log", default=str(LOG_ROOT / "ego"))
     ap.add_argument("--discovery", type=float, default=120.0,
                     help="s to wait for the recorder to subscribe")

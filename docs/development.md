@@ -1,6 +1,6 @@
 # Developer Guide
 
-For working on carla-scenario-bridge itself: building, testing, running against a live
+For working on scenario-world-bridge itself: building, testing, running against a live
 stack, and finding your way around the code and the design documents. Users start at the
 [README](../README.md) and the [tutorials](tutorials/).
 
@@ -9,8 +9,8 @@ stack, and finding your way around the code and the design documents. Users star
 On top of the user prerequisites (ROS 2 Humble, Autoware, CARLA 0.9.16, maps):
 
 ```bash
-git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-bridge.git
-cd carla-scenario-bridge
+git clone --recurse-submodules https://github.com/NEWSLabNTU/scenario-world-bridge.git
+cd scenario-world-bridge
 just setup      # rustup, colcon-cargo-ros2, submodules, rosdep, and the dev tools
 just build      # the user's colcon build plus --symlink-install and a dev-release profile
 ```
@@ -41,7 +41,7 @@ with plain `ros2 launch`, as the README shows.
 
 Project settings (map, rviz, vehicle and launch choices, scenario output) are recipe
 arguments, `name:=value` as for a launch file; host settings (ports, displays, install and
-data paths such as `CARLA_MAPS` and `AUTOWARE_TENSORRT_LIB`, the log root `CSB_LOG_ROOT`) come from the environment, made
+data paths such as `CARLA_MAPS` and `AUTOWARE_TENSORRT_LIB`, the log root `SWB_LOG_ROOT`) come from the environment, made
 permanent in `.env` or `.envrc`. The recipes refuse to run while one of the environment
 variables that used to carry a project setting is set, naming the argument that replaced it
 (`scripts/just_lib.bash`).
@@ -79,7 +79,7 @@ variables that used to carry a project setting is set, naming the argument that 
 
 ```
 src/
-  carla_scenario_bridge/   Rust: the SSv2 backend (ZMQ server, coordinator, CARLA adapter)
+  scenario_world_bridge/   Rust: the SSv2 backend (ZMQ server, coordinator, CARLA adapter)
     src/main.rs              entry point, CARLA connection loop, shutdown
     src/zmq_server.rs        ZMQ REP socket, protobuf dispatch
     src/coordinator.rs       the SSv2 handlers -> CARLA API calls
@@ -90,10 +90,10 @@ src/
     src/collision_monitor.rs, contact_report.rs  CARLA's contacts for the verdict (021)
     src/npc_tracking.rs      tracked NPC motion law (023)
     config/                  bridge_config.yaml, blueprint box tables
-  csb_launch/              launch files (simulation, scenario, background AV); run_suite,
+  swb_launch/              launch files (simulation, scenario, background AV); run_suite,
                            physical_verdict
-  csb_examples/            starter scenarios: basic/, multi_av/, awf/ (installed)
-  csb_interfaces/          ROS messages and services (weather)
+  swb_examples/            starter scenarios: basic/, multi_av/, awf/ (installed)
+  swb_interfaces/          ROS messages and services (weather)
   scenario_agent_relay/    the scenario's side of the vehicle agent protocol
   autoware_carla_bridge/   submodule: the vehicle side (sensors, vehicle interface, agent)
   scenario_simulator_v2/   submodule: our SSv2 fork
@@ -120,7 +120,7 @@ sides need no shared domain. Details: [architecture](design/architecture.md),
   blueprint chooser, the contact report, `run_suite` and `physical_verdict`. Pure logic is
   kept apart from the CARLA calls so it can be tested without a server.
 - **Live runs**: `just run`, `just ego-av`, then `just scenario <file>` or `ros2 run
-  csb_launch run_suite <dir> --physical-verdict`. The starter scenarios are the regression
+  swb_launch run_suite <dir> --physical-verdict`. The starter scenarios are the regression
   set; `scenarios/gap/` holds reproducers for fixed SSv2-vs-CARLA disagreements.
 - Before trusting a surprising measurement, check the running binaries against the source
   (`ls -l install/.../acb_bridge`, `/proc/<pid>/cmdline`) and the host's load (`uptime`):

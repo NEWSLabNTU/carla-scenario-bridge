@@ -1,18 +1,18 @@
-"""The csb_agent SDK against the relay's real AgentServer, in-process (roadmap 030)."""
+"""The swb_agent SDK against the relay's real AgentServer, in-process (roadmap 030)."""
 
 import threading
 import time
 
 import pytest
 
-import csb_agent
-from csb_agent import protocol as P
+import swb_agent
+from swb_agent import protocol as P
 from scenario_agent_relay.server import AgentServer
 
 POSE = {"x": 1.0, "y": 2.0, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
 
 
-class Recorder(csb_agent.Agent):
+class Recorder(swb_agent.Agent):
     def __init__(self, config=None):
         super().__init__(config)
         self.calls = []
@@ -55,7 +55,7 @@ def relay(request):
 @pytest.fixture
 def agent_client(relay):
     agent = Recorder({"entity": "ego"})
-    client = csb_agent.Client(agent, "127.0.0.1", relay.port)
+    client = swb_agent.Client(agent, "127.0.0.1", relay.port)
     thread = threading.Thread(target=client.run, daemon=True)
     thread.start()
     assert wait_until(lambda: relay.session("ego") is not None)

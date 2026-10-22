@@ -36,11 +36,11 @@
   <rect x="362" y="133" width="156" height="20" rx="4" fill="#dbeafe"/>
   <text x="440" y="147" text-anchor="middle" fill="#1e40af" font-size="10.5" font-weight="600">ZMQ + Protobuf (REQ/REP)</text>
 
-  <!-- ════════════════ carla-scenario-bridge ════════════════ -->
+  <!-- ════════════════ scenario-world-bridge ════════════════ -->
   <g filter="url(#shadow)">
     <rect x="160" y="172" width="560" height="108" rx="10" fill="#fefce8" stroke="#fde68a" stroke-width="1.5"/>
   </g>
-  <text x="440" y="196" text-anchor="middle" font-weight="700" fill="#92400e" font-size="14">carla-scenario-bridge</text>
+  <text x="440" y="196" text-anchor="middle" font-weight="700" fill="#92400e" font-size="14">scenario-world-bridge</text>
   <text x="440" y="212" text-anchor="middle" fill="#78716c" font-size="10.5">this project — translates SSv2 protocol into CARLA API calls</text>
 
   <!-- Sub-modules row -->
@@ -98,7 +98,7 @@
   <text x="440" y="598" text-anchor="middle" fill="#475569" font-size="11.5">full autonomous driving stack — real perception, planning, control</text>
 
   <!-- ════════════════ Side annotations ════════════════ -->
-  <!-- Left: what carla-scenario-bridge handles -->
+  <!-- Left: what scenario-world-bridge handles -->
   <rect x="16" y="172" width="128" height="226" rx="8" fill="#fffbeb" stroke="#fde68a" stroke-width="1" stroke-dasharray="4,3"/>
   <text x="80" y="192" text-anchor="middle" font-size="10" font-weight="700" fill="#92400e">Bridge handles</text>
   <text x="80" y="210" text-anchor="middle" font-size="9.5" fill="#78716c">entity spawn/despawn</text>

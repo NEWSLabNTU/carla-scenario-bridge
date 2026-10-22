@@ -12,7 +12,7 @@ speeds.
 Throttle: each pedal from standstill (the launch dead zone), and rolling from about 3 m/s (a car
 already moving is in gear). Brake: from about 7 m/s with each brake pedal. Every tick's (v, dv/dt)
 is binned into the speed columns; empty cells take the nearest measured column of the same row.
-Physics timing matches carla_scenario_bridge's (dt 0.05 s, 16 substeps).
+Physics timing matches scenario_world_bridge's (dt 0.05 s, 16 substeps).
 
 Usage (0.10 client):  probe_pedals_0100.py --port 2100 --out DIR [--blueprint vehicle.lincoln.mkz]
 """
@@ -138,8 +138,8 @@ def main():
     A = grid(THROTTLES, ["throttle_standstill", "throttle_rolling"])
     B = grid(BRAKES, ["brake"])
     hdr = ("# {kind} response of {bp} on CARLA 0.10.0 (Town10HD_Opt, 75 m straight), measured by\n"
-           "# carla-scenario-bridge scripts/ntu_twin/probe_pedals_0100.py (roadmap 019). Low speeds only.\n"
-           "# CARLA tick 0.050 s, physics substeps of 0.0031 s (max 16) -- the timing carla_scenario_bridge uses\n"
+           "# scenario-world-bridge scripts/ntu_twin/probe_pedals_0100.py (roadmap 019). Low speeds only.\n"
+           "# CARLA tick 0.050 s, physics substeps of 0.0031 s (max 16) -- the timing scenario_world_bridge uses\n"
            "# Rows: pedal position. Columns: vehicle speed in m/s.\n"
            "# Cells: measured longitudinal acceleration in m/s^2.\n")
     for name, kind, rows, G in (("accel_map.csv", "Throttle", THROTTLES, A),

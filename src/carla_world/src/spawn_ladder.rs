@@ -11,7 +11,7 @@
 //! `ActorSpawnResult.cpp:22-23`); a timeout fails the whole call (`Client.cpp:753-758`).
 //!
 //! After a failed call the actor may exist. Actor ids only increase (`ActorRegistry.cpp:24`,
-//! never reset), so csb notes the highest id it knows before the spawn and looks for an
+//! never reset), so swb notes the highest id it knows before the spawn and looks for an
 //! actor of the right blueprint and role above it; the lookup is an RPC queued behind the
 //! spawn on the same game thread, so it sees the spawn if the server ran it. Found: adopted,
 //! never lifted over. Not found: an error, never a lift.

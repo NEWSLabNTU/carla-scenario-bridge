@@ -134,12 +134,12 @@ carla_tick_seconds: 0.05
 # CARLA's Traffic Manager drives every scenario entity whose controller is
 # `simulator_autopilot`. Its port follows CARLA's (CARLA_PORT + 6000, so 8000 for 2000)
 # unless set here to something else than 8000. The rest:
-# `simulator_autopilot` (docs/design/scenario-authoring.md). csb runs it in its own process
+# `simulator_autopilot` (docs/design/scenario-authoring.md). swb runs it in its own process
 # and ticks it with the world, synchronously; `seed` is applied at every Initialize so the
 # simulator-driven traffic repeats run to run.
-# `serve: true` (or CSB_TM_SERVE=1) also serves it to other clients: it starts with the
-# synchronous world and stays for the bridge's lifetime, so a process that follows csb's
-# frames can drive vehicles through it as a TM-Client, stepped by csb's tick.
+# `serve: true` (or SWB_TM_SERVE=1) also serves it to other clients: it starts with the
+# synchronous world and stays for the bridge's lifetime, so a process that follows swb's
+# frames can drive vehicles through it as a TM-Client, stepped by swb's tick.
 traffic_manager:
   port: 8000
   seed: 2017

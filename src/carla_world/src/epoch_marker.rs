@@ -1,9 +1,9 @@
 //! The episode epoch, recorded in the world it belongs to (roadmap 015, "Joining mid-session").
 //!
 //! acb applies the epoch rule to the episode changes it watches. A vehicle side started after
-//! a reload has watched none of them and would start at epoch 0, a `/clock` behind csb and
+//! a reload has watched none of them and would start at epoch 0, a `/clock` behind swb and
 //! every other bridge by the length of the earlier episodes. acb depends on CARLA and nothing
-//! else, so the epoch is put where it can read it: in CARLA. After every episode change csb
+//! else, so the epoch is put where it can read it: in CARLA. After every episode change swb
 //! spawns one actor of [`BLUEPRINT`] -- an empty actor, no mesh, no collision, no physics --
 //! whose `role_name` is [`role_name`]`(epoch_ns)`. `load_world` destroys it with the rest of
 //! the old world, so every episode carries its own; a bridge joining mid-episode adopts it, a
@@ -14,7 +14,7 @@
 //! carry the same table of cases.
 
 /// An empty actor: nothing to render, collide with or simulate, and a settable `role_name`
-/// (CARLA 0.9.16). Nothing csb or acb lists by type (`vehicle.*`, `walker.*`, `sensor.*`,
+/// (CARLA 0.9.16). Nothing swb or acb lists by type (`vehicle.*`, `walker.*`, `sensor.*`,
 /// `traffic.*`) matches it.
 pub const BLUEPRINT: &str = "util.actor.empty";
 
@@ -38,17 +38,17 @@ pub fn parse(role_name: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
-/// What to do with the markers a world holds, given csb's epoch.
+/// What to do with the markers a world holds, given swb's epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerPlan {
     /// Markers recording another epoch, to destroy.
     pub stale: Vec<(u32, i64)>,
-    /// Spawn a marker for csb's epoch (none records it yet).
+    /// Spawn a marker for swb's epoch (none records it yet).
     pub spawn: bool,
 }
 
 /// `markers`: `(actor id, epoch)` of the world's markers. Epoch 0 is never written: no
-/// marker already means 0 to acb, and csb leaves a nonzero marker it disagrees with in
+/// marker already means 0 to acb, and swb leaves a nonzero marker it disagrees with in
 /// place rather than erase it with a 0 (the caller warns). Otherwise exactly one marker,
 /// recording `epoch_ns`, is left.
 pub fn plan(epoch_ns: i64, markers: &[(u32, i64)]) -> MarkerPlan {

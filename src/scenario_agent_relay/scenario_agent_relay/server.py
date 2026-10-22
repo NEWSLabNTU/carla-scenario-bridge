@@ -10,7 +10,7 @@ import socket
 import threading
 import time
 
-from csb_agent import protocol as P
+from swb_agent import protocol as P
 
 # A commander's command_for waits this long for the agent's reply unless it names its own
 # timeout, which is capped at COMMANDER_MAX_TIMEOUT.

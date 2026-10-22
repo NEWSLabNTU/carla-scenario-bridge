@@ -9,7 +9,7 @@
 	town01_ego_drive.xosc; nothing moves toward it. Success = 10 s of simulation time.
 -->
 <OpenSCENARIO>
-	<FileHeader author="carla-scenario-bridge" date="2026-10-11T00:00:00+00:00" description="Town01 one parked entity per subtype, for the entity geometry check" revMajor="1" revMinor="2" />
+	<FileHeader author="scenario-world-bridge" date="2026-10-11T00:00:00+00:00" description="Town01 one parked entity per subtype, for the entity geometry check" revMajor="1" revMinor="2" />
 	<ParameterDeclarations />
 	<CatalogLocations />
 	<RoadNetwork>

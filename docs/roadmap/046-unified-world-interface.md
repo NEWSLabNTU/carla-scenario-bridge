@@ -380,6 +380,50 @@ rendered Town01 frame faults the GPU, Xid 31/109, `ERROR_DEVICE_LOST`, on either
   render, which this host's GPUs fault on. They are owed on a host that renders Town01
   (newslab-server139, where 043-045 ran).
 
+## Results (part B, 2026-10-23, newslab-118-server)
+
+The rename was done by one script, not one commit per kind (step 12): the moves and the word
+rules are mechanical, the script was rehearsed on a throwaway worktree first, and a reviewer
+reads its rules rather than 280 file diffs. What it did:
+
+- **Moves** (`git mv`): `csb_core` to `swb_core`, `carla_scenario_bridge` to
+  `scenario_world_bridge`, `csb_world_check` to `swb_world_check`, `csb_world_server` to
+  `swb_world_server`, `csb_isaac` to `isaac_world`, `csb_launch`, `csb_agent`,
+  `csb_interfaces` and `csb_examples` to `swb_*`, `proto/csb_world.proto` to
+  `swb_world.proto` (package `swb_world`; the wire is unchanged, protocol version 4).
+- **Names in code and docs**: the same words everywhere outside the submodules and this
+  roadmap's history (000-046 and the index keep the names they were written with).
+- **Weather services** leave CARLA's namespace for the bridge node's own:
+  `/scenario_world_bridge/set_weather` and `get_weather` (`~/set_weather` in code).
+- **Host settings** `CSB_WEB_PORT`, `CSB_VEHICLE_USD`, `CSB_LOG_ROOT`, `CSB_LOG_ARCHIVE`,
+  `CSB_MAP_SOURCE`, `CSB_TICK_GATE`, `CSB_TM_SERVE`, `CSB_ISAAC_DIR` become `SWB_*`; the old
+  names are refused by every recipe, naming the new one (`SWB_RENAMED_ENV`). Each host's
+  `.env` is edited by hand.
+- **Kept on purpose**: names that live outside this repository. The Autoware fork's
+  `csb/*` branches, existing data paths (`/mnt/disk1/csb-play_log-archive`, the default
+  archive; `csb-043-vehicle`, `csb-045`), the CARLA editor's `/Game/CSB*Export/` content
+  folders, USD prim names in the Isaac world, and the scenario parameter
+  `csbExpectedContacts`, which users' scenarios declare.
+- acb (`da283e6`) and aib (`d82ae58`) were pushed first, then the pins moved. acb's agent
+  imports `swb_agent` and falls back to `csb_agent`, so an acb checkout works against either
+  side of the rename.
+
+Checks after a clean build from an empty `install/`:
+
+| check | result |
+|---|---|
+| `just check` (fmt, clippy) | pass |
+| `just test` | 398 Rust (1 skipped), 202 + 195 pytest, 18 + 20 unittest (2 skipped): pass |
+| CARLA 20-NPC bench, gap trace against the part A new stack's | identical, 1202 frames |
+| `multi_av/town01_two_av` on CARLA | PASS |
+| `swb_world_check conformance`: `carla_world`, Isaac world server | 20/20, 19/19 |
+| Isaac 20-NPC bench (headless, no ego) | PASS; trace identical to part A's first run |
+| node, services, parameter | `/scenario_world_bridge`, its two weather services, `config_file` |
+
+Not run: `just e2e` on either simulator. On CARLA, the bench, two_av and the suites of
+part A cover what it runs; on Isaac it needs the Isaac ego, which this host's GPUs cannot
+render (part A results).
+
 ## Steps
 
 ### Part A

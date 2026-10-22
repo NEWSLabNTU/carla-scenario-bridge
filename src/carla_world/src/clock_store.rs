@@ -1,9 +1,9 @@
-//! The episode clock, kept across csb restarts.
+//! The episode clock, kept across swb restarts.
 //!
-//! The epoch is the one piece of csb state that must outlive the process: a new csb that
+//! The epoch is the one piece of swb state that must outlive the process: a new swb that
 //! starts from epoch 0 reports CARLA's raw `elapsed_seconds`, so SSv2's time goes back and
-//! stays an epoch apart from acb's `/clock` (roadmap 016, gap 11). After every frame csb
-//! records `(CARLA episode id, epoch, last frame)`; a new csb restores it.
+//! stays an epoch apart from acb's `/clock` (roadmap 016, gap 11). After every frame swb
+//! records `(CARLA episode id, epoch, last frame)`; a new swb restores it.
 //!
 //! The file lives on tmpfs (`$XDG_RUNTIME_DIR`), not the log disk: it is written from the
 //! frame loop, and a write that blocks in a busy disk's journal stalls the loop
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use crate::episode_clock::EpisodeClock;
 
-/// What one csb process leaves for the next.
+/// What one swb process leaves for the next.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StoredClock {
     pub world_id: u64,
@@ -22,13 +22,13 @@ pub struct StoredClock {
     pub last_frame: Option<(f64, f64)>,
 }
 
-/// How a new csb takes over the stored clock.
+/// How a new swb takes over the stored clock.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Resume {
     /// Same CARLA episode: carry on with the stored epoch.
     SameEpisode(EpisodeClock),
-    /// CARLA moved to another episode (restarted, or a world was loaded) while no csb was
-    /// watching: the episode rule applied to the last frame the old csb recorded.
+    /// CARLA moved to another episode (restarted, or a world was loaded) while no swb was
+    /// watching: the episode rule applied to the last frame the old swb recorded.
     NewEpisode(EpisodeClock),
 }
 
@@ -44,12 +44,12 @@ pub fn resume(stored: StoredClock, current_world_id: Option<u64>) -> Resume {
     Resume::NewEpisode(clock)
 }
 
-/// `$XDG_RUNTIME_DIR/carla-scenario-bridge/clock-<host>-<port>`, or under `/tmp` without it.
+/// `$XDG_RUNTIME_DIR/scenario-world-bridge/clock-<host>-<port>`, or under `/tmp` without it.
 pub fn path_for(host: &str, port: u16) -> PathBuf {
     let base = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    base.join("carla-scenario-bridge")
+    base.join("scenario-world-bridge")
         .join(format!("clock-{host}-{port}"))
 }
 
@@ -81,7 +81,7 @@ pub fn load(path: &Path) -> Option<StoredClock> {
     decode(&std::fs::read_to_string(path).ok()?)
 }
 
-/// Write-then-rename, so a csb killed mid-write leaves the previous record, not half a line.
+/// Write-then-rename, so a swb killed mid-write leaves the previous record, not half a line.
 pub fn save(path: &Path, clock: &StoredClock) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn save_then_load() {
-        let dir = std::env::temp_dir().join(format!("csb-clock-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("swb-clock-test-{}", std::process::id()));
         let path = dir.join("clock");
         save(&path, &stored()).unwrap();
         assert_eq!(load(&path), Some(stored()));

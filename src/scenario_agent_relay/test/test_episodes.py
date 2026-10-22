@@ -6,15 +6,15 @@ import time
 
 import pytest
 
-import csb_agent
-from csb_agent import protocol as P
+import swb_agent
+from swb_agent import protocol as P
 from scenario_agent_relay.episodes import Episodes
 from scenario_agent_relay.server import AgentServer
 
 POSE = {"x": 1.0, "y": 2.0, "z": 0.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0}
 
 
-class SlowReset(csb_agent.Agent):
+class SlowReset(swb_agent.Agent):
     def __init__(self, seconds=0.0, fail=False):
         super().__init__({"entity": "ego"})
         self.seconds, self.fail = seconds, fail
@@ -24,13 +24,13 @@ class SlowReset(csb_agent.Agent):
         self.resets.append(ep)
         time.sleep(self.seconds)
         if self.fail:
-            raise csb_agent.Failed("localization did not converge")
+            raise swb_agent.Failed("localization did not converge")
 
     def on_stop(self):
         pass
 
 
-class NoReset(csb_agent.Agent):
+class NoReset(swb_agent.Agent):
     def __init__(self):
         super().__init__({"entity": "ego"})
         self.teleports = 0
@@ -57,7 +57,7 @@ def relay():
 
 
 def run(relay, agent):
-    client = csb_agent.Client(agent, "127.0.0.1", relay.port)
+    client = swb_agent.Client(agent, "127.0.0.1", relay.port)
     threading.Thread(target=client.run, daemon=True).start()
     assert wait_until(lambda: relay.session("ego") is not None)
     return client
@@ -146,7 +146,7 @@ class Ender(SlowReset):
 
 
 def test_episode_end_through_a_commander_reaches_the_agent(relay):
-    from csb_agent.commander import Commander
+    from swb_agent.commander import Commander
     agent = Ender()
     client = run(relay, agent)
     Episodes(relay).initialize("ego", POSE, reply_window=2.0)

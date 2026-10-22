@@ -10,7 +10,7 @@
   <maintainer email="maintainer@example.com">Maintainer</maintainer>
   <license>Apache-2.0</license>
 
-  <exec_depend>csb_agent</exec_depend>
+  <exec_depend>swb_agent</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>

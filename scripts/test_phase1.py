@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 1 acceptance test for carla-scenario-bridge.
+Phase 1 acceptance test for scenario-world-bridge.
 
 Acts as an SSv2 client (ZMQ REQ) and sends protobuf messages to the adapter.
 Tests all 14 message handlers and verifies responses.

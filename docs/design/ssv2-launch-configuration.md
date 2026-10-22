@@ -25,7 +25,7 @@ source install/setup.bash
 # First: the ego stack, in the same ROS domain SSv2 will run in. Wait for Autoware's
 # ADAPI services to come up before starting a scenario.
 play_launch launch --web-addr 0.0.0.0:8082 \
-    csb_launch ego_av.launch.xml \
+    swb_launch ego_av.launch.xml \
     map_path:=$PROJECT/data/carla-autoware-bridge/Town01
 
 # Then, per scenario run:

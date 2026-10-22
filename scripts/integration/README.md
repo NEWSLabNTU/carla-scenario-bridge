@@ -1,7 +1,7 @@
 # Integration probe
 
 `ssv2_probe.py` stands in for SSv2, speaking the real ZMQ + protobuf `simulation_interface`
-protocol to `carla_scenario_bridge`, and checks every assertion against the live CARLA world
+protocol to `scenario_world_bridge`, and checks every assertion against the live CARLA world
 through the Python API rather than against what the bridge reports about itself.
 
 It exists because the unit tests cannot reach the interesting behaviour: `Coordinator` needs

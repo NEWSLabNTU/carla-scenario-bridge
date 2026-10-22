@@ -38,22 +38,22 @@ if [ "${1:-}" = term ]; then
     title=""; cmd=true
     for a in "${@:2}"; do
         case $a in
-            title:=*) title="csb: ${a#title:=}" ;;
+            title:=*) title="swb: ${a#title:=}" ;;
             cmd:=*) cmd=${a#cmd:=} ;;
             *) echo "vnc_layout: term takes title:=<t> cmd:=<command>, not '$a'" >&2; exit 2 ;;
         esac
     done
     bus=$(session_bus) || { echo "vnc_layout: no GNOME session on $DISPLAY" >&2; exit 1; }
     # The title stays: an interactive bash whose prompt does not retitle the window.
-    rc=${XDG_RUNTIME_DIR:-/tmp}/csb-vnc-term.rc
+    rc=${XDG_RUNTIME_DIR:-/tmp}/swb-vnc-term.rc
     cat > "$rc" <<'RC'
 [ -f ~/.bashrc ] && . ~/.bashrc
 PS1='\u@\h:\w\$ '
-PROMPT_COMMAND='printf "\033]0;%s\007" "$CSB_TITLE"'
+PROMPT_COMMAND='printf "\033]0;%s\007" "$SWB_TITLE"'
 RC
-    CSB_TITLE=$title DBUS_SESSION_BUS_ADDRESS=$bus gnome-terminal --title "$title" -- \
-        bash -c 'printf "\033]0;%s\007" "$CSB_TITLE"; echo "\$ $1"; eval "$1"; exec bash --rcfile "$2"' \
-        csb-term "$cmd" "$rc"
+    SWB_TITLE=$title DBUS_SESSION_BUS_ADDRESS=$bus gnome-terminal --title "$title" -- \
+        bash -c 'printf "\033]0;%s\007" "$SWB_TITLE"; echo "\$ $1"; eval "$1"; exec bash --rcfile "$2"' \
+        swb-term "$cmd" "$rc"
     exit 0
 fi
 
@@ -84,7 +84,7 @@ place() {  # id desktop x y w h
 arrange() {
     local list isaac rviz terms n i
     list=$("$WMCTRL" -lx)
-    # A terminal titled after what it runs ("csb: Isaac Sim world server") is not the window.
+    # A terminal titled after what it runs ("swb: Isaac Sim world server") is not the window.
     isaac=$(awk 'tolower($3) !~ /gnome-terminal/ && /Isaac Sim/ {print $1; exit}' <<< "$list")
     rviz=$(awk 'tolower($3) !~ /gnome-terminal/ && (tolower($3) ~ /rviz/ || /RViz/) {print $1; exit}' <<< "$list")
     mapfile -t terms < <(awk -v a="$isaac" -v b="$rviz" \

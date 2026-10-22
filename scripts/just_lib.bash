@@ -5,9 +5,9 @@
 # install and data paths, the log root) come from the environment, kept in .env or .envrc.
 
 # Environment variables the recipes used to read as project settings, each with the argument
-# that replaced it. `csb_reject_env` refuses to run while any of them is set (even empty),
+# that replaced it. `swb_reject_env` refuses to run while any of them is set (even empty),
 # so a stale shell or .env cannot change a run silently.
-CSB_RETIRED_ENV=(
+SWB_RETIRED_ENV=(
     "MAP_NAME|map_path:=<dir> (ego-av, bg-av, ego-isaac, isaac-world-gen) or the map argument (e2e)"
     "CSB_CONFIG_DIR|config_file:=<dir>/bridge_config.yaml (just run)"
     "CSB_BACKEND|sim:=carla|isaac (just run)"
@@ -45,12 +45,32 @@ CSB_RETIRED_ENV=(
     "AUTOWARE_OVERLAY|autoware_overlay:=false (ego-av, ego-isaac, bg-av)"
 )
 
-csb_reject_env() {
+# Host settings renamed with the project (roadmap 046): the old name is refused, naming the
+# new one, so a stale .env cannot leave a setting silently unread.
+SWB_RENAMED_ENV=(
+    "CSB_WEB_PORT|SWB_WEB_PORT"
+    "CSB_VEHICLE_USD|SWB_VEHICLE_USD"
+    "CSB_LOG_ROOT|SWB_LOG_ROOT"
+    "CSB_LOG_ARCHIVE|SWB_LOG_ARCHIVE"
+    "CSB_MAP_SOURCE|SWB_MAP_SOURCE"
+    "CSB_TICK_GATE|SWB_TICK_GATE"
+    "CSB_TM_SERVE|SWB_TM_SERVE"
+    "CSB_ISAAC_DIR|SWB_ISAAC_DIR"
+)
+
+swb_reject_env() {
     local e var bad=0
-    for e in "${CSB_RETIRED_ENV[@]}"; do
+    for e in "${SWB_RETIRED_ENV[@]}"; do
         var="${e%%|*}"
         if [ -n "${!var+x}" ]; then
             echo "[just] $var is no longer read; pass ${e#*|} instead" >&2
+            bad=1
+        fi
+    done
+    for e in "${SWB_RENAMED_ENV[@]}"; do
+        var="${e%%|*}"
+        if [ -n "${!var+x}" ]; then
+            echo "[just] $var was renamed with the project; set ${e#*|} instead (.env/.envrc)" >&2
             bad=1
         fi
     done
@@ -61,11 +81,11 @@ csb_reject_env() {
     fi
 }
 
-# csb_with_defaults OUT DEFAULT... -- ARG...
+# swb_with_defaults OUT DEFAULT... -- ARG...
 # OUT=(each name:=value DEFAULT whose name no ARG names, then the ARGs). An argument with an
 # empty value (`relay:=`) drops the default and is itself dropped -- ROS launch rejects an
 # empty `name:=` -- so the launch file's own default applies.
-csb_with_defaults() {
+swb_with_defaults() {
     local -n _out="$1"; shift
     local -a defaults=() given=()
     while [ $# -gt 0 ] && [ "$1" != -- ]; do defaults+=("$1"); shift; done
@@ -84,13 +104,13 @@ csb_with_defaults() {
     return 0
 }
 
-# csb_log_dir PROJECT KIND: the directory play_launch logs a stack of this kind under,
-# $CSB_LOG_ROOT/KIND (default PROJECT/play_log/KIND), created. When the log root is not the
+# swb_log_dir PROJECT KIND: the directory play_launch logs a stack of this kind under,
+# $SWB_LOG_ROOT/KIND (default PROJECT/play_log/KIND), created. When the log root is not the
 # repo's play_log, PROJECT/play_log/KIND is made a symlink to it, so play_log/<kind>/latest
 # keeps working from the repo.
-csb_log_dir() {
+swb_log_dir() {
     local project="$1" kind="$2"
-    local root="${CSB_LOG_ROOT:-$project/play_log}"
+    local root="${SWB_LOG_ROOT:-$project/play_log}"
     mkdir -p "$root/$kind"
     if [ "$(realpath -m "$root")" != "$(realpath -m "$project/play_log")" ]; then
         local link="$project/play_log/$kind"

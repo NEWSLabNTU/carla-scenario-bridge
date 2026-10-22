@@ -1,6 +1,6 @@
 # Documentation
 
-## Using carla-scenario-bridge
+## Using scenario-world-bridge
 
 - [README](../README.md) -- what it is, prerequisites, setup, quick start
 - Tutorials, in order:
@@ -11,12 +11,12 @@
 - [User Guide](user-guide.md) -- the reference: install, maps, scenario directories, running,
   the CARLA world, troubleshooting
 - [Writing an agent](agent-interface.md) -- drive scenarios with your own autopilot: the
-  `csb_agent.Agent` class, `ros_adapter` from YAML, `csb-agent check` / `new`
+  `swb_agent.Agent` class, `ros_adapter` from YAML, `swb-agent check` / `new`
 - [Writing scenarios](design/scenario-authoring.md) -- what a scenario may use on CARLA, and how
 - [User workflow and the vehicle agent](design/user-workflow.md) -- the two sides, swapping
   CARLA or Autoware
 
-## Developing carla-scenario-bridge
+## Developing scenario-world-bridge
 
 - [Developer Guide](development.md) -- build, test, layout, how a scenario runs, conventions,
   and the index of design documents ([design/](design/))

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from csb_agent import protocol as P
+from swb_agent import protocol as P
 from scenario_agent_relay.server import AgentServer
 
 

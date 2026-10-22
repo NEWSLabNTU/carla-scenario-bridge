@@ -10,21 +10,21 @@ scenario from [Tutorial 2](02-prepare-a-scenario.md).
 own output directory -- and merges the verdicts into one JUnit file:
 
 ```bash
-ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
-    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic \
+ROS_DOMAIN_ID=9 ros2 run swb_launch run_suite \
+    $(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/basic \
     ~/my_scenarios \
-    --output ~/csb_results/today
+    --output ~/swb_results/today
 ```
 
 Arguments are scenario files (`.xosc`, `.yaml`) or directories (every scenario file in
 them, sorted, recursively). It prints one line per scenario and a total:
 
 ```
-[run_suite] 8 scenario(s), domain 9, results in /home/you/csb_results/today
+[run_suite] 8 scenario(s), domain 9, results in /home/you/swb_results/today
 [run_suite] (1/8) town01_ego_drive: .../basic/town01_ego_drive.xosc
 [run_suite] PASS town01_ego_drive: 1/1 passed in 41 s
 ...
-[run_suite] 8/8 scenario(s) passed; /home/you/csb_results/today/suite.junit.xml
+[run_suite] 8/8 scenario(s) passed; /home/you/swb_results/today/suite.junit.xml
 ```
 
 Before each scenario it asks the relay whether the scenario's vehicles are registered, and
@@ -40,8 +40,8 @@ SSv2 still passes the run. The bridge records what CARLA's collision sensor saw 
 run; `--physical-verdict` puts it next to SSv2's verdict:
 
 ```bash
-ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite ~/my_scenarios \
-    --output ~/csb_results/physical --physical-verdict
+ROS_DOMAIN_ID=9 ros2 run swb_launch run_suite ~/my_scenarios \
+    --output ~/swb_results/physical --physical-verdict
 ```
 
 Each scenario now has two testcases, SSv2's and `carla_contact`:
@@ -83,7 +83,7 @@ body yourself.
 ## 4. The results
 
 ```
-~/csb_results/physical/
+~/swb_results/physical/
   suite.junit.xml                       every scenario, merged: open it in any JUnit viewer
   follow_to_goal/
     launch.log                          the scenario launch's console
@@ -95,7 +95,7 @@ body yourself.
 ```
 
 `suite.junit.xml` is what a CI job reads. The contact reports themselves are JSON under
-`~/.ros/csb/contacts/`, one per run; `ros2 run csb_launch physical_verdict --help` judges a
+`~/.ros/swb/contacts/`, one per run; `ros2 run swb_launch physical_verdict --help` judges a
 single run's result outside a suite.
 
 ## 5. Scenarios with variants
@@ -104,9 +104,9 @@ SSv2's YAML scenarios can sweep parameters (`ScenarioModifiers`): one file, one 
 combination. The AWF use cases do this:
 
 ```bash
-ROS_DOMAIN_ID=9 ros2 run csb_launch run_suite \
-    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/awf/UC-AEB-001-0001_Standing-pedestrian.yaml \
-    --output ~/csb_results/aeb --physical-verdict
+ROS_DOMAIN_ID=9 ros2 run swb_launch run_suite \
+    $(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/awf/UC-AEB-001-0001_Standing-pedestrian.yaml \
+    --output ~/swb_results/aeb --physical-verdict
 # [run_suite] PASS UC-AEB-001-0001_Standing-pedestrian: 10/10 passed in 537 s
 ```
 

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Everything in one launch, for a first try: the simulation side, an ego Autoware and one
+  scenario. For repeated runs start simulation.launch.xml and ego_av.launch.xml once and
+  run scenario.launch.xml per scenario (docs/user-guide.md).
+-->
+<launch>
+  <arg name="scenario" description="Path to .xosc scenario file" />
+  <arg name="map_path" description="Map directory; the same one the scenario's LogicFile names" />
+  <arg name="carla_host" default="localhost" />
+  <arg name="carla_port" default="2000" />
+  <arg name="ssv2_port" default="5555" />
+
+  <arg name="world_port" default="5591" />
+
+  <include file="$(find-pkg-share swb_launch)/launch/carla_simulation.launch.xml">
+    <arg name="carla_host" value="$(var carla_host)" />
+    <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="world_port" value="$(var world_port)" />
+    <arg name="ssv2_port" value="$(var ssv2_port)" />
+  </include>
+
+  <include file="$(find-pkg-share swb_launch)/launch/ego_av.launch.xml">
+    <arg name="map_path" value="$(var map_path)" />
+    <arg name="carla_host" value="$(var carla_host)" />
+    <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="release_notify_endpoint" value="tcp://127.0.0.1:$(eval &quot;$(var ssv2_port) + 1&quot;)" />
+    <arg name="release_ack_endpoint" value="tcp://127.0.0.1:$(eval &quot;$(var ssv2_port) + 2&quot;)" />
+  </include>
+
+  <include file="$(find-pkg-share swb_launch)/launch/scenario.launch.xml">
+    <arg name="scenario" value="$(var scenario)" />
+    <arg name="port" value="$(var ssv2_port)" />
+  </include>
+</launch>

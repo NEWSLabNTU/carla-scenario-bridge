@@ -1,7 +1,7 @@
 # One SSv2 simulator interface, one world server per simulator
 
 **Date**: 2026-10-22, revised the same day after a porting walkthrough (below). **Status**:
-proposal (user direction 2026-10-22: SSv2 and the simulators modular; csb is the CARLA glue,
+proposal (user direction 2026-10-22: SSv2 and the simulators modular; swb is the CARLA glue,
 a second glue for Isaac Sim, both standalone packages on one interface defined on SSv2's
 side). Builds on [simulator-backends.md](simulator-backends.md) (the seam, roadmap 035) and
 the as-built Isaac stack (037, 038, 043, 044, 045). Nothing here is implemented yet;
@@ -26,33 +26,33 @@ changed".
 ## What exists
 
 Roadmap 035 drew the seam as a Rust trait, `backend::SimBackend`, inside the one crate
-`carla_scenario_bridge`, and said that "a later split (an SSv2 adapter crate plus one crate
+`scenario_world_bridge`, and said that "a later split (an SSv2 adapter crate plus one crate
 per simulator) is a move, not a rewrite". The crate today, by role (lines of Rust):
 
 | role | where | size | depends on a simulator? |
 |---|---|---|---|
-| SSv2 protocol | `proto/` (SSv2's schemas + `csb_world.proto`), `build.rs`, `proto.rs` | | no (SSv2's), except `csb_world` (Isaac's) |
+| SSv2 protocol | `proto/` (SSv2's schemas + `swb_world.proto`), `build.rs`, `proto.rs` | | no (SSv2's), except `swb_world` (Isaac's) |
 | adapter: socket, frame budget, panics, drain | `zmq_server.rs` | 826 | no |
 | adapter: request to trait call to reply, `Driver` rules | `coordinator.rs`, `backend/mod.rs`, `backend/fake.rs` | 883 | no |
 | policy both backends use | `agent_link`, `autopilot`, `budgets`, `body_clearance`, `contact_report`, `coordinate_conversion`, `entity_manager`, `gap_trace`, `map_resolver`, `npc_tracking`, `weather`, `world_services`, `config` | ~6 900 | no in substance, **CARLA in name and detail** (below) |
 | policy only the CARLA backend uses | `actor_census`, `blueprint_boxes`, `episode_clock`, `clock_store`, `epoch_marker`, `lanelet_map`, `sensor_release`, `spawn_ladder`, `tick_gate`, `tick_watchdog`, `frame_stats` | ~3 300 | mostly CARLA (acb's epoch marker, CARLA's tick, blueprints) |
 | CARLA glue | `backend/carla/` (backend, collision monitor, traffic-light mapper, resolved signals, version, weather) | 7 600 | carla-rust |
-| Isaac glue, Rust half | `backend/isaac/` (`mod.rs` 1 567, `tracking.rs` 383, `signals.rs` 209, `tests.rs` 595) | 2 750 | `csb_world.proto` |
-| Isaac glue, Python half | `src/csb_isaac/` (`server.py` 188 and `protocol.py` 85 simulator-free; `world.py` 841 and the USD, physics, walker and catalogue modules Isaac's) + `scripts/` (Isaac install, town and vehicle export) | 2 260 | Isaac Sim, aib |
+| Isaac glue, Rust half | `backend/isaac/` (`mod.rs` 1 567, `tracking.rs` 383, `signals.rs` 209, `tests.rs` 595) | 2 750 | `swb_world.proto` |
+| Isaac glue, Python half | `src/isaac_world/` (`server.py` 188 and `protocol.py` 85 simulator-free; `world.py` 841 and the USD, physics, walker and catalogue modules Isaac's) + `scripts/` (Isaac install, town and vehicle export) | 2 260 | Isaac Sim, aib |
 
 Around the crate: the SSv2 fork (`managed-ego-unforked`, 23 patches: the `agent` and
 `simulator_autopilot` controllers, `UpdateEntityGoal`, the vehicle subtype in
-`VehicleParameters`, bounded waits, `$(env)` in scenarios), the agent relay and `csb_agent`
-(simulator-free), `csb_launch` (launch files for both simulators, `backend:=` chooses), the
+`VehicleParameters`, bounded waits, `$(env)` in scenarios), the agent relay and `swb_agent`
+(simulator-free), `swb_launch` (launch files for both simulators, `backend:=` chooses), the
 justfile (CARLA and Isaac recipes side by side), one `bridge_config.yaml` holding both
 simulators' keys, and the two vehicle bridges, already their own repositories: acb (CARLA)
 and aib (Isaac, a submodule the world server imports). `proto/` is byte-identical to the
-fork's `simulation_interface/proto` today (checked 2026-10-22), plus `csb_world.proto`.
+fork's `simulation_interface/proto` today (checked 2026-10-22), plus `swb_world.proto`.
 
 ```mermaid
 flowchart LR
     SSv2["SSv2 fork<br/>managed-ego-unforked"]
-    subgraph csb["carla_scenario_bridge (one crate, one binary)"]
+    subgraph swb["scenario_world_bridge (one crate, one binary)"]
         direction TB
         zmq["zmq_server<br/>coordinator"]
         policy["shared policy<br/>(CARLA in name)"]
@@ -64,15 +64,15 @@ flowchart LR
         trait --> isaac_b
     end
     CARLA["CARLA server"]
-    WS["world server<br/>src/csb_isaac (Python)"]
+    WS["world server<br/>src/isaac_world (Python)"]
     Isaac["Isaac Sim 6.1"]
     acb["acb_bridge"]
     aib["aib (imported)"]
     AW["Autoware ego"]
-    relay["agent relay + csb_agent"]
+    relay["agent relay + swb_agent"]
     SSv2 -- "simulation_interface<br/>ZMQ + protobuf" --> zmq
     carla_b -- carla-rust --> CARLA
-    isaac_b -- "csb_world.proto<br/>(private)" --> WS --> Isaac
+    isaac_b -- "swb_world.proto<br/>(private)" --> WS --> Isaac
     WS --> aib
     CARLA --> acb --> AW
     aib --> AW
@@ -83,23 +83,23 @@ flowchart LR
 
 ## The gap
 
-What stops csb and an Isaac glue from being two standalone packages on one interface:
+What stops swb and an Isaac glue from being two standalone packages on one interface:
 
 1. **The interface is a trait inside one binary, not a package boundary.** Both backends
-   are modules of `carla_scenario_bridge`; the backend is chosen by a ROS parameter at run
+   are modules of `scenario_world_bridge`; the backend is chosen by a ROS parameter at run
    time; the binary links carla-rust whichever backend runs. Nothing a third party could
    depend on exists: no crate publishes `SimBackend`, no package publishes the protocol.
 2. **The shared policy is written in CARLA's terms.** `episode_clock` ("simulation time as
    CARLA reports it", continued by acb's epoch marker), `contact_report` ("the run's CARLA
    contacts"), `gap_trace` ("SSv2's world and CARLA's"), `map_resolver` ("a CARLA town name
    from the map path", `map_alias`), `budgets` ("every time bound the bridge puts on
-   CARLA"), `world_services` (`/carla/set_weather`, `/carla/get_weather`), and
+   CARLA"), `world_services` (`/scenario_world_bridge/set_weather`, `/scenario_world_bridge/get_weather`), and
    `coordinate_conversion` (the Y-flip) are all used by `IsaacBackend` too, with the CARLA
    parts stepped around. 035 noted this and left it to 037; 037 lifted what Isaac needed
    without renaming.
 3. **Weather leaks through the trait.** `SimBackend::set_weather` takes
    `weather::WeatherRequest` and returns `world_services::WeatherReply`, both CARLA's
-   parameter set (`csb_interfaces/Weather.msg` is CARLA's `WeatherParameters`). Isaac
+   parameter set (`swb_interfaces/Weather.msg` is CARLA's `WeatherParameters`). Isaac
    answers `Unsupported`. A sky or lighting preset is the general notion; CARLA's fourteen
    floats are its own.
 4. **One configuration file for two simulators.** `bridge_config.yaml` has `carla:`,
@@ -107,10 +107,10 @@ What stops csb and an Isaac glue from being two standalone packages on one inter
    `collision_monitor`, `npc_motion` side by side; `simulation.launch.xml` carries
    `isaac_*` and `carla_*` arguments both. A glue cannot ship its own schema.
 5. **The Isaac glue is in two halves joined by a private protocol.** `IsaacBackend` (Rust,
-   in csb) and the world server (Python, in csb) talk `csb_world.proto`. That is a fine
+   in swb) and the world server (Python, in swb) talk `swb_world.proto`. That is a fine
    internal shape, but today the protocol, its generator (`gen_world_proto.sh`,
-   `csb_world.desc`), the Rust client and the Python server are spread over `proto/`,
-   `backend/isaac/` and `src/csb_isaac/`, and none of it can leave csb on its own.
+   `swb_world.desc`), the Rust client and the Python server are spread over `proto/`,
+   `backend/isaac/` and `src/isaac_world/`, and none of it can leave swb on its own.
 6. **The protocol lives in the glue, not with SSv2.** `proto/` is a copy of SSv2's
    `simulation_interface` schemas plus the fork's additions. The fork and the copy drift
    independently; a second glue would copy them again. There is no package that says "this
@@ -121,9 +121,9 @@ What stops csb and an Isaac glue from being two standalone packages on one inter
    pass before it is a backend.
 8. **Simulator-free Autoware-side pieces live in the CARLA repo.** aib depends on acb at
    run time for `acb_launch`'s Autoware profile and `acb_pilot` (the vehicle agent). The
-   agent itself is already `csb_agent`'s (`acb_agent` runs `csb_agent`'s `AutowareAgent`);
+   agent itself is already `swb_agent`'s (`acb_agent` runs `swb_agent`'s `AutowareAgent`);
    the launch profile is not.
-9. **Launch and run tooling are entangled.** `csb_launch` holds `isaac_world.launch.xml`
+9. **Launch and run tooling are entangled.** `swb_launch` holds `isaac_world.launch.xml`
    beside the CARLA launches; the justfile holds `isaac-*` recipes, `isaac_up.sh`, the
    world-server stack; `run_suite`, `acceptance.py` and the gap oracle are simulator-free but
    sit in the CARLA package.
@@ -149,7 +149,7 @@ Rust crate `ssv2_sim_adapter` with a `SimBackend` trait and says "a third simula
 third binary on the same crate". BeamNG has no Rust API. Mina's choices are a Python
 binding layer under a Rust backend, or what Isaac did: a Rust backend that talks to a
 Python process over a socket. The second is the obvious one, and Isaac's two halves are
-right there to copy, but `csb_world.proto`, `protocol.py`, `server.py` and `IsaacBackend`
+right there to copy, but `swb_world.proto`, `protocol.py`, `server.py` and `IsaacBackend`
 are, in the draft, the Isaac glue's private property. Copying them means a second private
 protocol, a second Rust client of 1 500 lines, and no shared conformance for either.
 
@@ -221,7 +221,7 @@ lifetime and needs neither. Mina must learn which of the two shapes to copy. Wit
 server, time is the server's and monotonic by construction, so the world-server path
 answers this for free; the draft does not say so.
 
-What did not hurt: the agent side. `csb_agent` and the relay need nothing from the
+What did not hurt: the agent side. `swb_agent` and the relay need nothing from the
 simulator; a BeamNG ego driven by Autoware registers with the relay exactly as the CARLA and
 Isaac egos do. The trait's vocabulary (entities by SSv2 name, map-frame poses, one call per
 request) also read as right at every step.
@@ -237,7 +237,7 @@ every port. The revision keeps one: the wire. (AWSIM, which implements SSv2's
 ## What the walkthrough changed
 
 1. **One way in: every simulator is a world server.** The world protocol (today
-   `csb_world.proto`, the Isaac glue's private wire) becomes *the* simulator interface:
+   `swb_world.proto`, the Isaac glue's private wire) becomes *the* simulator interface:
    language-neutral, versioned, published by the adapter. The adapter is one fixed binary
    that speaks SSv2 on one side and the world protocol on the other; the `SimBackend` trait
    becomes its internal seam (one implementation, `RemoteBackend`, and the fake for tests),
@@ -256,7 +256,7 @@ every port. The revision keeps one: the wire. (AWSIM, which implements SSv2's
    `isaac_up.sh` has today, and the package name `<sim>_world`. The run tooling dispatches
    on the name and never learns a simulator.
 5. **The Autoware-side simulator-free pieces move to the adapter repository**: the launch
-   profile out of acb, the vehicle agent `acb_pilot` beside `csb_agent` (it is `csb_agent`'s
+   profile out of acb, the vehicle agent `acb_pilot` beside `swb_agent` (it is `swb_agent`'s
    runner), and a written I5 contract. aib's pure generator and `aib.ros` are noted as the
    next candidates, not moved now.
 
@@ -287,7 +287,7 @@ flowchart TB
         direction LR
         bridge["ssv2_world_bridge (one binary)<br/>zmq_server, coordinator, budgets, drain<br/>entity table, Driver rules, agent link,<br/>autopilot commander, contacts, gap trace,<br/>episode continuity, RemoteBackend"]
         wp["ssv2_world_protocol<br/>world .proto, version M<br/>shells: Rust WorldServer trait,<br/>Python World base class<br/>conformance CLI (wire level)"]
-        side["agent relay, csb_agent, vehicle agent,<br/>scenario_vehicle_launch (Autoware profile),<br/>run_suite, acceptance, gap oracle, examples"]
+        side["agent relay, swb_agent, vehicle agent,<br/>scenario_vehicle_launch (Autoware profile),<br/>run_suite, acceptance, gap oracle, examples"]
         bridge --> wp
     end
     subgraph L2["L2  one world server per simulator (own repository each)"]
@@ -349,7 +349,7 @@ implements. Only the adapter depends on it; a simulator never sees it.
 
 ### L1: `ssv2_world_protocol`, the simulator interface
 
-The one interface a simulator implements. It is today's `csb_world.proto` with the Isaac
+The one interface a simulator implements. It is today's `swb_world.proto` with the Isaac
 details removed and the CARLA-only trait surface added, versioned on its own (M):
 
 | message | today | change |
@@ -403,16 +403,16 @@ tests; it is not exported.
   `world.yaml` under it), `budgets` (SSv2's deadlines, with the world request timeouts),
   `coordinate_conversion` (the ROS-frame helpers only; the Y-flip leaves with CARLA).
 - Weather through the protocol: the ROS services become `/<node>/set_weather` and
-  `/<node>/get_weather` on a generic message (preset plus parameters); `csb_interfaces`'
+  `/<node>/get_weather` on a generic message (preset plus parameters); `swb_interfaces`'
   CARLA `Weather.msg` goes with the CARLA server, which may serve CARLA's own service beside
   it if the fourteen floats are wanted.
 - Configuration in two parts: the adapter's keys (`ssv2`, `world` endpoint and timeouts,
   `agent_relay`, `npc_motion`, `gap_trace_dir`, `contact_report_dir`, `weather`, `ego`,
   `asset_map`) and nothing else; a world server has its own config file, which is its
   business.
-- The agent relay, `csb_agent`, the vehicle agent (today acb's `acb_pilot`, which runs
-  `csb_agent`'s `AutowareAgent`), `run_suite`, `acceptance.py`, the gap oracle, the starter
-  scenarios (`csb_examples`), `scenario.launch.xml` and `simulation.launch.xml` (the bridge
+- The agent relay, `swb_agent`, the vehicle agent (today acb's `acb_pilot`, which runs
+  `swb_agent`'s `AutowareAgent`), `run_suite`, `acceptance.py`, the gap oracle, the starter
+  scenarios (`swb_examples`), `scenario.launch.xml` and `simulation.launch.xml` (the bridge
   plus the relay, taking the world endpoint): already simulator-free, they sit beside the
   bridge.
 
@@ -487,8 +487,8 @@ The vehicle bridges stay one per simulator. What moves to the adapter repository
 - `scenario_vehicle_launch`: acb's `carla_simulator.launch.xml` minus `acb_bridge`, the
   Autoware profile tuned for a simulated car, which acb's and aib's launches then include
   with their vehicle and sensor models. aib stops depending on acb.
-- The vehicle agent (`acb_pilot`'s `acb_agent`), which is `csb_agent`'s `AutowareAgent`
-  with a launch wrapper, beside `csb_agent`.
+- The vehicle agent (`acb_pilot`'s `acb_agent`), which is `swb_agent`'s `AutowareAgent`
+  with a launch wrapper, beside `swb_agent`.
 - The I5 contract written down in the adapter's docs: the topics and message set
   (`/sensing/*`, `/vehicle/status/*`, `/control/command/*`, `/clock`, the signal V2X
   table from `traffic_lights.yaml`), the frames, and the clock rule: one `/clock` per
@@ -523,7 +523,7 @@ servers and is measured.
 
 1. **Protocol package** `ssv2_sim_interface` (proto, build, Rust types, Python descriptor);
    the SSv2 submodule's `simulation_interface` checked against it by a test.
-2. **World protocol package** `ssv2_world_protocol`: `csb_world.proto` renamed and
+2. **World protocol package** `ssv2_world_protocol`: `swb_world.proto` renamed and
    generalised (`simulator_name`, `capabilities`, the world string, `step_time` in
    `LoadWorld`, the substep length in `Step`, `SetGoal`, `SetWeather`/`GetWeather`); the
    Python shell from `server.py`, `protocol.py` and `world_server.py` with `World` as a
@@ -546,7 +546,7 @@ servers and is measured.
    the USD tooling, the launch, `up.sh` from `isaac_up.sh`; the recipes dispatch on
    `sim:=`.
 7. **Vehicle launch profile** out of acb into `scenario_vehicle_launch`, the vehicle agent
-   beside `csb_agent`; aib's `isaac_simulator.launch.xml` and acb's
+   beside `swb_agent`; aib's `isaac_simulator.launch.xml` and acb's
    `carla_simulator.launch.xml` include the profile; the I5 contract written.
 8. **Repositories**: `isaac_world` and `carla_world` to their own repositories (aib and acb
    as their submodules), then the adapter layer (interface, world protocol, bridge, relay,
@@ -555,7 +555,7 @@ servers and is measured.
    does today (its own colcon workspace).
 
 Open points for the user: the names (`ssv2_world_bridge` says what it is; the repo could
-keep "csb" for the adapter and name the CARLA server `carla_world`); whether to upstream
+keep "swb" for the adapter and name the CARLA server `carla_world`); whether to upstream
 the SSv2 interface patches to tier4 before or after the split; whether the gap campaign
 (024-026, 039) wants the gap oracle in the adapter repo or beside the scenarios; whether
 `aib.ros` and the generator move with step 7 or wait for the first Python port that asks.
@@ -567,7 +567,7 @@ the SSv2 interface patches to tier4 before or after the split; whether the gap c
   hung LibCarla call now wedges the server, and the adapter sees a request timeout as it
   does with Isaac. Same outcome (the adapter drains, exits 75, the supervisor restarts), one
   more process to restart. Measured in step 5; the Isaac path has run this way since 037.
-- **The world protocol becomes a public contract.** Today a `csb_world` change bumps
+- **The world protocol becomes a public contract.** Today a `swb_world` change bumps
   `PROTOCOL_VERSION` on both halves in one commit; with three servers, the proto needs a
   compatibility rule (additive fields only within a major version, as the `model` field was
   added) and the conformance CLI as its test.

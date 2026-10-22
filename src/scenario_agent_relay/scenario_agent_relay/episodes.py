@@ -18,7 +18,7 @@ import itertools
 import threading
 import time
 
-from csb_agent import protocol as P
+from swb_agent import protocol as P
 
 RESET_TIMEOUT = 60.0
 

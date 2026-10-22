@@ -1,10 +1,10 @@
-# carla-scenario-bridge -- SSv2 on CARLA and Isaac Sim, through one world interface (roadmap 046)
+# scenario-world-bridge -- SSv2 on CARLA and Isaac Sim, through one world interface (roadmap 046)
 set dotenv-load
 
 # Host settings come from the environment (or .env / .envrc): ports, displays, install and
 # data paths, the log root. Project settings -- map, vehicle, rviz, scenario output, ... --
 # are recipe arguments, name:=value as for a launch file; the environment variables that
-# used to carry them are refused by name (scripts/just_lib.bash, CSB_RETIRED_ENV).
+# used to carry them are refused by name (scripts/just_lib.bash, SWB_RETIRED_ENV).
 carla_port := env_var_or_default('CARLA_PORT', '2000')
 ssv2_port := env_var_or_default('SSV2_PORT', '5555')
 # The town a recipe uses when no map is given
@@ -22,12 +22,12 @@ agent_port := env_var_or_default('AGENT_PORT', '5560')
 # The first background AV's ROS domain (`just bg-av`, `just two-av`); a second one is passed
 # as `just bg-av <entity> <domain>`. A host setting, so two checkouts keep their AVs apart.
 bg_domain := env_var_or_default('BG_ROS_DOMAIN_ID', '2')
-# The play_launch web UIs, one port per stack from CSB_WEB_PORT up (a host setting, so two
+# The play_launch web UIs, one port per stack from SWB_WEB_PORT up (a host setting, so two
 # checkouts can run side by side): +0 the demo, +1 the scenario stack, +2 the ego stack,
 # +3 the background AV (bg_av_1), +4 the simulation side (bridge + relay), +5 the Isaac world
 # server; a second background AV takes +6 (`just bg-av bg_av_2 3 <port>`). Recipes compute
-# them as $((CSB_WEB_PORT + n)); scripts/isaac_up.sh and run_suite read the same variable.
-export CSB_WEB_PORT := env_var_or_default('CSB_WEB_PORT', '8080')
+# them as $((SWB_WEB_PORT + n)); scripts/isaac_up.sh and run_suite read the same variable.
+export SWB_WEB_PORT := env_var_or_default('SWB_WEB_PORT', '8080')
 # The world servers' REP ports on 127.0.0.1 (roadmap 046): Isaac's (`just isaac-world`) and
 # CARLA's (inside `just run sim:=carla`). The bridge drives the one its simulation side names.
 isaac_port := env_var_or_default('ISAAC_PORT', '5590')
@@ -40,7 +40,7 @@ project := justfile_directory()
 # Where every stack's play_launch logs go, <log root>/<kind>/<time>/. A host setting: keep it
 # on a disk whose fsync latency cannot stall a node (CLAUDE.md, "The log disk can stall a
 # node"). When it is not the repo's play_log, play_log/<kind> links to it.
-export CSB_LOG_ROOT := env_var_or_default('CSB_LOG_ROOT', justfile_directory() + '/play_log')
+export SWB_LOG_ROOT := env_var_or_default('SWB_LOG_ROOT', justfile_directory() + '/play_log')
 lib := justfile_directory() + '/scripts/just_lib.bash'
 acb_src := justfile_directory() + '/src/autoware_carla_bridge'
 # Where Autoware's own setup.bash lives. The NEWSLabNTU 1.5.0 Debian installs under
@@ -150,7 +150,7 @@ build: _check-setuptools
         --cmake-args -DBUILD_TESTING=OFF
 
     # colcon-cargo-ros2 writes this workspace's message patches into acb's Cargo.lock too,
-    # as `[[patch.unused]]` entries (csb_interfaces is not an acb dependency). Undo that, and
+    # as `[[patch.unused]]` entries (swb_interfaces is not an acb dependency). Undo that, and
     # only that, so the acb submodule does not show a modified lock after every build here.
     lock=src/autoware_carla_bridge/Cargo.lock
     if ! git -C src/autoware_carla_bridge diff --quiet -- Cargo.lock; then
@@ -174,7 +174,7 @@ build-autoware-overlay:
     set -e
     PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/\.venv/bin$' | paste -sd:)
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_build "{{autoware_overlay_dir}}" "{{autoware_setup}}"
+    swb_autoware_overlay_build "{{autoware_overlay_dir}}" "{{autoware_setup}}"
 
 # Download TensorRT 10.8.0 (NVIDIA's tensorrt-cu12-libs wheel, 3.1 GB; 2.6 GB extracted) into
 # AUTOWARE_TENSORRT_LIB (default third_party/tensorrt/lib), the runtime `just ego-av`,
@@ -187,7 +187,7 @@ setup-tensorrt:
     #!/usr/bin/env bash
     set -e
     source "{{project}}/scripts/autoware_tensorrt.bash"
-    csb_tensorrt_setup "{{autoware_tensorrt_lib}}"
+    swb_tensorrt_setup "{{autoware_tensorrt_lib}}"
 
 # Remove build artifacts
 clean:
@@ -214,13 +214,13 @@ test:
     source install/setup.bash
     cargo nextest run --no-tests pass --no-fail-fast
     # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)
-    python3 -m pytest -q src/csb_launch/test
+    python3 -m pytest -q src/swb_launch/test
     # The agent SDK and protocol, and the relay against it (roadmap 030)
-    python3 -m pytest -q src/csb_agent/test src/scenario_agent_relay/test
+    python3 -m pytest -q src/swb_agent/test src/scenario_agent_relay/test
     # The world server shell, on a fake world (roadmaps 037, 046; protobuf only), and the Isaac
     # world's pure modules
-    python3 -m unittest discover -s src/csb_world_server/test
-    python3 -m unittest discover -s src/csb_isaac/test
+    python3 -m unittest discover -s src/swb_world_server/test
+    python3 -m unittest discover -s src/isaac_world/test
 
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
@@ -230,11 +230,11 @@ ci: build check test
 two-av *args: _require-carla
     #!/usr/bin/env bash
     set -u
-    source "{{lib}}"; csb_reject_env
+    source "{{lib}}"; swb_reject_env
     # What "two Autoware" means here: the ego's stack and one background AV's, each a full
     # Autoware in its OWN ROS domain with its own acb_bridge, /clock and vehicle agent. Both
     # are scenario entities (roadmap 017): the ego by isEgo, bg_av_1 by its controller
-    # `agent`. csb spawns bg_av_1 with role_name bg_av_1 and drives it through the agent
+    # `agent`. swb spawns bg_av_1 with role_name bg_av_1 and drives it through the agent
     # relay -- teleported, then the scenario's goal -- so SSv2 sees it (collisions, reach
     # conditions) and the ego's Autoware perceives real, Autoware-driven traffic.
     #
@@ -247,9 +247,9 @@ two-av *args: _require-carla
     #   output_directory   where the scenario writes its verdict (default /tmp)
     #
     # Stacks already running are reused and left running: the simulation side (`just run`),
-    # the ego stack (`just ego-av`, web CSB_WEB_PORT+2) and the background AV stack (`just
-    # bg-av`, web CSB_WEB_PORT+3). Only stacks this recipe starts are stopped at the end.
-    scenario_file="{{project}}/src/csb_examples/scenarios/multi_av/town01_two_av.xosc"
+    # the ego stack (`just ego-av`, web SWB_WEB_PORT+2) and the background AV stack (`just
+    # bg-av`, web SWB_WEB_PORT+3). Only stacks this recipe starts are stopped at the end.
+    scenario_file="{{project}}/src/swb_examples/scenarios/multi_av/town01_two_av.xosc"
     keep_stacks=false; record=false; ego_rviz=(); bg_rviz=(); output_directory=/tmp; n=0
     for a in "$@"; do
         case "$a" in
@@ -264,7 +264,7 @@ two-av *args: _require-carla
         esac
     done
     ego_dom={{ego_domain}}
-    logs=$(csb_log_dir "{{project}}" two-av)
+    logs=$(swb_log_dir "{{project}}" two-av)
     rec_display="${RECORD_DISPLAY:-${DISPLAY:-:1}}"
     launch_rviz=$([ "$record" = true ] && echo true || echo false)
     echo "[two-av] scenario domain {{scenario_domain}}, ego domain $ego_dom, background AV domain {{bg_domain}}"
@@ -329,8 +329,8 @@ two-av *args: _require-carla
         echo "[two-av] $name stack up at $(date +%T)"
     }
 
-    if stack_on_port $((CSB_WEB_PORT + 2)) >/dev/null; then
-        echo "[two-av] reusing the running ego stack (web $((CSB_WEB_PORT + 2)))"
+    if stack_on_port $((SWB_WEB_PORT + 2)) >/dev/null; then
+        echo "[two-av] reusing the running ego stack (web $((SWB_WEB_PORT + 2)))"
     else
         echo "[two-av] starting the ego stack (several minutes)"
         setsid env DISPLAY="$rec_display" \
@@ -339,8 +339,8 @@ two-av *args: _require-carla
         wait_for_stack ego "$ego_pg" || exit 1
     fi
 
-    if stack_on_port $((CSB_WEB_PORT + 3)) >/dev/null; then
-        echo "[two-av] reusing the running background AV stack (web $((CSB_WEB_PORT + 3)))"
+    if stack_on_port $((SWB_WEB_PORT + 3)) >/dev/null; then
+        echo "[two-av] reusing the running background AV stack (web $((SWB_WEB_PORT + 3)))"
     else
         echo "[two-av] starting the background AV stack"
         # With record:=true the background AV gets an RViz too, on the same display: two
@@ -414,12 +414,12 @@ demo-tour *args: _require-carla
     #                      the ego stack takes minutes to come up)
     # The windows go to RECORD_DISPLAY, else DISPLAY (host settings); none set: no windows,
     # the tour runs headless. The ego stack is the tour's (max_velocity:=11.11, CenterPoint
-    # with the lidar merger); a running one (web CSB_WEB_PORT+2) is reused, so start it with those
+    # with the lidar merger); a running one (web SWB_WEB_PORT+2) is reused, so start it with those
     # arguments. The simulation side is reused or started, and set to ClearNoon either way.
     set -e
-    source "{{lib}}"; csb_reject_env
+    source "{{lib}}"; swb_reject_env
     record=false; rviz=""; keep_stacks=true; output_directory=""
-    scenario="{{project}}/src/csb_examples/scenarios/demo/town01_tour.xosc"
+    scenario="{{project}}/src/swb_examples/scenarios/demo/town01_tour.xosc"
     for a in "$@"; do
         case "$a" in
             record:=*) record="${a#*:=}" ;;
@@ -430,7 +430,7 @@ demo-tour *args: _require-carla
             *) echo "demo-tour: unknown argument '$a' (record:=, rviz:=, keep_stacks:=, scenario:=, output_directory:=)" >&2; exit 2 ;;
         esac
     done
-    logs="$(csb_log_dir "{{project}}" demo-tour)/$(date +%Y-%m-%d_%H-%M-%S)"
+    logs="$(swb_log_dir "{{project}}" demo-tour)/$(date +%Y-%m-%d_%H-%M-%S)"
     mkdir -p "$logs"; ln -sfn "$logs" "$(dirname "$logs")/latest"
     output_directory="${output_directory:-$logs/out}"
     display="${RECORD_DISPLAY:-${DISPLAY:-}}"
@@ -474,7 +474,7 @@ demo-tour *args: _require-carla
     trap cleanup EXIT INT TERM
 
     # The simulation side, ClearNoon.
-    if ! stack_on_port $((CSB_WEB_PORT + 4)) > /dev/null; then
+    if ! stack_on_port $((SWB_WEB_PORT + 4)) > /dev/null; then
         echo "[demo-tour] starting the simulation side (just run weather:=ClearNoon)"
         setsid just run weather:=ClearNoon > "$logs/bridge.log" 2>&1 < /dev/null &
         started+=($!)
@@ -483,22 +483,22 @@ demo-tour *args: _require-carla
             sleep 2
         done
     fi
-    ROS_DOMAIN_ID={{scenario_domain}} timeout 30 ros2 service call /carla/set_weather \
-        csb_interfaces/srv/SetWeather "{preset: ClearNoon}" 2>/dev/null | grep -o "success=[A-Za-z]*" \
+    ROS_DOMAIN_ID={{scenario_domain}} timeout 30 ros2 service call /scenario_world_bridge/set_weather \
+        swb_interfaces/srv/SetWeather "{preset: ClearNoon}" 2>/dev/null | grep -o "success=[A-Za-z]*" \
         || echo "[demo-tour] note: could not set ClearNoon (bridge not answering yet?)"
 
     # The ego stack, the tour's arguments, RViz on the display.
-    if pid=$(stack_on_port $((CSB_WEB_PORT + 2))); then
+    if pid=$(stack_on_port $((SWB_WEB_PORT + 2))); then
         args=$(tr '\0' ' ' < "/proc/$pid/cmdline")
         case "$args" in *max_velocity:=11.11*) ;; *)
-            echo "[demo-tour] warning: the running ego stack (web $((CSB_WEB_PORT + 2))) was not started with" \
+            echo "[demo-tour] warning: the running ego stack (web $((SWB_WEB_PORT + 2))) was not started with" \
                  "max_velocity:=11.11 -- the tour is timed for 40 km/h" >&2 ;;
         esac
-        echo "[demo-tour] reusing the running ego stack (web $((CSB_WEB_PORT + 2)))"
+        echo "[demo-tour] reusing the running ego stack (web $((SWB_WEB_PORT + 2)))"
     else
         echo "[demo-tour] starting the ego stack (several minutes; CenterPoint)"
         rviz_args=(rviz:="$rviz")
-        [ "$rviz" = true ] && rviz_args+=(rviz_config:="{{project}}/src/csb_launch/rviz/autoware_cast.rviz")
+        [ "$rviz" = true ] && rviz_args+=(rviz_config:="{{project}}/src/swb_launch/rviz/autoware_cast.rviz")
         setsid env ${display:+DISPLAY=$display} just ego-av max_velocity:=11.11 \
             lidar_detection_model:=centerpoint use_multi_channel_tracker_merger:=false \
             "${rviz_args[@]}" > "$logs/ego.log" 2>&1 < /dev/null &
@@ -516,14 +516,14 @@ demo-tour *args: _require-carla
     # autoware_cast.rviz takes the right half of a 1920x1080 screen).
     if [ -n "$display" ]; then
         setsid env DISPLAY="$display" SDL_VIDEO_WINDOW_POS=70,28 VIEW_W=740 VIEW_H=416 \
-            CARLA_PORT={{carla_port}} ros2 run csb_launch chase_view > "$logs/chase_view.log" 2>&1 < /dev/null &
+            CARLA_PORT={{carla_port}} ros2 run swb_launch chase_view > "$logs/chase_view.log" 2>&1 < /dev/null &
         windows+=($!)
-        setsid env DISPLAY="$display" ROS_DOMAIN_ID={{scenario_domain}} ros2 run csb_launch demo_captions \
+        setsid env DISPLAY="$display" ROS_DOMAIN_ID={{scenario_domain}} ros2 run swb_launch demo_captions \
             --geometry 740x190+70+478 --log "$logs/captions.jsonl" > "$logs/captions.log" 2>&1 < /dev/null &
         windows+=($!)
         sleep 5
     else
-        setsid env ROS_DOMAIN_ID={{scenario_domain}} ros2 run csb_launch demo_captions --headless \
+        setsid env ROS_DOMAIN_ID={{scenario_domain}} ros2 run swb_launch demo_captions --headless \
             --log "$logs/captions.jsonl" > "$logs/captions.log" 2>&1 < /dev/null &
         windows+=($!)
     fi
@@ -574,7 +574,7 @@ _require-agent entity:
     sys.exit("[just] the relay closed the connection")
 
 # The simulation side (roadmaps 017, 046), long-lived, in the scenario domain. sim:=carla
-# (default): csb_launch carla_simulation.launch.xml -- the CARLA world server, the bridge
+# (default): swb_launch carla_simulation.launch.xml -- the CARLA world server, the bridge
 # driving it and the agent relay, one launch; CARLA itself runs apart (`just carla-start`).
 # sim:=isaac: isaac_simulation.launch.xml -- the bridge and the relay, driving the Isaac
 # world server (`just isaac-world`). play_launch restarts a server or bridge that died.
@@ -587,7 +587,7 @@ _require-agent entity:
 run *args:
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; csb_reject_env
+    source "{{lib}}"; swb_reject_env
     sim=carla; args=()
     for a in "$@"; do
         case "$a" in
@@ -602,7 +602,7 @@ run *args:
         isaac) launch=(isaac_simulation.launch.xml isaac_port:={{isaac_port}}) ;;
         *) echo "run: sim '$sim' is not carla or isaac" >&2; exit 2 ;;
     esac
-    log_dir=$(csb_log_dir "{{project}}" bridge)
+    log_dir=$(swb_log_dir "{{project}}" bridge)
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
@@ -611,9 +611,9 @@ run *args:
     # relay SSv2 cannot see.
     export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
     export ROS_DOMAIN_ID={{scenario_domain}}
-    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 4)) \
+    exec play_launch launch --web-addr 0.0.0.0:$((SWB_WEB_PORT + 4)) \
         --log-dir "$log_dir" \
-        csb_launch "${launch[@]}" agent_port:={{agent_port}} ssv2_port:={{ssv2_port}} \
+        swb_launch "${launch[@]}" agent_port:={{agent_port}} ssv2_port:={{ssv2_port}} \
         "${args[@]}"
 
 
@@ -631,15 +631,15 @@ isaac_display := env_var_or_default("ISAAC_DISPLAY", ":8")
 
 # Isaac Sim smoke test: version, start time, step time (headless; DISPLAY set = windowed)
 isaac-check:
-    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/csb_isaac/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/isaac_world/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
 
 # The Isaac Sim world server (roadmaps 037, 038, 046), supervised (043):
-# csb_launch isaac_world.launch.xml under play_launch (web CSB_WEB_PORT+5, logs in $CSB_LOG_ROOT/isaac/),
+# swb_launch isaac_world.launch.xml under play_launch (web SWB_WEB_PORT+5, logs in $SWB_LOG_ROOT/isaac/),
 # which respawns it when it dies. Long-lived: start it once, before `just run sim:=isaac`
 # and `just ego-isaac`; `just scenario ... sim:=isaac` starts it when it is not up.
 #
 # Where it runs is environment, set per shell or kept in .env / .envrc:
-#   ISAAC_PORT=5590   REP port on 127.0.0.1 (`just run` hands csb the same port)
+#   ISAAC_PORT=5590   REP port on 127.0.0.1 (`just run` hands swb the same port)
 #   EGO_ROS_DOMAIN_ID the ego's ROS domain (1; the same as `just ego-isaac`), over ego.yaml's
 #   DISPLAY=:8        Isaac opens its window there (the VNC display); unset: headless.
 #                     ISAAC_HEADLESS=1 forces headless with DISPLAY set.
@@ -653,11 +653,11 @@ isaac-check:
 #   world:=<w>[,<w>]  worlds to load and render before serving: world files
 #                     (<map>/isaac/world.yaml), map directories or USD files. A world's first
 #                     render compiles its materials (CARLA Town01: ~9 min on a new host), which
-#                     no request timeout covers; csb's LoadWorld of a preloaded one is quick.
+#                     no request timeout covers; swb's LoadWorld of a preloaded one is quick.
 #                     The first listed stays loaded.
 # DDS as the ego stack's: Cyclone with the localhost config (036: both sides must match).
 # Ready when it answers Hello: `just isaac-health`. Stop it by its play_launch's pid
-# (SIGTERM); csb only empties its world.
+# (SIGTERM); swb only empties its world.
 #
 # Usage: [DISPLAY=:8] just isaac-world [ego:=<yaml>] [follow:=true] [world:=<w>,...] [render:=...]
 [positional-arguments]
@@ -679,11 +679,11 @@ isaac-world *args:
     # The ego's ROS domain is the ego stack's (`just ego-isaac`), not aib's ego.yaml's.
     export ISAAC_ROOT={{isaac_root}} ISAAC_PORT={{isaac_port}} EGO_ROS_DOMAIN_ID={{ego_domain}}
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # Built beside this checkout's csb_isaac; a moved checkout points it here again.
-    export CSB_ISAAC_DIR="{{project}}/src/csb_isaac"
-    log_dir=$(csb_log_dir "{{project}}" isaac)
-    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 5)) --log-dir "$log_dir" \
-        csb_launch isaac_world.launch.xml "${args[@]}"
+    # Built beside this checkout's isaac_world; a moved checkout points it here again.
+    export SWB_ISAAC_DIR="{{project}}/src/isaac_world"
+    log_dir=$(swb_log_dir "{{project}}" isaac)
+    exec play_launch launch --web-addr 0.0.0.0:$((SWB_WEB_PORT + 5)) --log-dir "$log_dir" \
+        swb_launch isaac_world.launch.xml "${args[@]}"
 
 # Is a world server up? One probe Hello (it changes nothing on the server): its simulator,
 # capabilities, owner and readiness. sim:=carla (default, WORLD_PORT) or sim:=isaac
@@ -703,7 +703,7 @@ world-health *args:
     done
     case "$sim" in carla) port={{world_port}} ;; isaac) port={{isaac_port}} ;;
         *) echo "world-health: sim '$sim' is not carla or isaac" >&2; exit 2 ;; esac
-    exec "{{project}}/install/carla_scenario_bridge/lib/carla_scenario_bridge/csb_world_check" \
+    exec "{{project}}/install/scenario_world_bridge/lib/scenario_world_bridge/swb_world_check" \
         hello "tcp://127.0.0.1:$port" --wait "$wait"
 
 # The Isaac world server's health (`just world-health sim:=isaac`).
@@ -730,13 +730,13 @@ world-check *args:
     done
     case "$sim" in carla) port={{world_port}} ;; isaac) port={{isaac_port}} ;;
         *) echo "world-check: sim '$sim' is not carla or isaac" >&2; exit 2 ;; esac
-    exec "{{project}}/install/carla_scenario_bridge/lib/carla_scenario_bridge/csb_world_check" \
+    exec "{{project}}/install/scenario_world_bridge/lib/scenario_world_bridge/swb_world_check" \
         conformance "tcp://127.0.0.1:$port" --map "$map"
 
 
 # Build Autoware's message bindings for Isaac's Python (once per Isaac install; roadmap 038)
 isaac-msgs:
-    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/build_msgs.sh"
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/scripts/build_msgs.sh"
 
 # <map>/isaac/world.yaml: from the map's point cloud as voxels (default), or usd:=<file> -- a
 # USD world in the map frame, e.g. CARLA's SimReady export with its physics layer, ground
@@ -749,17 +749,17 @@ isaac-msgs:
 # A CARLA town as an Isaac world (roadmap 043)
 [positional-arguments]
 isaac-town town *args:
-    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_town.sh" "$@"
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/scripts/isaac_town.sh" "$@"
 
 # Usage: just isaac-vehicles [only:=<id>,<id>...] [export:=true] [props|walkers|riders:=true]
 #
-# SimReady export of each vehicle, render-only asset, vehicles.json, into CSB_VEHICLE_USD;
-# host paths from CARLA_SRC and CSB_VEHICLE_USD. Physics afterwards, with CARLA up:
-# src/csb_isaac/scripts/dump_vehicle_physics.py --root "$CSB_VEHICLE_USD".
+# SimReady export of each vehicle, render-only asset, vehicles.json, into SWB_VEHICLE_USD;
+# host paths from CARLA_SRC and SWB_VEHICLE_USD. Physics afterwards, with CARLA up:
+# src/isaac_world/scripts/dump_vehicle_physics.py --root "$SWB_VEHICLE_USD".
 # CARLA's vehicles as Isaac assets (roadmap 043)
 [positional-arguments]
 isaac-vehicles *args:
-    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_vehicles.sh" "$@"
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/scripts/isaac_vehicles.sh" "$@"
 
 # Usage: just isaac-world-gen [map_path:=<dir>] [usd:=<file>]
 #
@@ -768,7 +768,7 @@ isaac-vehicles *args:
 isaac-world-gen *args:
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; csb_reject_env
+    source "{{lib}}"; swb_reject_env
     map_path="{{maps_dir}}/{{default_map}}"; usd=""
     for a in "$@"; do
         case "$a" in
@@ -778,10 +778,10 @@ isaac-world-gen *args:
         esac
     done
     export ISAAC_ROOT={{isaac_root}}
-    source "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_env.sh"
-    cd "{{justfile_directory()}}/src/csb_isaac"
-    if [ -n "$usd" ]; then python -m csb_isaac.usd_world "$map_path" "$usd"
-    else python -m csb_isaac.pcd_world "$map_path"; fi
+    source "{{justfile_directory()}}/src/isaac_world/scripts/isaac_env.sh"
+    cd "{{justfile_directory()}}/src/isaac_world"
+    if [ -n "$usd" ]; then python -m isaac_world.usd_world "$map_path" "$usd"
+    else python -m isaac_world.pcd_world "$map_path"; fi
 
 # Usage: just surfaces-check [map_path:=<dir>]
 #
@@ -805,7 +805,7 @@ surfaces-plot *args:
 _surfaces command *args:
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; csb_reject_env
+    source "{{lib}}"; swb_reject_env
     command=$1; shift
     map_path="{{maps_dir}}/{{default_map}}"; out=()
     for a in "$@"; do
@@ -816,8 +816,8 @@ _surfaces command *args:
             *) echo "surfaces-$command: unknown argument '$a' (map_path:=$([ "$command" = plot ] && echo ', out:='))" >&2; exit 2 ;;
         esac
     done
-    cd "{{justfile_directory()}}/src/csb_isaac"
-    python3 -m csb_isaac.surfaces "$command" "$map_path" "${out[@]}"
+    cd "{{justfile_directory()}}/src/isaac_world"
+    python3 -m isaac_world.surfaces "$command" "$map_path" "${out[@]}"
 
 # GNOME with 3 static workspaces (Ctrl+Alt+1/2/3), OpenGL on the NVIDIA GPU through
 # VirtualGL (-vgl; scripts/vnc_xstartup.sh). A GL app started from a terminal in the
@@ -838,7 +838,7 @@ isaac-vnc:
 vnc-layout *args:
     ISAAC_DISPLAY={{isaac_display}} "{{justfile_directory()}}/scripts/vnc_layout.sh" "$@"
 
-# A gnome-terminal titled "csb: <title>" in the Isaac VNC session, running <cmd>
+# A gnome-terminal titled "swb: <title>" in the Isaac VNC session, running <cmd>
 #
 # Usage: just vnc-term title:=ego-av "cmd:=tail -f play_log/ego/latest/play_launch.log"
 [positional-arguments]
@@ -873,13 +873,13 @@ vehicle-params blueprint="vehicle.tesla.model3" *args:
 # the ego's domain across the batch. Exit status is 0 only if every run passed every check.
 #
 # Usage: just acceptance [scenario] [runs] [domain] [sim:=carla|isaac] [worlds:=...]
-#        just acceptance src/csb_examples/scenarios/basic/town01_ego_drive.xosc 3 sim:=isaac
+#        just acceptance src/swb_examples/scenarios/basic/town01_ego_drive.xosc 3 sim:=isaac
 [positional-arguments]
 acceptance *args:
     #!/usr/bin/env bash
     set -e
-    scenario="{{project}}/src/csb_examples/scenarios/basic/town01_ego_drive.xosc"
-    source "{{lib}}"; csb_reject_env
+    scenario="{{project}}/src/swb_examples/scenarios/basic/town01_ego_drive.xosc"
+    source "{{lib}}"; swb_reject_env
     runs=1; domain=""; sim=carla; worlds=""; n=0
     for a in "$@"; do
         case "$a" in
@@ -900,7 +900,7 @@ acceptance *args:
         carla)
             export CARLA_PORT={{carla_port}} CARLA_MAPS="{{maps_dir}}"
             "{{project}}/scripts/carla_up.sh" "$(just _scenario-map "$scenario")"
-            args=(--scenario "$scenario" --runs "$runs" --play-log "$CSB_LOG_ROOT/ego")
+            args=(--scenario "$scenario" --runs "$runs" --play-log "$SWB_LOG_ROOT/ego")
             # acceptance.py watches the ego's domain (default 1, `ego_domain`).
             [ -n "$domain" ] && args+=(--domain "$domain")
             exec python3 "{{acb_src}}/scripts/acceptance.py" "${args[@]}" ;;
@@ -953,7 +953,7 @@ _require-ego-stack:
     set -e
     source "{{autoware_setup}}"
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_source "{{autoware_overlay_dir}}" true
+    swb_autoware_overlay_source "{{autoware_overlay_dir}}" true
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
@@ -1001,7 +1001,7 @@ _require-carla:
 ego-av *args: _require-carla
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; csb_reject_env
+    source "{{lib}}"; swb_reject_env
     overlay=""; autoware_overlay=true; container_mode=isolated; play_launch_args=""
     given=()
     for a in "$@"; do
@@ -1019,21 +1019,21 @@ ego-av *args: _require-carla
         esac
     done
     # Three overlaid workspaces: base Autoware, then acb (acb_launch, sensor kit,
-    # vehicle description, acb_bridge), then this one (csb_launch). The ego stack
+    # vehicle description, acb_bridge), then this one (swb_launch). The ego stack
     # resolves packages from all three. Right after Autoware comes the Autoware fix
     # overlay (`just build-autoware-overlay`, roadmap 042), then overlay:=, when given, so
     # its packages shadow Autoware's but not acb's: e.g. a tier4_system_launch with the
     # stock MRM nodes removed (a safety island's).
     source "{{autoware_setup}}"
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
+    swb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
     if [ -n "$overlay" ]; then source "$overlay"; fi
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     # TensorRT 10.8.0 first on LD_LIBRARY_PATH, after the setups that rewrite it: the version
     # Autoware was compiled against, so cached engines validate (`just setup-tensorrt`).
     source "{{project}}/scripts/autoware_tensorrt.bash"
-    csb_tensorrt_source "{{autoware_tensorrt_lib}}"
+    swb_tensorrt_source "{{autoware_tensorrt_lib}}"
     # Loopback-unicast DDS: lo multicast is disabled on this host and NIC-multicast
     # discovery flakes at this participant count - each run randomly failed to match
     # a different ADAPI service. Every ROS process in the pipeline must share this.
@@ -1053,17 +1053,17 @@ ego-av *args: _require-carla
     # the relay `just run` starts, and no localization seed on attach (the agent
     # initializes localization at the scenario's start pose, teleported; seeding from CARLA
     # as well would race it). acb publishes signal state from CARLA's lights (roadmap 015)
-    # from the table csb writes beside the Lanelet2 map at every Initialize, which the
+    # from the table swb writes beside the Lanelet2 map at every Initialize, which the
     # launch file's traffic_light_map_path default (<map_path>/carla/traffic_lights.yaml)
     # finds. A ROS launch argument cannot carry an empty value, so an empty one given here
-    # drops the default and is not passed (csb_with_defaults).
-    csb_with_defaults launch_args \
+    # drops the default and is not passed (swb_with_defaults).
+    swb_with_defaults launch_args \
         map_path:="{{maps_dir}}/{{default_map}}" vehicle_name:=hero carla_port:={{carla_port}} \
         release_notify_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 1))" \
         release_ack_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 2))" \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false seed_localization_on_attach:=false \
         -- "${given[@]}"
-    log_dir=$(csb_log_dir "{{project}}" ego)
+    log_dir=$(swb_log_dir "{{project}}" ego)
     #
     # --container-mode isolated --composable-respawn on-crash: Autoware 1.5.0's
     # behavior_path_planner aborts now and then on a new route (autoware_universe#12460, once
@@ -1074,7 +1074,7 @@ ego-av *args: _require-carla
     # container_mode:=observable: on rmw_zenoh_cpp every process is a zenoh peer and the
     # peers mesh, so isolated's ~200 processes cost far more than observable's ~80 (one per
     # container); observable gives up reloading one crashed composable alone.
-    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 2)) \
+    exec play_launch launch --web-addr 0.0.0.0:$((SWB_WEB_PORT + 2)) \
         --container-mode "$container_mode" --composable-respawn on-crash \
         --log-dir "$log_dir" \
         $play_launch_args \
@@ -1098,7 +1098,7 @@ ego-av *args: _require-carla
 ego-isaac *args:
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; csb_reject_env
+    source "{{lib}}"; swb_reject_env
     overlay=""; autoware_overlay=true; container_mode=isolated; play_launch_args=""
     given=()
     for a in "$@"; do
@@ -1114,21 +1114,21 @@ ego-isaac *args:
     done
     source "{{autoware_setup}}"
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
+    swb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
     if [ -n "$overlay" ]; then source "$overlay"; fi
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     source "{{project}}/scripts/autoware_tensorrt.bash"
-    csb_tensorrt_source "{{autoware_tensorrt_lib}}"
+    swb_tensorrt_source "{{autoware_tensorrt_lib}}"
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
     # Defaults, each dropped when an argument names the same launch argument.
-    csb_with_defaults launch_args \
+    swb_with_defaults launch_args \
         map_path:="{{maps_dir}}/{{default_map}}" \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false \
         -- "${given[@]}"
-    log_dir=$(csb_log_dir "{{project}}" ego)
-    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 2)) \
+    log_dir=$(swb_log_dir "{{project}}" ego)
+    exec play_launch launch --web-addr 0.0.0.0:$((SWB_WEB_PORT + 2)) \
         --container-mode "$container_mode" --composable-respawn on-crash \
         --log-dir "$log_dir" \
         $play_launch_args \
@@ -1136,13 +1136,13 @@ ego-isaac *args:
 
 # Launch one background AV's vehicle side -- Autoware + acb_bridge + vehicle agent -- in its
 # own ROS domain. The background AV is a scenario entity whose controller is `agent`
-# (src/csb_examples/scenarios/multi_av/town01_two_av.xosc): csb spawns it with role_name = the entity name, and this
+# (src/swb_examples/scenarios/multi_av/town01_two_av.xosc): swb spawns it with role_name = the entity name, and this
 # stack's agent registers with the agent relay under that name and takes the scenario's goals.
 # Long-lived, like `just ego-av`, and startable before or after the scenario.
 #
 # Domains start at BG_ROS_DOMAIN_ID (2): 9 is the scenario's, 1 the ego's, and 0 is left free so that a stray
 # unconfigured ROS process cannot join a run's graph. A second background AV goes on 3 with
-# its own web port: `just bg-av bg_av_2 3 $((CSB_WEB_PORT + 6))` (+5 is the Isaac world server's).
+# its own web port: `just bg-av bg_av_2 3 $((SWB_WEB_PORT + 6))` (+5 is the Isaac world server's).
 #
 # Up to three positional arguments, then background_av.launch.xml's as name:=value:
 # map_path:=<dir> (default the Town01 map), launch_rviz:=true, rviz_config:=<file>,
@@ -1154,8 +1154,8 @@ ego-isaac *args:
 bg-av *args: _require-carla
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; csb_reject_env
-    entity=bg_av_1; domain={{bg_domain}}; web_port=$((CSB_WEB_PORT + 3)); autoware_overlay=true; given=(); n=0
+    source "{{lib}}"; swb_reject_env
+    entity=bg_av_1; domain={{bg_domain}}; web_port=$((SWB_WEB_PORT + 3)); autoware_overlay=true; given=(); n=0
     for a in "$@"; do
         case "$a" in
             autoware_overlay:=*) autoware_overlay="${a#*:=}" ;;
@@ -1169,28 +1169,28 @@ bg-av *args: _require-carla
     source "{{autoware_setup}}"
     # The same Autoware fix overlay as the ego's (roadmap 042)
     source "{{project}}/scripts/autoware_overlay.bash"
-    csb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
+    swb_autoware_overlay_source "{{autoware_overlay_dir}}" "$autoware_overlay"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
     source "{{project}}/scripts/autoware_tensorrt.bash"
-    csb_tensorrt_source "{{autoware_tensorrt_lib}}"
+    swb_tensorrt_source "{{autoware_tensorrt_lib}}"
     # Same loopback-unicast DDS config as every other process in the pipeline. DomainGain
     # 1000 in it is what keeps domain 1's unicast ports out of domain 0's range.
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID="$domain"
-    csb_with_defaults launch_args \
+    swb_with_defaults launch_args \
         entity:="$entity" relay:="tcp://localhost:{{agent_port}}" \
         map_path:="{{maps_dir}}/{{default_map}}" carla_port:={{carla_port}} launch_rviz:=false \
         release_notify_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 1))" \
         release_ack_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 2))" \
         -- "${given[@]}"
-    log_dir=$(csb_log_dir "{{project}}" "bg-$entity")
+    log_dir=$(swb_log_dir "{{project}}" "bg-$entity")
     exec play_launch launch --web-addr 0.0.0.0:"$web_port" \
         --container-mode isolated --composable-respawn on-crash \
         --load-node-timeout 120 \
         --load-total-budget 180 \
         --log-dir "$log_dir" \
-        csb_launch background_av.launch.xml "${launch_args[@]}"
+        swb_launch background_av.launch.xml "${launch_args[@]}"
 
 # Run SSv2 scenario (adapter and the ego stack — `just run`, `just ego-av` — must already
 # be up; SSv2 no longer launches Autoware)
@@ -1250,7 +1250,7 @@ scenario scenario_file *args:
     #!/usr/bin/env bash
     set -e
     shift
-    source "{{lib}}"; csb_reject_env
+    source "{{lib}}"; swb_reject_env
     sim=carla; worlds=""; output_directory=/tmp; timeout_args=()
     for a in "$@"; do
         case "$a" in
@@ -1288,10 +1288,10 @@ scenario scenario_file *args:
     export ROS_DOMAIN_ID={{scenario_domain}}
     # The scenario file is read, never modified: SSv2's runner preprocesses a copy in its
     # output directory (fork, roadmap 017).
-    log_dir=$(csb_log_dir "{{project}}" scenario)
-    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 1)) \
+    log_dir=$(swb_log_dir "{{project}}" scenario)
+    exec play_launch launch --web-addr 0.0.0.0:$((SWB_WEB_PORT + 1)) \
         --log-dir "$log_dir" \
-        csb_launch scenario.launch.xml \
+        swb_launch scenario.launch.xml \
         scenario:="$(realpath "{{scenario_file}}")" \
         output_directory:="$output_directory" \
         port:={{ssv2_port}} "${timeout_args[@]}"
@@ -1311,16 +1311,16 @@ _scenario-map scenario_file:
 # `just scenario sim:=<sim>` brings up (scripts/<sim>_up.sh; those already running are reused
 # and left), the scenario, its verdict, then the stacks this run started are stopped
 # (keep_stacks:=true leaves them; CARLA itself, a long-lived unit, is never stopped here).
-# output_directory:=<dir> (default $CSB_LOG_ROOT/e2e/<time>) gets the scenario's output.
-# csb_launch demo.launch.xml is the one-launch version of the same on CARLA, for a first try.
+# output_directory:=<dir> (default $SWB_LOG_ROOT/e2e/<time>) gets the scenario's output.
+# swb_launch demo.launch.xml is the one-launch version of the same on CARLA, for a first try.
 #
 # Usage: just e2e [xosc] [map] [sim:=carla|isaac] [worlds:=..] [keep_stacks:=true] [output_directory:=<dir>]
 [positional-arguments]
 e2e *args:
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; csb_reject_env
-    scenario="{{project}}/src/csb_examples/scenarios/basic/town01_ego_drive.xosc"
+    source "{{lib}}"; swb_reject_env
+    scenario="{{project}}/src/swb_examples/scenarios/basic/town01_ego_drive.xosc"
     map="{{default_map}}"; sim=carla; extra=(); keep_stacks=false; out=""; n=0
     for a in "$@"; do
         case "$a" in
@@ -1338,7 +1338,7 @@ e2e *args:
     [ -x "$up" ] || { echo "e2e: no simulator '$sim' (no scripts/${sim}_up.sh)" >&2; exit 2; }
     export CARLA_MAPS="{{maps_dir}}"
     started=$(mktemp)
-    [ -n "$out" ] || out="$(csb_log_dir "{{project}}" e2e)/$(date +%Y-%m-%d_%H-%M-%S)"
+    [ -n "$out" ] || out="$(swb_log_dir "{{project}}" e2e)/$(date +%Y-%m-%d_%H-%M-%S)"
     mkdir -p "$out"
     teardown() {
         if [ "$keep_stacks" = true ]; then
@@ -1368,10 +1368,10 @@ e2e *args:
     fi
 
 
-# Move play_launch runs older than `days` out of $CSB_LOG_ROOT into an archive, kind by
+# Move play_launch runs older than `days` out of $SWB_LOG_ROOT into an archive, kind by
 # kind (<dest>/<kind>/<time>). Never deletes, never overwrites; skips each kind's `latest`,
 # and runs a live process still has open (a running play_launch). dest defaults to
-# $CSB_LOG_ARCHIVE (a host setting; default /mnt/disk1/csb-play_log-archive, a spinning disk,
+# $SWB_LOG_ARCHIVE (a host setting; default /mnt/disk1/csb-play_log-archive, a spinning disk,
 # fine for an archive and not for live logs: CLAUDE.md). dry_run:=true lists only.
 #
 # Usage: just prune-logs [days:=7] [dest:=<dir>] [dry_run:=true]
@@ -1379,7 +1379,7 @@ e2e *args:
 prune-logs *args:
     #!/usr/bin/env bash
     set -e
-    days=7; dest="${CSB_LOG_ARCHIVE:-/mnt/disk1/csb-play_log-archive}"; dry=()
+    days=7; dest="${SWB_LOG_ARCHIVE:-/mnt/disk1/csb-play_log-archive}"; dry=()
     for a in "$@"; do
         case "$a" in
             days:=?*) days="${a#*:=}" ;;
@@ -1389,7 +1389,7 @@ prune-logs *args:
             *) echo "prune-logs: unknown argument '$a' (days:=, dest:=, dry_run:=true)" >&2; exit 2 ;;
         esac
     done
-    exec python3 "{{project}}/scripts/prune_logs.py" --root "$CSB_LOG_ROOT" --dest "$dest" \
+    exec python3 "{{project}}/scripts/prune_logs.py" --root "$SWB_LOG_ROOT" --dest "$dest" \
         --days "$days" "${dry[@]}"
 
 # Download pre-converted CARLA maps for Autoware (present ones: apply any newer repairs)

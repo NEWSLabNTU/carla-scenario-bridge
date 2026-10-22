@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Phase 2 integration test for carla-scenario-bridge.
+Phase 2 integration test for scenario-world-bridge.
 
 Tests the cooperation between the adapter and autoware_carla_bridge:
 - Adapter spawns ego with role_name=hero

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bring up what a scenario on Isaac Sim needs, reusing whatever already runs (roadmap 043):
-# the world server (`just isaac-world`, web CSB_WEB_PORT+5), the simulation side on Isaac
+# the world server (`just isaac-world`, web SWB_WEB_PORT+5), the simulation side on Isaac
 # (`just run sim:=isaac`, +4) and the ego's Autoware (`just ego-isaac`, +2), in that
 # order, each waited for. Run by `just scenario|acceptance|e2e ... sim:=isaac` (roadmap 046:
 # each simulator's bring-up is scripts/<sim>_up.sh, with this contract; carla_up.sh is CARLA's).
@@ -14,7 +14,7 @@
 # caller can take them down (`just e2e`).
 #
 # Environment, host settings all (from the justfile): ISAAC_PORT, SSV2_PORT, AGENT_PORT,
-# CSB_WEB_PORT (the stacks' web ports, as the justfile lays them out), CSB_LOG_ROOT (the stacks' consoles go there; default the repo's play_log), and the waits
+# SWB_WEB_PORT (the stacks' web ports, as the justfile lays them out), SWB_LOG_ROOT (the stacks' consoles go there; default the repo's play_log), and the waits
 # ISAAC_READY_TIMEOUT (s, default 1800: a town's first render on a host compiles its
 # materials, so the budget is the host's) and EGO_READY_TIMEOUT (s, default 1200).
 set -euo pipefail
@@ -22,12 +22,12 @@ map_dir="$1"
 worlds="${2:-$map_dir}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$here"
-logs="${CSB_LOG_ROOT:-$here/play_log}"
+logs="${SWB_LOG_ROOT:-$here/play_log}"
 mkdir -p "$logs"
 isaac_port="${ISAAC_PORT:-5590}"
 ssv2_port="${SSV2_PORT:-5555}"
 agent_port="${AGENT_PORT:-5560}"
-web_base="${CSB_WEB_PORT:-8080}"
+web_base="${SWB_WEB_PORT:-8080}"
 web_ego=$((web_base + 2)); web_bridge=$((web_base + 4)); web_isaac=$((web_base + 5))
 say() { echo "[isaac-up] $*" >&2; }
 

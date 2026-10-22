@@ -1,13 +1,13 @@
-//! The tick gate: csb waits, before each `world.tick()`, until a follower that asked for it
-//! has finished the frame csb ticked last.
+//! The tick gate: swb waits, before each `world.tick()`, until a follower that asked for it
+//! has finished the frame swb ticked last.
 //!
-//! csb is the only process that ticks CARLA (docs/design/time-and-ticking.md). A process
-//! that follows csb's frames instead of ticking (2026-vehicle-consensus' junction harness)
-//! acts a frame late, or skips frames, whenever one of its rounds takes longer than csb's
-//! frame. With the gate the follower still never ticks, but csb holds the next tick until the
+//! swb is the only process that ticks CARLA (docs/design/time-and-ticking.md). A process
+//! that follows swb's frames instead of ticking (2026-vehicle-consensus' junction harness)
+//! acts a frame late, or skips frames, whenever one of its rounds takes longer than swb's
+//! frame. With the gate the follower still never ticks, but swb holds the next tick until the
 //! follower says it is done with the current frame, so the follower sees every frame.
 //!
-//! Protocol, UDP datagrams to the gate's address (`CSB_TICK_GATE`, or `tick_gate` in
+//! Protocol, UDP datagrams to the gate's address (`SWB_TICK_GATE`, or `tick_gate` in
 //! `bridge_config.yaml`):
 //!
 //! - `HELLO` -- a follower joins: from now on every tick waits for it;
@@ -17,7 +17,7 @@
 //! The wait is bounded (`tick_gate_timeout_ms`): a follower that does not answer in time does
 //! not stop the simulation, the tick goes ahead and the miss is counted. A follower silent
 //! for [`SILENT_LEAVES`] is taken as gone, so a crashed follower costs at most a few
-//! bounded waits. The wait runs in csb's request path before the tick, never inside a tick
+//! bounded waits. The wait runs in swb's request path before the tick, never inside a tick
 //! or a sensor callback.
 
 use std::net::UdpSocket;
@@ -135,7 +135,7 @@ impl TickGate {
         }
     }
 
-    /// Before the tick that follows `frame` (the frame csb ticked last): wait until the
+    /// Before the tick that follows `frame` (the frame swb ticked last): wait until the
     /// follower finished it, at most the gate's timeout.
     pub fn wait_for(&mut self, frame: u64) {
         self.drain();

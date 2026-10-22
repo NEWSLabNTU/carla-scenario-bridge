@@ -1,6 +1,6 @@
 # Off-road surfaces: wet roads, mud and sand in parts of a large world
 
-How csb's Isaac backend should give an ego rally-grade surfaces (wet asphalt, puddles,
+How swb's Isaac backend should give an ego rally-grade surfaces (wet asphalt, puddles,
 gravel, mud, sand) without simulating deformable ground over a whole CARLA town, and how a
 scenario file names the road condition. The literature and games survey behind it is
 [survey-localized-deformable-terrain.md](survey-localized-deformable-terrain.md) (2026-10-22);
@@ -25,7 +25,7 @@ Map size stops mattering because neither layer stores anything per square metre 
 
 ## What Isaac Sim 6.1 gives us, measured
 
-`src/csb_isaac/spikes/terrain_hooks.py` drives aib's ego (`aib.isaac.vehicle.Vehicle`, the
+`src/isaac_world/spikes/terrain_hooks.py` drives aib's ego (`aib.isaac.vehicle.Vehicle`, the
 Model 3, `ev`) over a flat asphalt strip into a mud strip, each a USD `PhysicsMaterial`, and
 pokes each hook while it runs (0.05 s frames of 3 physics steps, as aib's host steps it).
 
@@ -84,7 +84,7 @@ soil model must return to the wheel has a working channel.
   corner in the map frame. `just surfaces-check` refuses what the server would (unknown
   classes or labels, bad ids, self-crossing polygons, rasters without placement) and warns
   about zones that overlap while setting the same field, or lie off the Lanelet2 map;
-  `just surfaces-plot` draws the zones over the lanes (`csb_isaac.surfaces`).
+  `just surfaces-plot` draws the zones over the lanes (`isaac_world.surfaces`).
 - **The friction table holds the class's peak friction** (the survey's table: dry asphalt
   ~0.85, wet 0.5-0.7, gravel ~0.6, dry earth ~0.68, packed snow 0.2, ice 0.1; calibrate,
   do not copy). PhysX already does the per-wheel lookup, so mu-split (one side in a puddle)
@@ -111,14 +111,14 @@ soil model must return to the wheel has a working channel.
   validated; loose and soft classes soak the water up (their wet factors) instead.
 - **Where the server finds the map**: `surfaces.yaml` in the map directory of a world file
   the world server was started with (`--world`, `just isaac-world world:=...`), checked
-  before Isaac starts and read again at every `LoadWorld` (an edit needs no restart). csb's
+  before Isaac starts and read again at every `LoadWorld` (an edit needs no restart). swb's
   `LoadWorld` sends only the USD, which the server maps back; 046's world protocol v4 should
   carry the map's surfaces itself. A world with no surface map writes nothing.
 
 ### Surface layer, measured on a pad (047 S1, 2026-10-23)
 
-`src/csb_isaac/spikes/surface_drive.py`: aib's Model 3 (`ev`, ABS and traction control on)
-through `csb_isaac.surface_layer` -- the world server's own code -- on one flat mesh labelled
+`src/isaac_world/spikes/surface_drive.py`: aib's Model 3 (`ev`, ABS and traction control on)
+through `isaac_world.surface_layer` -- the world server's own code -- on one flat mesh labelled
 Road, one lane per case, zones from x = 150; full braking demand from 20 m/s inside the zone.
 The class values are the shipped table's literature numbers, so these check directions and
 plumbing, not magnitudes.
@@ -210,7 +210,7 @@ SSv2 parses `Environment`, `Weather` and `RoadCondition`
 `properties`), but `EnvironmentAction::start()` and `run()` are `LINE()` no-ops, and
 `simulation_api_schema.proto` has no message for it
 ([ssv2-feature-completeness.md](ssv2-feature-completeness.md), section 2: "parse-only no-op",
-"no slot"). csb's weather comes only from its ROS services (`/carla/set_weather`).
+"no slot"). swb's weather comes only from its ROS services (`/scenario_world_bridge/set_weather`).
 
 ### Proposal: the map says where, the scenario says what state
 
@@ -224,9 +224,9 @@ SSv2 parses `Environment`, `Weather` and `RoadCondition`
   ```xml
   <RoadCondition frictionScaleFactor="1.0" wetness="moist">
     <Properties>
-      <Property name="csb.zone.ford_1.water_depth_m" value="0.12"/>
-      <Property name="csb.zone.mud_pit.soil" value="mud_wet"/>
-      <Property name="csb.ruts" value="fresh"/>   <!-- or: keep, or a saved rut set -->
+      <Property name="swb.zone.ford_1.water_depth_m" value="0.12"/>
+      <Property name="swb.zone.mud_pit.soil" value="mud_wet"/>
+      <Property name="swb.ruts" value="fresh"/>   <!-- or: keep, or a saved rut set -->
     </Properties>
   </RoadCondition>
   ```

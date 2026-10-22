@@ -7,7 +7,7 @@ can touch it, reads `bounding_box`, destroys it, and writes the table the bridge
 bodies from:
 
     scripts/measure_blueprint_boxes.py [--host H] [--port P]
-        [--output src/carla_scenario_bridge/config/blueprint_boxes_<version>.yaml]
+        [--output src/scenario_world_bridge/config/blueprint_boxes_<version>.yaml]
 
 Rerun it for every CARLA version, and whenever the bridge warns that a spawned actor's box
 differs from the table ("stale blueprint box table").
@@ -42,7 +42,7 @@ def measure(world, bp, carla):
     """The blueprint's box from a spawned probe, or None if CARLA refused the spawn or the
     actor has no finite box."""
     if bp.has_attribute("role_name"):
-        bp.set_attribute("role_name", "csb_box_probe")
+        bp.set_attribute("role_name", "swb_box_probe")
     actor = world.try_spawn_actor(bp, carla.Transform(carla.Location(0.0, 0.0, PROBE_Z)))
     if actor is None:
         return None
@@ -70,7 +70,7 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=2000)
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--output", type=Path,
-                    help="default: src/carla_scenario_bridge/config/"
+                    help="default: src/scenario_world_bridge/config/"
                          "blueprint_boxes_<server version>.yaml")
     args = ap.parse_args()
 
@@ -106,7 +106,7 @@ def main() -> int:
                   f" {entry.get('base_type', '')}")
 
     output = args.output or (Path(__file__).resolve().parent.parent
-                             / "src/carla_scenario_bridge/config"
+                             / "src/scenario_world_bridge/config"
                              / f"blueprint_boxes_{version}.yaml")
     header = (
         f"# Bounding boxes of CARLA {version}'s blueprints, measured from spawned actors.\n"

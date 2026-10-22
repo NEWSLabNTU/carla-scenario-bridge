@@ -30,7 +30,7 @@ ls $CARLA_MAPS/Town01/carla
 ```
 
 If `carla/traffic_lights.yaml` is missing, generate it once with CARLA running (step 1):
-`ros2 run carla_scenario_bridge carla_scenario_bridge --generate-signal-table $CARLA_MAPS/Town01`.
+`ros2 run scenario_world_bridge scenario_world_bridge --generate-signal-table $CARLA_MAPS/Town01`.
 
 ## 1. CARLA
 
@@ -57,13 +57,13 @@ goals to the vehicle). Start it once and leave it running; scenarios come and go
 
 ```bash
 # Terminal 2
-ROS_DOMAIN_ID=9 ros2 launch csb_launch simulation.launch.xml
+ROS_DOMAIN_ID=9 ros2 launch swb_launch simulation.launch.xml
 ```
 
 Ready when both of these lines have appeared:
 
 ```
-[carla_scenario_bridge-1] ... INFO carla_scenario_bridge::zmq_server: ZMQ server ready, waiting for SSv2 requests...
+[scenario_world_bridge-1] ... INFO scenario_world_bridge::zmq_server: ZMQ server ready, waiting for SSv2 requests...
 [relay-2] [INFO] ... [scenario_agent_relay]: Relaying entity 'ego': agents register on tcp://0.0.0.0:5560; ...
 ```
 
@@ -101,8 +101,8 @@ Town01.
 
 ```bash
 # Terminal 4
-ROS_DOMAIN_ID=9 ros2 launch csb_launch scenario.launch.xml \
-    scenario:=$(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic/town01_ego_drive.xosc \
+ROS_DOMAIN_ID=9 ros2 launch swb_launch scenario.launch.xml \
+    scenario:=$(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/basic/town01_ego_drive.xosc \
     output_directory:=/tmp/first_run
 ```
 
@@ -131,7 +131,7 @@ cat /tmp/first_run/scenario_test_runner/result.junit.xml
 reason -- a timeout, a collision, or the ego never engaging.
 
 Run another starter scenario the same way: Terminals 1-3 stay up. The list, with what each
-checks, is in [csb_examples' README](../../src/csb_examples/README.md).
+checks, is in [swb_examples' README](../../src/swb_examples/README.md).
 
 ## When it does not work
 

@@ -55,7 +55,7 @@ the design:
 
 ## Isaac spike (done 2026-10-22)
 
-`src/csb_isaac/spikes/terrain_hooks.py` on Isaac Sim 6.1 (omni.physx.vehicle 110.3.2), aib's
+`src/isaac_world/spikes/terrain_hooks.py` on Isaac Sim 6.1 (omni.physx.vehicle 110.3.2), aib's
 Model 3: results in [design/off-road-surfaces.md](../design/off-road-surfaces.md), "What
 Isaac Sim 6.1 gives us, measured". Works: per-wheel material lookup, friction-table edits
 while running (next frame), a table per wheel (per-wheel friction), `apply_force_at_pos` at
@@ -88,11 +88,11 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   as a library with its SCM terrain and a per-wheel rigid "tire".
 - [ ] **D3. Scenario format for zones** (gates S2): standard `RoadCondition` for world-wide
   `frictionScaleFactor` and `wetness`, per-zone state as `Properties` named
-  `csb.zone.<id>.<field>` [proposed]; or a `CustomCommandAction`.
+  `swb.zone.<id>.<field>` [proposed]; or a `CustomCommandAction`.
 - [ ] **D4. Physics rate in zones** (gates S3): raise the world's physics rate while a wheel is
   in a zone, or keep 60 Hz and integrate along the contact patch; decided by S3's measurement.
 - [ ] **D5. Rut persistence across runs** (gates S4): fresh per scenario by default, with
-  `csb.ruts` naming a saved set [proposed]; or always fresh.
+  `swb.ruts` naming a saved set [proposed]; or always fresh.
 - [ ] **D6. Mud** (gates S4): ship an engineered mud model marked unvalidated [proposed], or
   limit zones to sand and dry soil until a validation source exists.
 
@@ -112,13 +112,13 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         next step, 0.05 ms a write; a tire's `frictionVsSlipGraph` edit is refused once the
         simulation runs, so a class's slip curve goes through the friction value instead
         (`class(slip) / vehicle(slip)`, one step late).
-  - [x] `csb_isaac.surfaces` (pure, unit-tested: `test_surfaces.py`, 23 tests): the
+  - [x] `isaac_world.surfaces` (pure, unit-tested: `test_surfaces.py`, 23 tests): the
         surfaces.yaml loader that lists every problem, label defaults, zones with fields
         that fall through (later zones on top), PNG/.npy rasters, the class table
-        (`src/csb_isaac/config/surface_classes.yaml`: ten classes, literature values),
+        (`src/isaac_world/config/surface_classes.yaml`: ten classes, literature values),
         wetness and water depth, hydroplaning (Horne, engineered), the distance filter, the
         slip-curve emulation. `just surfaces-check` / `just surfaces-plot [map_path:=]`.
-  - [x] `csb_isaac.surface_layer` in the world server: SimReady label of the hit collider,
+  - [x] `isaac_world.surface_layer` in the world server: SimReady label of the hit collider,
         zone at the hit point (map origin applied), written per wheel after every substep;
         reset on teleport. The map is `surfaces.yaml` beside a `--world` world file, checked
         before Isaac starts, read again at every `LoadWorld`; no map, no writes.

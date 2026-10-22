@@ -16,7 +16,7 @@ deleted when they are done or the ego has passed, no watchdog (an ambient actor 
 the ego up; step 8 checks that).
 
 Usage:
-    scripts/gen_demo_tour.py                      # writes src/csb_examples/scenarios/demo/town01_tour.xosc
+    scripts/gen_demo_tour.py                      # writes src/swb_examples/scenarios/demo/town01_tour.xosc
     scripts/gen_demo_tour.py --out /tmp/tour.xosc
     scripts/gen_demo_tour.py --no-ambient         # incidents only
 """
@@ -38,7 +38,7 @@ _loader.exec_module(G)
 
 SITES = G.SITES
 AMBIENT = ROOT / "scripts/demo_town01_ambient.yaml"
-DEFAULT_OUT = ROOT / "src/csb_examples/scenarios/demo/town01_tour.xosc"
+DEFAULT_OUT = ROOT / "src/swb_examples/scenarios/demo/town01_tour.xosc"
 
 TIMEOUT_S = 600  # sim time: the tour is ~5 min of driving and handling
 ROUTE_ORDER = (2, 1, 3, 4, 5, 6)
@@ -231,7 +231,7 @@ def tour(sites, ambient=None):
      just ego-av max_velocity:=11.11 lidar_detection_model:=centerpoint use_multi_channel_tracker_merger:=false
      Sim side: just run weather:=ClearNoon -->
 <OpenSCENARIO>
-	<FileHeader author="carla-scenario-bridge" date="2026-10-21T00:00:00+00:00" description="{desc}" revMajor="1" revMinor="2" />
+	<FileHeader author="scenario-world-bridge" date="2026-10-21T00:00:00+00:00" description="{desc}" revMajor="1" revMinor="2" />
 	<ParameterDeclarations>{decls}</ParameterDeclarations>
 	<CatalogLocations />
 	<RoadNetwork><LogicFile filepath="$(env CARLA_MAPS)/Town01" /></RoadNetwork>

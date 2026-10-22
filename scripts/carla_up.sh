@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bring up what a scenario on CARLA needs, reusing whatever already runs (roadmap 046): CARLA
 # itself (`just carla-start`, a systemd unit), the simulation side on CARLA (`just run
-# sim:=carla`, web CSB_WEB_PORT+4: the CARLA world server, the bridge and the agent relay in
+# sim:=carla`, web SWB_WEB_PORT+4: the CARLA world server, the bridge and the agent relay in
 # one launch) and the ego's Autoware (`just ego-av`, +2), in that order, each waited for. Run
 # by `just scenario|acceptance|e2e ... sim:=carla` (the default). Each simulator's bring-up is
 # scripts/<sim>_up.sh with this contract; isaac_up.sh is Isaac's.
@@ -15,19 +15,19 @@
 # them down (`just e2e`).
 #
 # Environment, host settings all (from the justfile): CARLA_PORT, WORLD_PORT, SSV2_PORT,
-# AGENT_PORT, CSB_WEB_PORT, CSB_LOG_ROOT, and the waits CARLA_READY_TIMEOUT (s, default 300:
+# AGENT_PORT, SWB_WEB_PORT, SWB_LOG_ROOT, and the waits CARLA_READY_TIMEOUT (s, default 300:
 # a first start on a host serves RPC in 50-180 s) and EGO_READY_TIMEOUT (s, default 1200).
 set -euo pipefail
 map_dir="$1"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$here"
-logs="${CSB_LOG_ROOT:-$here/play_log}"
+logs="${SWB_LOG_ROOT:-$here/play_log}"
 mkdir -p "$logs"
 carla_port="${CARLA_PORT:-2000}"
 world_port="${WORLD_PORT:-5591}"
 ssv2_port="${SSV2_PORT:-5555}"
 agent_port="${AGENT_PORT:-5560}"
-web_base="${CSB_WEB_PORT:-8080}"
+web_base="${SWB_WEB_PORT:-8080}"
 web_ego=$((web_base + 2)); web_bridge=$((web_base + 4))
 say() { echo "[carla-up] $*" >&2; }
 

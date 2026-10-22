@@ -784,7 +784,7 @@ impl CollisionMonitor {
         tracing::info!("{}", self.log.summary(&ego_name));
         if self.relabelled > 0 {
             tracing::info!(
-                "{} contact event(s) this run reached csb after the SSv2 frame they happened \
+                "{} contact event(s) this run reached swb after the SSv2 frame they happened \
                  in; labelled by their CARLA frame",
                 self.relabelled
             );

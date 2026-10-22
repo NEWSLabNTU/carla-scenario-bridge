@@ -1,7 +1,7 @@
 # Writing Scenarios
 
 Scenarios are standard OpenSCENARIO 1.x files run by scenario_simulator_v2 (SSv2). This page
-covers what is specific to running them in CARLA through carla-scenario-bridge. Workflow:
+covers what is specific to running them in CARLA through scenario-world-bridge. Workflow:
 [../user-guide.md](../user-guide.md); architecture: [user-workflow.md](user-workflow.md).
 
 ## The map
@@ -67,7 +67,7 @@ is the only marker:
 </Private>
 ```
 
-Example: `src/csb_examples/scenarios/basic/town01_simulator_autopilot.xosc` (ego, an SSv2-driven NPC and a
+Example: `src/swb_examples/scenarios/basic/town01_simulator_autopilot.xosc` (ego, an SSv2-driven NPC and a
 CARLA-driven NPC in one run).
 
 What happens:
@@ -127,16 +127,16 @@ scenario entities: conditions, distances and `CollisionCondition` see them.
 </Private>
 ```
 
-Example: `src/csb_examples/scenarios/multi_av/town01_two_av.xosc` (the ego and `bg_av_1` in one lane; `just two-av`).
+Example: `src/swb_examples/scenarios/multi_av/town01_two_av.xosc` (the ego and `bg_av_1` in one lane; `just two-av`).
 
 The entity's name is the link to its vehicle side: start one per such entity, with
-`entity:=<name>` (and `vehicle_name:=<name>`, the default in `csb_launch
+`entity:=<name>` (and `vehicle_name:=<name>`, the default in `swb_launch
 background_av.launch.xml`) and the simulation side's relay, in a ROS domain of its own:
 
 ```bash
 ROS_DOMAIN_ID=2 play_launch launch \
     --container-mode isolated --composable-respawn on-crash --web-addr 127.0.0.1:8083 \
-    csb_launch background_av.launch.xml \
+    swb_launch background_av.launch.xml \
     entity:=bg_av_1 map_path:=<map dir> relay:=tcp://<simulation host>:5560
 ```
 
@@ -186,7 +186,7 @@ the next command or the next `Initialize`.
 - To stop the ego at an intersection, command that signal. Do not rely on the state a previous
   run or CARLA's own cycle left a light in; it is reset to GREEN.
 - "Mapped" means listed in the map dir's `carla/traffic_lights.yaml`, generated once per
-  map (`carla_scenario_bridge --generate-signal-table <map dir>`) and checked against CARLA
+  map (`scenario_world_bridge --generate-signal-table <map dir>`) and checked against CARLA
   at every `Initialize`: Lanelet2 traffic light ways matched to a CARLA light by position,
   plus `config/traffic_lights_<town>.yaml`. CARLA
   lights the Lanelet2 map does not reference keep their frozen state; Autoware cannot see them.
@@ -198,8 +198,8 @@ the next command or the next `Initialize`.
 ## Collisions: do not end on the collision frame
 
 SSv2's `CollisionCondition` (bounding boxes) is the verdict for every collision, NPC-NPC
-included. csb also attaches a CARLA collision sensor to the ego and logs what CARLA saw, as
-a cross-check. That cross-check only sees contacts that last more than one frame: csb applies
+included. swb also attaches a CARLA collision sensor to the ego and logs what CARLA saw, as
+a cross-check. That cross-check only sees contacts that last more than one frame: swb applies
 SSv2's NPC pose one frame after SSv2 computes it, so a scenario that exits on the first frame
 of overlap ends before CARLA ticks with the bodies touching, and the bridge logs "no
 collisions" for a run SSv2 scored as a collision. Delay the exit (e.g. `delay="3"` on the
@@ -211,4 +211,4 @@ SSv2 commands it on -- have the NPC brake once the collision is seen, as
 `npc_motion:=kinematic` fallback an NPC never moves when hit and two NPCs pass through each
 other in CARLA (see
 [multi-instance-architecture.md](multi-instance-architecture.md#consequence-puppeteered-actors-are-kinematic)).
-Example: `src/csb_examples/scenarios/basic/town01_rear_contact.xosc`.
+Example: `src/swb_examples/scenarios/basic/town01_rear_contact.xosc`.

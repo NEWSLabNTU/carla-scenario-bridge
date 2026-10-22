@@ -27,7 +27,7 @@
 	The ego drives west as in town01_motorbike_body.xosc; the truck starts 25 m behind it.
 -->
 <OpenSCENARIO>
-	<FileHeader author="carla-scenario-bridge" date="2026-10-13T00:00:00+00:00" description="Town01 declared 12 m truck on a Model 3 body holding behind the driving ego, the gap oracle positive control" revMajor="1" revMinor="2" />
+	<FileHeader author="scenario-world-bridge" date="2026-10-13T00:00:00+00:00" description="Town01 declared 12 m truck on a Model 3 body holding behind the driving ego, the gap oracle positive control" revMajor="1" revMinor="2" />
 	<ParameterDeclarations />
 	<CatalogLocations />
 	<RoadNetwork>

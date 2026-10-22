@@ -54,8 +54,8 @@ pub fn scan(
     Ok(found)
 }
 
-/// The actors a previous bridge process left: entities with csb's mark (`mark_prefix`),
-/// and vehicles with a role csb owns (the ego's, the agent ledger's), except this
+/// The actors a previous bridge process left: entities with swb's mark (`mark_prefix`),
+/// and vehicles with a role swb owns (the ego's, the agent ledger's), except this
 /// process's own. As `(id, role)`.
 pub fn orphans(
     found: &[Found],
@@ -128,7 +128,7 @@ mod tests {
         // later, 9010 later still, and both are within the margin.
         let world = vec![
             actor(12, "traffic.traffic_light", None, None),
-            actor(9003, "vehicle.tesla.model3", Some("csb_entity:npc"), None),
+            actor(9003, "vehicle.tesla.model3", Some("swb_entity:npc"), None),
             actor(9004, "vehicle.lincoln.mkz", Some("hero"), None),
             actor(9010, "sensor.other.imu", Some(""), Some(9004)),
         ];
@@ -173,20 +173,20 @@ mod tests {
     fn orphans_are_marked_entities_and_owned_vehicles_of_others() {
         let found = vec![
             actor(1, "vehicle.a", Some("hero"), None),
-            actor(2, "walker.pedestrian.0001", Some("csb_entity:ped"), None),
+            actor(2, "walker.pedestrian.0001", Some("swb_entity:ped"), None),
             actor(3, "vehicle.b", Some("someone_else"), None),
             actor(4, "sensor.camera.rgb", Some("hero"), Some(1)),
-            actor(5, "vehicle.c", Some("csb_entity:mine"), None),
+            actor(5, "vehicle.c", Some("swb_entity:mine"), None),
             actor(6, "vehicle.d", Some("bg_av_1"), None),
             actor(7, "static.prop.box", None, None),
         ];
         let owned = vec!["hero".to_string(), "bg_av_1".to_string()];
-        let got = orphans(&found, "csb_entity:", &owned, |id| id == 5);
+        let got = orphans(&found, "swb_entity:", &owned, |id| id == 5);
         assert_eq!(
             got,
             vec![
                 (1, "hero".to_string()),
-                (2, "csb_entity:ped".to_string()),
+                (2, "swb_entity:ped".to_string()),
                 (6, "bg_av_1".to_string()),
             ]
         );

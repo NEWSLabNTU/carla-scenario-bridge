@@ -23,12 +23,12 @@ use crate::backend::{
 };
 use crate::config::{BridgeConfig, NpcMotion};
 use crate::coordinate_conversion::euler_to_quaternion;
-use crate::proto::csb_world as wire;
 use crate::proto::geometry_msgs::{self, Pose};
+use crate::proto::swb_world as wire;
 use crate::proto::traffic_simulator_msgs::entity_subtype::Enum as EntitySubtype;
 use crate::proto::traffic_simulator_msgs::{ActionStatus, BoundingBox};
 use crate::weather::wire_form;
-use csb_core::world_server::{Refusal, World, WorldResult};
+use swb_core::world_server::{Refusal, World, WorldResult};
 
 /// How often a CARLA that is not there yet is tried again.
 const CONNECT_EVERY: Duration = Duration::from_secs(5);

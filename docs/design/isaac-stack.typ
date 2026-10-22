@@ -34,7 +34,7 @@
 
   // ── Simulation launch ────────────────────────────────────────────────────────
   title((0, 3.4), [Simulation launch (play_launch :8084)]),
-  b((0, 4), [*csb bridge* · IsaacBackend \ ego · scenario NPCs · walkers], done, <br>),
+  b((0, 4), [*swb bridge* · IsaacBackend \ ego · scenario NPCs · walkers], done, <br>),
   b((0, 5), [UpdateTrafficLights → SetSignals], s2, <tls>),
   b((1, 5), [Agent-driven vehicles \ (agent link)], s3, <agl>),
   b((0, 6), [Gap trace → oracle, \ campaign runner], s3, <gt>),
@@ -48,7 +48,7 @@
   b((2, 1), [*CARLA 0.9.16 editor* \ -run=SimReadyExport], done, <ce>),
   b((3, 1), [*Town0X.usd* \ 01 done · 02/03/05/10 to do], s1, <tu>),
   b((4, 1), [*Physics layer script* \ → Town0X_physics.usda], s1, <pl>),
-  b((5, 1), [*csb_isaac.usd_world* \ → isaac/world.yaml \ same frame as Autoware map], done,
+  b((5, 1), [*isaac_world.usd_world* \ → isaac/world.yaml \ same frame as Autoware map], done,
     <uw>),
   b((2, 2), [*Signal table* \ lanelet TL id ↔ lamp prims \ (from OpenDRIVE signals)], s2, <st>),
   b((3, 2), [*vehicle.\*.usd* ×41 \ + vehicles.json], done, <vu>),
@@ -96,7 +96,7 @@
 
   // ── Flows ────────────────────────────────────────────────────────────────────
   edge(<ssv2>, <br>, "<|-|>", [ZMQ :5555 \ SSv2 protocol], label-side: left),
-  edge(<br>, <ls>, "<|-|>", [csb_world.proto \ :ISAAC_PORT]),
+  edge(<br>, <ls>, "<|-|>", [swb_world.proto \ :ISAAC_PORT]),
   edge(<wsup>, <isa>, "-|>", stroke: (dash: "dotted")),
   edge(<off>, <isa>, "-|>", [worlds, vehicles, \ signal table, ego params], label-side: left),
   edge(<sen>, <aw>, "<|-|>", [DDS domain 1], label-side: left),

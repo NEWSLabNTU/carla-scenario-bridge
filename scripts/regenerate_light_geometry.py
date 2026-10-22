@@ -27,7 +27,7 @@ sidesteps having to pin down CARLA's own actor-yaw convention.
 
 Positions are written as lat/lon *and* local_x/local_y/ele. lat/lon is what Autoware's
 loader projects (map_projector_info.yaml declares TransverseMercator about 0,0, so
-x = radians(lon) * 6378137 and y = radians(lat) * 6378137); local_x/local_y is what csb's
+x = radians(lon) * 6378137 and y = radians(lat) * 6378137); local_x/local_y is what swb's
 own parser reads. Writing one and not the other leaves the two halves of the stack
 disagreeing about where the light is.
 

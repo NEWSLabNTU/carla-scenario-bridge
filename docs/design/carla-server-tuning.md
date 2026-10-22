@@ -66,7 +66,7 @@ NVIDIA ICD; one fresh server per row; GPU memory is CARLA's own process, from nv
 |---|---|---|
 | 5 x (load_world Town02, load_world Town01, reload_world), loader only | crash on the first load_world, 3/3 servers | 5/5 cycles, 1.3-11 s each |
 | 5 x reload_world on Town01 | crash on the first | -- |
-| `town02_episode_change` (csb + ego stack) | CARLA segfaults, scenario errors | passes |
+| `town02_episode_change` (swb + ego stack) | CARLA segfaults, scenario errors | passes |
 | `town01_ego_drive` (single town) | passes 2/2 | passes 2/2 |
 | RSS / VRAM, idle on Town01 | 2424 MB / 1730 MiB | 2463 MB / 2005 MiB |
 | RSS / VRAM, during town01_ego_drive | 2391 MB / 1730 MiB | 2441 MB / 2005 MiB |
@@ -75,7 +75,7 @@ NVIDIA ICD; one fresh server per row; GPU memory is CARLA's own process, from nv
 Every Low crash left the same UE crash report; the client only sees an RPC time-out after
 180 s. Low saves about 275 MiB of VRAM and 40-50 MB of RSS on one town -- not worth a server
 that dies the first time a scenario changes towns. Use `quality:=low` only when every run
-stays on the boot town (`map:=`), which csb then never reloads. What does grow memory is
+stays on the boot town (`map:=`), which swb then never reloads. What does grow memory is
 loading other towns (the last row): boot on the town the run uses rather than loading it.
 
 ## Rejected

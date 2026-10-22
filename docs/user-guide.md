@@ -5,7 +5,7 @@ Background: [design/user-workflow.md](design/user-workflow.md).
 
 Two sides run independently and meet only in CARLA and the map directory:
 
-- **Simulation side**: CARLA, `carla_scenario_bridge` (CARLA's adapter for
+- **Simulation side**: CARLA, `scenario_world_bridge` (CARLA's adapter for
   scenario_simulator_v2), `scenario_agent_relay`, and scenario_simulator_v2 (SSv2), which runs
   your `.xosc` files and judges them.
 - **Vehicle side**, one per autonomous vehicle: your Autoware with this project's sensor kit
@@ -59,8 +59,8 @@ play_launch --version
 - This repository with its submodules, its system dependencies, and one build:
 
 ```bash
-git clone --recurse-submodules https://github.com/NEWSLabNTU/carla-scenario-bridge.git
-cd carla-scenario-bridge
+git clone --recurse-submodules https://github.com/NEWSLabNTU/scenario-world-bridge.git
+cd scenario-world-bridge
 source /opt/ros/humble/setup.bash && source <Autoware>/setup.bash   # e.g. /opt/autoware/1.5.0
 rosdep install --from-paths src --ignore-src -y   # prints only a summary when all is present
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --cargo-args --release
@@ -105,7 +105,7 @@ One directory per CARLA town, in Autoware's map layout plus one CARLA file:
 per map, with CARLA running:
 
 ```bash
-ros2 run carla_scenario_bridge carla_scenario_bridge --generate-signal-table <map dir>
+ros2 run scenario_world_bridge scenario_world_bridge --generate-signal-table <map dir>
 ```
 
 The bridge checks it at every scenario start and refuses to run with a table that no longer
@@ -124,7 +124,7 @@ y: 67800.0
 z: 0.0       # optional
 ```
 
-Both bridges read it (carla_scenario_bridge at every scenario start, acb_bridge through
+Both bridges read it (scenario_world_bridge at every scenario start, acb_bridge through
 `map_origin_path`, which `carla_simulator.launch.xml` points at `<map_path>/carla/`). No file
 means an origin of zero; a file that does not parse stops the run rather than putting every
 pose hundreds of metres off.
@@ -134,7 +134,7 @@ TUM's [carla-autoware-bridge](https://github.com/TUMFTM/Carla-Autoware-Bridge) (
 copyright 2024 TUM, LGPL-3.0; its `LICENSE.md` ships in each town directory). The pack's
 download link (`scripts/download_maps.sh`) is dead at the time of writing, so there is no
 public download yet; providing the maps is a separate effort. With a copy of the pack,
-`CSB_MAP_SOURCE=<pack dir> scripts/download_maps.sh` installs it under
+`SWB_MAP_SOURCE=<pack dir> scripts/download_maps.sh` installs it under
 `data/carla-autoware-bridge/<Town>/` with the projector fix SSv2 needs; then generate each
 town's `carla/traffic_lights.yaml` as above. The script also repairs six defects of the
 pack, idempotently (`scripts/repair_lanelet_traffic_lights.py`, `scripts/repair_lanelet_subtypes.py`,
@@ -152,7 +152,7 @@ tagged `straight`, `left` or `right` from its heading change); and road lanelets
 at fresh nodes exactly where their predecessor ends, which Lanelet2 does not treat as a
 successor, so routing stops there (one join in Town03, between the roundabout and its south
 exit); and `right_of_way` elements that name no lanelet with right of way (one each in Town05
-and Town10), over which scenario_simulator_v2 refuses to load the map. One more repair needs CARLA holding the town and something ticking it (csb during a
+and Town10), over which scenario_simulator_v2 refuses to load the map. One more repair needs CARLA holding the town and something ticking it (swb during a
 scenario): `scripts/repair_lanelet_signal_links.py <Town>` links every signalised approach
 lanelet to the regulatory element of the light CARLA controls it by (from each light's stop
 waypoints and the signal table) and gives that element a stop line at the stop waypoints. On
@@ -168,11 +168,11 @@ export CARLA_MAPS=<repo>/data/carla-autoware-bridge     # holds Town01/, Town02/
 ## 3. Prepare a scenario directory
 
 **Starter scenarios** are installed with the workspace, no scenario directory needed
-(package `csb_examples`; each scenario, its town and what it checks are listed in its
-[README](../src/csb_examples/README.md)):
+(package `swb_examples`; each scenario, its town and what it checks are listed in its
+[README](../src/swb_examples/README.md)):
 
 ```
-$(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/
+$(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/
     basic/      this project's Town01/Town02 scenarios (ego drive, traffic light, pedestrian,
                 rear contact, engage state, simulator autopilot, Town02 episode change)
     multi_av/   town01_two_av.xosc: needs a second vehicle side, entity bg_av_1 (Terminal 3b)
@@ -195,7 +195,7 @@ For your own:
 
 ```
 <scenario dir>/  my_scenario.xosc
-                 bridge.yaml          # optional: copy of carla_scenario_bridge's config
+                 bridge.yaml          # optional: copy of scenario_world_bridge's config
 ```
 
 In the `.xosc`, name the map directory by path:
@@ -212,10 +212,10 @@ default (exact choreography). Name a vehicle's controller `simulator_autopilot` 
 Traffic Manager drives it with physics instead: give it a goal with `AcquirePositionAction`
 and a speed with an absolute `SpeedAction`, and it routes there and stops
 ([design/scenario-authoring.md](design/scenario-authoring.md#vehicles-the-simulator-drives-simulator_autopilot);
-example `src/csb_examples/scenarios/basic/town01_simulator_autopilot.xosc`). Name it `agent` and an autopilot of its
+example `src/swb_examples/scenarios/basic/town01_simulator_autopilot.xosc`). Name it `agent` and an autopilot of its
 own drives it -- a second Autoware, say: start one more vehicle side for it with
 `entity:=<its name>` ([design/scenario-authoring.md](design/scenario-authoring.md#vehicles-an-autopilot-drives-agent);
-example `src/csb_examples/scenarios/multi_av/town01_two_av.xosc`). Scenario files are never modified.
+example `src/swb_examples/scenarios/multi_av/town01_two_av.xosc`). Scenario files are never modified.
 
 ## 4. Run
 
@@ -227,7 +227,7 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
 # Terminal 2 -- simulation side, long-lived: the CARLA world server, the scenario bridge
 # driving it and the agent relay (TCP 5560), each restarted if it dies, in the ROS domain
 # scenarios will run in
-ROS_DOMAIN_ID=9 ros2 launch csb_launch carla_simulation.launch.xml \
+ROS_DOMAIN_ID=9 ros2 launch swb_launch carla_simulation.launch.xml \
     [config_file:=<scenario dir>/bridge.yaml] [weather:=ClearNoon] [npc_motion:=kinematic]
 
 # Terminal 3 -- vehicle side, any ROS domain, any host, any time
@@ -236,11 +236,11 @@ ROS_DOMAIN_ID=1 ros2 launch acb_launch carla_simulator.launch.xml \
     [rviz:=false] [autoware_launch:=<your autoware.launch.xml>]
 
 # Terminal 3b -- one more vehicle side per entity whose controller is `agent`, e.g. bg_av_1
-ROS_DOMAIN_ID=2 ros2 launch csb_launch background_av.launch.xml \
+ROS_DOMAIN_ID=2 ros2 launch swb_launch background_av.launch.xml \
     entity:=bg_av_1 map_path:=$CARLA_MAPS/Town01 relay:=tcp://<simulation host>:5560
 
 # Terminal 4 -- one scenario, in the simulation side's domain; exits when it ends
-ROS_DOMAIN_ID=9 ros2 launch csb_launch scenario.launch.xml \
+ROS_DOMAIN_ID=9 ros2 launch swb_launch scenario.launch.xml \
     scenario:=<scenario dir>/my_scenario.xosc [output_directory:=<dir>]
 ```
 
@@ -249,7 +249,7 @@ in place of `ros2 launch`.
 
 **Two processes, two configurations** (roadmap 046). The simulation side runs the scenario
 bridge, which speaks SSv2's protocol and knows no simulator, and a world server per
-simulator, which drives the simulator over the world protocol (`proto/csb_world.proto`). On
+simulator, which drives the simulator over the world protocol (`proto/swb_world.proto`). On
 CARLA the world server (`carla_world`) runs inside the same launch as the bridge; on Isaac
 Sim it is its own long-lived launch (`just isaac-world`, then `isaac_simulation.launch.xml`
 for the simulation side). Each has its file, and each refuses the other's keys, naming
@@ -258,13 +258,13 @@ where they went:
 - The bridge's `bridge_config.yaml` (the world server's endpoint and timeouts, the asset map,
   the agent relay, weather, `npc_motion`, gap traces and contact reports), chosen by the
   launch argument `config_file:=` (`just run config_file:=<dir>/bridge.yaml`), default the
-  installed `share/carla_scenario_bridge/config/bridge_config.yaml`.
+  installed `share/scenario_world_bridge/config/bridge_config.yaml`.
 - The CARLA world server's `carla_world.yaml` (CARLA's host and port, blueprints and map
   aliases, ticking, the Traffic Manager, the collision sensors, the sensor-release channel),
   chosen by `carla_world_config:=`, default `share/carla_world/config/carla_world.yaml`;
   `blueprint_boxes_<version>.yaml` is read beside it.
 
-Both log the file they loaded. `ros2 param get /carla_scenario_bridge config_file` names the
+Both log the file they loaded. `ros2 param get /scenario_world_bridge config_file` names the
 bridge's. The older `CSB_CONFIG_DIR` variable is refused.
 
 **Is a world server up?** `just world-health [sim:=carla|isaac]` sends it one probe (which
@@ -278,7 +278,7 @@ One bridge drives a world server at a time: a second bridge is refused while the
   useful; a cold headless start takes from under a minute (NVIDIA Vulkan) to about three.
 - The simulation side's bridge logs `ZMQ server ready` and its relay `Relaying entity 'ego'`.
   Under play_launch these are in the per-node logs, not on the launch's console:
-  `play_log/latest/node/carla_scenario_bridge/out` and
+  `play_log/latest/node/scenario_world_bridge/out` and
   `play_log/latest/node/scenario_agent_relay/err`. The world server waits for CARLA by itself
   if started first (answering `just world-health` with "not ready" meanwhile), and the bridge
   binds the SSv2 port only once its world server is ready.
@@ -307,9 +307,9 @@ overwrites the verdict, so give every run you want to keep its own `output_direc
 ```bash
 # Terminal 4, instead of one scenario
 export CARLA_MAPS=<map root>
-ros2 run csb_launch run_suite \
-    $(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/basic \
-    --output ~/csb_results/basic \
+ros2 run swb_launch run_suite \
+    $(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/basic \
+    --output ~/swb_results/basic \
     [--domain 9] [--relay tcp://<simulation host>:5560] [--timeout-per-scenario S] \
     [-- global_timeout:=900 ...]
 ```
@@ -354,7 +354,7 @@ simulation side and the vehicle side(s) already up; scenarios that load another 
 SSv2 decides collisions in its own geometry: declared bounding boxes, in 2D, and no static
 world. When the ego hits a curb, a pole, or an NPC whose CARLA body is bigger than its
 declared box, the run can still pass. The bridge writes what CARLA's collision sensor saw
-for every ego run to `~/.ros/csb/contacts/` (`contact_report_dir:=` on `carla_simulation.launch.xml`
+for every ego run to `~/.ros/swb/contacts/` (`contact_report_dir:=` on `carla_simulation.launch.xml`
 moves it, `off` disables it). With `--physical-verdict`, `run_suite` adds a `carla_contact`
 testcase to each scenario, next to SSv2's own:
 
@@ -374,7 +374,7 @@ The value is a comma-separated list of entity names. `static` allows contact wit
 `--min-impulse N` ignores contacts below N N·s. For one scenario, run the join after it ends:
 
 ```bash
-ros2 run csb_launch physical_verdict <output>/scenario_test_runner/result.junit.xml \
+ros2 run swb_launch physical_verdict <output>/scenario_test_runner/result.junit.xml \
     --scenario <scenario file>       # judges the newest report; --since/--until for a window
 ```
 
@@ -446,22 +446,22 @@ the vehicle side's terminal, after sourcing the setups. The developer workflow d
 ### Another autopilot
 
 The vehicle side does not have to be Autoware. Anything that registers with the relay as
-the entity's agent drives it: a Python class (`csb_agent.Agent`) in your own project, or a
-ROS 2 autopilot described in a YAML file (`ros2 run csb_agent ros_adapter --config
-agent.yaml`). Start one with `ros2 run csb_agent csb-agent new <name>` and test it with
-`csb-agent check` before running scenarios: [Writing an agent](agent-interface.md).
+the entity's agent drives it: a Python class (`swb_agent.Agent`) in your own project, or a
+ROS 2 autopilot described in a YAML file (`ros2 run swb_agent ros_adapter --config
+agent.yaml`). Start one with `ros2 run swb_agent swb-agent new <name>` and test it with
+`swb-agent check` before running scenarios: [Writing an agent](agent-interface.md).
 
 ### Another simulator
 
-Every simulator is a world server behind the world protocol (`proto/csb_world.proto`;
+Every simulator is a world server behind the world protocol (`proto/swb_world.proto`;
 roadmap 046, [design](design/simulator-interface-split.md)); the bridge needs nothing new for
 one. A port is one process that owns the simulator and implements the protocol:
 
-- **Python**: subclass `csb_world_server.world.World` (`load`, `spawn`, `despawn`, `step`;
+- **Python**: subclass `swb_world_server.world.World` (`load`, `spawn`, `despawn`, `step`;
   `set_signals` and the rest with a capability), set `simulator_name`, `capabilities` and
-  `max_physics_dt`, and serve it with `csb_world_server.server.bind` and `run`. The Isaac
-  world server (`src/csb_isaac/csb_isaac/world.py`) is the worked example.
-- **Rust**: implement `csb_core::world_server::World` and serve it with `world_server::bind`
+  `max_physics_dt`, and serve it with `swb_world_server.server.bind` and `run`. The Isaac
+  world server (`src/isaac_world/isaac_world/world.py`) is the worked example.
+- **Rust**: implement `swb_core::world_server::World` and serve it with `world_server::bind`
   and `serve`, as `src/carla_world` does for CARLA.
 - **Anything else**: answer the `.proto`'s `Request` with its `Reply` on a ZMQ REP socket.
 
@@ -469,9 +469,9 @@ Declare only what the simulator does (`Capability`): the bridge never sends a re
 drive the server did not declare, and answers SSv2 with an honest failure naming the missing
 capability. A map tells the server which world it means in `<map dir>/<simulator name>/world.yaml`
 (`world`, `ground_paths`, `map_origin`). Check the server with
-`csb_world_check conformance tcp://127.0.0.1:<port> --map <map dir>` before a scenario, then
+`swb_world_check conformance tcp://127.0.0.1:<port> --map <map dir>` before a scenario, then
 run the starter scenarios against it: start the simulation side with
-`ros2 launch csb_launch simulation.launch.xml world_endpoint:=tcp://127.0.0.1:<port>`, then
+`ros2 launch swb_launch simulation.launch.xml world_endpoint:=tcp://127.0.0.1:<port>`, then
 scenarios as above. The vehicle under test needs a vehicle bridge of its own
 (sensors, `/vehicle/status/*`, `/control/command/*`, `/clock`), as acb and aib are.
 
@@ -504,16 +504,16 @@ the bridge's 120 s RPC timeout for a CARLA town load (measured 44-71 s).
 ## 5. Configure the CARLA world
 
 The bridge owns the simulation side's CARLA connection, so world settings are ROS services
-on it, in the simulation side's domain (`csb_interfaces`):
+on it, in the simulation side's domain (`swb_interfaces`):
 
 ```bash
-ROS_DOMAIN_ID=9 ros2 service call /carla/set_weather csb_interfaces/srv/SetWeather "{preset: ClearNoon}"
-ROS_DOMAIN_ID=9 ros2 service call /carla/get_weather csb_interfaces/srv/GetWeather
+ROS_DOMAIN_ID=9 ros2 service call /scenario_world_bridge/set_weather swb_interfaces/srv/SetWeather "{preset: ClearNoon}"
+ROS_DOMAIN_ID=9 ros2 service call /scenario_world_bridge/get_weather swb_interfaces/srv/GetWeather
 
 # explicit values instead of a preset (fields not given are 0; use_parameters guards an
 # empty request): cloudiness, precipitation, precipitation_deposits, wind_intensity,
 # fog_density, fog_distance, wetness, sun_azimuth_angle, sun_altitude_angle
-ROS_DOMAIN_ID=9 ros2 service call /carla/set_weather csb_interfaces/srv/SetWeather \
+ROS_DOMAIN_ID=9 ros2 service call /scenario_world_bridge/set_weather swb_interfaces/srv/SetWeather \
     "{use_parameters: true, weather: {cloudiness: 30.0, sun_altitude_angle: 60.0, fog_distance: 0.75}}"
 ```
 

@@ -1,4 +1,4 @@
-"""The supervisor role (roadmap 030 step 8): `csb-agent supervise` registers for an entity,
+"""The supervisor role (roadmap 030 step 8): `swb-agent supervise` registers for an entity,
 the relay routes `restart` to it when the agent cannot restart itself, and the supervisor
 replaces the whole process group, after which the agent registers again."""
 
@@ -8,9 +8,9 @@ import tempfile
 import threading
 import time
 
-import csb_agent
-from csb_agent import protocol as P
-from csb_agent.supervise import Group, Supervisor
+import swb_agent
+from swb_agent import protocol as P
+from swb_agent.supervise import Group, Supervisor
 from scenario_agent_relay.server import AgentServer
 
 
@@ -33,7 +33,7 @@ def agent_command(port):
     config = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False)
     config.write("world: fake\n")
     config.close()
-    return (f"{sys.executable} -m csb_agent.adapters.carla_basic --relay tcp://127.0.0.1:{port}"
+    return (f"{sys.executable} -m swb_agent.adapters.carla_basic --relay tcp://127.0.0.1:{port}"
             f" --entity ego --config {config.name} --log-level WARNING")
 
 
@@ -47,7 +47,7 @@ def test_restart_goes_to_the_supervisor_and_the_agent_comes_back():
         assert wait_until(lambda: server.session("ego") is not None
                           and server.supervisor("ego") is not None, 20.0)
         first_pgid, first = group.pgid, server.session("ego")
-        with csb_agent.Commander(f"tcp://127.0.0.1:{server.port}", "test") as c:
+        with swb_agent.Commander(f"tcp://127.0.0.1:{server.port}", "test") as c:
             answer = c.query("ego")
             assert answer["registered"] and answer["supervised"]
             reply = c.command("ego", P.RESTART, timeout=20.0)
@@ -85,16 +85,16 @@ def test_an_agent_that_exits_is_started_again():
 def test_restart_without_supervisor_or_capability_is_unsupported():
     server = start_server()
 
-    class Plain(csb_agent.Agent):
+    class Plain(swb_agent.Agent):
         def on_stop(self):
             pass
 
     agent = Plain({"entity": "ego"})
-    client = csb_agent.Client(agent, "127.0.0.1", server.port)
+    client = swb_agent.Client(agent, "127.0.0.1", server.port)
     threading.Thread(target=client.run, daemon=True).start()
     try:
         assert wait_until(lambda: server.session("ego") is not None)
-        with csb_agent.Commander(f"tcp://127.0.0.1:{server.port}", "test") as c:
+        with swb_agent.Commander(f"tcp://127.0.0.1:{server.port}", "test") as c:
             assert c.query("ego")["supervised"] is False
             reply = c.command("ego", P.RESTART, timeout=2.0)
         assert reply["status"] == P.UNSUPPORTED

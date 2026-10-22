@@ -7,7 +7,7 @@
   <maintainer email="maintainer@example.com">Maintainer</maintainer>
   <license>Apache-2.0</license>
 
-  <!-- libclang for carla-rust's autocxx bindings, protoc for prost-build (csb_core's
+  <!-- libclang for carla-rust's autocxx bindings, protoc for prost-build (swb_core's
        protocols), libzmq for the world protocol's socket. -->
   <build_depend>libclang-dev</build_depend>
   <build_depend>protobuf-dev</build_depend>

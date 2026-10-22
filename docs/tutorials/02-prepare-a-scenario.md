@@ -5,7 +5,7 @@ road to a goal, behind a slower car it must not touch. You will find the poses w
 write the `.xosc`, and run it on the stack from [Tutorial 1](01-first-run.md).
 
 The finished file ships with the workspace, so you can compare against it:
-`$(ros2 pkg prefix csb_examples)/share/csb_examples/scenarios/tutorial/town01_follow_to_goal.xosc`.
+`$(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/tutorial/town01_follow_to_goal.xosc`.
 
 ## 1. A scenario directory
 
@@ -23,7 +23,7 @@ CARLA's world with y flipped and headings negated, which is easy to get wrong by
 scenario) and prints positions already converted, as OpenSCENARIO elements:
 
 ```bash
-ros2 run csb_launch carla_poses spawn-points
+ros2 run swb_launch carla_poses spawn-points
 ```
 
 ```
@@ -41,8 +41,8 @@ first line. Spawn point 2 starts on a long straight road heading west. Walk alon
 for the lead car's start (20 m) and the goal (80 m):
 
 ```bash
-ros2 run csb_launch carla_poses ahead 2 --distance 20
-ros2 run csb_launch carla_poses ahead 2 --distance 80
+ros2 run swb_launch carla_poses ahead 2 --distance 20
+ros2 run swb_launch carla_poses ahead 2 --distance 80
 ```
 
 ```
@@ -144,7 +144,7 @@ Autoware's start-up.
 The stack from Tutorial 1 (Terminals 1-3) stays up:
 
 ```bash
-ROS_DOMAIN_ID=9 ros2 launch csb_launch scenario.launch.xml \
+ROS_DOMAIN_ID=9 ros2 launch swb_launch scenario.launch.xml \
     scenario:=$HOME/my_scenarios/follow_to_goal.xosc output_directory:=/tmp/follow
 grep -o 'failures="[0-9]*" errors="[0-9]*"' /tmp/follow/scenario_test_runner/result.junit.xml | head -1
 # failures="0" errors="0"

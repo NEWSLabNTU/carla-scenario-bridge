@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <OpenSCENARIO>
-	<FileHeader author="carla-scenario-bridge" date="2026-04-03T00:00:00+00:00" description="Town10 ego drive on CARLA 0.10 (roadmap 019 step 6): 80 m on one lane; every 2 m within 0.6 m and 10 deg of a TUM lanelet" revMajor="1" revMinor="2" />
+	<FileHeader author="scenario-world-bridge" date="2026-04-03T00:00:00+00:00" description="Town10 ego drive on CARLA 0.10 (roadmap 019 step 6): 80 m on one lane; every 2 m within 0.6 m and 10 deg of a TUM lanelet" revMajor="1" revMinor="2" />
 	<ParameterDeclarations />
 	<CatalogLocations />
 	<RoadNetwork>

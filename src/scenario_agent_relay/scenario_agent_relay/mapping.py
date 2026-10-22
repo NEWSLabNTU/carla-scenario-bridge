@@ -8,7 +8,7 @@ importable.
 
 from dataclasses import dataclass
 
-from csb_agent import protocol as P
+from swb_agent import protocol as P
 
 # autoware_adapi_v1_msgs/LocalizationInitializationState
 LOC_UNKNOWN, LOC_UNINITIALIZED, LOC_INITIALIZING, LOC_INITIALIZED = 0, 1, 2, 3

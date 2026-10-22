@@ -34,7 +34,7 @@ from tier4_external_api_msgs.srv import Engage, SetVelocityLimit
 from tier4_rtc_msgs.msg import CooperateResponse, CooperateStatus, CooperateStatusArray
 from tier4_rtc_msgs.srv import AutoModeWithModule, CooperateCommands
 
-from csb_agent import protocol as P
+from swb_agent import protocol as P
 
 from . import mapping as M
 from .episodes import RESET_TIMEOUT, Episodes

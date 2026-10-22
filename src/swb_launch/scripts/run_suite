@@ -1,0 +1,746 @@
+#!/usr/bin/env python3
+"""Run a set of scenarios one after another and keep every verdict.
+
+    ros2 run swb_launch run_suite <scenario file or dir>... --output <results dir> \\
+        [--domain 9] [--timeout-per-scenario S] [--relay tcp://localhost:5560]
+        [--no-preflight] [--physical-verdict [--min-impulse N]]
+        [-- <extra scenario.launch.xml args>]
+
+Each scenario runs through `play_launch launch swb_launch scenario.launch.xml` (or
+`ros2 launch` when play_launch is not installed) with its own
+`output_directory:=<results>/<scenario stem>`, in its own process group, so a scenario
+that overruns --timeout-per-scenario is killed alone. Afterwards every
+`<results>/<stem>/scenario_test_runner/result.junit.xml` is merged into
+`<results>/suite.junit.xml` (one testcase per scenario variant, classname = stem); a
+scenario that left no verdict is recorded as an error with the reason.
+
+The simulation side and the vehicle side(s) must already be up, as for one scenario.
+Before each scenario a pre-flight asks the agent relay whether the vehicle agent of every
+entity the scenario needs (its ego, and each entity whose controller is `agent`) is
+registered; if one is not, the scenario fails at once with that reason instead of waiting
+out SSv2's initialize timeout. With --physical-verdict, each scenario also gets a
+`carla_contact` testcase from the bridge's contact reports for its run window
+(`physical_verdict`, roadmap 021): it fails when CARLA saw the ego touch something the
+scenario did not declare in csbExpectedContacts. Exit status is 0 only if every testcase
+of every scenario passed.
+
+Between scenarios (roadmap 030): after each scenario run_suite asks the relay how the ego
+agent's reset went (`swb_agent.Commander.query`), tells the agent the verdict
+(`episode_end`), and climbs the restart ladder by `--restart`:
+
+  never              never restart
+  on-reset-failure   restart when the scenario's reset failed or timed out (default)
+  on-failure         restart after any failed scenario
+  every:N            restart after every N scenarios
+
+A restart goes through the relay to the agent (its `restart` capability) or to the entity's
+supervisor (`swb-agent supervise`); run_suite then waits up to --restart-timeout for the
+agent to register again. A policy other than `never` with neither available is refused at
+start. Each scenario's result (summary line and `suite.json`) records its reset (episode,
+status, seconds) and whether it ran on a restarted agent. With a scenario file that expands
+to several variants, the record is the last variant's reset.
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Optional, Tuple
+from urllib.parse import urlparse
+
+SCENARIO_SUFFIXES = (".xosc", ".yaml", ".yml")
+JUNIT_RELPATH = Path("scenario_test_runner") / "result.junit.xml"
+DEFAULT_RELAY = "tcp://localhost:5560"
+EGO_CONTROLLER = "Autoware"  # SSv2: isEgo=true or a controller of this name is the ego
+AGENT_CONTROLLER = "agent"  # this project: an autopilot behind the relay drives it
+
+
+@dataclass
+class Case:
+    name: str
+    classname: str
+    kind: str = "pass"  # pass | failure | error
+    type: str = ""
+    message: str = ""
+    time: Optional[str] = None
+    out: str = ""  # system-out
+
+
+@dataclass
+class ScenarioResult:
+    stem: str
+    path: Path
+    output: Path
+    seconds: float = 0.0
+    exit_code: Optional[int] = None
+    timed_out: bool = False
+    timeout: Optional[float] = None
+    preflight_error: Optional[str] = None
+    started_unix: Optional[float] = None
+    ended_unix: Optional[float] = None
+    cases: List[Case] = field(default_factory=list)
+    reset: Optional[dict] = None  # the agent's reset for this scenario (relay's record)
+    restarted: bool = False  # ran on an agent restarted after the previous scenario
+    restart: Optional[dict] = None  # the restart done after this scenario, if any
+
+    @property
+    def passed(self) -> bool:
+        return bool(self.cases) and all(c.kind == "pass" for c in self.cases)
+
+
+# ---------------------------------------------------------------------------------------
+# Scenario discovery
+# ---------------------------------------------------------------------------------------
+
+
+def collect_scenarios(inputs: List[str]) -> List[Path]:
+    """Files as given, directories expanded (recursively, sorted) to their scenario files."""
+    found: List[Path] = []
+    for arg in inputs:
+        p = Path(arg).expanduser().resolve()
+        if p.is_dir():
+            found.extend(
+                sorted(f for f in p.rglob("*") if f.is_file() and f.suffix in SCENARIO_SUFFIXES)
+            )
+        elif p.is_file():
+            found.append(p)
+        else:
+            raise FileNotFoundError(f"no such scenario file or directory: {arg}")
+    return found
+
+
+def unique_stems(paths: List[Path]) -> List[str]:
+    """One output directory name per scenario; repeated stems get _2, _3, ..."""
+    seen: dict = {}
+    stems = []
+    for p in paths:
+        n = seen.get(p.stem, 0) + 1
+        seen[p.stem] = n
+        stems.append(p.stem if n == 1 else f"{p.stem}_{n}")
+    return stems
+
+
+# ---------------------------------------------------------------------------------------
+# JUnit
+# ---------------------------------------------------------------------------------------
+
+
+def read_cases(junit: Path, classname: str) -> List[Case]:
+    """Testcases of one SSv2 result.junit.xml (testsuites > testsuite > testcase)."""
+    root = ET.parse(junit).getroot()
+    cases = []
+    for tc in root.iter("testcase"):
+        case = Case(name=tc.get("name", ""), classname=classname, time=tc.get("time"))
+        for kind in ("failure", "error"):
+            el = tc.find(kind)
+            if el is not None:
+                case.kind = kind
+                case.type = el.get("type", "")
+                case.message = el.get("message", "") or (el.text or "").strip()
+                break
+        cases.append(case)
+    return cases
+
+
+def collect_result(result: ScenarioResult) -> None:
+    """Fill result.cases from its junit, or with one error saying why there is none."""
+    if result.preflight_error is not None:
+        result.cases = [Case(result.stem, result.stem, "error", "Preflight",
+                             result.preflight_error)]
+        return
+    junit = result.output / JUNIT_RELPATH
+    reason = None
+    if result.timed_out:
+        cap = result.timeout if result.timeout else result.seconds
+        reason = (f"TIMEOUT after {cap:.0f} s (--timeout-per-scenario); launch killed "
+                  f"after {result.seconds:.0f} s")
+    if junit.is_file():
+        try:
+            result.cases = read_cases(junit, result.stem)
+        except ET.ParseError as e:
+            reason = f"unreadable {junit}: {e}"
+            result.cases = []
+        if result.cases and not result.timed_out:
+            return
+        if result.cases and result.timed_out:
+            # Variants that finished before the cap keep their verdicts; the overrun is added.
+            result.cases.append(Case(result.stem + " (timeout)", result.stem, "error",
+                                     "Timeout", reason))
+            return
+        reason = reason or f"{junit} has no testcases"
+    if reason is None:
+        reason = f"no {JUNIT_RELPATH} written (launch exit code {result.exit_code})"
+    result.cases = [Case(result.stem, result.stem, "error", "NoVerdict", reason)]
+
+
+def build_suite_xml(results: List[ScenarioResult], name: str = "swb_suite") -> ET.ElementTree:
+    cases = [c for r in results for c in r.cases]
+    failures = sum(c.kind == "failure" for c in cases)
+    errors = sum(c.kind == "error" for c in cases)
+    total_time = sum(r.seconds for r in results)
+    counts = {"tests": str(len(cases)), "failures": str(failures), "errors": str(errors),
+              "time": f"{total_time:.1f}"}
+    root = ET.Element("testsuites", name=name, **counts)
+    suite = ET.SubElement(root, "testsuite", name=name, **counts)
+    for c in cases:
+        attrs = {"name": c.name, "classname": c.classname}
+        if c.time is not None:
+            attrs["time"] = c.time
+        tc = ET.SubElement(suite, "testcase", **attrs)
+        if c.kind != "pass":
+            el = ET.SubElement(tc, c.kind, type=c.type, message=c.message)
+            el.text = c.message
+        if c.out:
+            ET.SubElement(tc, "system-out").text = c.out
+    if hasattr(ET, "indent"):
+        ET.indent(root, "  ")
+    return ET.ElementTree(root)
+
+
+def summary_line(r: ScenarioResult) -> str:
+    n = len(r.cases)
+    ok = sum(c.kind == "pass" for c in r.cases)
+    head = "PASS" if r.passed else "FAIL"
+    line = f"[run_suite] {head} {r.stem}: {ok}/{n} passed in {r.seconds:.0f} s"
+    if r.timed_out:
+        cap = r.timeout if r.timeout else r.seconds
+        line += f" -- TIMEOUT after {cap:.0f} s"
+    if r.reset:
+        secs = r.reset.get("seconds")
+        line += f" [reset {r.reset.get('status')}" + (f" {secs:.1f} s" if secs is not None
+                                                      else "") + "]"
+    if r.restarted:
+        line += " [restarted agent]"
+    bad = [c for c in r.cases if c.kind != "pass"]
+    if bad:
+        first = bad[0]
+        msg = " ".join(first.message.split())[:160]
+        line += f" -- {first.name}: {first.type} {msg}".rstrip()
+    return line
+
+
+# ---------------------------------------------------------------------------------------
+# Pre-flight: are the scenario's vehicle agents registered with the relay?
+# ---------------------------------------------------------------------------------------
+
+
+def _is_true(value) -> bool:
+    return str(value).strip().lower() == "true"
+
+
+def _objects_xml(path: Path) -> List[Tuple[str, str, bool]]:
+    root = ET.parse(path).getroot()
+    objects = []
+    for obj in root.iter("ScenarioObject"):
+        ctrl = obj.find(".//ObjectController/Controller")
+        name = ctrl.get("name", "") if ctrl is not None else ""
+        is_ego = ctrl is not None and any(
+            p.get("name") == "isEgo" and _is_true(p.get("value"))
+            for p in ctrl.iter("Property"))
+        objects.append((obj.get("name", ""), name, is_ego))
+    return objects
+
+
+def _objects_yaml(path: Path) -> List[Tuple[str, str, bool]]:
+    import yaml  # ROS ships PyYAML; only needed for YAML scenarios
+
+    objects = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "ScenarioObject":
+                    for obj in value if isinstance(value, list) else [value]:
+                        if isinstance(obj, dict):
+                            objects.append(_yaml_object(obj))
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(yaml.safe_load(path.read_text()))
+    return objects
+
+
+def _yaml_object(obj: dict) -> Tuple[str, str, bool]:
+    ctrl = ((obj.get("ObjectController") or {}).get("Controller")) or {}
+    props = ((ctrl.get("Properties") or {}).get("Property")) or []
+    if isinstance(props, dict):
+        props = [props]
+    is_ego = any(isinstance(p, dict) and p.get("name") == "isEgo" and _is_true(p.get("value"))
+                 for p in props)
+    return str(obj.get("name", "")), str(ctrl.get("name", "") or ""), is_ego
+
+
+def required_agents(scenario: Path, ego_entity: str = "ego") -> List[str]:
+    """Relay entities a scenario needs: `ego_entity` if it has an ego (isEgo=true or the
+    controller SSv2 calls Autoware -- the relay serves the ego under its configured entity,
+    whatever the scenario names it), plus every entity whose controller is `agent`.
+    A file that cannot be read needs nothing here; the launch reports it properly."""
+    try:
+        if scenario.suffix == ".xosc":
+            objects = _objects_xml(scenario)
+        else:
+            objects = _objects_yaml(scenario)
+    except Exception:  # noqa: BLE001 -- unparseable is the launch's error to report
+        return []
+    needed = []
+    if any(is_ego or ctrl == EGO_CONTROLLER for _, ctrl, is_ego in objects):
+        needed.append(ego_entity)
+    for name, ctrl, is_ego in objects:
+        if ctrl == AGENT_CONTROLLER and not is_ego and name and name not in needed:
+            needed.append(name)
+    return needed
+
+
+def relay_address(url: str) -> Tuple[str, int]:
+    """tcp://host:port (or host:port) -> (host, port)."""
+    parsed = urlparse(url if "://" in url else "tcp://" + url)
+    if parsed.scheme != "tcp" or not parsed.hostname or not parsed.port:
+        raise ValueError(f"relay address must be tcp://host:port, got {url!r}")
+    return parsed.hostname, parsed.port
+
+
+def query_agents(relay: str, entities: List[str], timeout: float = 5.0) -> dict:
+    """Ask the relay, as a commander, whether an agent is registered for each entity.
+    Returns {entity: (registered, phase or "")}. Raises OSError/ValueError on a relay
+    that cannot be reached or does not answer."""
+    host, port = relay_address(relay)
+    answers = {}
+    with socket.create_connection((host, port), timeout=timeout) as s:
+        s.settimeout(timeout)
+        f = s.makefile("rw")
+        msgs = [{"type": "register", "role": "commander", "agent": "run_suite"}]
+        msgs += [{"type": "query", "id": i, "entity": e} for i, e in enumerate(entities, 1)]
+        for m in msgs:
+            f.write(json.dumps({**m, "v": 1}) + "\n")
+        f.flush()
+        for line in f:
+            m = json.loads(line)
+            if m.get("type") != "reply" or not isinstance(m.get("id"), int):
+                continue
+            i = m["id"]
+            if 1 <= i <= len(entities):
+                phase = (m.get("state") or {}).get("phase", "") or ""
+                answers[entities[i - 1]] = (bool(m.get("registered")), phase)
+            if len(answers) == len(entities):
+                return answers
+    raise OSError("the relay closed the connection before answering")
+
+
+def preflight(scenario: Path, relay: str, ego_entity: str = "ego") -> Optional[str]:
+    """None if every agent the scenario needs is registered, else why the scenario
+    cannot run."""
+    entities = required_agents(scenario, ego_entity)
+    if not entities:
+        return None
+    try:
+        answers = query_agents(relay, entities)
+    except (OSError, ValueError) as e:
+        return (f"pre-flight: agent relay {relay} unreachable ({e}); start the simulation "
+                f"side (swb_launch simulation.launch.xml) or pass --relay / --no-preflight")
+    missing = [e for e in entities if not answers.get(e, (False, ""))[0]]
+    if not missing:
+        return None
+    return (f"pre-flight: no vehicle agent registered with the relay {relay} as "
+            f"{', '.join(repr(e) for e in missing)}; start that vehicle side "
+            f"(acb_launch carla_simulator.launch.xml relay:={relay} entity:={missing[0]}) "
+            f"and wait until it has registered, or check it for exited nodes")
+
+
+# ---------------------------------------------------------------------------------------
+# Running
+# ---------------------------------------------------------------------------------------
+
+
+def launch_command(scenario: Path, output: Path, extra: List[str]) -> List[str]:
+    launch_args = [
+        "swb_launch", "scenario.launch.xml",
+        f"scenario:={scenario}",
+        f"output_directory:={output}",
+        *extra,
+    ]
+    if shutil.which("play_launch"):
+        # play_launch >= 0.15.1: defaults as ros2 launch (no interception without a
+        # contract, ament_index package lookup). Web UI on SWB_WEB_PORT+1 (8081 by default),
+        # the scenario stack's port by this project's convention (the justfile lays the
+        # stacks out from SWB_WEB_PORT; play_launch's own default, 8080, is the demo's).
+        web_port = int(os.environ.get("SWB_WEB_PORT", "8080")) + 1
+        return ["play_launch", "launch",
+                "--web-addr", f"127.0.0.1:{web_port}",
+                "--log-dir", str(output / "play_log"), *launch_args]
+    return ["ros2", "launch", *launch_args]
+
+
+def signal_group(pgid: int, sig: int) -> bool:
+    try:
+        os.killpg(pgid, sig)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def group_alive(pgid: int) -> bool:
+    return signal_group(pgid, 0)
+
+
+def stop_group(pgid: int, grace: float = 20.0) -> None:
+    """SIGINT, then SIGTERM, then SIGKILL the whole group until nothing in it is left."""
+    for sig, wait in ((signal.SIGINT, grace), (signal.SIGTERM, grace / 2), (signal.SIGKILL, 5)):
+        if not signal_group(pgid, sig):
+            return
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            if not group_alive(pgid):
+                return
+            time.sleep(0.5)
+
+
+def run_one(scenario: Path, stem: str, results_dir: Path, extra: List[str],
+            timeout: Optional[float], env: dict, relay: Optional[str] = DEFAULT_RELAY,
+            ego_entity: str = "ego") -> ScenarioResult:
+    output = results_dir / stem
+    output.mkdir(parents=True, exist_ok=True)
+    # SSv2's runner empties its subdirectories at startup but leaves its own top-level
+    # files, a previous verdict among them; never let a stale one stand in for this run.
+    stale = output / JUNIT_RELPATH
+    if stale.exists():
+        stale.unlink()
+    result = ScenarioResult(stem=stem, path=scenario, output=output,
+                            timeout=timeout if timeout and timeout > 0 else None)
+    if relay:
+        result.preflight_error = preflight(scenario, relay, ego_entity)
+        if result.preflight_error is not None:
+            collect_result(result)
+            return result
+    cmd = launch_command(scenario, output, extra)
+    log = output / "launch.log"
+    start = time.monotonic()
+    result.started_unix = time.time()
+    with open(log, "w") as logf:
+        logf.write("$ " + " ".join(cmd) + "\n")
+        logf.flush()
+        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, env=env, start_new_session=True)
+        try:
+            result.exit_code = proc.wait(timeout=timeout if timeout and timeout > 0 else None)
+        except subprocess.TimeoutExpired:
+            result.timed_out = True
+            stop_group(proc.pid)
+            result.exit_code = proc.wait()
+        except KeyboardInterrupt:
+            stop_group(proc.pid)
+            raise
+    # The launch ended on its own; anything it left behind in its group goes too.
+    if group_alive(proc.pid):
+        stop_group(proc.pid, grace=10.0)
+    result.seconds = time.monotonic() - start
+    result.ended_unix = time.time()
+    collect_result(result)
+    return result
+
+
+# ---------------------------------------------------------------------------------------
+# Between scenarios: reset record, episode_end, the restart ladder (roadmap 030)
+# ---------------------------------------------------------------------------------------
+
+RESTART_POLICIES = ("never", "on-reset-failure", "on-failure", "every:N")
+
+
+def parse_restart(value: str) -> Tuple[str, int]:
+    """'never' | 'on-reset-failure' | 'on-failure' | 'every:N' -> (kind, N)."""
+    if value in ("never", "on-reset-failure", "on-failure"):
+        return value, 0
+    if value.startswith("every:"):
+        try:
+            n = int(value.split(":", 1)[1])
+        except ValueError:
+            n = 0
+        if n >= 1:
+            return "every", n
+    raise ValueError(f"--restart must be one of {', '.join(RESTART_POLICIES)}, got {value!r}")
+
+
+def _commander(relay: str):
+    from swb_agent import Commander  # the agent SDK: this workspace, the tarball or the wheel
+    return Commander(relay, "run_suite")
+
+
+class Ladder:
+    """One entity's agent between scenarios. `commander` builds a swb_agent.Commander."""
+
+    def __init__(self, relay: str, entity: str, policy: str, restart_timeout: float = 300.0,
+                 commander=_commander, log=print, poll=2.0):
+        self.relay, self.entity = relay, entity
+        self.kind, self.every = parse_restart(policy)
+        self.restart_timeout = restart_timeout
+        self.commander = commander
+        self.log = log
+        self.poll = poll
+        self.last_episode = None
+        self.since_restart = 0
+        self.restarted = False  # the next scenario runs on a restarted agent
+
+    def _query(self):
+        with self.commander(self.relay) as c:
+            return c.query(self.entity)
+
+    def refuse(self) -> Optional[str]:
+        """Why this policy cannot run, or None."""
+        if self.kind == "never":
+            return None
+        try:
+            answer = self._query()
+        except (OSError, Exception) as e:  # an unreachable relay, a missing SDK
+            return f"--restart={self.kind}: cannot ask the relay {self.relay} ({e})"
+        caps = (answer.get("state") or {}).get("capabilities") or []
+        if answer.get("supervised") or "restart" in caps:
+            return None
+        return (f"--restart={self.kind if self.kind != 'every' else f'every:{self.every}'} "
+                f"needs a supervisor for entity {self.entity!r} (swb-agent supervise) or an "
+                f"agent with the restart capability; the relay has neither (use "
+                f"--restart=never)")
+
+    def after(self, result: ScenarioResult) -> None:
+        """Record the reset, send the verdict, restart if the policy says so."""
+        result.restarted, self.restarted = self.restarted, False
+        self.since_restart += 1
+        try:
+            answer = self._query()
+        except Exception as e:  # noqa: BLE001 -- the relay gone is not this scenario's fault
+            self.log(f"[run_suite] relay query for {self.entity!r} failed: {e}")
+            answer = {}
+        reset = answer.get("reset")
+        if reset and reset.get("episode") != self.last_episode:
+            result.reset = reset
+            self.last_episode = reset.get("episode")
+        failures = [c.name for c in result.cases if c.kind != "pass"]
+        if answer.get("registered"):
+            try:
+                with self.commander(self.relay) as c:
+                    c.episode_end(self.entity, result.passed, failures,
+                                  episode=(result.reset or {}).get("episode", ""))
+            except Exception as e:  # noqa: BLE001 -- informational only
+                self.log(f"[run_suite] episode_end for {self.entity!r}: {e}")
+        why = self.wants_restart(result)
+        if why:
+            result.restart = self.restart(why)
+            self.restarted = result.restart.get("status") == "OK"
+
+    def wants_restart(self, result: ScenarioResult) -> Optional[str]:
+        if self.kind == "never":
+            return None
+        if self.kind == "on-reset-failure":
+            r = result.reset
+            if r is not None and (r.get("status") != "OK" or r.get("timed_out")):
+                return f"reset {r.get('episode')} {r.get('status')}" + (
+                    " (timed out)" if r.get("timed_out") else "")
+            return None
+        if self.kind == "on-failure":
+            return None if result.passed else "the scenario failed"
+        if self.since_restart >= self.every:
+            return f"every {self.every} scenario(s)"
+        return None
+
+    def restart(self, why: str) -> dict:
+        self.log(f"[run_suite] restarting {self.entity!r}: {why}")
+        start = time.monotonic()
+        record = {"reason": why}
+        try:
+            with self.commander(self.relay) as c:
+                reply = c.command(self.entity, "restart", timeout=30.0)
+            record["status"], record["message"] = reply.get("status"), reply.get("message", "")
+        except Exception as e:  # noqa: BLE001
+            record["status"], record["message"] = "FAILED", str(e)
+        if record["status"] == "OK":
+            end = time.monotonic() + self.restart_timeout
+            ready = False
+            while time.monotonic() < end:
+                try:
+                    answer = self._query()
+                    phase = (answer.get("state") or {}).get("phase", "")
+                    if answer.get("registered") and phase not in ("", "UNAVAILABLE"):
+                        ready = True
+                        break
+                except Exception:  # noqa: BLE001 -- keep polling
+                    pass
+                time.sleep(self.poll)
+            if not ready:
+                record["status"] = "FAILED"
+                record["message"] = (f"the agent did not register again within "
+                                     f"{self.restart_timeout:.0f} s")
+        record["seconds"] = round(time.monotonic() - start, 1)
+        self.since_restart = 0
+        self.log(f"[run_suite] restart {record['status']} in {record['seconds']:.0f} s"
+                 + (f": {record['message']}" if record.get("message") else ""))
+        return record
+
+
+def write_suite_json(results: List[ScenarioResult], path: Path) -> None:
+    rows = [{"stem": r.stem, "path": str(r.path), "passed": r.passed,
+             "seconds": round(r.seconds, 1), "reset": r.reset, "restarted": r.restarted,
+             "restart": r.restart,
+             "cases": [{"name": c.name, "kind": c.kind, "message": c.message}
+                       for c in r.cases]} for r in results]
+    path.write_text(json.dumps({"scenarios": rows}, indent=1) + "\n")
+
+
+def _physical_verdict():
+    """The physical_verdict script next to this one, as a module."""
+    path = Path(__file__).resolve().parent / "physical_verdict"
+    loader = importlib.machinery.SourceFileLoader("swb_physical_verdict", str(path))
+    spec = importlib.util.spec_from_loader("swb_physical_verdict", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def add_physical_verdict(result: ScenarioResult, contacts_dir: Path,
+                         min_impulse: float = 0.0, pv=None) -> None:
+    """Append the carla_contact testcase for this run's window. A scenario that never
+    launched (pre-flight refused it) has no run to judge and gets none."""
+    if result.started_unix is None:
+        return
+    pv = pv or _physical_verdict()
+    kind, type_, message, notes = pv.verdict_for_run(
+        result.path, contacts_dir, result.started_unix, result.ended_unix, min_impulse)
+    result.cases.append(Case(name=pv.TESTCASE, classname=result.stem, kind=kind, type=type_,
+                             message="" if kind == "pass" else message,
+                             out="\n".join(notes)))
+
+
+def parse_args(argv: List[str]) -> argparse.Namespace:
+    extra: List[str] = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, extra = argv[:i], argv[i + 1:]
+    ap = argparse.ArgumentParser(
+        prog="run_suite",
+        description="Run scenarios one after another through swb_launch scenario.launch.xml "
+                    "and merge their verdicts into <output>/suite.junit.xml.",
+        epilog="Arguments after -- are passed to scenario.launch.xml (e.g. global_timeout:=900).",
+    )
+    ap.add_argument("scenarios", nargs="+", help="scenario files (.xosc/.yaml) or directories")
+    ap.add_argument("--output", "-o", required=True, type=Path, help="results directory")
+    ap.add_argument("--domain", type=int,
+                    default=int(os.environ.get("ROS_DOMAIN_ID") or 9),
+                    help="ROS_DOMAIN_ID of the scenario side (default: $ROS_DOMAIN_ID or 9)")
+    # No cap by default: SSv2 already ends every variant at the scenario's own timeout,
+    # while one YAML file can expand to dozens of variants (awf/ UC-ACC: 27, measured at
+    # over 2000 s), which no fixed cap fits without also being too long to catch a hang
+    # promptly. Set one in CI as a backstop against a wedged launch.
+    ap.add_argument("--timeout-per-scenario", type=float, default=0.0, metavar="S",
+                    help="wall-clock cap per scenario file in seconds, all its variants "
+                         "included (default 0 = none; SSv2 times out each variant itself)")
+    ap.add_argument("--relay", default=DEFAULT_RELAY, metavar="URL",
+                    help="agent relay to check before each scenario that its vehicle "
+                         f"agents are registered (default {DEFAULT_RELAY})")
+    ap.add_argument("--ego-entity", default="ego", metavar="NAME",
+                    help="entity the relay serves the ego as (simulation.launch.xml "
+                         "entity:=, default ego)")
+    ap.add_argument("--restart", default=None, metavar="POLICY",
+                    help="restart the ego's agent between scenarios: never, on-reset-failure "
+                         "(default when a restart is possible, else never), on-failure, "
+                         "every:N; given explicitly, anything but never needs a supervisor "
+                         "(swb-agent supervise) or the agent's restart capability")
+    ap.add_argument("--restart-timeout", type=float, default=300.0, metavar="S",
+                    help="how long a restarted agent has to register again (default 300)")
+    ap.add_argument("--no-preflight", action="store_true",
+                    help="skip the relay check and run every scenario regardless")
+    ap.add_argument("--physical-verdict", action="store_true",
+                    help="add a carla_contact testcase per scenario from the bridge's "
+                         "contact reports (roadmap 021): fails on a CARLA contact the "
+                         "scenario did not declare in csbExpectedContacts")
+    ap.add_argument("--contacts", type=Path, default=None, metavar="DIR",
+                    help="the bridge's contact_report_dir (default $ROS_HOME/swb/contacts)")
+    ap.add_argument("--min-impulse", type=float, default=0.0, metavar="N",
+                    help="with --physical-verdict: ignore contacts below this normal "
+                         "impulse, N*s (default 0)")
+    args = ap.parse_args(argv)
+    args.extra = extra
+    try:
+        parse_restart(args.restart or "on-reset-failure")
+    except ValueError as e:
+        ap.error(str(e))
+    return args
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        scenarios = collect_scenarios(args.scenarios)
+    except FileNotFoundError as e:
+        print(f"[run_suite] {e}", file=sys.stderr)
+        return 2
+    if not scenarios:
+        print("[run_suite] no scenario files (.xosc, .yaml, .yml) found", file=sys.stderr)
+        return 2
+    results_dir = args.output.expanduser().resolve()
+    results_dir.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, ROS_DOMAIN_ID=str(args.domain))
+    stems = unique_stems(scenarios)
+    print(f"[run_suite] {len(scenarios)} scenario(s), domain {args.domain}, results in "
+          f"{results_dir}", flush=True)
+
+    ladder = None
+    if not args.no_preflight:
+        ladder = Ladder(args.relay, args.ego_entity, args.restart or "on-reset-failure",
+                        args.restart_timeout)
+        refused = ladder.refuse()
+        if refused and args.restart is not None:
+            print(f"[run_suite] {refused}", file=sys.stderr)
+            return 2
+        if refused:  # the default: restart when possible, never otherwise
+            ladder.kind = "never"
+        print(f"[run_suite] restart policy for {args.ego_entity!r}: "
+              f"{ladder.kind if ladder.kind != 'every' else f'every:{ladder.every}'}"
+              + (" (no supervisor or restart capability)" if refused else ""), flush=True)
+
+    results: List[ScenarioResult] = []
+    suite_path = results_dir / "suite.junit.xml"
+    pv = _physical_verdict() if args.physical_verdict else None
+    contacts_dir = (args.contacts or (pv.default_contacts_dir() if pv else Path("."))).expanduser()
+    try:
+        for i, (scenario, stem) in enumerate(zip(scenarios, stems), 1):
+            print(f"[run_suite] ({i}/{len(scenarios)}) {stem}: {scenario}", flush=True)
+            r = run_one(scenario, stem, results_dir, args.extra,
+                        args.timeout_per_scenario, env,
+                        relay=None if args.no_preflight else args.relay,
+                        ego_entity=args.ego_entity)
+            if pv is not None:
+                add_physical_verdict(r, contacts_dir, args.min_impulse, pv)
+            if ladder is not None and r.preflight_error is None:
+                ladder.after(r)
+            elif ladder is not None:  # no run: but a restart may bring the agent back
+                why = ladder.wants_restart(r) if ladder.kind == "on-failure" else None
+                if why:
+                    r.restart = ladder.restart(why)
+                    ladder.restarted = r.restart.get("status") == "OK"
+            results.append(r)
+            print(summary_line(r), flush=True)
+            # Written after every scenario, so an interrupted suite still leaves a verdict.
+            build_suite_xml(results).write(suite_path, encoding="utf-8", xml_declaration=True)
+            write_suite_json(results, results_dir / "suite.json")
+    except KeyboardInterrupt:
+        print("[run_suite] interrupted", file=sys.stderr)
+        build_suite_xml(results).write(suite_path, encoding="utf-8", xml_declaration=True)
+        return 130
+
+    passed = sum(r.passed for r in results)
+    print(f"[run_suite] {passed}/{len(results)} scenario(s) passed; {suite_path}", flush=True)
+    return 0 if passed == len(results) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

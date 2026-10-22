@@ -16,58 +16,58 @@
 #
 # Bump all three together when Autoware moves to a release built against another TensorRT.
 
-CSB_TENSORRT_VERSION=10.8.0
-CSB_TENSORRT_WHEEL=tensorrt_cu12_libs-10.8.0.43-py2.py3-none-manylinux_2_28_x86_64.whl
-CSB_TENSORRT_WHEEL_SHA256=aed2af55168297ebbf0de666fb2cef6bbab0dd64c516f390d406a81f8cbdbffe
-CSB_TENSORRT_LIBS=(
+SWB_TENSORRT_VERSION=10.8.0
+SWB_TENSORRT_WHEEL=tensorrt_cu12_libs-10.8.0.43-py2.py3-none-manylinux_2_28_x86_64.whl
+SWB_TENSORRT_WHEEL_SHA256=aed2af55168297ebbf0de666fb2cef6bbab0dd64c516f390d406a81f8cbdbffe
+SWB_TENSORRT_LIBS=(
     libnvinfer.so.10
-    "libnvinfer_builder_resource.so.$CSB_TENSORRT_VERSION"
+    "libnvinfer_builder_resource.so.$SWB_TENSORRT_VERSION"
     libnvinfer_plugin.so.10
     libnvonnxparser.so.10
 )
 
 # Download the wheel and extract the libraries into $1. Idempotent: a complete directory is
 # left alone. The wheel (3.1 GB) is downloaded beside $1 and removed afterwards.
-csb_tensorrt_setup() {
+swb_tensorrt_setup() {
     local dir="$1"
     [ -n "$dir" ] || { echo "[setup-tensorrt] AUTOWARE_TENSORRT_LIB is empty: nothing to do" >&2; return 0; }
-    if _csb_tensorrt_complete "$dir"; then
-        echo "[setup-tensorrt] TensorRT $CSB_TENSORRT_VERSION already in $dir"
+    if _swb_tensorrt_complete "$dir"; then
+        echo "[setup-tensorrt] TensorRT $SWB_TENSORRT_VERSION already in $dir"
         return 0
     fi
     mkdir -p "$dir"
-    local whl="$dir/../$CSB_TENSORRT_WHEEL"
-    if ! echo "$CSB_TENSORRT_WHEEL_SHA256  $whl" | sha256sum -c --status 2>/dev/null; then
-        echo "[setup-tensorrt] downloading $CSB_TENSORRT_WHEEL (3.1 GB) from pypi.nvidia.com"
-        curl -fL -# --retry 3 -o "$whl.part" "https://pypi.nvidia.com/tensorrt-cu12-libs/$CSB_TENSORRT_WHEEL"
+    local whl="$dir/../$SWB_TENSORRT_WHEEL"
+    if ! echo "$SWB_TENSORRT_WHEEL_SHA256  $whl" | sha256sum -c --status 2>/dev/null; then
+        echo "[setup-tensorrt] downloading $SWB_TENSORRT_WHEEL (3.1 GB) from pypi.nvidia.com"
+        curl -fL -# --retry 3 -o "$whl.part" "https://pypi.nvidia.com/tensorrt-cu12-libs/$SWB_TENSORRT_WHEEL"
         mv "$whl.part" "$whl"
-        echo "$CSB_TENSORRT_WHEEL_SHA256  $whl" | sha256sum -c --status \
+        echo "$SWB_TENSORRT_WHEEL_SHA256  $whl" | sha256sum -c --status \
             || { echo "[setup-tensorrt] checksum mismatch: $whl" >&2; return 1; }
     fi
     local f members=()
-    for f in "${CSB_TENSORRT_LIBS[@]}"; do members+=("tensorrt_libs/$f"); done
-    unzip -q -o -j "$whl" "${members[@]}" "${CSB_TENSORRT_WHEEL%%-py2*}.dist-info/LICENSE.txt" -d "$dir"
+    for f in "${SWB_TENSORRT_LIBS[@]}"; do members+=("tensorrt_libs/$f"); done
+    unzip -q -o -j "$whl" "${members[@]}" "${SWB_TENSORRT_WHEEL%%-py2*}.dist-info/LICENSE.txt" -d "$dir"
     rm -f "$whl"
-    _csb_tensorrt_complete "$dir" || { echo "[setup-tensorrt] extraction incomplete in $dir" >&2; return 1; }
-    echo "[setup-tensorrt] TensorRT $CSB_TENSORRT_VERSION in $dir"
+    _swb_tensorrt_complete "$dir" || { echo "[setup-tensorrt] extraction incomplete in $dir" >&2; return 1; }
+    echo "[setup-tensorrt] TensorRT $SWB_TENSORRT_VERSION in $dir"
 }
 
-_csb_tensorrt_complete() {
+_swb_tensorrt_complete() {
     local f
-    for f in "${CSB_TENSORRT_LIBS[@]}"; do [ -s "$1/$f" ] || return 1; done
+    for f in "${SWB_TENSORRT_LIBS[@]}"; do [ -s "$1/$f" ] || return 1; done
 }
 
 # Put the runtime first on LD_LIBRARY_PATH of the calling shell, after the setups are
 # sourced (they rewrite LD_LIBRARY_PATH). $1: the directory; empty turns it off. A missing
 # or incomplete directory warns and leaves the host's TensorRT in place.
-csb_tensorrt_source() {
+swb_tensorrt_source() {
     local dir="$1"
     if [ -z "$dir" ]; then
         echo "[just] AUTOWARE_TENSORRT_LIB is empty: the host's TensorRT, engines rebuilt per start" >&2
         return 0
     fi
-    if ! _csb_tensorrt_complete "$dir"; then
-        echo "[just] WARNING: no TensorRT $CSB_TENSORRT_VERSION in $dir: Autoware's TensorRT nodes" >&2
+    if ! _swb_tensorrt_complete "$dir"; then
+        echo "[just] WARNING: no TensorRT $SWB_TENSORRT_VERSION in $dir: Autoware's TensorRT nodes" >&2
         echo "[just]   (CenterPoint, any TensorRT model) rebuild their engines at every start" >&2
         echo "[just]   when the host's TensorRT is another version. Fill it: just setup-tensorrt" >&2
         return 0

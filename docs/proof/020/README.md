@@ -2,8 +2,8 @@
 
 Taken 2026-10-10 on the development host with the stack as the user guide describes it:
 CARLA 0.9.16 (Town01/Town02), the simulation side (`simulation.launch.xml`, domain 9), the
-ego's vehicle side (`just ego-av`, domain 1) and `ros2 run csb_launch run_suite` over the
-installed `csb_examples` scenarios. Viewers ran on a local VNC display
+ego's vehicle side (`just ego-av`, domain 1) and `ros2 run swb_launch run_suite` over the
+installed `swb_examples` scenarios. Viewers ran on a local VNC display
 (`vncserver :5 -geometry 1920x1080 -SecurityTypes None -localhost`): Autoware's RViz
 (`autoware.rviz`, view following `base_link`) in the ego's domain and an xterm tailing
 `run_suite`'s output. Captured with `import -window root -display :5`, halved.

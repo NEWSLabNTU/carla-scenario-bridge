@@ -12,7 +12,7 @@ run some process still has a file or its working directory open in (a live play_
 holds its play_launch.log), and a run whose name the archive already has (nothing is
 overwritten). Files directly in the root (the *.console files) stay.
 
-`just prune-logs` runs this with the justfile's CSB_LOG_ROOT and CSB_LOG_ARCHIVE.
+`just prune-logs` runs this with the justfile's SWB_LOG_ROOT and SWB_LOG_ARCHIVE.
 """
 import argparse
 import os
@@ -83,7 +83,7 @@ def candidates(root: Path):
     """(kind, entry) for each run under root; kind '' for a root-level <time>/."""
     for e in sorted(root.iterdir()):
         if e.is_symlink():
-            # A kind linked elsewhere (CSB_LOG_ROOT moved) is pruned where it lives.
+            # A kind linked elsewhere (SWB_LOG_ROOT moved) is pruned where it lives.
             continue
         if e.is_dir() and RUN_NAME.match(e.name):
             yield "", e, set()

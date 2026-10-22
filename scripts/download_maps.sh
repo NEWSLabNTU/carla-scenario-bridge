@@ -4,13 +4,13 @@
 #
 # The upstream LRZ Sync+Share link is DEAD -- it returns HTTP 404 with an HTML error
 # page, so the download path below cannot work until someone supplies a live URL.
-# Set CSB_MAP_SOURCE to a directory holding the town folders (Town01, Town02, ...) and
+# Set SWB_MAP_SOURCE to a directory holding the town folders (Town01, Town02, ...) and
 # they are linked or copied from there instead.
 set -e
 
 # Optional local source, e.g. a NAS mount:
-#   CSB_MAP_SOURCE=~/nas/autoveh/dataset/CARLA-map-from-TUM just download-maps
-MAP_SOURCE="${CSB_MAP_SOURCE:-}"
+#   SWB_MAP_SOURCE=~/nas/autoveh/dataset/CARLA-map-from-TUM just download-maps
+MAP_SOURCE="${SWB_MAP_SOURCE:-}"
 
 # Dead as of 2026-07-28. Kept so the intended origin stays documented.
 URL="https://syncandshare.lrz.de/dl/fiBgYSNkmsmRB28meoX3gZ/.dir"
@@ -66,7 +66,7 @@ mkdir -p "$DIR"
 # --- Local source ---------------------------------------------------------------
 if [ -n "$MAP_SOURCE" ]; then
     if [ ! -d "$MAP_SOURCE" ]; then
-        echo "ERROR: CSB_MAP_SOURCE='$MAP_SOURCE' is not a directory." >&2
+        echo "ERROR: SWB_MAP_SOURCE='$MAP_SOURCE' is not a directory." >&2
         exit 1
     fi
 
@@ -132,10 +132,10 @@ fi
 echo "Downloading CARLA maps for Autoware..."
 echo
 echo "NOTE: the upstream URL is known to be dead (HTTP 404) as of 2026-07-28."
-echo "      If this fails, point CSB_MAP_SOURCE at a directory holding the town"
+echo "      If this fails, point SWB_MAP_SOURCE at a directory holding the town"
 echo "      folders, e.g.:"
 echo
-echo "        CSB_MAP_SOURCE=/path/to/CARLA-map-from-TUM $0"
+echo "        SWB_MAP_SOURCE=/path/to/CARLA-map-from-TUM $0"
 echo
 
 if command -v aria2c &>/dev/null; then

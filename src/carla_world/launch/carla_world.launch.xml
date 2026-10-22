@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   The CARLA world server (roadmap 046): CARLA behind the world protocol, on 127.0.0.1:<port>.
-  Included by csb_launch carla_simulation.launch.xml, beside the bridge and the agent relay,
+  Included by swb_launch carla_simulation.launch.xml, beside the bridge and the agent relay,
   so the three share one launch, one process group and one stop.
 
     play_launch launch carla_world carla_world.launch.xml [port:=5591] [carla_host:=localhost]

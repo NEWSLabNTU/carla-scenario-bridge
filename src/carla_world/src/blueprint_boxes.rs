@@ -190,13 +190,13 @@ pub fn table_file(version: &str) -> String {
     format!("blueprint_boxes_{version}.yaml")
 }
 
-/// `<prefix>/share/carla_scenario_bridge/config` for each prefix in `AMENT_PREFIX_PATH`.
+/// `<prefix>/share/scenario_world_bridge/config` for each prefix in `AMENT_PREFIX_PATH`.
 fn installed_shares() -> Vec<PathBuf> {
     std::env::var("AMENT_PREFIX_PATH")
         .unwrap_or_default()
         .split(':')
         .filter(|p| !p.is_empty())
-        .map(|p| Path::new(p).join("share/carla_scenario_bridge/config"))
+        .map(|p| Path::new(p).join("share/scenario_world_bridge/config"))
         .collect()
 }
 
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn the_table_is_found_beside_the_config_then_in_a_share() {
-        let root = std::env::temp_dir().join(format!("csb-boxes-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("swb-boxes-{}", std::process::id()));
         let (config, share) = (root.join("config"), root.join("share"));
         std::fs::create_dir_all(&config).unwrap();
         std::fs::create_dir_all(&share).unwrap();

@@ -13,7 +13,7 @@ path = "src/main.rs"
 install_to_share = ["config", "launch"]
 
 [dependencies]
-csb_core = { path = "../csb_core" }
+swb_core = { path = "../swb_core" }
 # CARLA: the version is the workspace's feature (CLAUDE.md, "The CARLA version is a Cargo
 # feature").
 carla.workspace = true

@@ -49,7 +49,7 @@ local-environment adjustments, and each is inert unless its option or controller
 **No:**
 
 - Anything that only makes sense in this deployment. Adjustments for our launch layout,
-  our domains, our CARLA setup or our host belong in this repo — in `csb_launch`, the
+  our domains, our CARLA setup or our host belong in this repo — in `swb_launch`, the
   justfile, or config — where they cost nothing to rebase.
 - Anything that changes stock behavior when the new option is not used. Every patch must be
   inert by default: a scenario that uses none of the new options or controllers runs as

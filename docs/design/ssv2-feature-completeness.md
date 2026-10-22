@@ -5,7 +5,7 @@ where the gaps are, and which mechanisms from TIER IV's `carla-autoware-native` 
 to a client-API-only design.
 
 **Status**: audit, 2026-09-25. Nothing here is implemented; the ranked gap list at the end is
-input to the next roadmap entry. Line numbers refer to `src/carla_scenario_bridge/src/coordinator.rs`
+input to the next roadmap entry. Line numbers refer to `src/scenario_world_bridge/src/coordinator.rs`
 (`C:`), SSv2 `463c02946` and acb `7e899ab` unless stated.
 
 ## Method
@@ -80,7 +80,7 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
   colliders active). The ego can be shoved by an NPC that SSv2 never registers as a
   collision, or SSv2 can report one that CARLA never rendered. Nothing compares the two.
 - **Pose reference point.** Scenario vehicles declare `BoundingBox/Center x="1.5"` (e.g.
-  `src/csb_examples/scenarios/multi_av/town01_two_av.xosc:13`): the SSv2 entity origin is the rear axle. A CARLA vehicle's
+  `src/swb_examples/scenarios/multi_av/town01_two_av.xosc:13`): the SSv2 entity origin is the rear axle. A CARLA vehicle's
   origin is near its bbox centre. `ros_pose_to_carla_transform` (C:2399) and
   `coordinate_conversion.rs` apply no offset. **Measured 2026-09-25** (`scripts/pose_offset_probe.py`):
   the bridge maps the SSv2 pose to the CARLA actor origin 1:1 (Δ 0.000 m on spawn, teleport and

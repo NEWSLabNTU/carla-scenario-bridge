@@ -28,7 +28,7 @@ mod tick_gate;
 mod tick_watchdog;
 mod world;
 
-pub(crate) use csb_core::{
+pub(crate) use swb_core::{
     agent_link, autopilot, body_clearance, budgets, config, contact_report, coordinate_conversion,
     entity_manager, episode_clock, gap_trace, lanelet_map, map_resolver, npc_tracking, proto,
     ros_args, weather,
@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use color_eyre::eyre::{self, Result};
-use csb_core::world_server::{self, End, Shell, World};
+use swb_core::world_server::{self, End, Shell, World};
 
 /// Exit status when a CARLA call hung or CARLA went away (`EX_TEMPFAIL`): restarted.
 const RESTART_EXIT: i32 = 75;

@@ -18,7 +18,7 @@
 //!
 //! The tick runs on one long-lived helper thread; the ZMQ thread hands it the call and waits
 //! at most its bound (`crate::budgets`: one per kind of call). Ticks stay strictly one at a time, issued only by the ZMQ
-//! thread's request and awaited before the request goes on, so csb is still CARLA's only
+//! thread's request and awaited before the request goes on, so swb is still CARLA's only
 //! ticker and no request overlaps a tick (015/023's synchronous-mode invariants). On expiry
 //! the request fails with an error naming the step and the wait, and the watchdog is wedged:
 //! the helper may still be inside LibCarla holding the world, so no further tick is ever
@@ -32,9 +32,9 @@ use std::time::{Duration, Instant};
 /// A test-only fault (roadmap 034 step 2): the tick of one SSv2 frame never returns, as in
 /// the step-7 hang, so the drain-and-exit path can be run on a live stack.
 ///
-/// Off unless the environment sets `CSB_TEST_HANG_TICK_AT=<SSv2 frame>`: the first tick of
+/// Off unless the environment sets `SWB_TEST_HANG_TICK_AT=<SSv2 frame>`: the first tick of
 /// that `UpdateFrame` blocks its helper thread forever instead of calling CARLA. With
-/// `CSB_TEST_HANG_TICK_TOKEN=<file>` it fires only while that file exists, and removes it
+/// `SWB_TEST_HANG_TICK_TOKEN=<file>` it fires only while that file exists, and removes it
 /// when it fires, so one `touch` arms exactly one hang and the respawned bridge (which
 /// inherits the environment) runs the next scenario normally. Never set in a product
 /// launch; the bridge logs a warning at start-up when it is.
@@ -45,8 +45,8 @@ pub struct HangHook {
 }
 
 impl HangHook {
-    pub const FRAME_ENV: &'static str = "CSB_TEST_HANG_TICK_AT";
-    pub const TOKEN_ENV: &'static str = "CSB_TEST_HANG_TICK_TOKEN";
+    pub const FRAME_ENV: &'static str = "SWB_TEST_HANG_TICK_AT";
+    pub const TOKEN_ENV: &'static str = "SWB_TEST_HANG_TICK_TOKEN";
 
     /// The hook the environment asks for, if any.
     pub fn from_env() -> Option<Self> {
@@ -169,7 +169,7 @@ fn spawn_worker() -> Option<Worker> {
     let (job_tx, job_rx) = mpsc::channel::<Job>();
     let (out_tx, out_rx) = mpsc::channel::<Outcome>();
     std::thread::Builder::new()
-        .name("csb-tick".into())
+        .name("swb-tick".into())
         .spawn(move || {
             for job in job_rx {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn the_hang_hook_with_a_token_fires_once() {
-        let dir = std::env::temp_dir().join(format!("csb-hang-hook-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("swb-hang-hook-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let token = dir.join("token");
         let hook = HangHook::parse(Some("5"), Some(token.to_str().unwrap())).unwrap();

@@ -1,0 +1,135 @@
+<launch>
+  <!--
+    Autoware + acb_bridge + the vehicle agent for the scenario ego: the acb CARLA profile
+    (acb_launch/carla_simulator.launch.xml) with this repo's defaults.
+
+    Same stack, same structure as background_av.launch.xml; the differences are exactly
+    the ego's domain and clock policy:
+
+    - No ROS_DOMAIN_ID override in this file: the domain is ambient in the caller's
+      environment, and any domain works. SSv2 reaches this ego only through the agent
+      relay (TCP, `relay`), never over ROS (roadmap 017). Domain 0 is best avoided: it is
+      where every unconfigured ROS process on the host lands.
+
+    - publish_clock is true in every mode (roadmap 015): acb publishes CARLA's frame time
+      plus an episode epoch as /clock, and SSv2 (clock_source:=simulator) publishes none.
+      Exactly one /clock publisher per domain; a second makes localization log
+      "Detected jump back in time. Clearing TF buffer".
+
+      play_launch launch FLAGS \
+          swb_launch ego_av.launch.xml map_path:=/path/to/Town01
+
+    FLAGS are the play_launch options container-mode isolated, composable-respawn on-crash,
+    web-addr 127.0.0.1:<SWB_WEB_PORT+2> (8082)
+    (each with a double-hyphen prefix, which an XML comment cannot contain);
+    docs/user-guide.md section 4 says why.
+
+    `just ego-av` and the user guide start acb_launch carla_simulator.launch.xml directly;
+    this file keeps the CPU-only perception defaults for demo.launch.xml.
+
+    Start this BEFORE the scenario launch and wait for Autoware's ADAPI to come up: the
+    concealer's constructor queues a ChangeToStop call with a 180 s service timeout, so
+    a late ego stack fails slowly and confusingly. The stack is long-lived — SSv2 forks
+    nothing and kills nothing, so one ego stack serves consecutive scenario runs.
+  -->
+  <arg name="map_path" description="Directory with lanelet2_map.osm and pointcloud_map.pcd" />
+  <!-- Default "hero": SSv2 spawns the ego with role_name "hero", (bridge_config ego.role_name);
+       an agent-driven background AV is named after its entity. -->
+  <arg name="vehicle_name" default="hero" description="CARLA role_name of the ego vehicle" />
+  <arg name="carla_host" default="localhost" />
+  <arg name="carla_port" default="2000" />
+  <!-- scenario_world_bridge's sensor-release sockets (ssv2_port + 1, + 2; `just ego-av`
+       derives them from SSV2_PORT). Must match the simulation side's. -->
+  <arg name="release_notify_endpoint" default="tcp://127.0.0.1:5556" />
+  <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557" />
+  <arg name="vehicle_model" default="acb_vehicle" />
+  <arg name="sensor_model" default="acb_sensor_kit" />
+  <arg name="launch_rviz" default="false" />
+
+  <!-- Who routes and engages this ego (roadmap 017): the vehicle agent (acb_pilot agent),
+       started by the profile. With `relay` it takes the scenario's goals from the
+       scenario's agent relay, so this stack may run in any ROS domain; without one it can
+       drive to a local `goal_poses_file`. The managed/unmanaged split of phases 012-013
+       (SSv2's concealer calling this stack's ADAPI directly, same domain) is retired. -->
+  <arg name="relay" default="tcp://localhost:5560" description="the scenario's agent relay; empty = none"/>
+  <arg name="entity" default="ego" description="the scenario entity this vehicle is"/>
+  <arg name="goal_poses_file" default="" description="local goal when relay is empty"/>
+  <!-- No longer derived from `managed` (roadmap 015): acb owns /clock in every domain and
+       SSv2 runs with clock_source:=simulator, publishing none. false is an emergency off. -->
+  <arg name="publish_clock" default="true"
+       description="acb publishes /clock (CARLA time plus episode epoch); false only as an emergency off" />
+  <!-- Whether acb reports the wheel angle it measured, or echoes the command.
+       Echoing (false, acb's default) leaves no actuator inside the loop MPC
+       closes, while the CARLA wheel measurably lags the command by ~0.5 s.
+       Exposed here so the two can be compared; see acb docs/issues/016. -->
+  <arg name="report_measured_steering" default="false" />
+  <!-- Trim on the steering command. 1.0 is right for the blueprints measured so far; the
+       Ackermann inverse acb applies comes from physics_control, so a blueprint whose tyres
+       or steering curve differ from its geometry can still under- or over-steer against it.
+       Calibrate against measured wheel angles, not scenario outcomes. -->
+  <arg name="steering_multiplier" default="1.0" />
+  <arg name="steer_rate_limit_deg_s" default="0.0" description="steering actuator rate limit, deg/s; 0 = off" />
+  <arg name="steer_time_constant_s" default="0.0" description="steering first-order lag, s; 0 = off" />
+  <!-- Report CARLA's actors as perception output instead of running the LiDAR pipeline.
+       For debugging planning or control without perception in the loop. Set `perception`
+       false as well, or Autoware's own prediction node publishes the same topic. -->
+  <arg name="seed_localization_on_attach" default="true" />
+  <arg name="publish_ground_truth_objects" default="false" />
+  <arg name="ground_truth_range_m" default="100.0" />
+  <!-- acb publishes signal state from CARLA's lights (roadmap 015) using the table swb
+       writes beside the Lanelet2 map at every Initialize. Same file the scenario's map
+       resolves to: swb writes next to the real map file, symlinks resolved, which is this
+       map_path. Empty turns acb's signal publisher off. -->
+  <arg name="traffic_light_map_path" default="$(var map_path)/carla/traffic_lights.yaml" />
+  <arg name="control_trace_path" default="" />
+  <arg name="accel_map_path" default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv" />
+  <arg name="brake_map_path" default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv" />
+  <!-- clustering = CPU-only rule-based lidar detection. This host shares its GPU;
+       CARLA takes what headroom there is and centerpoint's TensorRT engine does
+       not fit beside it. -->
+  <arg name="lidar_detection_model" default="clustering" />
+  <arg name="occupancy_grid_map_method" default="laserscan_based" />
+
+  <!-- 1. Autoware — the same CARLA-tuned configuration SSv2's concealer used to fork -->
+  <!-- Signal state comes from acb (CARLA's lights, roadmap 015), so traffic light recognition
+       runs fusion-only and the camera that only fed it is not spawned. false brings both back. -->
+  <arg name="traffic_light_fusion_only" default="true" description="signals from acb only; no traffic light camera"/>
+  <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
+    <arg name="traffic_light_fusion_only" value="$(var traffic_light_fusion_only)" />
+    <arg name="map_path" value="$(var map_path)" />
+    <arg name="vehicle_model" value="$(var vehicle_model)" />
+    <arg name="sensor_model" value="$(var sensor_model)" />
+    <arg name="rviz" value="$(var launch_rviz)" />
+    <arg name="lidar_detection_model" value="$(var lidar_detection_model)" />
+    <arg name="occupancy_grid_map_method" value="$(var occupancy_grid_map_method)" />
+    <!-- acb_bridge (the vehicle interface) is started by carla_simulator.launch.xml from
+         these, once. It used to be included separately here with the profile's own
+         interface disabled: two bridges are two /clock publishers and doubled sensor
+         streams, which crashed gyro_bias_estimator ("dt_pose or dt_gyro is zero"). -->
+    <arg name="relay" value="$(var relay)" />
+    <arg name="entity" value="$(var entity)" />
+    <arg name="goal_poses_file" value="$(var goal_poses_file)" />
+    <arg name="carla_host" value="$(var carla_host)" />
+    <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="release_notify_endpoint" value="$(var release_notify_endpoint)" />
+    <arg name="release_ack_endpoint" value="$(var release_ack_endpoint)" />
+    <arg name="vehicle_name" value="$(var vehicle_name)" />
+    <arg name="publish_clock" value="$(var publish_clock)" />
+    <arg name="report_measured_steering" value="$(var report_measured_steering)" />
+    <arg name="steering_multiplier" value="$(var steering_multiplier)" />
+    <arg name="steer_rate_limit_deg_s" value="$(var steer_rate_limit_deg_s)" />
+    <arg name="steer_time_constant_s" value="$(var steer_time_constant_s)" />
+    <arg name="seed_localization_on_attach" value="$(var seed_localization_on_attach)" />
+    <arg name="publish_ground_truth_objects" value="$(var publish_ground_truth_objects)" />
+    <arg name="ground_truth_range_m" value="$(var ground_truth_range_m)" />
+    <arg name="traffic_light_map_path" value="$(var traffic_light_map_path)" />
+    <arg name="control_trace_path" value="$(var control_trace_path)" />
+    <arg name="accel_map_path" value="$(var accel_map_path)" />
+    <arg name="brake_map_path" value="$(var brake_map_path)" />
+  </include>
+
+  <!-- The velocity-limit API SSv2's SpeedActions need (/api/autoware/set/velocity_limit,
+       reached through the relay and the vehicle agent) comes from Autoware's deprecated
+       API, which carla_simulator.launch.xml turns on (launch_deprecated_api, default true).
+       Nothing runs beside this launch. -->
+</launch>

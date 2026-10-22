@@ -7,7 +7,7 @@ at the end; anything marked *unverified* is inference that a spike must confirm.
 ## Questions
 
 1. What did the Autoware Off-road/Racing Working Group actually build on Isaac Sim, and how
-   does it compare with this stack (SSv2 + carla-scenario-bridge + acb + CARLA 0.9.16)?
+   does it compare with this stack (SSv2 + scenario-world-bridge + acb + CARLA 0.9.16)?
 2. Which Isaac Sim features matter for us?
 3. Can we go from a real site to a running scenario quickly:
    capture → point-cloud map (GLIM) → Lanelet2 map → simulator scene → realistic sensors →

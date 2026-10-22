@@ -12,7 +12,7 @@ Status: **design, decisions taken 2026-10-08** (UX campaign). Roadmap: 017.
    references this repo's tree.
 3. **Two self-contained sides** that share the simulator and the map dir and nothing else --
    no ROS domain, no start order:
-   - *Simulation side*: simulator, its SSv2 adapter (csb for CARLA), SSv2. Builds the world,
+   - *Simulation side*: simulator, its SSv2 adapter (swb for CARLA), SSv2. Builds the world,
      runs NPCs and signals, owns time, judges the scenario.
    - *Vehicle side*, one per autonomous vehicle: an autopilot (the user's Autoware, or
      anything else), its agent, and the simulator's vehicle bridge (acb for CARLA).
@@ -65,7 +65,7 @@ command that other autopilots reject.
 │                                        │            │ vehicle bridge (CARLA: acb)   │
 │ SSv2 ──ZMQ :5555 (SSv2 sim protocol)──▶│ simulator  │  sensors, vehicle interface,  │
 │                                        │ adapter    │  /clock, traffic signals      │
-│                                        │ (CARLA:csb)│                               │
+│                                        │ (CARLA:swb)│                               │
 └────────────────────────────────────┼───┘            └──────────────┼────────────────┘
                                      ▼                               ▼
                                simulator (CARLA) ◀── world, time, actors, control
@@ -81,13 +81,13 @@ Five interfaces, each with one owner:
 | I4 | Autopilot native interface | agent ↔ autopilot | the autopilot | no | yes (Autoware: ADAPI, local domain) |
 | I5 | Vehicle I/O (sensors, vehicle interface, `/clock`, signals) | vehicle bridge ↔ autopilot | the autopilot's message set | yes (bridge talks to the simulator) | yes (publishes the autopilot's messages) |
 
-Private, not part of any contract: csb ↔ CARLA, acb ↔ CARLA, and the csb ↔ acb sensor-release
+Private, not part of any contract: swb ↔ CARLA, acb ↔ CARLA, and the swb ↔ acb sensor-release
 channel (CARLA actor ids).
 
 ## The agent protocol (I3)
 
-Implemented in `csb_agent/protocol.py` (roadmap 030), which the relay and every
-`csb_agent` agent import, the Autoware agent included (030 step 6; it speaks v2).
+Implemented in `swb_agent/protocol.py` (roadmap 030), which the relay and every
+`swb_agent` agent import, the Autoware agent included (030 step 6; it speaks v2).
 
 - **Transport**: plain TCP, **newline-delimited JSON** (one UTF-8 object per line), standard
   library only on both ends -- no ZMQ or protobuf dependency for an agent author (decision
@@ -238,7 +238,7 @@ for the same pose joins the running reset. A v2 commander's `query` reply carrie
 | `episode_end` | relay → agent (event) | `episode`, `result` (`passed`, `failures[]`, `contacts`) | the scenario's verdict; `run_suite` sends it through the commander role (`command_for`), since only it knows the verdict |
 | `restart` | relay → agent (command, capability `restart`) | -- | restart the autopilot in place; the agent closes and re-registers when ready |
 
-A **supervisor** (`csb-agent supervise`) registers in a third role, `supervisor` (v2 only:
+A **supervisor** (`swb-agent supervise`) registers in a third role, `supervisor` (v2 only:
 `{"type": "register", "role": "supervisor", "entity": E, "capabilities": ["restart"]}`),
 heartbeats like an agent and sends no state. The relay sends `restart` for E to the agent
 when it has the capability, else to E's supervisor (no agent need be registered), else
@@ -262,7 +262,7 @@ reset that fails or times out is the default trigger. *Implemented* (030 step 8)
   unchanged. It does not live in `acb_bridge`. Implemented as the `agent` entry point of
   `acb_pilot` (`ros2 run acb_pilot agent --ros-args -p relay:=tcp://host:5560 -p
   entity:=ego`), beside `auto_drive`. Since roadmap 030 step 6 the agent itself is the SDK's
-  `csb_agent.adapters.autoware.AutowareAgent` (ROS-free logic behind an `AutopilotPort`,
+  `swb_agent.adapters.autoware.AutowareAgent` (ROS-free logic behind an `AutopilotPort`,
   tested against a fake Autoware; the ADAPI port in `autoware_ros.py`), and acb's node only
   runs it with acb's parameters. Without `relay` it drives once to `goal_poses_file` (local
   mode).
@@ -275,15 +275,15 @@ reset that fails or times out is the default trigger. *Implemented* (030 step 8)
 
 ## Simulation side
 
-- **csb** (CARLA's SSv2 adapter, I1) becomes a ROS node: params `carla_host`, `carla_port`,
+- **swb** (CARLA's SSv2 adapter, I1) becomes a ROS node: params `carla_host`, `carla_port`,
   `ssv2_port`, `config_file`, `weather`; `bridge.launch.xml` with `respawn="true"`.
   `config_file` (default: the installed `bridge_config.yaml`) replaced `CSB_CONFIG_DIR`,
   which is now refused; the node declares the file it loaded as a read-only parameter. It serves
-  the world-configuration services `/carla/set_weather` and `/carla/get_weather`
-  (`csb_interfaces`, roadmap 018) -- simulator-specific, outside the five interfaces above.
-- **agent relay** is its **own** package and node (`scenario_agent_relay`), not part of csb:
+  the world-configuration services `/scenario_world_bridge/set_weather` and `/scenario_world_bridge/get_weather`
+  (`swb_interfaces`, roadmap 018) -- simulator-specific, outside the five interfaces above.
+- **agent relay** is its **own** package and node (`scenario_agent_relay`), not part of swb:
   it speaks I2 and I3 only, so it survives a simulator swap. One relay per scenario domain.
-- `csb_launch/scenario.launch.xml`: `scenario:=` plus a few knobs; runs SSv2 with
+- `swb_launch/scenario.launch.xml`: `scenario:=` plus a few knobs; runs SSv2 with
   `managed_ego:=true` against the relay. `managed_ego:=false` and the unmanaged domain
   split are retired once the relay works.
 
@@ -294,8 +294,8 @@ entity and changeable mid-run (`AssignControllerAction`):
 
 | Controller | Backend | Use |
 |---|---|---|
-| *(default)* | **SSv2 behavior tree**; the adapter drives the actor's physics body toward SSv2's pose each frame (`npc_motion: tracked`, within 0.2 m p95), or teleports it kinematically under `npc_motion: kinematic` | scripted traffic, exact choreography; every SSv2 action; ~0.02 ms per NPC in csb tracked (~0.065 kinematic), plus CARLA's physics (~+7 ms p95 tick for 20 NPCs) |
-| `simulator_autopilot` | **the simulator's own driver**: for CARLA, Traffic Manager with physics on. Goal-driven (`AcquirePositionAction` → a route csb plans on lanelet2, converted to a TM path) or roaming; speed via `set_desired_speed`. The adapter returns the simulator's pose and SSv2 adopts it (`api.cpp:113`: non-ego status is applied as returned); the entity's SSv2 behavior is `do_nothing` | ambient traffic with real dynamics |
+| *(default)* | **SSv2 behavior tree**; the adapter drives the actor's physics body toward SSv2's pose each frame (`npc_motion: tracked`, within 0.2 m p95), or teleports it kinematically under `npc_motion: kinematic` | scripted traffic, exact choreography; every SSv2 action; ~0.02 ms per NPC in swb tracked (~0.065 kinematic), plus CARLA's physics (~+7 ms p95 tick for 20 NPCs) |
+| `simulator_autopilot` | **the simulator's own driver**: for CARLA, Traffic Manager with physics on. Goal-driven (`AcquirePositionAction` → a route swb plans on lanelet2, converted to a TM path) or roaming; speed via `set_desired_speed`. The adapter returns the simulator's pose and SSv2 adopts it (`api.cpp:113`: non-ego status is applied as returned); the entity's SSv2 behavior is `do_nothing` | ambient traffic with real dynamics |
 | `agent` | **an agent registered under the entity's name** (I3) -- e.g. a full Autoware on its own vehicle side. The adapter spawns the vehicle physics-on with the entity name as the simulator's vehicle name, forwards goals to the agent through the relay (as a commander), and returns the simulator's pose; SSv2's behavior is `do_nothing`, as for `simulator_autopilot` | AV-vs-AV studies, at a full stack's cost |
 
 The controller names are **simulator-neutral**: `simulator_autopilot` means "whatever the
@@ -323,24 +323,24 @@ protocol (`simulation_api_schema.proto`) and keeps the scenario standard:
   that drives nothing needs no change; `simple_sensor_simulator` refuses a
   `simulator_autopilot` spawn rather than leave a vehicle that never moves.
 
-csb (`autopilot.rs`, `coordinator.rs`):
+swb (`autopilot.rs`, `coordinator.rs`):
 
-- Spawn: physics on, parked, `csb_entity:<name>` role like every entity (reaped the same
-  way); one Traffic Manager per csb process (port and seed in `bridge.yaml`
+- Spawn: physics on, parked, `swb_entity:<name>` role like every entity (reaped the same
+  way); one Traffic Manager per swb process (port and seed in `bridge.yaml`
   `traffic_manager`), created at the first such spawn, synchronous whenever the world is.
   **LibCarla ticks a synchronous Traffic Manager inside `world.tick()`** (verified on
-  0.9.16: a registered vehicle drives with world ticks alone, no `synchronous_tick`), so csb
+  0.9.16: a registered vehicle drives with world ticks alone, no `synchronous_tick`), so swb
   remains the only ticker.
 - Hand-over when `UpdateEntityStatus.npc_logic_started` first arrives, so the vehicle waits
   with SSv2's own NPCs; goals received earlier are kept for then.
 - Goals: Traffic Manager does not route between distant points -- given a path it takes, at
   each junction, the branch nearest the next point. Measured on Town01 with Traffic Manager
   alone: the goal as the only point missed 1 route in 4, points every 10 m along the route
-  missed one that the goal alone reached. csb therefore plans the lane route itself (Dijkstra
+  missed one that the goal alone reached. swb therefore plans the lane route itself (Dijkstra
   over `Map::topology()` segments sampled every 2 m, from the actor's lane position to the
   goal's) and gives Traffic Manager one point 5 m past each junction on it, then the goal;
   every probed route arrived, run to run identical with a fixed seed. Traffic Manager roams
-  on past the end of a path, so csb slows the vehicle into the goal (1.5 m/s²) and, within
+  on past the end of a path, so swb slows the vehicle into the goal (1.5 m/s²) and, within
   0.5 m along the lane, unregisters it and brakes.
 - Status: `UpdateEntityStatus` returns CARLA's pose, twist and acceleration for these
   entities (the ego's readback: origin offset undone, settle frames and median filter), and
@@ -352,9 +352,9 @@ csb (`autopilot.rs`, `coordinator.rs`):
   the hand brake reads as 15.5 m/s² for a frame, then a steady ~5.2 m/s².
 - Signals: **starting a Traffic Manager resets every light group to its own cycle** (24 of
   Town01's 36 lights RED after the first such spawn; the vehicle then waited at a red light
-  until the timeout). csb re-applies its signal state right after creating it: every mapped
+  until the timeout). swb re-applies its signal state right after creating it: every mapped
   light GREEN, then what the scenario has commanded this run.
-- Arrival: within 0.5 m of the goal csb asks Traffic Manager for 0 m/s and parks the vehicle
+- Arrival: within 0.5 m of the goal swb asks Traffic Manager for 0 m/s and parks the vehicle
   (unregistered, hand brake) once below 0.1 m/s; parking at the approach's 1 m/s read as
   -8 m/s².
 - Teardown: despawn, Initialize and shutdown release vehicles from Traffic Manager before
@@ -365,7 +365,7 @@ CARLA's lanes, and routing on the same graph it drives keeps the two from disagr
 
 ### `agent` as built (roadmap 017 step 6)
 
-Background AVs used to be listed in `bridge_config.yaml` (`background_avs`), spawned by csb
+Background AVs used to be listed in `bridge_config.yaml` (`background_avs`), spawned by swb
 at every `Initialize` and invisible to SSv2. They are now scenario entities:
 
 ```xml
@@ -377,17 +377,17 @@ at every `Initialize` and invisible to SSv2. They are now scenario entities:
   with `behavior: "agent"`; `AcquirePositionAction`, `AssignRouteAction` and an absolute
   `SpeedAction` go out as `UpdateEntityGoal`; lane changes, relative speeds, trajectories and
   controller switches are scenario errors. `simple_sensor_simulator` refuses the spawn.
-- **csb** (`agent_link.rs`, `coordinator.rs`):
+- **swb** (`agent_link.rs`, `coordinator.rs`):
   - Spawn: physics on, parked (hand brake) like the ego, **`role_name` = the entity name**,
     so the vehicle side started with `vehicle_name:=<entity>` attaches to it; not given to
-    Traffic Manager. Refused if the name is the ego's role name, a `csb_entity:` mark, or a
+    Traffic Manager. Refused if the name is the ego's role name, a `swb_entity:` mark, or a
     role another CARLA vehicle already has. Spawning succeeds whether or not an agent is
     registered (a vehicle side may come up later).
-  - Reaping: these vehicles carry no `csb_entity:` mark (acb finds them by name), so csb
-    records their role names in a ledger on tmpfs (`$XDG_RUNTIME_DIR/carla-scenario-bridge/
+  - Reaping: these vehicles carry no `swb_entity:` mark (acb finds them by name), so swb
+    records their role names in a ledger on tmpfs (`$XDG_RUNTIME_DIR/scenario-world-bridge/
     agent-vehicles-<host>-<port>`, beside the episode clock) and the reaper at `Initialize`
     destroys vehicles with those names, as it does the ego's `hero`.
-  - Commands: csb is a relay **commander** (`agent_relay` in `bridge.yaml`, default
+  - Commands: swb is a relay **commander** (`agent_relay` in `bridge.yaml`, default
     `tcp://localhost:5560`; ROS parameter `agent_relay`; `simulation.launch.xml` points it at
     its own relay). After the spawn it sends `teleported` with the spawn pose (retried until
     an agent is registered); `UpdateEntityGoal` becomes `set_speed_limit` (absolute target
@@ -403,7 +403,7 @@ at every `Initialize` and invisible to SSv2. They are now scenario entities:
     `UpdateEntityStatus` fails the frame with it, so SSv2 ends the scenario.
   - Status: `UpdateEntityStatus` returns CARLA's pose, entity-frame twist and acceleration
     for it -- the ego's and `simulator_autopilot`'s readback -- and never teleports it.
-- **Vehicle side**: `csb_launch background_av.launch.xml entity:=<name> relay:=...` is the
+- **Vehicle side**: `swb_launch background_av.launch.xml entity:=<name> relay:=...` is the
   acb CARLA profile with the agent registered as `<name>` and `vehicle_name` = `<name>`;
   `just bg-av` runs it in domain 2.
 - **Speed**: an absolute `SpeedAction` is the agent's speed *limit*, not a target: the
@@ -411,20 +411,20 @@ at every `Initialize` and invisible to SSv2. They are now scenario entities:
 
 ## Swap audit
 
-**Replace CARLA with simulator X.** Replace: the simulator adapter (csb → X's I1
+**Replace CARLA with simulator X.** Replace: the simulator adapter (swb → X's I1
 implementation; AWSIM already has one) and the vehicle bridge (acb_bridge → X's bridge for
 Autoware). Keep: SSv2, the relay, the agent protocol, acb_agent, Autoware and its launch
 profile minus the CARLA overrides, scenario files, the map dir minus `carla/`.
 
 **Replace Autoware with autopilot Y.** Replace: the agent (acb_agent → Y's agent, I3 ↔ I4)
 and the vehicle bridge's message set (I5: acb publishes Autoware's messages; Y needs its own
-or an adapter). Keep: SSv2, csb, the relay, CARLA, scenario files. Scenario features that
+or an adapter). Keep: SSv2, swb, the relay, CARLA, scenario files. Scenario features that
 are Autoware-specific degrade explicitly: RTC answers `UNSUPPORTED`; `fault` is `NONE` if Y
 has no notion of it.
 
 Findings, each folded into the design above:
 
-1. **The relay must not live in csb.** First draft had csb serve the ADAPI subset; that
+1. **The relay must not live in swb.** First draft had swb serve the ADAPI subset; that
    ties every vehicle's command path to the CARLA adapter. → separate `scenario_agent_relay`.
 2. **Agents are keyed by entity name, not `role_name`.** `role_name` is CARLA's; the
    scenario knows entity names. The vehicle bridge maps entity → simulator vehicle on its
@@ -439,7 +439,7 @@ Findings, each folded into the design above:
    `simulator_autopilot`.
 7. **CARLA artifacts in the shared map dir.** `traffic_lights.yaml` (lanelet signal ↔ CARLA
    light) is CARLA's → `<map dir>/carla/traffic_lights.yaml`, generated offline with the
-   map; csb checks it at `Initialize` instead of writing it at run time; acb reads it.
+   map; swb checks it at `Initialize` instead of writing it at run time; acb reads it.
 8. **The vehicle description package is a shared dependency, and that is acceptable**:
    SSv2 needs dimensions, the autopilot needs them, both read `vehicle_model`'s
    `*_description` (`vehicle_info.param.yaml`). It is the one artifact both sides must agree
@@ -474,7 +474,7 @@ Background vehicles are entities in the `.xosc`, not entries in `bridge.yaml`
 ./CarlaUE4.sh -RenderOffScreen
 
 # Simulation side, long-lived (scenario domain)
-play_launch launch carla_scenario_bridge bridge.launch.xml config_file:=<scenario dir>/bridge.yaml
+play_launch launch scenario_world_bridge bridge.launch.xml config_file:=<scenario dir>/bridge.yaml
 play_launch launch scenario_agent_relay relay.launch.xml
 
 # Vehicle side, any domain, any order
@@ -487,18 +487,18 @@ ROS_DOMAIN_ID=8 play_launch launch acb_launch carla_simulator.launch.xml \
     vehicle_name:=bg_av_1 entity:=bg_av_1 relay:=tcp://<sim host>:5560
 
 # A scenario; exits on its own; repeat
-play_launch launch csb_launch scenario.launch.xml scenario:=<scenario dir>/<name>.xosc
+play_launch launch swb_launch scenario.launch.xml scenario:=<scenario dir>/<name>.xosc
 ```
 
 ## Migration (roadmap 017)
 
-1. csb as a ROS node: params, installed config as default, launch file with respawn.
+1. swb as a ROS node: params, installed config as default, launch file with respawn.
 2. `scenario.launch.xml`; SSv2 fork's preprocessor writes its copy to the output dir, never
    over the input.
-3. Offline `<map dir>/carla/traffic_lights.yaml`; csb verifies instead of writing.
+3. Offline `<map dir>/carla/traffic_lights.yaml`; swb verifies instead of writing.
 4. `carla_simulator.launch.xml` starts `acb_bridge` (and later `acb_agent`); switchable
-   overrides; csb's `ego_av`/`background_av` launch files shrink to it.
+   overrides; swb's `ego_av`/`background_av` launch files shrink to it.
 5. Agent protocol schema; `scenario_agent_relay`; `acb_agent` from `auto_drive.py`. Then
    retire `managed_ego:=false` and the domain coupling.
-6. `simulator_autopilot` controller in csb (Traffic Manager; lanelet route → TM path).
+6. `simulator_autopilot` controller in swb (Traffic Manager; lanelet route → TM path).
 7. User guide; README; `ssv2-launch-configuration.md` rewritten to this.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive carla_scenario_bridge over its real SSv2 ZMQ/protobuf protocol.
+"""Drive scenario_world_bridge over its real SSv2 ZMQ/protobuf protocol.
 
 This stands in for SSv2 so the bridge's CARLA-side behaviour can be exercised without
 Autoware or a rendering GPU. Every assertion is checked against the live CARLA world via
