@@ -616,13 +616,31 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
    | `UC-AEB-001` (1 variant) | PASS | | agree, 0 contacts |
    | incident 2 | PASS, judge PASS | | agree, 0 contacts |
 
-   So **`UC-ACC-001` on the CenterPoint stack fails on both backends** (CARLA 0/3, Isaac 1/3),
-   the ego braking right at the scenario's -1.5 m/s^2 when it meets `Npc1` (5.5 m/s, 29 m
-   ahead) at 8.3 m/s. Not a gap between the simulators any more: Autoware's ACC on this
-   stack. The default stack passes on CARLA only because its `max_velocity` (4.17 m/s) is
-   below `Npc1`'s, so it never closes on it. The other step 3-7 Isaac verdicts for scenarios
+   So **`UC-ACC-001` on the CenterPoint stack fails on both backends** (CARLA 0/3, Isaac 1/3).
+   Not a gap between the simulators any more; what fails is the scenario against Autoware on
+   this stack, two ways (`c8-acc-1` on CARLA with a bag of perception, planning and control,
+   `/mnt/wd/aeon/csb-044/bags/acc-carla-1`):
+
+   - **The spawn's braking peak.** SSv2 spawns `Npc1` 29-30 m ahead (5.5 m/s) when the ego,
+     at 8.3 m/s, reaches the start position. For its first 0.3-0.5 s the tracker has it as an
+     UNKNOWN object at 0 m/s, Autoware plans a `route-obstacle` stop 20.6 m out and the command
+     goes to -0.69 then -1.1 m/s^2; the tracker has 5.5 m/s (a car) by +0.58 s, but the command
+     stays near -1.1 for another second. Autoware never commands below -1.13; the plant and
+     the measurement put SSv2's reading at -1.46 to -1.76 (CARLA's PhysX acceleration, median
+     of 3 frames; Isaac's from aib's position differences), on the -1.5 limit, 1.2-1.5 s after
+     the spawn every time (`c7-acc*`, `fx-acc-1`).
+   - **Missing the success window.** Success is the ego at lane 5230 s=170 (x 270.4) *while*
+     matching `Npc1`'s speed (relative speed < 0.05), and `Npc1` only slows to 1.94 m/s once
+     the ego has first matched its 5.5. An ego that settles onto 5.5 late meets s=170 still
+     closing (3.5 m/s against 1.9), the trigger misses, it drives on to Autoware's goal at
+     x 301 and stands there: 60 s standstill (`fx-acc-2`) or the 180 s limit (`c8-acc-1`).
+
+   The default stack's passes on CARLA do not test this: the scenario's ego speed is 8.333
+   m/s (`vxi_ego`), the default `max_velocity` is 4.17, below `Npc1`'s 5.5, so that ego never
+   closes on it, and `Npc1` slows at once. The other step 3-7 Isaac verdicts for scenarios
    with a mid-run spawn (incidents 1, 2, 4, 5, 6, `UC-AEB-001`) were taken with the ego
-   stopped by the spawn; AEB and incident 2 pass again with the fix, the rest are to be re-run.
+   stopped by the spawn. All pass again with the fix (`fx-i1`, `fx-i2`, `fx-i4`, `fx-i5`,
+   `fx-i6`, `fx-aeb`: SSv2 PASS, judge PASS, oracle agree, 0 contacts, no spawn drop).
 2. **The two-wheeler rider stays in its bind pose** (step 5, `two_wheelers_bind_pose.png`):
    two UE attempts reverted. Next to try: the walkers' route (a plain `SkeletalMeshActor`
    playing the rider's seated sequence, exported as a `SkelAnimation`).
