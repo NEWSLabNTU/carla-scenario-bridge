@@ -3,6 +3,7 @@
 //!
 //!     csb_world_check hello <endpoint> [--wait SECONDS] [--quiet]
 //!     csb_world_check conformance <endpoint> [--map <lanelet2_map.osm or map dir>]
+//!     csb_world_check rtt <endpoint> [--n 2000] [--gap-us 0]
 //!
 //! `hello`: one probe `Hello` (changes nothing on the server: no ownership, no lease). Exit 0
 //! with the server's description when it answers within 2 s, 1 when it does not (not
@@ -15,6 +16,10 @@
 //! It moves bodies in the server's world: run it between scenarios, never during one (a
 //! bridge that owns the server makes it refuse, which is itself checked). `--map` is the map
 //! to load (a CARLA town needs one); without it the server loads its default world.
+//!
+//! `rtt`: the round trip of a probe `Hello`, N times: the protocol's own cost per request on
+//! this host (p50, p95, max), changing nothing on the server. `--gap-us`: a pause before
+//! each, as a frame's idle time between requests (a sleeping server wakes slower).
 
 use std::collections::BTreeSet;
 use std::process::ExitCode;
@@ -31,7 +36,8 @@ const STEP: f64 = 0.05;
 fn usage() -> ExitCode {
     eprintln!(
         "usage: csb_world_check hello <endpoint> [--wait SECONDS] [--quiet]\n       \
-         csb_world_check conformance <endpoint> [--map <lanelet2 map>]"
+         csb_world_check conformance <endpoint> [--map <lanelet2 map>]\n       \
+         csb_world_check rtt <endpoint> [--n N] [--gap-us US]"
     );
     ExitCode::from(2)
 }
@@ -54,6 +60,11 @@ fn main() -> ExitCode {
             args.iter().any(|a| a == "--quiet"),
         ),
         "conformance" => conformance(endpoint, opt("--map")),
+        "rtt" => rtt(
+            endpoint,
+            opt("--n").and_then(|n| n.parse().ok()).unwrap_or(2000),
+            Duration::from_micros(opt("--gap-us").and_then(|n| n.parse().ok()).unwrap_or(0)),
+        ),
         _ => usage(),
     }
 }
@@ -721,4 +732,36 @@ fn finish(mut c: Client, mut r: Report) -> ExitCode {
     } else {
         ExitCode::from(1)
     }
+}
+
+fn rtt(endpoint: &str, n: usize, gap: Duration) -> ExitCode {
+    let mut client = match Client::connect(endpoint) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{endpoint}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let mut times = Vec::with_capacity(n);
+    for _ in 0..n.max(1) {
+        if !gap.is_zero() {
+            std::thread::sleep(gap);
+        }
+        let started = Instant::now();
+        if let Err(e) = client.hello(true, TIMEOUT) {
+            eprintln!("{endpoint}: {e}");
+            return ExitCode::from(1);
+        }
+        times.push(started.elapsed().as_secs_f64() * 1e6);
+    }
+    times.sort_by(f64::total_cmp);
+    let at = |q: f64| times[((q * (times.len() - 1) as f64).round() as usize).min(times.len() - 1)];
+    println!(
+        "{} probe hellos to {endpoint}: round trip p50 {:.0} us, p95 {:.0} us, max {:.0} us",
+        times.len(),
+        at(0.5),
+        at(0.95),
+        at(1.0)
+    );
+    ExitCode::SUCCESS
 }

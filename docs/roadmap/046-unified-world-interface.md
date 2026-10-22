@@ -298,6 +298,88 @@ What changed from the design above while building it, and why:
 10. **A cross-checkout leak found on the way**: `just bg-av` and `two-av` put the first
     background AV in domain 2, hard-coded (fixed on main, `BG_ROS_DOMAIN_ID`).
 
+## Results (part A, 2026-10-22, newslab-118-server)
+
+Baseline: main at `438db27` (044 complete as of that day), built fresh; the new stack: branch
+`phase-046`. The checkouts ran side by side, each with its own CARLA 0.9.16 (2010 for the
+baseline on GPU 1, 2020 for the new stack on GPU 0) and its own ports and ROS domains; the
+host also carried csb-seps's stacks and CARLA. Runs marked "concurrent" shared the host with
+the other campaign, so their timings are not comparable; the frame budget comparison was run
+back to back on a quiet host (below).
+
+**CARLA, verdicts** (`run_suite`, default ego stack):
+
+| | baseline | new stack |
+|---|---|---|
+| starter: `basic/town01_*`, `town02_episode_change`, `tutorial/town01_follow_to_goal` | 8/8 | see the back-to-back session |
+| `multi_av/town01_two_av` (two Autowares, the agent relay) | PASS | PASS |
+| AWF UC-ACC-001 (27 variants) | 7/8, then the suite's 600 s cap cut it | **27/27** |
+| AWF UC-AEB-001 (9 variants) | 9/9 | see the back-to-back session |
+| `town01_rear_contact` | PASS | PASS |
+| hung tick (034's hook at frame 40), then `town01_ego_drive` | (034) | fails with the reason, next run PASS |
+
+**CARLA, gap trace.** The 20-NPC bench's trace on the new stack is identical to the
+baseline's, record for record, over every frame both reached (1056 of the baseline's 1168;
+the runner's 400 s wall-clock cap ends a slow run at a different frame each time), entity
+records included, with the method of 035 (episode, `start_unix`, actor ids and CARLA frames
+set aside). Contacts are not compared: they differ between baseline runs too.
+
+**Conformance**: `carla_world` 20/20, the Isaac world server 19/19 (`swb_world_check
+conformance`, weather skipped on Isaac: not declared).
+
+**Lifecycle drills (CARLA)**, each passing: a second `carla_world` on the same CARLA refused
+by its lock, one on the same port refused by the bind (exit 1); a second bridge refused by
+the lease; `kill -9` of the bridge, its respawn owning the world again in **2.1 s**; a CARLA
+restart restarting `carla_world` (exit 75, waiting for CARLA) and not the bridge; `kill -9`
+of the simulation side's play_launch leaving no process 3 s later and CARLA back in
+asynchronous mode with its lights unfrozen. Two fixes came out of them (as built, 8).
+
+**CARLA, frame budget**, back to back on one CARLA (2020) on a quiet host (load 4 on 48
+cores): the 20-NPC bench three times on each stack, the bridge's whole-run summary per run.
+
+| per frame, ms (p50 / p95) | baseline | new stack |
+|---|---|---|
+| processing (the bridge's time, the tick excluded) | 0.41 / 0.53 (twice) | 0.78-0.79 / 1.01 (three times) |
+| `UpdateEntityStatus` | 0.31 / 0.40-0.41 | 0.39 / 0.56 |
+| tick | 5.83-6.33 / 7.71-7.76 | 6.12-6.23 / 7.65-7.85 |
+
+**The processing bound is not met**: p95 is 1.01 ms against 0.53, nearly twice, where the
+acceptance allowed 10 %. What it costs in a frame is small: processing plus tick, the
+bridge's whole frame, is 6.7 ms on the baseline and 6.9 ms on the new stack at p50 (+3 %),
+against SSv2's 50 ms step. A profile of one bench (timers on both sides, since removed)
+puts the extra 0.38 ms at p50 here:
+
+| where | p50, us |
+|---|---|
+| `Apply`'s transport (round trip 360, server 268) | 90 |
+| `Step`'s transport (round trip 6735, server 6566) | 170 |
+| `carla_world` reading the states for the gap trace (`want_states`) | 60 |
+| the bridge after `Step` (states into the trace, the clock) | 55 |
+
+The transport is the wake-up of a sleeping peer, not the bytes. `swb_world_check rtt`
+(added) measures a probe `Hello`'s round trip: 37 / 53 us back to back, 56 / 96 us with 1 ms
+of idle before each request, 82 / 219 us with 6 ms (a tick's worth). Two round trips a frame
+pay that twice. The states are read only when the gap trace records or the server does not
+offer `READS_BACK`; on CARLA outside a trace run that 60 us and the larger `Step` reply go.
+What would take the rest off: one round trip a frame (`Apply`'s reply is SSv2's
+`UpdateEntityStatus` answer, needed before `UpdateFrame`, so this is a protocol change), or
+spinning instead of sleeping on both sides (a core each). Neither is worth its cost at 0.4 ms
+in 50. Proposed, not yet agreed: restate the bound as the whole frame's (processing plus
+tick, p95 within 10 %), which the new stack meets, and keep the per-request numbers here for
+the next protocol revision.
+
+**Isaac** (the world server headless with no ego, `ISAAC_KIT_ARGS`: on this host any
+rendered Town01 frame faults the GPU, Xid 31/109, `ERROR_DEVICE_LOST`, on either card):
+
+- 20-NPC bench, three runs per stack: all six pass. PhysX is not bitwise repeatable, so the
+  traces are compared as a spread: p99 position difference 0.017-0.041 m between baseline
+  runs, 0.016-0.091 m between new-stack runs, 0.011-0.088 m across. The new stack is inside
+  the baseline's own spread. Per frame on the world server: 13.9 ms baseline, 14.1 ms new.
+- Lifecycle: the world server killed, respawned and owned by the same bridge again in 20 s.
+- Not run here: `town01_ego_drive` 5/5 and 044's exit set need the Isaac ego, whose sensors
+  render, which this host's GPUs fault on. They are owed on a host that renders Town01
+  (newslab-server139, where 043-045 ran).
+
 ## Steps
 
 ### Part A
