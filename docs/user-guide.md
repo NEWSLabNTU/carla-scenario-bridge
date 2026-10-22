@@ -224,9 +224,10 @@ example `src/csb_examples/scenarios/multi_av/town01_two_av.xosc`). Scenario file
 VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json \
   <CARLA_0.9.16>/CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000
 
-# Terminal 2 -- simulation side, long-lived: the bridge (restarted if it crashes) and the
-# agent relay (TCP 5560), in the ROS domain scenarios will run in
-ROS_DOMAIN_ID=9 ros2 launch csb_launch simulation.launch.xml \
+# Terminal 2 -- simulation side, long-lived: the CARLA world server, the scenario bridge
+# driving it and the agent relay (TCP 5560), each restarted if it dies, in the ROS domain
+# scenarios will run in
+ROS_DOMAIN_ID=9 ros2 launch csb_launch carla_simulation.launch.xml \
     [config_file:=<scenario dir>/bridge.yaml] [weather:=ClearNoon] [npc_motion:=kinematic]
 
 # Terminal 3 -- vehicle side, any ROS domain, any host, any time
@@ -246,14 +247,30 @@ ROS_DOMAIN_ID=9 ros2 launch csb_launch scenario.launch.xml \
 With play_launch instead, put `play_launch launch` and the flags from the table at the top
 in place of `ros2 launch`.
 
-**The bridge's configuration** (`bridge_config.yaml`: blueprint and map aliases, Traffic
-Manager, ticking) is chosen by the bridge's ROS parameter `config_file`, a launch argument of
-`simulation.launch.xml` and `just run` (`just run config_file:=<dir>/bridge.yaml`). It
-defaults to the installed `share/carla_scenario_bridge/config/bridge_config.yaml`; per-map
-files (`traffic_lights_<town>.yaml`) are read from the same directory. The bridge logs the
-file it loaded (`Config: ...`) and declares it as a read-only parameter:
-`ros2 param get /carla_scenario_bridge config_file`. The older `CSB_CONFIG_DIR` variable is
-refused, by `just run` and by the bridge itself.
+**Two processes, two configurations** (roadmap 046). The simulation side runs the scenario
+bridge, which speaks SSv2's protocol and knows no simulator, and a world server per
+simulator, which drives the simulator over the world protocol (`proto/csb_world.proto`). On
+CARLA the world server (`carla_world`) runs inside the same launch as the bridge; on Isaac
+Sim it is its own long-lived launch (`just isaac-world`, then `isaac_simulation.launch.xml`
+for the simulation side). Each has its file, and each refuses the other's keys, naming
+where they went:
+
+- The bridge's `bridge_config.yaml` (the world server's endpoint and timeouts, the asset map,
+  the agent relay, weather, `npc_motion`, gap traces and contact reports), chosen by the
+  launch argument `config_file:=` (`just run config_file:=<dir>/bridge.yaml`), default the
+  installed `share/carla_scenario_bridge/config/bridge_config.yaml`.
+- The CARLA world server's `carla_world.yaml` (CARLA's host and port, blueprints and map
+  aliases, ticking, the Traffic Manager, the collision sensors, the sensor-release channel),
+  chosen by `carla_world_config:=`, default `share/carla_world/config/carla_world.yaml`;
+  `blueprint_boxes_<version>.yaml` is read beside it.
+
+Both log the file they loaded. `ros2 param get /carla_scenario_bridge config_file` names the
+bridge's. The older `CSB_CONFIG_DIR` variable is refused.
+
+**Is a world server up?** `just world-health [sim:=carla|isaac]` sends it one probe (which
+changes nothing) and prints its simulator, what it offers, its owner and whether it is ready.
+One bridge drives a world server at a time: a second bridge is refused while the first lives.
+`just world-check` runs the conformance check between scenarios (it takes the server over).
 
 **When each part is ready.** Start them in this order and wait for each:
 
@@ -262,8 +279,9 @@ refused, by `just run` and by the bridge itself.
 - The simulation side's bridge logs `ZMQ server ready` and its relay `Relaying entity 'ego'`.
   Under play_launch these are in the per-node logs, not on the launch's console:
   `play_log/latest/node/carla_scenario_bridge/out` and
-  `play_log/latest/node/scenario_agent_relay/err`. It waits for CARLA by itself if started
-  first.
+  `play_log/latest/node/scenario_agent_relay/err`. The world server waits for CARLA by itself
+  if started first (answering `just world-health` with "not ready" meanwhile), and the bridge
+  binds the SSv2 port only once its world server is ready.
 - The vehicle side is ready when the relay (Terminal 2) logs
   `entity 'ego': agent acb_agent registered` and then `ego: agent up`. Under play_launch the
   vehicle side also logs `Startup complete: all nodes ready (nodes 63/63, containers 18/18,
@@ -336,7 +354,7 @@ simulation side and the vehicle side(s) already up; scenarios that load another 
 SSv2 decides collisions in its own geometry: declared bounding boxes, in 2D, and no static
 world. When the ego hits a curb, a pole, or an NPC whose CARLA body is bigger than its
 declared box, the run can still pass. The bridge writes what CARLA's collision sensor saw
-for every ego run to `~/.ros/csb/contacts/` (`contact_report_dir:=` on `simulation.launch.xml`
+for every ego run to `~/.ros/csb/contacts/` (`contact_report_dir:=` on `carla_simulation.launch.xml`
 moves it, `off` disables it). With `--physical-verdict`, `run_suite` adds a `carla_contact`
 testcase to each scenario, next to SSv2's own:
 
@@ -375,7 +393,7 @@ To force a body, set the entity's `model3d` to a CARLA blueprint name, or map it
 ### How NPCs move: `npc_motion`
 
 SSv2 computes every NPC's pose; the bridge decides how CARLA's body follows it.
-`npc_motion:=` on `simulation.launch.xml` (or `npc_motion:` in `bridge.yaml`) selects:
+`npc_motion:=` on `carla_simulation.launch.xml` (or `npc_motion:` in `bridge.yaml`) selects:
 
 | `npc_motion` | What CARLA has | Choose it for |
 |---|---|---|
@@ -481,7 +499,7 @@ Presets are CARLA's (`carla.WeatherParameters`): `ClearNoon`, `CloudyNoon`, `Wet
 services answer with the resulting values and the preset they match.
 
 Every map load resets CARLA's weather to the town's default. The bridge keeps the weather
-you asked for -- `weather:=` on `simulation.launch.xml` (or `weather:` in `bridge.yaml`),
+you asked for -- `weather:=` on `carla_simulation.launch.xml` (or `weather:` in `bridge.yaml`),
 then the last `set_weather` -- and applies it again after every map load and CARLA restart,
 so it holds across scenarios on different towns. Empty (the default) leaves CARLA's own.
 

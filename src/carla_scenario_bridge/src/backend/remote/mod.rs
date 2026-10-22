@@ -68,6 +68,10 @@ use tracking::{Drive, Tracked};
 
 pub use world_client::PROTOCOL_VERSION;
 
+/// How long the bridge waits, at its end, for the world server to undo what it did. CARLA's
+/// teardown of a scenario's actors takes well under a second.
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// `<map dir>/<simulator>/world.yaml`: the simulator's world for a Lanelet2 map. Absent: the
 /// server's default world (a flat ground plane; CARLA: the town the directory names) with
 /// the map frame as the world frame.
@@ -2163,13 +2167,15 @@ impl SimBackend for RemoteBackend {
             return;
         }
         // The world server outlives the bridge: it undoes what it did for this one and has
-        // no owner after.
-        if let Err(e) = self.call(
-            "Release",
+        // no owner after. Briefly: a bridge ending with its supervisor (killed, its world
+        // server going too) must not wait on a server that is gone; the owner lease covers a
+        // release that never arrived.
+        match self.client.call(
             wire::request::Request::Release(wire::Release {}),
-            Duration::from_secs(10),
+            RELEASE_TIMEOUT,
         ) {
-            tracing::warn!("Could not release the {} world server: {e}", self.sim());
+            Ok(_) => tracing::info!("Released the {} world server", self.sim()),
+            Err(e) => tracing::warn!("Could not release the {} world server: {e}", self.sim()),
         }
     }
 }

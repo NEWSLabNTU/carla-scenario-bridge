@@ -29,6 +29,8 @@ fn main() -> Result<()> {
     color_eyre::install()?;
     // Ends with its supervisor: a play_launch killed with SIGKILL takes the bridge along.
     csb_core::world_server::die_with_parent();
+    // SAFETY: getppid has no preconditions.
+    let supervisor = unsafe { libc::getppid() };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -135,9 +137,63 @@ fn main() -> Result<()> {
         unsafe { libc::_exit(TICK_HUNG_EXIT) };
     }
 
-    // The world server outlives the bridge: release it.
-    server.cleanup();
+    // The world server outlives the bridge: release it -- unless the supervisor is gone, which
+    // takes the world server down too (or the owner lease frees it): nothing to wait for then.
+    // SAFETY: getppid has no preconditions.
+    if unsafe { libc::getppid() } == supervisor {
+        server.cleanup();
+    } else {
+        tracing::info!("The supervisor is gone: ending without releasing the world server");
+    }
 
     tracing::info!("Shutdown complete");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// The bridge knows no simulator (roadmap 046): nothing in its dependency graph is a
+    /// simulator's client library. Read from the workspace's Cargo.lock, which lists every
+    /// package's dependencies.
+    #[test]
+    fn no_simulator_crate_is_in_the_bridges_dependency_graph() {
+        let lock =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock"))
+                .expect("read Cargo.lock");
+        let mut deps: std::collections::HashMap<String, Vec<String>> = Default::default();
+        for block in lock.split("[[package]]").skip(1) {
+            let name = block
+                .lines()
+                .find_map(|l| l.strip_prefix("name = \""))
+                .map(|n| n.trim_end_matches('"').to_string())
+                .expect("a package name");
+            let list = block
+                .split("dependencies = [")
+                .nth(1)
+                .map(|d| d.split(']').next().unwrap_or_default())
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|d| d.trim().trim_matches('"').split(' ').next())
+                .filter(|d| !d.is_empty())
+                .map(str::to_string)
+                .collect();
+            deps.entry(name).or_insert(list);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut todo = vec!["carla_scenario_bridge".to_string()];
+        while let Some(p) = todo.pop() {
+            if seen.insert(p.clone()) {
+                todo.extend(deps.get(&p).cloned().unwrap_or_default());
+            }
+        }
+        assert!(seen.len() > 20, "found only {seen:?}");
+        let simulators: Vec<&String> = seen
+            .iter()
+            .filter(|p| p.starts_with("carla") && p.as_str() != "carla_scenario_bridge")
+            .collect();
+        assert!(
+            simulators.is_empty(),
+            "the bridge depends on a simulator: {simulators:?}"
+        );
+    }
 }

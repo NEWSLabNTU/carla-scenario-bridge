@@ -33,47 +33,44 @@ just test     # Run tests
 
 ## Repository Structure
 
+Since roadmap 046 every simulator is a **world server** behind one protocol
+(`proto/csb_world.proto`), and the bridge knows no simulator
+(`docs/design/simulator-interface-split.md`, `docs/roadmap/046-unified-world-interface.md`).
+
 ```
 .
-├── src/carla_scenario_bridge/  # Rust crate (ament_cargo package)
-│   ├── src/
-│   │   ├── main.rs             # Entry point: config, backend choice, shutdown
-│   │   ├── zmq_server.rs       # ZMQ REP socket, protobuf dispatch
-│   │   ├── coordinator.rs      # SSv2 requests → SimBackend calls (no simulator)
-│   │   ├── backend/            # The simulator seam (035)
-│   │   │   ├── mod.rs          # SimBackend trait and its types
-│   │   │   ├── fake.rs         # In-memory backend for coordinator tests
-│   │   │   ├── carla/          # CarlaBackend: the only code that uses carla-rust
-│   │   │   │   ├── backend.rs  # SSv2 handlers → CARLA API calls
-│   │   │   │   ├── collision_monitor.rs, traffic_light_mapper.rs,
-│   │   │   │   └── resolved_signals.rs, version.rs, weather.rs
-│   │   │   └── isaac/          # IsaacBackend: csb_world.proto to the world server (037)
-│   │   ├── gap_trace.rs        # Both worlds per frame, for the gap oracle (024)
-│   │   ├── entity_manager.rs   # SSv2 name ↔ CARLA actor ID mapping
-│   │   ├── coordinate_conversion.rs  # ROS ↔ CARLA frame conversion
-│   │   ├── weather.rs          # Weather presets, kept across map loads (018)
-│   │   ├── world_services.rs   # rclrs node: /carla/set_weather, /carla/get_weather
-│   │   └── proto.rs            # Generated protobuf type re-exports
-│   ├── build.rs                # prost-build proto compilation
-│   ├── config/bridge_config.yaml
-│   ├── Cargo.toml
-│   └── package.xml
+├── src/csb_core/               # Rust library, simulator-free (no simulator crate in its graph):
+│   └── src/                    #   proto (SSv2's + the world protocol), sim (the SimBackend seam),
+│                               #   world_client / world_server (the protocol's Rust ends: lease,
+│                               #   capabilities), config, entity table, episode clock, NPC tracking,
+│                               #   gap trace, contact reports, agent link, weather, map resolver
+├── src/carla_scenario_bridge/  # The bridge (ament_cargo): SSv2's ZMQ server, coordinator,
+│   ├── src/backend/remote/     #   RemoteBackend -- its only backend, a world server over the protocol
+│   ├── src/bin/csb_world_check.rs  # probe (hello) or conformance-check any world server
+│   └── config/bridge_config.yaml   # the bridge's keys only
+├── src/carla_world/            # The CARLA world server (ament_cargo): CarlaBackend behind the
+│   ├── src/backend/carla/      #   protocol; the only code that uses carla-rust. One per CARLA
+│   ├── src/world.rs            #   (flock /tmp/swb-locks/carla-<host>-<port>.lock)
+│   └── config/carla_world.yaml #   CARLA's keys only; blueprint_boxes_<version>.yaml beside it
+├── src/csb_world_server/       # The protocol's Python server shell (lease, capabilities, World base)
+├── src/csb_isaac/              # The Isaac Sim world server (Python, Isaac's venv; `just isaac-world`):
+│                               #   IsaacWorld on csb_world_server, NPCs, contacts, vehicle catalogue,
+│                               #   the surface layer (047: <map>/surfaces.yaml, per-wheel friction)
+├── src/autoware_isaac_bridge/  # aib submodule (045): the Isaac ego the world server imports
 ├── src/csb_interfaces/     # rosidl: Weather.msg, SetWeather.srv, GetWeather.srv
 ├── src/csb_agent/          # Agent SDK + agent protocol v1/v2 (030): csb_agent.Agent, Client, main
 ├── src/scenario_agent_relay/  # the relay: concealer ADAPI <-> agents (imports csb_agent.protocol)
-├── src/csb_isaac/          # Isaac Sim world server (Python, Isaac's venv; `just isaac-world`):
-│                           #   lockstep world, NPCs, contacts, the CARLA vehicle catalogue,
-│                           #   the surface layer (047: <map>/surfaces.yaml, per-wheel friction)
-├── src/autoware_isaac_bridge/  # aib submodule (045): the Isaac ego the world server imports
-│                           #   (PhysX vehicle, sensors, vehicle interface; vehicle spec ->
-│                           #   Autoware vehicle/sensor kit + rig), aib_launch for `just ego-isaac`
-├── proto/                  # SSv2 protobuf definitions, and csb_world.proto (Isaac, 037)
+├── src/csb_launch/         # simulation.launch.xml (bridge + relay), carla_simulation.launch.xml
+│                           #   (+ carla_world), isaac_simulation.launch.xml, isaac_world.launch.xml,
+│                           #   scenario, ego and background-AV launches, run_suite, gap oracle
+├── proto/                  # SSv2 protobuf definitions, and csb_world.proto (the world protocol)
 ├── src/csb_examples/       # Starter scenarios (basic/, multi_av/, awf/), installed
 ├── scenarios/              # Benchmark scenarios (bench/), goal-pose files
+├── scripts/carla_up.sh, isaac_up.sh  # per-simulator bring-up (`just scenario ... sim:=`)
 ├── docs/
 │   ├── design/             # Architecture, protocol, launch config docs
 │   └── roadmap/            # Phase 1-5 roadmap with task checklists
-├── Cargo.toml              # Workspace root
+├── Cargo.toml              # Workspace root: csb_core, carla_scenario_bridge, carla_world
 ├── justfile                # Build and run commands
 └── CLAUDE.md               # This file
 ```
@@ -90,7 +87,8 @@ Recipes take project settings -- map, rviz, vehicle and launch choices, scenario
 map_path:=<dir> rviz:=true`, `just scenario <xosc> output_directory:=<dir>`); `ego-av`,
 `ego-isaac` and `bg-av` hand any argument they do not know to the launch file. Host
 settings come from the environment, made permanent in `.env` (just's `dotenv-load`) or
-`.envrc`: ports (`CARLA_PORT`, `SSV2_PORT`, `AGENT_PORT`, `ISAAC_PORT`; the play_launch web
+`.envrc`: ports (`CARLA_PORT`, `SSV2_PORT`, `AGENT_PORT`, `ISAAC_PORT`, `WORLD_PORT` for the CARLA world
+server, default 5591; the play_launch web
 UIs from `CSB_WEB_PORT`, default 8080: +0 demo, +1 scenario, +2 ego, +3 background AV, +4
 the simulation side, +5 the Isaac world server), displays
 (`DISPLAY`, `ISAAC_DISPLAY`, `RECORD_DISPLAY`), install and data paths (`AUTOWARE_SETUP`,
@@ -99,17 +97,20 @@ the simulation side, +5 the Isaac world server), displays
 (`EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`, `BG_ROS_DOMAIN_ID` for the first background
 AV; the Isaac ego's `isaac_vehicle` node follows
 `EGO_ROS_DOMAIN_ID` too, over aib's `ego.yaml`) and the ego's RMW (`EGO_RMW_IMPLEMENTATION`),
-the log root and archive (`CSB_LOG_ROOT`, `CSB_LOG_ARCHIVE`), and the Isaac bring-up waits
-(`ISAAC_READY_TIMEOUT`, `EGO_READY_TIMEOUT`). The variables that used to carry project
+the log root and archive (`CSB_LOG_ROOT`, `CSB_LOG_ARCHIVE`), and the bring-up waits
+(`CARLA_READY_TIMEOUT`, `ISAAC_READY_TIMEOUT`, `EGO_READY_TIMEOUT`). The variables that used to carry project
 settings (`MAP_NAME`, `LAUNCH_RVIZ`, `EGO_LAUNCH_ARGS`, `OUTPUT_DIR`, `KEEP_STACKS`, ...;
 the list is `CSB_RETIRED_ENV` in `scripts/just_lib.bash`) make a recipe refuse to start,
 naming the argument to pass instead. Do not add new ones.
 
 Two checkouts share a host by moving one checkout's whole set in its `.env`: `CSB_WEB_PORT`,
-`SSV2_PORT` (the bridge's sensor-release sockets follow it at +1 and +2, on both csb's and
-acb's side), `AGENT_PORT`, `EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`, `BG_ROS_DOMAIN_ID`. `ISAAC_PORT` and
+`SSV2_PORT` (the CARLA world server's sensor-release sockets follow it at +1 and +2, on both
+its side and acb's), `AGENT_PORT`, `WORLD_PORT`, `EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`,
+`BG_ROS_DOMAIN_ID`. `ISAAC_PORT` and
 `CARLA_PORT` keep the simulators' own defaults (5590, 2000) unless those are taken too; a
-second CARLA also needs its Traffic Manager port moved (`traffic_manager.port`, default 8000).
+second CARLA's Traffic Manager port follows it (CARLA_PORT + 6000) unless `carla_world.yaml`
+names another. The CARLA world server's lock refuses a second one on the same CARLA, whichever
+checkout it comes from.
 
 ### Use just build
 Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).

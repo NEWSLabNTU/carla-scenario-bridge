@@ -217,7 +217,9 @@ test:
     python3 -m pytest -q src/csb_launch/test
     # The agent SDK and protocol, and the relay against it (roadmap 030)
     python3 -m pytest -q src/csb_agent/test src/scenario_agent_relay/test
-    # The Isaac world server's protocol side, on a fake world (roadmap 037; protobuf only)
+    # The world server shell, on a fake world (roadmaps 037, 046; protobuf only), and the Isaac
+    # world's pure modules
+    python3 -m unittest discover -s src/csb_world_server/test
     python3 -m unittest discover -s src/csb_isaac/test
 
 # Run CI checks: build, check (format + clippy), and tests

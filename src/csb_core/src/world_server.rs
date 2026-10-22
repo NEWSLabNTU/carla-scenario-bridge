@@ -513,7 +513,12 @@ pub fn serve<W: World>(
         if let Some(reason) = shell.fatal() {
             return Ok(End::Fatal(reason.to_string()));
         }
-        let ready = socket.poll(zmq::POLLIN, 100)? > 0;
+        // A signal (the stop flag's) interrupts the wait: look at the flag again.
+        let ready = match socket.poll(zmq::POLLIN, 100) {
+            Ok(n) => n > 0,
+            Err(zmq::Error::EINTR) => continue,
+            Err(e) => return Err(e.into()),
+        };
         if !ready {
             if shell.last_world_request.elapsed() >= idle_every && last_idle.elapsed() >= idle_every
             {
@@ -524,21 +529,34 @@ pub fn serve<W: World>(
             }
             continue;
         }
-        let request = socket.recv_bytes(0)?;
+        let request = match socket.recv_bytes(0) {
+            Ok(r) => r,
+            Err(zmq::Error::EINTR) => continue,
+            Err(e) => return Err(e.into()),
+        };
         let reply = shell.handle(&request);
-        socket.send(reply, 0)?;
+        // The reply goes out even when a signal interrupts the first try (a REP socket must
+        // answer before it can take the next request).
+        loop {
+            match socket.send(reply.as_slice(), 0) {
+                Ok(()) => break,
+                Err(zmq::Error::EINTR) => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
     }
 }
 
 /// Ask the kernel for SIGTERM when the parent dies (a supervisor killed with SIGKILL), and
-/// exit 1 now when it already has. Linux only.
+/// exit 1 when it died while this was being set up. A process started detached (`setsid
+/// ... &`, its parent already gone) has no supervisor to follow and runs on. Linux only.
 pub fn die_with_parent() {
     // SAFETY: getppid and prctl have no memory-safety preconditions.
     unsafe {
         let parent = libc::getppid();
         libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-        if parent == 1 || libc::getppid() != parent {
-            eprintln!("parent process gone before start: exiting");
+        if libc::getppid() != parent {
+            eprintln!("parent process gone while starting: exiting");
             libc::_exit(1);
         }
     }

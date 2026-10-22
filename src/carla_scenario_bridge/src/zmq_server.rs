@@ -29,7 +29,7 @@ pub struct ZmqServer {
     poisoned: Option<String>,
     frame_stats: FrameStats,
     /// Requests from the ROS services (`world_services`), applied between SSv2 requests on
-    /// this thread, which owns the CARLA client.
+    /// this thread, which owns the world server's client.
     world_commands: Option<mpsc::Receiver<WorldCommand>>,
 }
 
@@ -79,12 +79,13 @@ impl ZmqServer {
             return;
         };
         self.serve(&socket, &shutdown);
-        // A CARLA call never returned (roadmap 032 N5, 034 step 2): the request in flight has
+        // A world request never returned, or the world server cannot go on (roadmap 032 N5,
+        // 034 step 2, 046): the request in flight has
         // its error. Answer whatever SSv2 sends next -- its deactivate's DespawnEntity comes
-        // within milliseconds -- with the same error and without a word to CARLA, until it
+        // within milliseconds -- with the same error and without a word to the world server, until it
         // has been quiet ~2 s (10 s at most); `main` then ends the process for a fresh bridge.
         if let Some(reason) = self.coordinator.wedged().map(str::to_owned) {
-            tracing::error!("A CARLA call never returned: this bridge drains, then exits");
+            tracing::error!("A world request never returned, or the world server cannot go on: this bridge drains, then exits");
             let answered = drain(&socket, &reason, DrainPolicy::default());
             tracing::warn!(
                 "Drained {answered} request(s) with the hang error; closing the SSv2 socket"
@@ -103,7 +104,7 @@ impl ZmqServer {
             let mut items = [socket.as_poll_item(zmq::POLLIN)];
             match zmq::poll(&mut items, 100) {
                 Ok(0) => {
-                    // Between scenarios: is the CARLA connection still alive? A dead one
+                    // Between scenarios: is the world server still there? A dead one
                     // ends the bridge (Coordinator::probe_connection_idle).
                     if last_request.elapsed() >= budgets::IDLE_PROBE_AFTER
                         && last_probe.elapsed() >= budgets::IDLE_PROBE_EVERY
@@ -146,7 +147,7 @@ impl ZmqServer {
             if let Err(e) = socket.send(&response_bytes, 0) {
                 tracing::error!("send error: {e}");
             }
-            // A CARLA call never returned (roadmap 032 N5): the request has its error; stop
+            // A world request never returned (roadmap 032 N5): the request has its error; stop
             // serving, and drain (see `run`).
             if self.coordinator.wedged().is_some() {
                 break;
@@ -272,14 +273,12 @@ impl ZmqServer {
         }
     }
 
-    /// Undo everything this bridge changed in CARLA: destroy its actors, unfreeze traffic
-    /// lights it froze, restore async mode.
-    /// Why the bridge cannot go on after a hung tick, if one did not return.
+    /// Why the bridge cannot go on after a hung world request, if one did not return.
     pub fn wedged(&self) -> Option<String> {
         self.coordinator.wedged().map(str::to_owned)
     }
 
-    /// Why the bridge exits after its idle check found the CARLA connection dead.
+    /// Why the bridge exits after its idle check found the world server gone.
     pub fn server_lost(&self) -> Option<String> {
         self.coordinator.server_lost().map(str::to_owned)
     }
@@ -296,11 +295,13 @@ impl ZmqServer {
         }
     }
 
-    /// Close what the run recorded after a hung tick, without a word to CARLA.
+    /// Close what the run recorded after a hung request, without a word to the world server.
     pub fn abandon_after_hang(&mut self) {
         self.coordinator.abandon_after_hang();
     }
 
+    /// Release the world server: it undoes what it did for this bridge (destroys its
+    /// entities, restores the simulator).
     pub fn cleanup(&mut self) {
         self.end_run();
         self.coordinator.shutdown();
@@ -310,7 +311,7 @@ impl ZmqServer {
 /// How long closing the SSv2 socket may wait for queued replies to leave (ms).
 const SOCKET_LINGER_MS: i32 = 1000;
 
-/// When a bridge that is draining after a hung CARLA call stops answering (034 step 2).
+/// When a bridge that is draining after a hung world request stops answering (034 step 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DrainPolicy {
     /// Quiet this long since the last request (or the start): SSv2 has had its answers.
@@ -339,7 +340,7 @@ impl DrainPolicy {
 /// Returns how many were answered.
 pub fn drain(socket: &zmq::Socket, reason: &str, policy: DrainPolicy) -> usize {
     let description = format!(
-        "csb is restarting after a CARLA call that never returned; this request was not \
+        "the bridge is restarting after a world request that never returned; this request was not \
          run: {reason}"
     );
     let started = Instant::now();

@@ -1,7 +1,7 @@
 """Process lifetime for world servers and their clients (roadmap 046).
 
 - `die_with_parent()`: SIGTERM from the kernel when the parent dies (a play_launch killed
-  with SIGKILL), and exit at once when it already has.
+  with SIGKILL), and exit at once when it died while that was being set up.
 - `client_id()`: this process as the protocol's `ClientId`.
 - `is_gone(client)`: whether a `ClientId` names a process that provably no longer runs.
 """
@@ -15,7 +15,7 @@ PR_SET_PDEATHSIG = 1
 
 
 def die_with_parent():
-    """Ask for SIGTERM when the parent dies; exit 1 now if it is already gone. Linux only;
+    """Ask for SIGTERM when the parent dies; exit 1 if it died meanwhile. Linux only;
     elsewhere a no-op."""
     if not sys.platform.startswith("linux"):
         return
@@ -25,9 +25,10 @@ def die_with_parent():
         libc.prctl(PR_SET_PDEATHSIG, int(signal.SIGTERM), 0, 0, 0)
     except OSError:
         return
-    # The parent died before the call: the signal will never come.
-    if parent == 1 or os.getppid() != parent:
-        sys.stderr.write("parent process gone before start: exiting\n")
+    # The parent died while the signal was being asked for: it will never come. A process
+    # started detached (its parent already gone) has no supervisor to follow and runs on.
+    if os.getppid() != parent:
+        sys.stderr.write("parent process gone while starting: exiting\n")
         sys.exit(1)
 
 
