@@ -311,10 +311,10 @@ back to back on a quiet host (below).
 
 | | baseline | new stack |
 |---|---|---|
-| starter: `basic/town01_*`, `town02_episode_change`, `tutorial/town01_follow_to_goal` | 8/8 | see the back-to-back session |
+| starter: `basic/town01_*`, `town02_episode_change`, `tutorial/town01_follow_to_goal` | 8/8 | 8/8 |
 | `multi_av/town01_two_av` (two Autowares, the agent relay) | PASS | PASS |
 | AWF UC-ACC-001 (27 variants) | 7/8, then the suite's 600 s cap cut it | **27/27** |
-| AWF UC-AEB-001 (9 variants) | 9/9 | see the back-to-back session |
+| AWF UC-AEB-001 (9 variants) | 9/9 | 9/9 |
 | `town01_rear_contact` | PASS | PASS |
 | hung tick (034's hook at frame 40), then `town01_ego_drive` | (034) | fails with the reason, next run PASS |
 
