@@ -451,6 +451,30 @@ ROS 2 autopilot described in a YAML file (`ros2 run csb_agent ros_adapter --conf
 agent.yaml`). Start one with `ros2 run csb_agent csb-agent new <name>` and test it with
 `csb-agent check` before running scenarios: [Writing an agent](agent-interface.md).
 
+### Another simulator
+
+Every simulator is a world server behind the world protocol (`proto/csb_world.proto`;
+roadmap 046, [design](design/simulator-interface-split.md)); the bridge needs nothing new for
+one. A port is one process that owns the simulator and implements the protocol:
+
+- **Python**: subclass `csb_world_server.world.World` (`load`, `spawn`, `despawn`, `step`;
+  `set_signals` and the rest with a capability), set `simulator_name`, `capabilities` and
+  `max_physics_dt`, and serve it with `csb_world_server.server.bind` and `run`. The Isaac
+  world server (`src/csb_isaac/csb_isaac/world.py`) is the worked example.
+- **Rust**: implement `csb_core::world_server::World` and serve it with `world_server::bind`
+  and `serve`, as `src/carla_world` does for CARLA.
+- **Anything else**: answer the `.proto`'s `Request` with its `Reply` on a ZMQ REP socket.
+
+Declare only what the simulator does (`Capability`): the bridge never sends a request or a
+drive the server did not declare, and answers SSv2 with an honest failure naming the missing
+capability. A map tells the server which world it means in `<map dir>/<simulator name>/world.yaml`
+(`world`, `ground_paths`, `map_origin`). Check the server with
+`csb_world_check conformance tcp://127.0.0.1:<port> --map <map dir>` before a scenario, then
+run the starter scenarios against it: start the simulation side with
+`ros2 launch csb_launch simulation.launch.xml world_endpoint:=tcp://127.0.0.1:<port>`, then
+scenarios as above. The vehicle under test needs a vehicle bridge of its own
+(sensors, `/vehicle/status/*`, `/control/command/*`, `/clock`), as acb and aib are.
+
 ### Timeouts
 
 A broken setup should fail in a minute or two, naming the cause, and a healthy run should
