@@ -111,7 +111,8 @@ soil model must return to the wheel has a working channel.
   validated; loose and soft classes soak the water up (their wet factors) instead.
 - **Where the server finds the map**: `surfaces.yaml` in the map directory of a world file
   the world server was started with (`--world`, `just isaac-world world:=...`), checked
-  before Isaac starts and read again at every `LoadWorld` (an edit needs no restart). swb's
+  before Isaac starts, and looked for and read again at every `LoadWorld` (adding or editing
+  one needs no restart). swb's
   `LoadWorld` sends only the USD, which the server maps back; 046's world protocol v4 should
   carry the map's surfaces itself. A world with no surface map writes nothing.
 
@@ -139,6 +140,27 @@ plumbing, not magnitudes.
 
 Cost: the layer's update, four wheels, 21 us p50 / 0.41 ms p99 per physics step (10 k
 steps); a frame of three steps 2.05 ms with it, 2.26 ms without (noise).
+
+### Surface layer on Town01 (047 S1, 2026-10-23)
+
+`src/isaac_world/spikes/surface_town.py` drives the same cases on Town01's SimReady world
+(`Town01_physics.usda`, loaded in 534 s on a loaded host) along lanelet 13397, the east road
+heading +y, zones on the lane from y = -160: every wheel's collider is a `Road` mesh
+(`.../Road_Road_Town01_455/St_Road_TileRoad_RoadR`) and resolves to `Road` -> asphalt. Every
+case matches the pad within 0.01 m (dry 24.73 m, wet 28.43, gravel 29.85, ice from 12 m/s
+53.26 at 1.36 m/s^2, step 27.54, mu-split 27.35 with yaw -5.4 deg toward the dry side, flood
+20.31 from 15 m/s and 65.37 from 25), so the town's triangles change nothing; Road labelled
+gravel by `defaults` alone (no zone) gives the gravel zone's numbers. No surface layer and a
+dry map stop at the same 24.73 m. Update 19 us p50 / 0.39 ms p99.
+
+With Autoware (`town01_ego_drive`, 3 runs each, one world server): no map, a dry map, and
+the route over wet asphalt, a left-wheel puddle, gravel and ice at the goal all pass with 0
+MRM and tracking inside 045's spread (047 S1). The route's 4.3 m/s and gentle stops stay
+inside every class's grip; a scenario that stresses Autoware on low grip is S6's.
+
+The world server logs each wheel's change of surface (`<vehicle> wheel <i> at (x, y): <class>
+[wetness] [water] (zone <id>), mu <value>`, the value on the first step there, still
+blending), which is how a run shows its zones took.
 
 ### Soil layer (zones)
 

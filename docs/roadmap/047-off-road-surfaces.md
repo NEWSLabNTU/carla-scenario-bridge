@@ -100,7 +100,7 @@ Each needs an answer before the step it gates; the design's proposal is in brack
 
 - [x] Survey (above).
 - [x] Isaac spike: which hooks Isaac 6.1 honours (above).
-- [ ] **S1. Surface layer in aib and the world server.** A friction table per wheel in
+- [x] **S1. Surface layer in aib and the world server.** A friction table per wheel in
       `aib.isaac.vehicle`; `<map>/surfaces.yaml` (D1) loaded by the world server: label
       defaults, zones, per-zone rasters, a lint and `just surfaces-plot`; per-class friction and slip-curve shape (gravel flat or rising, asphalt
       falling); `mu_eff = mu_class(wetness) * f_hydroplane(v, depth)` written per wheel per
@@ -121,16 +121,29 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   - [x] `isaac_world.surface_layer` in the world server: SimReady label of the hit collider,
         zone at the hit point (map origin applied), written per wheel after every substep;
         reset on teleport. The map is `surfaces.yaml` beside a `--world` world file, checked
-        before Isaac starts, read again at every `LoadWorld`; no map, no writes.
+        before Isaac starts, looked for and read again at every `LoadWorld`; no map, no writes.
   - [x] On a pad through the world server's code (`spikes/surface_drive.py`, design doc
         "Surface layer, measured"): every case moves the expected way (wet, gravel, ice,
         dry-to-wet step, mu-split yaws toward the dry side, ABS shorter than locked on asphalt
         and longer on gravel, hydroplaning at 25 m/s and not at 15, TC holds on ice); 21 us a
         step for four wheels, no frame-time change.
-  - [ ] On one town with Autoware: a surfaces.yaml for Town01 (maps live in git-ignored
-        `data/`: where it is kept is open), the acceptance surface-layer set below through
-        `just scenario ... backend:=isaac`, and `town01_ego_drive` unchanged with the map
-        loaded.
+  - [x] On Town01 (2026-10-23, newslab-server-241, swb `fa9123f` + this step, aib
+        `df94015`, acb `8f72488`, all rebuilt; design doc "Surface layer on Town01"):
+        - scripted (`spikes/surface_town.py`): the surface cases at speed on the town's own
+          road (lanelet 13397); its colliders resolve to `Road`, and every number matches the
+          pad's within 0.01 m. No surface layer and a dry map give the same stop, 24.73 m.
+        - Autoware, `just acceptance town01_ego_drive.xosc 3 backend:=isaac worlds:=Town01`,
+          three sets on one world server: A no map, B a dry map (label defaults, a zone off
+          the route), C the route crossing wet asphalt, a puddle under the left wheels,
+          gravel, and its goal on ice. 9/9 PASS, 0 MRM; longitudinal A 0.013-0.018, B
+          0.007-0.018, C 0.010-0.016 m/s^2 (045: 0.008-0.021), cross-track 0.03-0.04 m.
+          The world server's log shows each wheel taking each zone at its edge, the puddle
+          on the left wheels only. The route peaks at 4.3 m/s and brakes gently, inside even
+          ice's grip, so C shows the plumbing and that nothing regresses, not surface
+          effects on Autoware.
+        Surface maps of the runs: `scenarios/surfaces/town01_{dry,route}.yaml`, copied to
+        `<map>/surfaces.yaml` for a run (maps stay in git-ignored `data/`). A surfaces.yaml
+        added or changed while the world server runs counts from the next `LoadWorld`.
 - [ ] **S2. Road condition from the scenario** (after 046's protocol v4, D3): SSv2 fork
       (`managed-ego-unforked`) sends `EnvironmentAction`'s environment through a new
       `simulation_api_schema` request (pushed to the fork before the pin moves); the bridge
@@ -153,7 +166,7 @@ Each needs an answer before the step it gates; the design's proposal is in brack
 
 ## Acceptance
 
-- [ ] Surface layer: on one town, a dry-to-wet step, a one-side puddle (mu-split: the ego yaws,
+- [x] Surface layer: on one town, a dry-to-wet step, a one-side puddle (mu-split: the ego yaws,
   ABS holds it), gravel braking (ABS no shorter than locked), an ice patch, and speed rising
   toward hydroplaning each behave in the expected direction, with numbers recorded; 0 MRM on
   the dry baseline (`town01_ego_drive` unchanged within 045's spread).

@@ -1,0 +1,18 @@
+# Roadmap 047 S1 town runs, set C: town01_ego_drive's route (x 190.8 -> 120 along y -130,
+# heading -x, so the left wheels are at y < -130) crosses a wet stretch, a puddle under the
+# left wheels, gravel, and stops on ice at its goal (x 120).
+# Copy to data/carla-autoware-bridge/Town01/surfaces.yaml.
+defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass, Ground: dirt}
+zones:
+  - id: wet_stretch
+    wetness: wetWithPuddles
+    polygon: [[160.0, -134.0], [175.0, -134.0], [175.0, -126.0], [160.0, -126.0]]
+  - id: puddle_left
+    water_depth: 0.006
+    polygon: [[150.0, -134.0], [160.0, -134.0], [160.0, -130.0], [150.0, -130.0]]
+  - id: gravel_patch
+    class: gravel
+    polygon: [[140.0, -134.0], [150.0, -134.0], [150.0, -126.0], [140.0, -126.0]]
+  - id: ice_at_goal
+    class: ice
+    polygon: [[105.0, -134.0], [135.0, -134.0], [135.0, -126.0], [105.0, -126.0]]

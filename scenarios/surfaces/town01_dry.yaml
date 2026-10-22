@@ -1,0 +1,9 @@
+# Roadmap 047 S1 town runs, set B: Town01's label defaults and one zone off the
+# town01_ego_drive route. Copy to data/carla-autoware-bridge/Town01/surfaces.yaml.
+# The route's asphalt keeps the rig's tire friction, so the run must match set A (no map).
+defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass, Ground: dirt}
+zones:
+  - id: mud_pit
+    class: mud_wet
+    soil: true
+    polygon: [[230.0, -60.0], [270.0, -60.0], [270.0, -40.0], [230.0, -40.0]]

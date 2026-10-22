@@ -249,6 +249,8 @@ class IsaacWorld(WorldBase):
         if entry is None:
             return
         path, origin = entry
+        if not os.path.exists(path):
+            return
         self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin)
         log.info("surface map %s: %d zone(s)", path, len(self.surface.map.zones))
 

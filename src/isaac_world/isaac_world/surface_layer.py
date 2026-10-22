@@ -8,8 +8,9 @@ the next substep goes into the wheel's own table (`Vehicle.set_wheel_friction`).
 with no surface map is left alone: every wheel keeps the rig's tire friction.
 
 Where the map comes from: `surfaces.yaml` in the map directory of a world file the server
-was started with (`--world`); swb's `LoadWorld` sends only the USD, which `register` maps
-back. (046's world protocol v4 is the place for the map to say so itself.)
+was started with (`--world`), looked for at every `LoadWorld`; swb's `LoadWorld` sends only
+the USD, which `register` maps back. (046's world protocol is the place for the map to say so
+itself.)
 """
 import logging
 import os
@@ -29,6 +30,7 @@ class SurfaceLayer:
         self.condition = surfaces.RoadCondition()
         self.labels = {}  # collider path -> SimReady ground label, or None
         self.wheels = {}  # vehicle path -> surfaces.WheelSurfaces
+        self.logged = {}  # (vehicle path, wheel) -> the surface last logged
 
     def label(self, path):
         """The ground label of the collider at `path`: the first Q-code found on it or up its
@@ -60,7 +62,16 @@ class SurfaceLayer:
         for i, (c, w) in enumerate(zip(vehicle.contacts, vehicle.wheel_states)):
             s = self.map.at(c.position[0] + ox, c.position[1] + oy, self.label(c.shape)) \
                 if c.on_ground else None
-            vehicle.set_wheel_friction(i, ws.update(i, s, self.condition, speed, w.slip, dt))
+            mu = ws.update(i, s, self.condition, speed, w.slip, dt)
+            vehicle.set_wheel_friction(i, mu)
+            if s is not None and self.logged.get((vehicle.path, i)) != s:
+                # a wheel onto other ground: rare (class and zone edges), so INFO
+                self.logged[(vehicle.path, i)] = s
+                log.info("%s wheel %d at (%.1f, %.1f): %s%s%s%s, mu %.3f", vehicle.path, i,
+                         c.position[0] + ox, c.position[1] + oy, s.cls,
+                         f" {s.wetness}" if s.wetness else "",
+                         "" if s.water_depth is None else f" water {s.water_depth * 1000:.1f} mm",
+                         f" (zone {s.zone})" if s.zone else "", mu)
 
     def surfaces_under(self, vehicle):
         """The surface each wheel last stood on (None in the air), for logs and probes."""
@@ -78,23 +89,23 @@ class SurfaceLayer:
 
 
 def register(world_files):
-    """`{usd realpath: (surfaces.yaml path, map origin)}` for the world files (map
-    directories) that have a surface map beside them; a map that fails its check stops the
-    server here, with every problem listed."""
+    """`{usd realpath: (surfaces.yaml path, map origin)}` for the world files' map
+    directories, whether the surface map exists yet or not (one added later counts from the
+    next LoadWorld); one that exists and fails its check stops the server here, with every
+    problem listed."""
     import yaml
 
     out = {}
     for world_file in world_files:
         map_dir = os.path.dirname(os.path.dirname(world_file))
-        path = surfaces.find(map_dir)
-        if not path.exists():
-            continue
         with open(world_file) as f:
             w = yaml.safe_load(f) or {}
         usd = w.get("usd", "")
         if not usd:
             continue
         usd = usd if os.path.isabs(usd) else os.path.join(map_dir, usd)
-        surfaces.load(path)  # refused here, not at the first LoadWorld
+        path = surfaces.find(map_dir)
+        if path.exists():
+            surfaces.load(path)  # refused here, not at the first LoadWorld
         out[os.path.realpath(usd)] = (str(path), tuple(w.get("map_origin") or (0.0, 0.0, 0.0)))
     return out

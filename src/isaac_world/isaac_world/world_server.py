@@ -99,7 +99,8 @@ def main(argv=None):
     except SurfaceError as e:
         raise SystemExit(f"surface map refused:\n{e}") from e
     for usd, (path, _) in surface_maps.items():
-        log.info("surface map %s for %s", path, usd)
+        log.info("surface map %s for %s%s", path, usd,
+                 "" if os.path.exists(path) else " (none yet: looked for at each LoadWorld)")
     if args.display:
         os.environ["DISPLAY"] = args.display
     else:

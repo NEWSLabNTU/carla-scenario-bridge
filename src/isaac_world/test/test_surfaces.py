@@ -316,10 +316,13 @@ class SurfaceLayerTest(unittest.TestCase):
             (Path(d) / "isaac").mkdir()
             (Path(d) / "isaac" / "world.yaml").write_text(
                 "usd: town.usd\nmap_origin: [1.0, 2.0, 0.0]\n")
+            entry = [(str(Path(d) / "surfaces.yaml"), (1.0, 2.0, 0.0))]
+            # none yet: registered all the same, looked for at each LoadWorld
+            got = surface_layer.register([str(Path(d) / "isaac" / "world.yaml")])
+            self.assertEqual(list(got.values()), entry)
             (Path(d) / "surfaces.yaml").write_text("defaults: {Road: asphalt}\n")
             got = surface_layer.register([str(Path(d) / "isaac" / "world.yaml")])
-            self.assertEqual(list(got.values()),
-                             [(str(Path(d) / "surfaces.yaml"), (1.0, 2.0, 0.0))])
+            self.assertEqual(list(got.values()), entry)
             (Path(d) / "surfaces.yaml").write_text("defaults: {Road: tarmac}\n")
             with self.assertRaises(SurfaceError):
                 surface_layer.register([str(Path(d) / "isaac" / "world.yaml")])
