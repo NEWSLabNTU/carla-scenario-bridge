@@ -106,6 +106,31 @@ Each needs an answer before the step it gates; the design's proposal is in brack
       falling); `mu_eff = mu_class(wetness) * f_hydroplane(v, depth)` written per wheel per
       step, blended over a contact patch at class edges. Measured: per-wheel write cost; the
       ABS/TC scenario set below on one town.
+  - [x] A table per wheel in aib (`<vehicle>/tireFriction/<wheel>`, no ground materials;
+        `Vehicle.set_wheel_friction`, `Vehicle.contacts`: each wheel's hit point and collider).
+        Checked first in Isaac (2026-10-23): a table's `defaultFrictionValue` edit takes the
+        next step, 0.05 ms a write; a tire's `frictionVsSlipGraph` edit is refused once the
+        simulation runs, so a class's slip curve goes through the friction value instead
+        (`class(slip) / vehicle(slip)`, one step late).
+  - [x] `csb_isaac.surfaces` (pure, unit-tested: `test_surfaces.py`, 23 tests): the
+        surfaces.yaml loader that lists every problem, label defaults, zones with fields
+        that fall through (later zones on top), PNG/.npy rasters, the class table
+        (`src/csb_isaac/config/surface_classes.yaml`: ten classes, literature values),
+        wetness and water depth, hydroplaning (Horne, engineered), the distance filter, the
+        slip-curve emulation. `just surfaces-check` / `just surfaces-plot [map_path:=]`.
+  - [x] `csb_isaac.surface_layer` in the world server: SimReady label of the hit collider,
+        zone at the hit point (map origin applied), written per wheel after every substep;
+        reset on teleport. The map is `surfaces.yaml` beside a `--world` world file, checked
+        before Isaac starts, read again at every `LoadWorld`; no map, no writes.
+  - [x] On a pad through the world server's code (`spikes/surface_drive.py`, design doc
+        "Surface layer, measured"): every case moves the expected way (wet, gravel, ice,
+        dry-to-wet step, mu-split yaws toward the dry side, ABS shorter than locked on asphalt
+        and longer on gravel, hydroplaning at 25 m/s and not at 15, TC holds on ice); 21 us a
+        step for four wheels, no frame-time change.
+  - [ ] On one town with Autoware: a surfaces.yaml for Town01 (maps live in git-ignored
+        `data/`: where it is kept is open), the acceptance surface-layer set below through
+        `just scenario ... backend:=isaac`, and `town01_ego_drive` unchanged with the map
+        loaded.
 - [ ] **S2. Road condition from the scenario** (after 046's protocol v4, D3): SSv2 fork
       (`managed-ego-unforked`) sends `EnvironmentAction`'s environment through a new
       `simulation_api_schema` request (pushed to the fork before the pin moves); the bridge

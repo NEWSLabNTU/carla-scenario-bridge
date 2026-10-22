@@ -34,6 +34,8 @@ pokes each hook while it runs (0.05 s frames of 3 physics steps, as aib's host s
 | Per-wheel material lookup | **yes, free** | at the strip edge the front wheels read `mud` / mu 0.35 while the rears still read `asphalt` / 1.0 (`VEHICLE_WHEEL_STATE_GROUND_MATERIAL`, `_TIRE_FRICTION`) |
 | Change friction while running | **yes, next step** | `PhysxVehicleTireFrictionTable.frictionValues` 1.0 -> 0.6 mid-run: the wheels on that table read 0.6 one frame later |
 | Per-wheel friction override | **yes**, by giving each wheel its own table | left wheels on a second table set to 0.3 read 0.30 / 0.296 while the right wheels read 0.6 |
+| A wheel's friction with no ground materials at all | **yes, next step, 0.05 ms a write** | a table per wheel with an empty `groundMaterials`: `defaultFrictionValue` 1.0 -> 0.3 / 0.6 read back one frame later; four writes 0.18 ms, a frame with four writes every substep no slower than one without (2.2 vs 2.9 ms, noise). Halving it mid-slide halved the deceleration (9.83 -> 5.09 m/s^2) |
+| Change a tire's friction-vs-slip graph while running | **no** | `physxVehicleTire:frictionVsSlipGraph`: "modification not allowed once the simulation has been started. Changes will be ignored." Set before the start it works: a locked slide decelerates 9.83 m/s^2 with the graph ending at 0.8, 6.49 at 0.4 |
 | Soil resistance as a force at the contact | **yes** | `apply_force_at_pos` of 1500 N rearward at each of the four contact points for 1 s, no drive correction: 7.76 -> 4.43 m/s, -3.33 m/s against -3.41 m/s from F/m alone |
 | Sinkage by moving the suspension frame | **no** | `suspensionFramePosition` +5 cm on one wheel, held 3 s: jounce 0.097 -> 0.084, body height unchanged |
 | Ruts by editing a collision mesh's points | **not picked up** | 5 cm ruts written into a 41 x 41-vertex tile (4 x 4 m, 3200 triangles): the wheels' ground hit stays at z 0.0 |
@@ -73,17 +75,70 @@ soil model must return to the wheel has a working channel.
   point-in-zone, then the zone's raster) and writes the table, rather than relying on a
   material bound per mesh. USD physics materials, where used, are generated from the file,
   never authored.
+
+  Every zone field but `id` is optional and falls through to the zone below (zones listed
+  later lie on top), the label's default, then the world's road condition: a puddle zone
+  that sets only `water_depth` keeps the gravel or asphalt under it. A zone with a raster
+  and no polygon covers the raster's extent. A raster is a one-channel PNG (`scale`: metres
+  per count) or a `.npy` of metres, row 0 at the top (+y) edge, `origin` its lower-left
+  corner in the map frame. `just surfaces-check` refuses what the server would (unknown
+  classes or labels, bad ids, self-crossing polygons, rasters without placement) and warns
+  about zones that overlap while setting the same field, or lie off the Lanelet2 map;
+  `just surfaces-plot` draws the zones over the lanes (`csb_isaac.surfaces`).
 - **The friction table holds the class's peak friction** (the survey's table: dry asphalt
   ~0.85, wet 0.5-0.7, gravel ~0.6, dry earth ~0.68, packed snow 0.2, ice 0.1; calibrate,
   do not copy). PhysX already does the per-wheel lookup, so mu-split (one side in a puddle)
   costs nothing.
-- **Each wheel gets its own table** (aib today shares one, `/World/vehicleTireFriction`), so
-  the world server can write a wheel's effective friction every physics step:
-  `mu_eff = mu_class(wetness) * f_hydroplane(v, water_depth)`, blended over about one contact
-  patch at class edges so ABS/TC do not chatter, but kept per wheel.
-- **The slip curve's shape** (`frictionVsSlipGraph`, three points) differs by class: gravel and
-  loose snow flat or rising after the peak (a locked wheel is not worse than ABS there),
-  asphalt falling. It is per tire, so it is written when the wheel's class changes.
+- **Each wheel has its own table** (aib, `<vehicle>/tireFriction/<wheel>`, no ground
+  materials: its `defaultFrictionValue` is the wheel's friction on anything), and the world
+  server writes it after every physics step for the next:
+  `mu = tire_friction * friction_scale * mu_class * wet_class(wetness) * f_hydroplane(v, depth) / mu_reference`.
+  Relative to the reference class (asphalt), so on dry asphalt a wheel keeps the rig's own
+  `tire_friction` and a map of asphalt drives exactly as no map. It follows a change of
+  surface through a first-order filter in distance travelled, `blend_length` (0.2 m, about a
+  contact patch), so a class edge is no step for ABS/TC to chatter on, yet stays per wheel.
+- **The slip curve's shape** differs by class: gravel and loose snow flat or rising after the
+  peak (a locked wheel is not worse than ABS there), asphalt falling. PhysX fixes a tire's
+  `frictionVsSlipGraph` once the simulation runs (measured above), so the class's curve goes
+  through the same friction value: `* class_graph(slip) / vehicle_graph(slip)` on the last
+  step's longitudinal slip. PhysX applies the vehicle's graph on top, so the product is the
+  class's curve, one physics step (17 ms) late.
+- **Water**: a zone's `water_depth` (a number, or a raster) or the wetness's implied film
+  (`wetness_depth` in the class table) picks the wetness level it reaches, and on paved
+  classes (`hydroplaning: true`) a hydroplaning factor: Horne's onset speed for the tire
+  pressure (6.35 sqrt(p kPa) km/h, 100 km/h at 250 kPa), grip falling from half that speed to
+  `residual` (0.1) at it, scaled by how much of the full film (2.5 mm) stands. Engineered, not
+  validated; loose and soft classes soak the water up (their wet factors) instead.
+- **Where the server finds the map**: `surfaces.yaml` in the map directory of a world file
+  the world server was started with (`--world`, `just isaac-world world:=...`), checked
+  before Isaac starts and read again at every `LoadWorld` (an edit needs no restart). csb's
+  `LoadWorld` sends only the USD, which the server maps back; 046's world protocol v4 should
+  carry the map's surfaces itself. A world with no surface map writes nothing.
+
+### Surface layer, measured on a pad (047 S1, 2026-10-23)
+
+`src/csb_isaac/spikes/surface_drive.py`: aib's Model 3 (`ev`, ABS and traction control on)
+through `csb_isaac.surface_layer` -- the world server's own code -- on one flat mesh labelled
+Road, one lane per case, zones from x = 150; full braking demand from 20 m/s inside the zone.
+The class values are the shipped table's literature numbers, so these check directions and
+plumbing, not magnitudes.
+
+| case | stop | decel (from v0 - 1 to 3 m/s) | written mu | |
+|---|---|---|---|---|
+| dry asphalt | 24.7 m | 8.81 m/s^2 | 1.0 (the rig's own) | baseline |
+| dry, ABS off | 25.1 m | 8.63 | 1.0 | ABS shorter on asphalt |
+| wet (`wetWithPuddles`) | 28.4 m | 7.56 | 0.75 | |
+| gravel | 29.8 m | 7.17 | 0.65-0.66 (curve: grip builds with slip) | |
+| gravel, ABS off | 27.9 m | 7.69 | 0.82 front (locked) | locking shorter on gravel |
+| ice | 144.6 m | 1.38 | 0.11-0.12 | |
+| dry braking into wet 10 m on | 27.5 m | ~8.9, then ~7.75 | 1.0 -> 0.75 | |
+| 6 mm water under the left wheels | 27.3 m | 8.04 | left 0.54-0.65, right 1.0 | yaw -5.4 deg, 0.77 m toward the dry side, steering held straight |
+| 10 mm water, from 15 m/s | 20.3 m | 5.90 | 0.55 (`highFlooded`, below onset) | |
+| 10 mm water, from 25 m/s | 65.5 m | 5.45 | 0.24 at 25 m/s, 0.55 slower | hydroplaning |
+| full throttle 3 s on ice | 1.4 m/s reached | | | driven-wheel slip <= 0.18: TC holds |
+
+Cost: the layer's update, four wheels, 21 us p50 / 0.41 ms p99 per physics step (10 k
+steps); a frame of three steps 2.05 ms with it, 2.26 ms without (noise).
 
 ### Soil layer (zones)
 

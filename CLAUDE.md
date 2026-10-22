@@ -62,7 +62,8 @@ just test     # Run tests
 ├── src/csb_agent/          # Agent SDK + agent protocol v1/v2 (030): csb_agent.Agent, Client, main
 ├── src/scenario_agent_relay/  # the relay: concealer ADAPI <-> agents (imports csb_agent.protocol)
 ├── src/csb_isaac/          # Isaac Sim world server (Python, Isaac's venv; `just isaac-world`):
-│                           #   lockstep world, NPCs, contacts, the CARLA vehicle catalogue
+│                           #   lockstep world, NPCs, contacts, the CARLA vehicle catalogue,
+│                           #   the surface layer (047: <map>/surfaces.yaml, per-wheel friction)
 ├── src/autoware_isaac_bridge/  # aib submodule (045): the Isaac ego the world server imports
 │                           #   (PhysX vehicle, sensors, vehicle interface; vehicle spec ->
 │                           #   Autoware vehicle/sensor kit + rig), aib_launch for `just ego-isaac`

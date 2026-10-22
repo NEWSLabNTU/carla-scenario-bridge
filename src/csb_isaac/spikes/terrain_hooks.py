@@ -33,7 +33,7 @@ from omni.physx.bindings._physx import (VEHICLE_WHEEL_STATE_GROUND_HIT_POSITION,
 from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, UsdGeom, UsdPhysics, UsdShade  # noqa: E402
 
 from aib.control import GEAR_DRIVE, Command, State  # noqa: E402
-from aib.isaac.vehicle import FRICTION_TABLE, Vehicle, ensure_vehicle_scene  # noqa: E402
+from aib.isaac.vehicle import Vehicle, ensure_vehicle_scene  # noqa: E402
 from aib.rig import EgoConfig  # noqa: E402
 
 FRAME, SUB = 0.05, 3
@@ -84,9 +84,11 @@ quad_mesh("/World/ground/after", 104, 140, -10, 10, mat=asphalt)
 if not any(pr.IsA(UsdPhysics.Scene) for pr in stage.Traverse()):
     UsdPhysics.Scene.Define(stage, "/World/physicsScene")
 ensure_vehicle_scene(stage)
-table = PhysxSchema.PhysxVehicleTireFrictionTable(stage.GetPrimAtPath(FRICTION_TABLE))
-table.GetGroundMaterialsRel().SetTargets([asphalt.GetPath(), mud.GetPath()])
-table.GetFrictionValuesAttr().Set([1.0, 0.35])
+# The spike's own shared table (aib at 9949e4e had one; it now gives each wheel its own).
+FRICTION_TABLE = "/World/vehicleTireFriction"
+table = PhysxSchema.PhysxVehicleTireFrictionTable.Define(stage, FRICTION_TABLE)
+table.CreateGroundMaterialsRel().SetTargets([asphalt.GetPath(), mud.GetPath()])
+table.CreateFrictionValuesAttr([1.0, 0.35])
 # T3: a second table for the left wheels, identical at first
 left_path = "/World/vehicleTireFrictionLeft"
 left = PhysxSchema.PhysxVehicleTireFrictionTable.Define(stage, left_path)
@@ -99,10 +101,10 @@ cfg = EgoConfig.load(os.environ.get("AIB_EGO") or os.path.join(
 rig = cfg.load_rig()
 pose = ((0.0, 0.0, 0.05), (1.0, 0.0, 0.0, 0.0))
 veh = Vehicle(stage, "/World/ego", rig.vehicle, rig.box_center, rig.box_dims, pose)
-table.GetDefaultFrictionValueAttr().Set(1.0)
-for wp in veh.wheel_paths[0::2]:  # frontLeft, rearLeft
+table.CreateDefaultFrictionValueAttr(1.0)
+for i, wp in enumerate(veh.wheel_paths):  # frontLeft, rearLeft: the left table
     PhysxSchema.PhysxVehicleTireAPI(stage.GetPrimAtPath(wp)).GetFrictionTableRel().SetTargets(
-        [Sdf.Path(left_path)])
+        [Sdf.Path(left_path if i % 2 == 0 else FRICTION_TABLE)])
 world.reset()
 world.play()
 physx = omni.physx.get_physx_interface()

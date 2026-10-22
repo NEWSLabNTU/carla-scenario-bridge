@@ -731,6 +731,42 @@ isaac-world-gen *args:
     if [ -n "$usd" ]; then python -m csb_isaac.usd_world "$map_path" "$usd"
     else python -m csb_isaac.pcd_world "$map_path"; fi
 
+# Usage: just surfaces-check [map_path:=<dir>]
+#
+# Refuses what the world server would refuse (every problem listed), warns about overlapping
+# zones and zones off the Lanelet2 map; docs/design/off-road-surfaces.md has the format.
+# Check a map's surface map, <map>/surfaces.yaml (roadmap 047)
+[positional-arguments]
+surfaces-check *args:
+    @just _surfaces check "$@"
+
+# Usage: just surfaces-plot [map_path:=<dir>] [out:=<png>]
+#
+# Zones (filled by class, hatched where soil), rasters and the label defaults over the
+# Lanelet2 map; default out: <map>/surfaces.png.
+# Plot a map's surface map over its lanes (roadmap 047)
+[positional-arguments]
+surfaces-plot *args:
+    @just _surfaces plot "$@"
+
+[positional-arguments]
+_surfaces command *args:
+    #!/usr/bin/env bash
+    set -e
+    source "{{lib}}"; csb_reject_env
+    command=$1; shift
+    map_path="{{maps_dir}}/{{default_map}}"; out=()
+    for a in "$@"; do
+        case "$a" in
+            map_path:=*) map_path=$(realpath "${a#map_path:=}") ;;
+            out:=*) [ "$command" = plot ] || { echo "surfaces-$command: out:= is plot's" >&2; exit 2; }
+                    out=(-o "$(realpath -m "${a#out:=}")") ;;
+            *) echo "surfaces-$command: unknown argument '$a' (map_path:=$([ "$command" = plot ] && echo ', out:='))" >&2; exit 2 ;;
+        esac
+    done
+    cd "{{justfile_directory()}}/src/csb_isaac"
+    python3 -m csb_isaac.surfaces "$command" "$map_path" "${out[@]}"
+
 # GNOME with 3 static workspaces (Ctrl+Alt+1/2/3), OpenGL on the NVIDIA GPU through
 # VirtualGL (-vgl; scripts/vnc_xstartup.sh). A GL app started from a terminal in the
 # session needs `vglrun` (gnome-terminal does not inherit the preload).

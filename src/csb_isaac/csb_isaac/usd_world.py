@@ -22,14 +22,10 @@ import os
 import sys
 from pathlib import Path
 
-# Wikidata Q-codes SimReady writes for CARLA's semantic classes (CARLA docs, nvidia_simready)
-GROUND_QCODES = {
-    "Q34442",  # Road
-    "Q177749",  # SideWalk
-    "Q1392287",  # RoadLine
-    "Q186131",  # Terrain
-    "Q36133",  # Ground
-}
+from .surfaces import QCODE_LABELS
+
+# Wikidata Q-codes SimReady writes for CARLA's ground classes (CARLA docs, nvidia_simready)
+GROUND_QCODES = set(QCODE_LABELS)
 QCODE_ATTR = "semantics:labels:wikidata_qcode"
 # Where world.py references the world's default prim.
 ENVIRONMENT = "/World/env"

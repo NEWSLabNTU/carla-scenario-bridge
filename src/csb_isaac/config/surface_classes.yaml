@@ -1,0 +1,81 @@
+# Surface classes for the surface layer (roadmap 047; docs/design/off-road-surfaces.md).
+# A map's surfaces.yaml names these by key; `classes:` there may point at another table.
+#
+# Per class:
+#   mu     peak tire-road friction, dry. Written to a wheel relative to `reference`'s:
+#          on dry `reference` a wheel keeps the rig's own tire_friction, so a map whose roads
+#          are all asphalt drives exactly as one with no surface map.
+#   wet    friction factor per OpenSCENARIO wetness (dry is 1.0); a missing level takes the
+#          next drier one's.
+#   slip   friction against longitudinal slip, [[0, f0], [slip at peak, 1], [1, f at lock]]
+#          as PhysX's frictionVsSlipGraph; absent: the vehicle's own curve. PhysX fixes a
+#          tire's graph once it runs, so the server applies the class's curve through the
+#          friction value: class(slip) / vehicle(slip).
+#   hydroplaning  true where standing water lifts the tire (paved, impermeable); loose and
+#          soft ground soaks it instead.
+#
+# The values are the survey's literature table (survey-localized-deformable-terrain.md, wet
+# and loose surfaces), not measurements: calibrate before trusting a number.
+reference: asphalt
+
+# Water film depth (m) a wetness implies where no zone or raster gives one.
+wetness_depth:
+  dry: 0.0
+  moist: 0.0001
+  wetWithPuddles: 0.0005
+  lowFlooded: 0.003
+  highFlooded: 0.010
+
+# Hydroplaning (paved classes): Horne's onset speed for the tire pressure, 6.35 sqrt(p kPa)
+# km/h, scaled by how much of the full film depth stands; grip falls from `onset` x that speed
+# to `residual` at it. An engineering model, unvalidated.
+hydroplaning:
+  tire_pressure_kpa: 250.0
+  onset: 0.5
+  residual: 0.1
+  depth_min: 0.0005
+  depth_full: 0.0025
+
+# Distance over which a wheel's friction follows a change of surface, m: about one contact
+# patch, so a class edge is not a step ABS and traction control chatter on.
+blend_length: 0.2
+
+classes:
+  asphalt:
+    mu: 0.85
+    wet: {moist: 0.9, wetWithPuddles: 0.75, lowFlooded: 0.65, highFlooded: 0.55}
+    hydroplaning: true
+  concrete:
+    mu: 0.8
+    wet: {moist: 0.9, wetWithPuddles: 0.75, lowFlooded: 0.65, highFlooded: 0.55}
+    hydroplaning: true
+  gravel:
+    mu: 0.6
+    wet: {moist: 0.95, wetWithPuddles: 0.9, lowFlooded: 0.85, highFlooded: 0.8}
+    slip: [[0.0, 0.7], [0.3, 1.0], [1.0, 1.0]]
+  dirt:
+    mu: 0.68
+    wet: {moist: 0.85, wetWithPuddles: 0.7, lowFlooded: 0.6, highFlooded: 0.5}
+    slip: [[0.0, 0.8], [0.2, 1.0], [1.0, 0.95]]
+  grass:
+    mu: 0.55
+    wet: {moist: 0.8, wetWithPuddles: 0.6, lowFlooded: 0.5, highFlooded: 0.45}
+    slip: [[0.0, 0.8], [0.15, 1.0], [1.0, 0.85]]
+  sand:
+    mu: 0.5
+    wet: {moist: 1.1, wetWithPuddles: 1.0, lowFlooded: 0.9, highFlooded: 0.8}
+    slip: [[0.0, 0.6], [0.3, 1.0], [1.0, 1.0]]
+  mud_wet:
+    mu: 0.3
+    slip: [[0.0, 0.7], [0.25, 1.0], [1.0, 0.9]]
+  snow_packed:
+    mu: 0.2
+    wet: {moist: 0.8, wetWithPuddles: 0.6}
+    slip: [[0.0, 0.8], [0.15, 1.0], [1.0, 0.9]]
+  snow_loose:
+    mu: 0.25
+    slip: [[0.0, 0.6], [0.3, 1.0], [1.0, 1.05]]
+  ice:
+    mu: 0.1
+    wet: {moist: 0.6, wetWithPuddles: 0.5}
+    slip: [[0.0, 0.8], [0.05, 1.0], [1.0, 0.7]]

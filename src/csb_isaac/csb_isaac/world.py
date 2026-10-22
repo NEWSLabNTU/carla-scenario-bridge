@@ -18,6 +18,9 @@ With an ego config (`--ego`, roadmaps 038, 045) the ego is not a box but aib's e
 with Autoware's sensors and vehicle interface on its own ROS domain. Physics moves it, from
 Autoware's commands, and SSv2 reads its pose back; a pose csb sends for it is a teleport.
 Rendering is then on every frame its sensors need, whatever the request asks.
+
+A world with a surface map (`<map>/surfaces.yaml`, roadmap 047; `surface_layer`) sets each
+ego wheel's friction every substep from the ground under it.
 """
 import contextlib
 import logging
@@ -32,9 +35,10 @@ from isaacsim.core.api import World
 from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics
 
-from . import motion as body_motion, signals as signal_table, vehicle_assets
+from . import motion as body_motion, signals as signal_table, surfaces, vehicle_assets
 from . import walkers as walker_gait
 from .catalogue import check_ego, ego_model, load_ego
+from .surface_layer import SurfaceLayer
 
 log = logging.getLogger("csb_isaac")
 
@@ -94,9 +98,14 @@ def _quat(wxyz):
 
 
 class IsaacWorld:
-    def __init__(self, physics_dt=1 / 60, ego_config=None, ego_domain=None, follow=False):
+    def __init__(self, physics_dt=1 / 60, ego_config=None, ego_domain=None, follow=False,
+                 surface_maps=None):
+        """`surface_maps`: `{usd realpath: (surfaces.yaml, map origin)}`
+        (`surface_layer.register`)."""
         self.isaac_version = _isaac_version()
         self.follow = follow
+        self.surface_maps = dict(surface_maps or {})
+        self.surface = None  # SurfaceLayer of the loaded world, if it has a surface map
         self.ego_config = None
         self.ego_rig = None
         self.ego_ros = None
@@ -196,6 +205,7 @@ class IsaacWorld:
         for handle in list(self.entities):
             self.despawn(handle)
         self.ground_cache.clear()
+        self._load_surfaces(usd)
         plane = self.stage.GetPrimAtPath(GROUND_PLANE)
         if usd and usd == self.loaded_usd and self.stage.GetPrimAtPath(ENVIRONMENT):
             # The same world (preloaded, or the last episode's): keep it, shaders and all.
@@ -218,6 +228,16 @@ class IsaacWorld:
         own = bool(env) and any(p.HasAPI(UsdLux.LightAPI) for p in Usd.PrimRange(env))
         for path in (SUN, SKY):
             self.stage.GetPrimAtPath(path).SetActive(not own)
+
+    def _load_surfaces(self, usd):
+        """The world's surface map, read again at every load (an edit needs no restart)."""
+        self.surface = None
+        entry = self.surface_maps.get(usd)
+        if entry is None:
+            return
+        path, origin = entry
+        self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin)
+        log.info("surface map %s: %d zone(s)", path, len(self.surface.map.zones))
 
     # --- Traffic signals (roadmap 044 B) --------------------------------------------------
 
@@ -656,6 +676,8 @@ class IsaacWorld:
         ego = self.egos.pop(handle, None)
         if ego is not None:
             ego.close()
+            if self.surface is not None:
+                self.surface.forget(ego.path)
         self.reporters.discard(handle)
         self.walking.pop(handle, None)
         if ego is None:
@@ -752,6 +774,8 @@ class IsaacWorld:
         for handle, d in drives.items():
             if handle in self.egos and d.pose is not None:
                 self.egos[handle].teleport(d.pose, self.physx)
+                if self.surface is not None:
+                    self.surface.reset(self.egos[handle].path)
         egos = list(self.egos.values())
         t0 = time.perf_counter()
         for ego in egos:
@@ -765,6 +789,8 @@ class IsaacWorld:
             self.world.step(render=render and s == substeps - 1)
             for ego in egos:
                 ego.after_substep(self.physx, dt)
+                if self.surface is not None:
+                    self.surface.update(ego.vehicle, ego.state.velocity[0], dt)
             self._collect_contacts(touching)
         if self.fresh:  # simulated once: PhysX has them now
             self.fresh.clear()

@@ -11,7 +11,8 @@ A world is a world file (`<map>/isaac/world.yaml`, as csb's `LoadWorld` reads it
 directory (its `isaac/world.yaml`) or a USD file. Several, comma separated, are all loaded and
 rendered once before the server answers (roadmap 043: a town's first render compiles its
 materials, minutes, which a scenario's `LoadWorld` should not have to); the first one listed
-stays loaded.
+stays loaded. A world file's map directory with a `surfaces.yaml` (roadmap 047) gives that
+world its surface map, checked here before Isaac starts.
 """
 import argparse
 import logging
@@ -21,14 +22,21 @@ import sys
 import time
 
 
-def world_usd(entry):
-    """The USD stage a `--world` entry names: a world file's `usd` (relative to its map
-    directory, as csb resolves it), a map directory's `isaac/world.yaml`, or a USD file."""
+def world_file(entry):
+    """The world file a `--world` entry names (a map directory's `isaac/world.yaml`), or
+    None for a USD file."""
     path = os.path.abspath(os.path.expanduser(entry))
     if os.path.isdir(path):
         path = os.path.join(path, "isaac", "world.yaml")
-    if not path.endswith((".yaml", ".yml")):
-        return path
+    return path if path.endswith((".yaml", ".yml")) else None
+
+
+def world_usd(entry):
+    """The USD stage a `--world` entry names: a world file's `usd` (relative to its map
+    directory, as csb resolves it), a map directory's `isaac/world.yaml`, or a USD file."""
+    path = world_file(entry)
+    if path is None:
+        return os.path.abspath(os.path.expanduser(entry))
     import yaml
 
     with open(path) as f:
@@ -75,6 +83,17 @@ def main(argv=None):
     log = logging.getLogger("csb_isaac")
 
     preload = preload_list(args.world)
+    from .surface_layer import register
+    from .surfaces import SurfaceError
+
+    entries = [e.strip() for e in args.world.split(",") if e.strip()]
+    try:
+        # A world's surface map (<map>/surfaces.yaml, roadmap 047), checked before Isaac starts.
+        surface_maps = register([w for w in map(world_file, entries) if w])
+    except SurfaceError as e:
+        raise SystemExit(f"surface map refused:\n{e}") from e
+    for usd, (path, _) in surface_maps.items():
+        log.info("surface map %s for %s", path, usd)
     if args.display:
         os.environ["DISPLAY"] = args.display
     else:
@@ -100,7 +119,7 @@ def main(argv=None):
     from .world import IsaacWorld
 
     world = IsaacWorld(ego_config=args.ego or None, ego_domain=args.ego_domain or None,
-                       follow=bool(args.display and args.follow))
+                       follow=bool(args.display and args.follow), surface_maps=surface_maps)
     # The first listed is preloaded last, so it is the one loaded when csb first asks.
     for usd in reversed(preload):
         world.preload(usd)
