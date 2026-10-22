@@ -61,7 +61,7 @@ borrowed from greybox fuzzing.
 - [034: Bridge Failure Paths](034-bridge-failure-paths.md) — a hung tick (a lost wakeup in CARLA 0.9.16's Traffic Manager) ends in an error, a drain and a restart inside SSv2's timeouts; no TM unless a scenario needs one; a timed-out spawn's late actor adopted, actors looked up by id; then upstream's TM fix backported into carla-rust's prebuilt LibCarla
 - [042: Autoware Fixes Carried as an Overlay](042-autoware-overlay.md) — upstream fixes Autoware 1.5.0 lacks, built one package at a time from the NEWSLabNTU fork at a pinned commit (`just build-autoware-overlay`) and sourced by `just ego-av` by default; first: `blind_spot`'s right-turn ego passage interval (autoware_universe#13509, from 033)
 
-## Simulator backends and Isaac Sim (035-041, 043-045)
+## Simulator backends and Isaac Sim (035-041, 043-046)
 
 SSv2 on more than one simulator, CARLA and Isaac Sim, chosen per run; the repository keeps
 its name ([design/simulator-backends.md](../design/simulator-backends.md)). Driven by a
@@ -77,6 +77,7 @@ sponsor's off-road competition on Isaac Sim (user direction 2026-10-16).
 - [039: Several Autoware Instances on Isaac Sim](039-isaac-multi-autoware.md) — stage 3: one domain per ego, relay-coordinated, ego count per GPU measured; V2X; the gap campaign on Isaac
 - [040: NTU Off-road Test Field](040-ntu-offroad-field.md) — the vendor's NTU mesh as an Isaac world, aligned to our Autoware maps, terrain friction zones, Lanelet2 course
 - [041: Competition Director](041-competition-director.md) — heats, team isolation, scoring from ground truth, Isaac simulation-control services for the operator
+- [046: One World Interface, then the Rename](046-unified-world-interface.md) — every simulator a world server behind one protocol (CARLA moved out of the bridge into `carla_world`, Isaac on the same protocol, one conformance check), proven on both against a baseline; then the project and its packages renamed away from "carla" ([design/simulator-interface-split.md](../design/simulator-interface-split.md))
 
 035 and 036 can run in parallel; 037 needs both. After 038 the order is 043, 044, 039 (user
 direction 2026-10-18); the target stack is [design/isaac-stack.svg](../design/isaac-stack.svg). 040 can start on the import script as soon as

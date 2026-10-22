@@ -4,7 +4,9 @@
 proposal (user direction 2026-10-22: SSv2 and the simulators modular; csb is the CARLA glue,
 a second glue for Isaac Sim, both standalone packages on one interface defined on SSv2's
 side). Builds on [simulator-backends.md](simulator-backends.md) (the seam, roadmap 035) and
-the as-built Isaac stack (037, 038, 043, 044, 045). Nothing here is implemented yet.
+the as-built Isaac stack (037, 038, 043, 044, 045). Nothing here is implemented yet;
+[roadmap 046](../roadmap/046-unified-world-interface.md) implements steps 1-6 inside this
+repository (unify, test on both simulators) and then renames the project.
 
 The first draft of this document described the split as a move of today's modules into
 three packages, with a Rust trait as the simulator interface. Walking a developer through
