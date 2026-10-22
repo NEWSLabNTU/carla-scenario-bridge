@@ -171,7 +171,9 @@ NPCs add a velocity write and a read per NPC per step; measured in the A spike.
 6. [x] **C spike, then C**: CARLA walkers through SimReady, else NVIDIA characters;
    incident 2, `town01_pedestrian`, `UC-AEB-001` (2026-10-22: CARLA's walkers, no fallback;
    all SSv2 PASS; the ego touches `town01_pedestrian`'s walker in 4 of 5, open).
-7. [ ] **F**: exit runs on both backends; 043's CARLA routes.
+7. [x] **F**: exit runs on both backends; 043's CARLA routes (2026-10-22: every scenario
+   passes on Isaac; SSv2 agrees with CARLA everywhere but `UC-ACC-001` on the CenterPoint
+   stack, which CARLA fails by 0.02 m/s^2; Town02-10 PASS on CARLA, the alias works).
 
 ## Step 2: the A spike
 
@@ -514,6 +516,62 @@ side, and the oracle's physical verdict. One backend at a time.
    other towns an ego stack on that town's map), the 043 routes scored for tracking with
    `just acceptance <xosc> 1` as 043 scored them on Isaac. `town10_ego_drive` is the first
    CARLA run through the `Town10: Town10HD` alias.
+
+**Found on the way: despawned entities stayed in the lidar's world.** The first Town01
+batch failed `town01_ego_drive`, `town01_engage_state` and `UC-ACC-001`, all three because
+Autoware stopped for obstacles nobody had spawned: `route-obstacle` stop factors, and
+perceived objects standing exactly where an earlier scenario's entities had ended
+(`town01_rear_contact`'s `npc_rear` at (187.6, -130.3), `UC-ACC-001`'s `Npc1` at (201.4,
+-133.4), `town01_pedestrian`'s `barrier_1` at (120, -129.8)). A fresh world server passed;
+`town01_rear_contact` then `town01_ego_drive` reproduced it. The deleted prims were gone
+from the stage, PhysX overlap queries at those places found only road, and an RGB camera
+did not see them: only the RTX lidar kept them. Fix (`57950ce`, `7eb38b8`): `despawn` makes
+the body kinematic, moves it 1000 m under the world and makes it invisible, and deletes it
+after the next step. After it: `rear_contact` -> `ego_drive`, `pedestrian` -> `ego_drive`
+and `episode_change` -> `ego_drive` all pass. Also fixed: a `LoadWorld` of the world already
+loaded no longer leaves the lamps uncoloured. Steps 3-6 ran each scenario on a server that
+had run others before, so some of their runs carried ghosts too; none of their verdicts
+needed one.
+
+**Results** (2026-10-22, one run each with the final code unless noted; runs under
+`/mnt/wd/aeon/csb-044/runs/`, `s7j-*`/`s7k-*` Isaac, `c7-*` CARLA). Town01 on the demo ego
+stack (CenterPoint, `max_velocity:=11.11`) on both backends; the other towns on the default
+ego stack, as 043 ran them. "Oracle" is the gap oracle's physical verdict.
+
+| Scenario | Isaac SSv2 | Isaac oracle | CARLA SSv2 | CARLA oracle |
+|---|---|---|---|---|
+| `town01_ego_drive` | PASS (+ after `rear_contact`, `pedestrian`, `episode_change`) | agree | PASS (+ after `episode_change`) | agree |
+| `town01_engage_state` | PASS | agree | PASS | agree |
+| `town01_rear_contact` | PASS | agree, 38 contacts | PASS | agree |
+| `town01_traffic_light` | PASS | agree | PASS | agree |
+| `town01_pedestrian` | PASS (6/6 over steps 6-7) | PASS+contact | PASS | PASS+overlap |
+| `town02_episode_change` | PASS | agree | PASS | agree |
+| incident 1-6 | PASS 6/6, judge PASS 6/6 | agree, 0 contacts | PASS 6/6 | agree |
+| `UC-ACC-001` (1 variant) | PASS (s7j; 2/2 in step 3) | agree | **FAIL 0/3** (accel -1.51, -1.50, -1.52 < -1.5); default stack PASS 2/2 | agree (fail_other) |
+| `UC-AEB-001` (1 variant) | PASS (+2/2 step 6) | agree | PASS | agree |
+| `town02/03/05/10_ego_drive` | PASS 4/4 | | PASS 4/4 (`just acceptance`, below) | |
+
+- **`town01_pedestrian`'s contact is the scenario's, not Isaac's**: on CARLA the ego meets
+  the crossing walker at 10 m/s too (5 contacts, frames 418-423, walker at y -130.6 entering
+  the lane), and SSv2 passes it there as well. Step 6's perception reading stands (the
+  walker is `unknown` on the approach) and is no longer an Isaac difference.
+- **`UC-ACC-001` on the CenterPoint stack** is the one disagreement: CARLA's ego brakes
+  0.00-0.02 m/s^2 past the scenario's -1.5 m/s^2 comfort limit in all three runs; on the
+  default stack it passes 2/2 on CARLA, and Isaac passes it on the CenterPoint stack.
+- **043's routes on CARLA** (`just acceptance <xosc> 1`, acb's acceptance.py, default ego
+  stack on the town's map): all PASS, tracking of the order Isaac measured in 043.
+
+| Route | CARLA | longitudinal, m/s^2 | cross-track, m | localization, m | Isaac (043, medians) |
+|---|---|---|---|---|---|
+| `town02_ego_drive` | PASS | 0.003 | 0.153 | 1.25 | 0.017 / 0.01 / 1.35 |
+| `town03_ego_drive` | PASS | 0.027 | 0.088 | 0.89 | 0.025 / 0.01 / 0.95 |
+| `town05_ego_drive` | PASS | 0.012 | 0.150 | 0.73 | 0.028 / 0.03 / 0.71 |
+| `town10_ego_drive` | PASS | 0.020 | 0.153 | 0.65 | 0.031 / 0.04 / 0.42 |
+
+`town10_ego_drive` on CARLA is the first run through the `Town10: Town10HD` alias: csb
+logged `Loading map 'Town10HD' (CARLA currently holds 'Town05')` and `Map 'Town10HD'
+loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside acceptance.py's
+1.0 m.
 
 ## Acceptance
 
