@@ -24,7 +24,7 @@
           entity:=bg_av_1 map_path:=/path/to/Town01 relay:=tcp://sim-host:5560
 
     FLAGS are the play_launch options container-mode isolated, composable-respawn on-crash,
-    web-addr 127.0.0.1:8083
+    web-addr 127.0.0.1:<CSB_WEB_PORT+3> (8083)
     (each with a double-hyphen prefix, which an XML comment cannot contain);
     docs/user-guide.md section 4 says why.
 
@@ -45,6 +45,10 @@
   <arg name="map_path" description="Directory with lanelet2_map.osm and pointcloud_map.pcd" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
+  <arg name="release_notify_endpoint" default="tcp://127.0.0.1:5556"
+       description="carla_scenario_bridge's release PUB socket (ssv2_port + 1)" />
+  <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557"
+       description="carla_scenario_bridge's release PULL socket (ssv2_port + 2)" />
   <arg name="vehicle_model" default="acb_vehicle" />
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
@@ -74,6 +78,8 @@
     <!-- acb_bridge for this vehicle, started by the profile. -->
     <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="release_notify_endpoint" value="$(var release_notify_endpoint)" />
+    <arg name="release_ack_endpoint" value="$(var release_ack_endpoint)" />
     <arg name="vehicle_name" value="$(var vehicle_name)" />
     <arg name="publish_clock" value="true" />
   </include>

@@ -9,12 +9,13 @@
         csb_launch isaac_world.launch.xml [ego:=default|none|<yaml>] \
         [world:=<world>[,<world>...]] [follow:=true] [render:=auto|window|headless]
 
-    FLAGS are the play_launch options web-addr 127.0.0.1:8085 and log-dir play_log/isaac
+    FLAGS are the play_launch options web-addr 127.0.0.1:<CSB_WEB_PORT+5> (8085) and log-dir play_log/isaac
     (each with a double-hyphen prefix, which an XML comment cannot contain); `just isaac-world`
     runs exactly this.
 
   Host settings come from the environment: ISAAC_PORT (REP port on 127.0.0.1, default 5590;
-  `just run` gives csb the same), DISPLAY (Isaac's window, render auto or window),
+  `just run` gives csb the same), EGO_ROS_DOMAIN_ID (the ego's ROS domain, default 1: the ego
+  stack's, over the ego config's), DISPLAY (Isaac's window, render auto or window),
   ISAAC_HEADLESS=1 (render auto: headless with DISPLAY set), ISAAC_ROOT, CYCLONEDDS_URI.
 
   The server answers nothing until every world in world:= is loaded and rendered once (a
@@ -36,5 +37,5 @@
        lets the dead server's GPU memory and port go before the next one claims them. -->
   <node pkg="csb_launch" exec="isaac_world_server" name="isaac_world" output="screen"
         respawn="true" respawn_delay="10.0"
-        args="--port $(env ISAAC_PORT 5590) --ego $(var ego) --world $(var world) --follow $(var follow) --render $(var render)"/>
+        args="--port $(env ISAAC_PORT 5590) --ego $(var ego) --ego-domain $(env EGO_ROS_DOMAIN_ID 1) --world $(var world) --follow $(var follow) --render $(var render)"/>
 </launch>

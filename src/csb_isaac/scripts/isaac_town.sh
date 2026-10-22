@@ -64,8 +64,8 @@ if [ "$force" = true ] || [ ! -f "$usd" ]; then
         source "$1/env.sh"
         # On a host with another GPU the editor enumerates it too, and an AMD iGPU trips
         # an ensure that starts CrashReportClient (which then uploads a report to Epic).
-        # Any ensure does: the -ini: override below turns the editor's unattended crash
-        # reports and usage data off for this run (BaseEditorSettings.ini turns them on).
+        # Any ensure does: the -ini: override below turns off the editor unattended crash
+        # reports and usage data for this run (BaseEditorSettings.ini turns them on).
         export VK_ICD_FILENAMES=${VK_ICD_FILENAMES:-/usr/share/vulkan/icd.d/nvidia_icd.json}
         exec nice -n 15 "$UE4_ROOT/Engine/Binaries/Linux/UE4Editor-Cmd" \
             "$CARLA_ROOT/Unreal/CarlaUE4/CarlaUE4.uproject" -run=SimReadyExport \

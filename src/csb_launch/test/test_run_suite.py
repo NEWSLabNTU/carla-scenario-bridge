@@ -3,6 +3,7 @@
     python3 -m pytest src/csb_launch/test      # or: python3 -m unittest discover src/csb_launch/test
 """
 
+import os
 import importlib.machinery
 import importlib.util
 import json
@@ -171,7 +172,8 @@ class DiscoveryTest(unittest.TestCase):
         # play_launch >= 0.15.1 intercepts nothing without a contract: no --enforce-rules.
         self.assertNotIn("--enforce-rules", cmd)
         if cmd[0] == "play_launch":
-            self.assertEqual(cmd[cmd.index("--web-addr") + 1], "127.0.0.1:8081")
+            base = int(os.environ.get("CSB_WEB_PORT", "8080"))
+            self.assertEqual(cmd[cmd.index("--web-addr") + 1], f"127.0.0.1:{base + 1}")
 
 
 EGO_XOSC = """<OpenSCENARIO><Entities>

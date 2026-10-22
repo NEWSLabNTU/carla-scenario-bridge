@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bring up what a scenario on Isaac Sim needs, reusing whatever already runs (roadmap 043):
-# the world server (`just isaac-world`, web 8085), the simulation side on backend isaac
-# (`just run backend:=isaac`, web 8084) and the ego's Autoware (`just ego-isaac`, web 8082),
+# the world server (`just isaac-world`, web CSB_WEB_PORT+5), the simulation side on backend
+# isaac (`just run backend:=isaac`, +4) and the ego's Autoware (`just ego-isaac`, +2),
 # in that order, each waited for. Run by `just scenario|acceptance|e2e ... backend:=isaac`.
 #
 #   scripts/isaac_up.sh <map dir> [<world>[,<world>...]]
@@ -13,7 +13,7 @@
 # caller can take them down (`just e2e`).
 #
 # Environment, host settings all (from the justfile): ISAAC_PORT, SSV2_PORT, AGENT_PORT,
-# CSB_LOG_ROOT (the stacks' consoles go there; default the repo's play_log), and the waits
+# CSB_WEB_PORT (the stacks' web ports, as the justfile lays them out), CSB_LOG_ROOT (the stacks' consoles go there; default the repo's play_log), and the waits
 # ISAAC_READY_TIMEOUT (s, default 1800: a town's first render on a host compiles its
 # materials, so the budget is the host's) and EGO_READY_TIMEOUT (s, default 1200).
 set -euo pipefail
@@ -26,6 +26,8 @@ mkdir -p "$logs"
 isaac_port="${ISAAC_PORT:-5590}"
 ssv2_port="${SSV2_PORT:-5555}"
 agent_port="${AGENT_PORT:-5560}"
+web_base="${CSB_WEB_PORT:-8080}"
+web_ego=$((web_base + 2)); web_bridge=$((web_base + 4)); web_isaac=$((web_base + 5))
 say() { echo "[isaac-up] $*" >&2; }
 
 # The play_launch serving web port $1, if any: stacks are told apart by their port.
@@ -54,7 +56,7 @@ alive() { kill -0 "$1" 2>/dev/null; }
 if just isaac-health > /dev/null 2>&1; then
     say "world server on $isaac_port is up"
 else
-    if pid=$(stack_on_port 8085); then
+    if pid=$(stack_on_port "$web_isaac"); then
         say "world server launch (pid $pid) is up but not answering yet: waiting"
     else
         world_args=()
@@ -91,9 +93,9 @@ fi
 
 # 2. The simulation side, on backend isaac: ready when the bridge and relay listen.
 listening() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
-if pid=$(stack_on_port 8084); then
+if pid=$(stack_on_port "$web_bridge"); then
     if ! cmdline "$pid" | grep -q "backend:=isaac"; then
-        say "the simulation side on 8084 (pid $pid) is not on backend isaac:"
+        say "the simulation side on $web_bridge (pid $pid) is not on backend isaac:"
         say "  $(cmdline "$pid" | cut -c1-200)"
         say "stop it (kill $pid) and run again, or start it with \`just run backend:=isaac\`"
         exit 1
@@ -116,10 +118,10 @@ done
 
 # 3. The ego's Autoware on Isaac: ready when its play_launch reports startup complete and
 #    the ADAPI answers (`_require-ego-stack`), then its agent registered with the relay.
-if pid=$(stack_on_port 8082); then
+if pid=$(stack_on_port "$web_ego"); then
     line=$(cmdline "$pid")
     if ! grep -q "aib_launch isaac_simulator.launch.xml" <<< "$line"; then
-        say "the ego stack on 8082 (pid $pid) is not the Isaac one (just ego-av?): stop it first"
+        say "the ego stack on $web_ego (pid $pid) is not the Isaac one (just ego-av?): stop it first"
         exit 1
     fi
     case "$line" in

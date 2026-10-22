@@ -20,7 +20,7 @@
           csb_launch ego_av.launch.xml map_path:=/path/to/Town01
 
     FLAGS are the play_launch options container-mode isolated, composable-respawn on-crash,
-    web-addr 127.0.0.1:8082
+    web-addr 127.0.0.1:<CSB_WEB_PORT+2> (8082)
     (each with a double-hyphen prefix, which an XML comment cannot contain);
     docs/user-guide.md section 4 says why.
 
@@ -38,6 +38,10 @@
   <arg name="vehicle_name" default="hero" description="CARLA role_name of the ego vehicle" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
+  <!-- carla_scenario_bridge's sensor-release sockets (ssv2_port + 1, + 2; `just ego-av`
+       derives them from SSV2_PORT). Must match the simulation side's. -->
+  <arg name="release_notify_endpoint" default="tcp://127.0.0.1:5556" />
+  <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557" />
   <arg name="vehicle_model" default="acb_vehicle" />
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
@@ -107,6 +111,8 @@
     <arg name="goal_poses_file" value="$(var goal_poses_file)" />
     <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="release_notify_endpoint" value="$(var release_notify_endpoint)" />
+    <arg name="release_ack_endpoint" value="$(var release_ack_endpoint)" />
     <arg name="vehicle_name" value="$(var vehicle_name)" />
     <arg name="publish_clock" value="$(var publish_clock)" />
     <arg name="report_measured_steering" value="$(var report_measured_steering)" />

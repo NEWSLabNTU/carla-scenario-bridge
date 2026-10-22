@@ -373,10 +373,12 @@ def launch_command(scenario: Path, output: Path, extra: List[str]) -> List[str]:
     ]
     if shutil.which("play_launch"):
         # play_launch >= 0.15.1: defaults as ros2 launch (no interception without a
-        # contract, ament_index package lookup). Web UI on 8081, the scenario stack's port by this project's convention (the
-        # default, 8080, is not reserved for it).
+        # contract, ament_index package lookup). Web UI on CSB_WEB_PORT+1 (8081 by default),
+        # the scenario stack's port by this project's convention (the justfile lays the
+        # stacks out from CSB_WEB_PORT; play_launch's own default, 8080, is the demo's).
+        web_port = int(os.environ.get("CSB_WEB_PORT", "8080")) + 1
         return ["play_launch", "launch",
-                "--web-addr", "127.0.0.1:8081",
+                "--web-addr", f"127.0.0.1:{web_port}",
                 "--log-dir", str(output / "play_log"), *launch_args]
     return ["ros2", "launch", *launch_args]
 

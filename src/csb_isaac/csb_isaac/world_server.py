@@ -66,6 +66,9 @@ def main(argv=None):
                     help="aib ego config (autoware_isaac_bridge's config/ego.yaml): the ego "
                          "is aib's PhysX vehicle driven by Autoware (038, 045); empty: a "
                          "kinematic box (037). aib must be on PYTHONPATH")
+    ap.add_argument("--ego-domain", type=int, default=0,
+                    help="the ego's ROS domain, over the ego config's (the ego stack's "
+                         "ROS_DOMAIN_ID); 0: the config's")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -92,7 +95,8 @@ def main(argv=None):
     from .server import WorldServer, serve
     from .world import IsaacWorld
 
-    world = IsaacWorld(ego_config=args.ego or None, follow=bool(args.display and args.follow))
+    world = IsaacWorld(ego_config=args.ego or None, ego_domain=args.ego_domain or None,
+                       follow=bool(args.display and args.follow))
     # The first listed is preloaded last, so it is the one loaded when csb first asks.
     for usd in reversed(preload):
         world.preload(usd)

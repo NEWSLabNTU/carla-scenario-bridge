@@ -129,7 +129,9 @@ gap_trace_dir: ""
 sensor_release:
   enabled: true
   # Ours to bind. Sensor bridges connect to these; acb takes the same two as ROS
-  # parameters (release_notify_endpoint, release_ack_endpoint).
+  # parameters (release_notify_endpoint, release_ack_endpoint). Left at these defaults
+  # they follow the launch's ssv2_port (+1, +2; `just run` passes SSV2_PORT), as acb's
+  # launch derives them from the same port.
   notify_endpoint: "tcp://127.0.0.1:5556"
   ack_endpoint: "tcp://127.0.0.1:5557"
   # Paid once per despawned entity that nobody acknowledges -- an entity with no sensor

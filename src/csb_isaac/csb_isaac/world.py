@@ -78,7 +78,7 @@ def _quat(wxyz):
 
 
 class IsaacWorld:
-    def __init__(self, physics_dt=1 / 60, ego_config=None, follow=False):
+    def __init__(self, physics_dt=1 / 60, ego_config=None, ego_domain=None, follow=False):
         self.isaac_version = _isaac_version()
         self.follow = follow
         self.ego_config = None
@@ -89,6 +89,10 @@ class IsaacWorld:
 
             # aib's ego config and the rig it names (the vehicle, generated from aib's spec).
             self.ego_config, self.ego_rig = load_ego(ego_config)
+            if ego_domain is not None:
+                # The ego stack's domain wins over the config's: both come from one setting
+                # (EGO_ROS_DOMAIN_ID) so two checkouts on a host do not share a graph.
+                self.ego_config.domain = int(ego_domain)
             for ext in ("isaacsim.sensors.experimental.rtx", "isaacsim.sensors.rtx.nodes"):
                 enable_extension(ext)
             omni.kit.app.get_app().update()

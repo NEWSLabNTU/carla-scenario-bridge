@@ -21,6 +21,8 @@
     <arg name="map_path" value="$(var map_path)" />
     <arg name="carla_host" value="$(var carla_host)" />
     <arg name="carla_port" value="$(var carla_port)" />
+    <arg name="release_notify_endpoint" value="tcp://127.0.0.1:$(eval &quot;$(var ssv2_port) + 1&quot;)" />
+    <arg name="release_ack_endpoint" value="tcp://127.0.0.1:$(eval &quot;$(var ssv2_port) + 2&quot;)" />
   </include>
 
   <include file="$(find-pkg-share csb_launch)/launch/scenario.launch.xml">

@@ -421,7 +421,18 @@ impl BridgeConfig {
             self.carla.port = u16::try_from(port).map_err(|e| eyre::eyre!("carla_port: {e}"))?;
         }
         if let Some(port) = num("ssv2_port")? {
-            self.ssv2.port = u16::try_from(port).map_err(|e| eyre::eyre!("ssv2_port: {e}"))?;
+            let port = u16::try_from(port).map_err(|e| eyre::eyre!("ssv2_port: {e}"))?;
+            self.ssv2.port = port;
+            // The sensor-release channel sits beside the SSv2 port (+1, +2) unless the file
+            // names its own endpoints, so a second bridge on a host needs one setting
+            // (SSV2_PORT) and acb's launch derives the same two from it.
+            let defaults = SensorReleaseConfig::default();
+            if self.sensor_release.notify_endpoint == defaults.notify_endpoint {
+                self.sensor_release.notify_endpoint = format!("tcp://127.0.0.1:{}", port + 1);
+            }
+            if self.sensor_release.ack_endpoint == defaults.ack_endpoint {
+                self.sensor_release.ack_endpoint = format!("tcp://127.0.0.1:{}", port + 2);
+            }
         }
         if let Some(wait) = num("reconnect_wait_seconds")? {
             self.carla.reconnect_wait_seconds = wait;
@@ -668,6 +679,49 @@ mod tests {
         .expect("parses");
         config.apply_ros_params(&params).expect("applies");
         assert_eq!(config.agent_relay(), "tcp://h:1");
+    }
+
+    #[test]
+    fn release_endpoints_follow_the_ssv2_port_unless_the_file_names_them() {
+        let params = |pairs: &[&str]| {
+            let mut args = vec!["--ros-args".to_string()];
+            for p in pairs {
+                args.push("-p".to_string());
+                args.push(p.to_string());
+            }
+            crate::ros_args::RosParams::from_args(args).expect("parses")
+        };
+        let mut config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        config
+            .apply_ros_params(&params(&["ssv2_port:=5565"]))
+            .expect("applies");
+        assert_eq!(config.ssv2.port, 5565);
+        assert_eq!(
+            config.sensor_release.notify_endpoint,
+            "tcp://127.0.0.1:5566"
+        );
+        assert_eq!(config.sensor_release.ack_endpoint, "tcp://127.0.0.1:5567");
+
+        let mut config: BridgeConfig =
+            serde_yaml::from_str("sensor_release:\n  notify_endpoint: tcp://127.0.0.1:7001\n")
+                .expect("parses");
+        config
+            .apply_ros_params(&params(&["ssv2_port:=5565"]))
+            .expect("applies");
+        assert_eq!(
+            config.sensor_release.notify_endpoint,
+            "tcp://127.0.0.1:7001"
+        );
+        assert_eq!(config.sensor_release.ack_endpoint, "tcp://127.0.0.1:5567");
+
+        let mut config: BridgeConfig = serde_yaml::from_str("{}").expect("parses");
+        config
+            .apply_ros_params(&params(&["ssv2_port:="]))
+            .expect("applies");
+        assert_eq!(
+            config.sensor_release.notify_endpoint,
+            "tcp://127.0.0.1:5556"
+        );
     }
 
     #[test]

@@ -19,6 +19,12 @@ ego_domain := env_var_or_default('EGO_ROS_DOMAIN_ID', '1')
 # the scenario reaches vehicles only through the relay's TCP port (`agent_port`).
 scenario_domain := env_var_or_default('SCENARIO_ROS_DOMAIN_ID', '9')
 agent_port := env_var_or_default('AGENT_PORT', '5560')
+# The play_launch web UIs, one port per stack from CSB_WEB_PORT up (a host setting, so two
+# checkouts can run side by side): +0 the demo, +1 the scenario stack, +2 the ego stack,
+# +3 the background AV (bg_av_1), +4 the simulation side (bridge + relay), +5 the Isaac world
+# server; a second background AV takes +6 (`just bg-av bg_av_2 3 <port>`). Recipes compute
+# them as $((CSB_WEB_PORT + n)); scripts/isaac_up.sh and run_suite read the same variable.
+export CSB_WEB_PORT := env_var_or_default('CSB_WEB_PORT', '8080')
 # The Isaac world server's REP port on 127.0.0.1 (`just isaac-world`, and csb's backend:=isaac)
 isaac_port := env_var_or_default('ISAAC_PORT', '5590')
 data_dir := env_var_or_default('DATA_DIR', justfile_directory() + '/data')
@@ -234,8 +240,8 @@ two-av *args: _require-carla
     #   output_directory   where the scenario writes its verdict (default /tmp)
     #
     # Stacks already running are reused and left running: the simulation side (`just run`),
-    # the ego stack (`just ego-av`, web 8082) and the background AV stack (`just bg-av`, web
-    # 8083). Only stacks this recipe starts are stopped at the end.
+    # the ego stack (`just ego-av`, web CSB_WEB_PORT+2) and the background AV stack (`just
+    # bg-av`, web CSB_WEB_PORT+3). Only stacks this recipe starts are stopped at the end.
     scenario_file="{{project}}/src/csb_examples/scenarios/multi_av/town01_two_av.xosc"
     keep_stacks=false; record=false; ego_rviz=(); bg_rviz=(); output_directory=/tmp; n=0
     for a in "$@"; do
@@ -315,8 +321,8 @@ two-av *args: _require-carla
         echo "[two-av] $name stack up at $(date +%T)"
     }
 
-    if stack_on_port 8082 >/dev/null; then
-        echo "[two-av] reusing the running ego stack (web 8082)"
+    if stack_on_port $((CSB_WEB_PORT + 2)) >/dev/null; then
+        echo "[two-av] reusing the running ego stack (web $((CSB_WEB_PORT + 2)))"
     else
         echo "[two-av] starting the ego stack (several minutes)"
         setsid env DISPLAY="$rec_display" \
@@ -325,8 +331,8 @@ two-av *args: _require-carla
         wait_for_stack ego "$ego_pg" || exit 1
     fi
 
-    if stack_on_port 8083 >/dev/null; then
-        echo "[two-av] reusing the running background AV stack (web 8083)"
+    if stack_on_port $((CSB_WEB_PORT + 3)) >/dev/null; then
+        echo "[two-av] reusing the running background AV stack (web $((CSB_WEB_PORT + 3)))"
     else
         echo "[two-av] starting the background AV stack"
         # With record:=true the background AV gets an RViz too, on the same display: two
@@ -400,7 +406,7 @@ demo-tour *args: _require-carla
     #                      the ego stack takes minutes to come up)
     # The windows go to RECORD_DISPLAY, else DISPLAY (host settings); none set: no windows,
     # the tour runs headless. The ego stack is the tour's (max_velocity:=11.11, CenterPoint
-    # with the lidar merger); a running one (web 8082) is reused, so start it with those
+    # with the lidar merger); a running one (web CSB_WEB_PORT+2) is reused, so start it with those
     # arguments. The simulation side is reused or started, and set to ClearNoon either way.
     set -e
     source "{{lib}}"; csb_reject_env
@@ -460,7 +466,7 @@ demo-tour *args: _require-carla
     trap cleanup EXIT INT TERM
 
     # The simulation side, ClearNoon.
-    if ! stack_on_port 8084 > /dev/null; then
+    if ! stack_on_port $((CSB_WEB_PORT + 4)) > /dev/null; then
         echo "[demo-tour] starting the simulation side (just run weather:=ClearNoon)"
         setsid just run weather:=ClearNoon > "$logs/bridge.log" 2>&1 < /dev/null &
         started+=($!)
@@ -474,13 +480,13 @@ demo-tour *args: _require-carla
         || echo "[demo-tour] note: could not set ClearNoon (bridge not answering yet?)"
 
     # The ego stack, the tour's arguments, RViz on the display.
-    if pid=$(stack_on_port 8082); then
+    if pid=$(stack_on_port $((CSB_WEB_PORT + 2))); then
         args=$(tr '\0' ' ' < "/proc/$pid/cmdline")
         case "$args" in *max_velocity:=11.11*) ;; *)
-            echo "[demo-tour] warning: the running ego stack (web 8082) was not started with" \
+            echo "[demo-tour] warning: the running ego stack (web $((CSB_WEB_PORT + 2))) was not started with" \
                  "max_velocity:=11.11 -- the tour is timed for 40 km/h" >&2 ;;
         esac
-        echo "[demo-tour] reusing the running ego stack (web 8082)"
+        echo "[demo-tour] reusing the running ego stack (web $((CSB_WEB_PORT + 2)))"
     else
         echo "[demo-tour] starting the ego stack (several minutes; CenterPoint)"
         rviz_args=(rviz:="$rviz")
@@ -581,7 +587,7 @@ run *args:
     # relay SSv2 cannot see.
     export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
     export ROS_DOMAIN_ID={{scenario_domain}}
-    exec play_launch launch --web-addr 0.0.0.0:8084 \
+    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 4)) \
         --log-dir "$log_dir" \
         csb_launch simulation.launch.xml agent_port:={{agent_port}} \
         carla_host:="${CARLA_HOST:-localhost}" carla_port:={{carla_port}} ssv2_port:={{ssv2_port}} \
@@ -605,12 +611,13 @@ isaac-check:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/csb_isaac/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
 
 # Isaac Sim world server for csb's `backend:=isaac` (roadmaps 037, 038), supervised (043):
-# csb_launch isaac_world.launch.xml under play_launch (web 8085, logs in $CSB_LOG_ROOT/isaac/),
+# csb_launch isaac_world.launch.xml under play_launch (web CSB_WEB_PORT+5, logs in $CSB_LOG_ROOT/isaac/),
 # which respawns it when it dies. Long-lived: start it once, before `just run backend:=isaac`
 # and `just ego-isaac`; `just scenario ... backend:=isaac` starts it when it is not up.
 #
 # Where it runs is environment, set per shell or kept in .env / .envrc:
 #   ISAAC_PORT=5590   REP port on 127.0.0.1 (`just run` hands csb the same port)
+#   EGO_ROS_DOMAIN_ID the ego's ROS domain (1; the same as `just ego-isaac`), over ego.yaml's
 #   DISPLAY=:8        Isaac opens its window there (the VNC display); unset: headless.
 #                     ISAAC_HEADLESS=1 forces headless with DISPLAY set.
 # What it simulates is arguments, name:=value as for a launch file:
@@ -646,12 +653,13 @@ isaac-world *args:
     done
     source /opt/ros/humble/setup.bash
     source "{{project}}/install/setup.bash"
-    export ISAAC_ROOT={{isaac_root}} ISAAC_PORT={{isaac_port}}
+    # The ego's ROS domain is the ego stack's (`just ego-isaac`), not aib's ego.yaml's.
+    export ISAAC_ROOT={{isaac_root}} ISAAC_PORT={{isaac_port}} EGO_ROS_DOMAIN_ID={{ego_domain}}
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     # Built beside this checkout's csb_isaac; a moved checkout points it here again.
     export CSB_ISAAC_DIR="{{project}}/src/csb_isaac"
     log_dir=$(csb_log_dir "{{project}}" isaac)
-    exec play_launch launch --web-addr 0.0.0.0:8085 --log-dir "$log_dir" \
+    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 5)) --log-dir "$log_dir" \
         csb_launch isaac_world.launch.xml "${args[@]}"
 
 # Is the world server up? One Hello round trip on ISAAC_PORT; wait:=SECS retries that long.
@@ -956,6 +964,8 @@ ego-av *args: _require-carla
     # drops the default and is not passed (csb_with_defaults).
     csb_with_defaults launch_args \
         map_path:="{{maps_dir}}/{{default_map}}" vehicle_name:=hero carla_port:={{carla_port}} \
+        release_notify_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 1))" \
+        release_ack_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 2))" \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false seed_localization_on_attach:=false \
         -- "${given[@]}"
     log_dir=$(csb_log_dir "{{project}}" ego)
@@ -969,7 +979,7 @@ ego-av *args: _require-carla
     # container_mode:=observable: on rmw_zenoh_cpp every process is a zenoh peer and the
     # peers mesh, so isolated's ~200 processes cost far more than observable's ~80 (one per
     # container); observable gives up reloading one crashed composable alone.
-    exec play_launch launch --web-addr 0.0.0.0:8082 \
+    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 2)) \
         --container-mode "$container_mode" --composable-respawn on-crash \
         --log-dir "$log_dir" \
         $play_launch_args \
@@ -1023,7 +1033,7 @@ ego-isaac *args:
         relay:="tcp://localhost:{{agent_port}}" rviz:=false \
         -- "${given[@]}"
     log_dir=$(csb_log_dir "{{project}}" ego)
-    exec play_launch launch --web-addr 0.0.0.0:8082 \
+    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 2)) \
         --container-mode "$container_mode" --composable-respawn on-crash \
         --log-dir "$log_dir" \
         $play_launch_args \
@@ -1037,7 +1047,7 @@ ego-isaac *args:
 #
 # Domains start at 2: 9 is the scenario's, 1 the ego's, and 0 is left free so that a stray
 # unconfigured ROS process cannot join a run's graph. A second background AV goes on 3 with
-# its own web port: `just bg-av bg_av_2 3 8086` (8085 is the Isaac world server's).
+# its own web port: `just bg-av bg_av_2 3 $((CSB_WEB_PORT + 6))` (+5 is the Isaac world server's).
 #
 # Up to three positional arguments, then background_av.launch.xml's as name:=value:
 # map_path:=<dir> (default the Town01 map), launch_rviz:=true, rviz_config:=<file>,
@@ -1050,7 +1060,7 @@ bg-av *args: _require-carla
     #!/usr/bin/env bash
     set -e
     source "{{lib}}"; csb_reject_env
-    entity=bg_av_1; domain=2; web_port=8083; autoware_overlay=true; given=(); n=0
+    entity=bg_av_1; domain=2; web_port=$((CSB_WEB_PORT + 3)); autoware_overlay=true; given=(); n=0
     for a in "$@"; do
         case "$a" in
             autoware_overlay:=*) autoware_overlay="${a#*:=}" ;;
@@ -1076,6 +1086,8 @@ bg-av *args: _require-carla
     csb_with_defaults launch_args \
         entity:="$entity" relay:="tcp://localhost:{{agent_port}}" \
         map_path:="{{maps_dir}}/{{default_map}}" carla_port:={{carla_port}} launch_rviz:=false \
+        release_notify_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 1))" \
+        release_ack_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 2))" \
         -- "${given[@]}"
     log_dir=$(csb_log_dir "{{project}}" "bg-$entity")
     exec play_launch launch --web-addr 0.0.0.0:"$web_port" \
@@ -1183,7 +1195,7 @@ scenario scenario_file *args:
     # The scenario file is read, never modified: SSv2's runner preprocesses a copy in its
     # output directory (fork, roadmap 017).
     log_dir=$(csb_log_dir "{{project}}" scenario)
-    exec play_launch launch --web-addr 0.0.0.0:8081 \
+    exec play_launch launch --web-addr 0.0.0.0:$((CSB_WEB_PORT + 1)) \
         --log-dir "$log_dir" \
         csb_launch scenario.launch.xml \
         scenario:="$(realpath "{{scenario_file}}")" \
@@ -1270,7 +1282,7 @@ e2e *args:
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
     export ROS_DOMAIN_ID={{ego_domain}}
     log_dir=$(csb_log_dir "{{project}}" demo)
-    exec play_launch launch --web-addr 0.0.0.0:8080 --log-dir "$log_dir" \
+    exec play_launch launch --web-addr 0.0.0.0:$CSB_WEB_PORT --log-dir "$log_dir" \
         csb_launch demo.launch.xml \
         scenario:="$(realpath "$scenario")" \
         map_path:="$CARLA_MAPS/$map" \
