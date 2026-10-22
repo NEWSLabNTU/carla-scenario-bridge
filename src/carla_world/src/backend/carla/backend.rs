@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::traffic_light_mapper::{carla_state_for_signal, signal_uses_arrows, SignalMap};
-use crate::agent_link::{self, AgentLink, AgentPose};
+use crate::agent_link::{self, AgentLink};
 use crate::autopilot;
 use crate::blueprint_boxes::{self, BoxTable, Dimensions, SizeClass};
 use crate::body_clearance::{self, BodyBox};
@@ -411,26 +411,6 @@ fn jerk_from_acceleration(previous: f64, current: f64, dt: f64) -> f64 {
         return 0.0;
     }
     (current - previous) / dt
-}
-
-/// An SSv2 pose (map frame) as an agent-protocol pose.
-fn agent_pose(pose: &Pose) -> AgentPose {
-    let p = pose.position.unwrap_or_default();
-    let q = pose.orientation.unwrap_or(geometry_msgs::Quaternion {
-        x: 0.0,
-        y: 0.0,
-        z: 0.0,
-        w: 1.0,
-    });
-    AgentPose {
-        x: p.x,
-        y: p.y,
-        z: p.z,
-        qx: q.x,
-        qy: q.y,
-        qz: q.z,
-        qw: q.w,
-    }
 }
 
 /// Spawn height when the ground could not be probed.
@@ -4195,7 +4175,7 @@ impl CarlaBackend {
         self.last_spawn_body = Some(SpawnBody {
             actor_id,
             blueprint: blueprint_key.clone(),
-            blueprint_box: trace_box.clone(),
+            blueprint_box: trace_box,
             origin_offset: [origin_offset.x, origin_offset.y, origin_offset.yaw],
             declared_center: shape.center,
             declared_dimensions: shape
@@ -6760,27 +6740,6 @@ mod tests {
         assert!(agent_role_conflict("hero", "hero").unwrap().contains("ego"));
         assert!(agent_role_conflict("", "hero").is_some());
         assert!(agent_role_conflict("csb_entity:x", "hero").is_some());
-    }
-
-    #[test]
-    fn ssv2_poses_become_agent_poses() {
-        let pose = Pose {
-            position: Some(geometry_msgs::Point {
-                x: 230.0,
-                y: -129.8,
-                z: 0.3,
-            }),
-            orientation: Some(geometry_msgs::Quaternion {
-                x: 0.0,
-                y: 0.0,
-                z: 1.0,
-                w: 0.0,
-            }),
-        };
-        let a = agent_pose(&pose);
-        assert_eq!((a.x, a.y, a.z, a.qz, a.qw), (230.0, -129.8, 0.3, 1.0, 0.0));
-        let a = agent_pose(&Pose::default());
-        assert_eq!(a.qw, 1.0, "a missing orientation is the identity");
     }
 
     #[test]

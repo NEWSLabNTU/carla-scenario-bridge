@@ -127,6 +127,13 @@ impl Deadline {
     }
 }
 
+/// How long the bridge's idle check lets its world server go unanswered before it gives up
+/// and exits for a fresh bridge (roadmap 046). Long enough for a supervised world server to
+/// be respawned (CARLA's after it lost its CARLA, seconds), so a restart there does not
+/// restart the bridge too; the bridge finds the new instance and forgets the old one's
+/// entities.
+pub const WORLD_SERVER_LOST_AFTER: Duration = Duration::from_secs(60);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,10 +210,3 @@ mod tests {
         assert!(worst < SSV2_INITIALIZE_TIMEOUT, "{worst:?}");
     }
 }
-
-/// How long the bridge's idle check lets its world server go unanswered before it gives up
-/// and exits for a fresh bridge (roadmap 046). Long enough for a supervised world server to
-/// be respawned (CARLA's after it lost its CARLA, seconds), so a restart there does not
-/// restart the bridge too; the bridge finds the new instance and forgets the old one's
-/// entities.
-pub const WORLD_SERVER_LOST_AFTER: Duration = Duration::from_secs(60);

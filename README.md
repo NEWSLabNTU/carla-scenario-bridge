@@ -1,11 +1,20 @@
-# carla-scenario-bridge
+# scenario-world-bridge
 
 Run [OpenSCENARIO](https://www.asam.net/standards/detail/openscenario/) scenarios in
-[CARLA](https://carla.org/) with [Autoware](https://autowarefoundation.github.io/autoware-documentation/main/)
-driving on **real sensor data**: CARLA's cameras and lidar feed Autoware's full perception,
+[CARLA](https://carla.org/) or [Isaac Sim](https://developer.nvidia.com/isaac/sim) with
+[Autoware](https://autowarefoundation.github.io/autoware-documentation/main/) driving on
+**real sensor data**: the simulator's cameras and lidar feed Autoware's full perception,
 localization, planning and control, while
 [scenario_simulator_v2](https://github.com/tier4/scenario_simulator_v2) (SSv2) runs the
 scenario and gives the verdict.
+
+Every simulator is a **world server** behind one protocol (`proto/swb_world.proto`): the
+bridge speaks SSv2's protocol on one side and the world protocol on the other, and knows no
+simulator. CARLA's world server (`carla_world`, Rust) and Isaac Sim's (`isaac_world`,
+Python) are two implementations; another simulator is a third, written against the Python
+or Rust server shell and checked with `swb_world_check conformance`
+([design](docs/design/simulator-interface-split.md)). This project was
+carla-scenario-bridge (csb) until roadmap 046.
 
 <p align="center">
   <img src="docs/media/showreel_pedestrian.gif" alt="Autoware in CARLA stops for a crossing pedestrian, then drives on" width="640"><br>

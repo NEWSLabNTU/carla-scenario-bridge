@@ -1822,7 +1822,7 @@ impl SimBackend for RemoteBackend {
             std::mem::take(&mut self.pending).into_values().collect();
         #[cfg(test)]
         {
-            self.sent = poses.iter().map(|p| (p.handle, p.clone())).collect();
+            self.sent = poses.iter().map(|p| (p.handle, *p)).collect();
         }
         let mut server_failure = None;
         let mut read_backs: BTreeMap<u32, wire::ReadBack> = BTreeMap::new();
@@ -1990,7 +1990,7 @@ impl SimBackend for RemoteBackend {
             return Err(unsupported(
                 "UpdateTrafficLights",
                 wire::Capability::Signals,
-                &self.sim().to_string(),
+                self.sim(),
             ));
         }
         // SSv2 sends every signal's state every frame; only changes go to the world server.
