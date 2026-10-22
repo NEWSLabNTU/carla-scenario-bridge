@@ -54,7 +54,7 @@ GROUND_PLANE = "/World/defaultGroundPlane"
 # over the frame's substeps; a body held back by a contact is held by the contact, not this.
 TRACKED_MATERIAL = "/World/Looks/csbTrackedBody"
 TRACKED_FRICTION = float(os.environ.get("CSB_TRACKED_FRICTION", "0.1"))
-# Where a despawned tracked body spends its last step (`despawn`), m.
+# Where a despawned entity spends its last step (`despawn`), m.
 BURY_Z = -1000.0
 # Traffic signals (roadmap 044 B): the lamps' bulbs in a CARLA town's SimReady export, by
 # the colour they show (nested Green -> Yellow -> Red), and the materials their lenses wear.
@@ -159,7 +159,7 @@ class IsaacWorld:
         # Tracked bodies spawned since the last step: not in PhysX until it simulates, so
         # their first drive goes through USD (pose, initial velocity), read at their creation.
         self.fresh = set()
-        self.buried = []  # despawned tracked bodies' paths, deleted after the next step
+        self.buried = []  # despawned entities' paths, deleted after the next step
         self.walking = {}  # handle -> a pedestrian's walker: its cycles, SkelAnimation, gait (044 C)
         self.walker_cycles = {}  # walker id -> its cycles, loaded once
         self.ground_cache = {}  # prim path -> whether it is ground (contacts)
@@ -651,12 +651,14 @@ class IsaacWorld:
             ego.close()
         self.reporters.discard(handle)
         self.walking.pop(handle, None)
-        if handle in self.tracked:
-            # A dynamic body deleted where it stands stays in the RTX lidar's scene, at its
-            # last pose: Autoware saw every despawned tracked NPC as an obstacle for the rest
-            # of the server's life (044 step 7). So it goes kinematic, under the world, for
-            # one step, and is deleted after it (`_bury`).
-            self._to_kinematic(handle, path)
+        if ego is None:
+            # An entity deleted where it stands stays in the RTX lidar's scene at its last
+            # pose (cameras and PhysX queries do not see it): Autoware saw every despawned
+            # NPC and prop as an obstacle for the rest of the world server's life (044 step
+            # 7). So it goes under the world (kinematic, if it was tracked) for one step, and
+            # is deleted after it (`_bury`).
+            if handle in self.tracked:
+                self._to_kinematic(handle, path)
             translate.Set(Gf.Vec3d(0.0, 0.0, BURY_Z))
             UsdGeom.Imageable(self.stage.GetPrimAtPath(path)).MakeInvisible()
             self.buried.append(path)
@@ -665,8 +667,8 @@ class IsaacWorld:
         self.stage.RemovePrim(path)
 
     def _bury(self):
-        """Delete the tracked bodies `despawn` moved under the world, now that a step has
-        moved them there."""
+        """Delete the entities `despawn` moved under the world, now that a step has moved
+        them there."""
         if self.buried:
             self.tracked_view = None
             for path in self.buried:
