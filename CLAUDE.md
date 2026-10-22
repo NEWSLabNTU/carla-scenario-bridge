@@ -95,7 +95,8 @@ the simulation side, +5 the Isaac world server), displays
 (`DISPLAY`, `ISAAC_DISPLAY`, `RECORD_DISPLAY`), install and data paths (`AUTOWARE_SETUP`,
 `ISAAC_ROOT`, `CARLA_SRC`, `CARLA_USD`, `CSB_VEHICLE_USD`, `CARLA_DIR`, `DATA_DIR`,
 `CARLA_MAPS`, `AUTOWARE_TENSORRT_LIB`), the ROS domains
-(`EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`; the Isaac ego's `isaac_vehicle` node follows
+(`EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`, `BG_ROS_DOMAIN_ID` for the first background
+AV; the Isaac ego's `isaac_vehicle` node follows
 `EGO_ROS_DOMAIN_ID` too, over aib's `ego.yaml`) and the ego's RMW (`EGO_RMW_IMPLEMENTATION`),
 the log root and archive (`CSB_LOG_ROOT`, `CSB_LOG_ARCHIVE`), and the Isaac bring-up waits
 (`ISAAC_READY_TIMEOUT`, `EGO_READY_TIMEOUT`). The variables that used to carry project
@@ -105,8 +106,9 @@ naming the argument to pass instead. Do not add new ones.
 
 Two checkouts share a host by moving one checkout's whole set in its `.env`: `CSB_WEB_PORT`,
 `SSV2_PORT` (the bridge's sensor-release sockets follow it at +1 and +2, on both csb's and
-acb's side), `AGENT_PORT`, `EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`. `ISAAC_PORT` and
-`CARLA_PORT` keep the simulators' own defaults (5590, 2000) unless those are taken too.
+acb's side), `AGENT_PORT`, `EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`, `BG_ROS_DOMAIN_ID`. `ISAAC_PORT` and
+`CARLA_PORT` keep the simulators' own defaults (5590, 2000) unless those are taken too; a
+second CARLA also needs its Traffic Manager port moved (`traffic_manager.port`, default 8000).
 
 ### Use just build
 Always use `just build` instead of `colcon build` directly (ensures `--symlink-install`).

@@ -13,12 +13,15 @@ default_map := 'Town01'
 # plain ROS, so `just ego-av` and `just scenario` must agree on this. Domain 0 is left
 # free deliberately -- it is where every unconfigured ROS process on the host lands, and
 # a stray node there joins the scenario's graph without anyone asking. Background AVs
-# (scenario entities with controller `agent`) get 2 and up (see `just bg-av`).
+# (scenario entities with controller `agent`) get BG_ROS_DOMAIN_ID (2) and up (`just bg-av`).
 ego_domain := env_var_or_default('EGO_ROS_DOMAIN_ID', '1')
 # Where SSv2 and the agent relay run (roadmap 017). Separate from every vehicle's domain:
 # the scenario reaches vehicles only through the relay's TCP port (`agent_port`).
 scenario_domain := env_var_or_default('SCENARIO_ROS_DOMAIN_ID', '9')
 agent_port := env_var_or_default('AGENT_PORT', '5560')
+# The first background AV's ROS domain (`just bg-av`, `just two-av`); a second one is passed
+# as `just bg-av <entity> <domain>`. A host setting, so two checkouts keep their AVs apart.
+bg_domain := env_var_or_default('BG_ROS_DOMAIN_ID', '2')
 # The play_launch web UIs, one port per stack from CSB_WEB_PORT up (a host setting, so two
 # checkouts can run side by side): +0 the demo, +1 the scenario stack, +2 the ego stack,
 # +3 the background AV (bg_av_1), +4 the simulation side (bridge + relay), +5 the Isaac world
@@ -260,7 +263,7 @@ two-av *args: _require-carla
     logs=$(csb_log_dir "{{project}}" two-av)
     rec_display="${RECORD_DISPLAY:-${DISPLAY:-:1}}"
     launch_rviz=$([ "$record" = true ] && echo true || echo false)
-    echo "[two-av] scenario domain {{scenario_domain}}, ego domain $ego_dom, background AV domain 2"
+    echo "[two-av] scenario domain {{scenario_domain}}, ego domain $ego_dom, background AV domain {{bg_domain}}"
 
     # The play_launch serving web port $1, if any (stacks are told apart by their port).
     stack_on_port() {
@@ -288,7 +291,8 @@ two-av *args: _require-carla
     trap cleanup EXIT INT TERM
 
     # The simulation side (bridge + relay) is long-lived and not part of any scenario launch.
-    if ! pgrep -x carla_scenario_ >/dev/null 2>&1; then
+    # This checkout's bridge, by its SSv2 port: another checkout's on the host is not ours.
+    if ! ss -lnt | grep -q ":{{ssv2_port}} "; then
         echo "[two-av] no bridge running; starting the simulation side (just run)"
         setsid just run > "$logs/bridge.log" 2>&1 &
         for _ in $(seq 1 120); do
@@ -1045,7 +1049,7 @@ ego-isaac *args:
 # stack's agent registers with the agent relay under that name and takes the scenario's goals.
 # Long-lived, like `just ego-av`, and startable before or after the scenario.
 #
-# Domains start at 2: 9 is the scenario's, 1 the ego's, and 0 is left free so that a stray
+# Domains start at BG_ROS_DOMAIN_ID (2): 9 is the scenario's, 1 the ego's, and 0 is left free so that a stray
 # unconfigured ROS process cannot join a run's graph. A second background AV goes on 3 with
 # its own web port: `just bg-av bg_av_2 3 $((CSB_WEB_PORT + 6))` (+5 is the Isaac world server's).
 #
@@ -1060,7 +1064,7 @@ bg-av *args: _require-carla
     #!/usr/bin/env bash
     set -e
     source "{{lib}}"; csb_reject_env
-    entity=bg_av_1; domain=2; web_port=$((CSB_WEB_PORT + 3)); autoware_overlay=true; given=(); n=0
+    entity=bg_av_1; domain={{bg_domain}}; web_port=$((CSB_WEB_PORT + 3)); autoware_overlay=true; given=(); n=0
     for a in "$@"; do
         case "$a" in
             autoware_overlay:=*) autoware_overlay="${a#*:=}" ;;
