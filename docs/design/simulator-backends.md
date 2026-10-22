@@ -1,5 +1,10 @@
 # Simulator Backends: SSv2 on CARLA and on Isaac Sim
 
+**Superseded in its seam** by [simulator-interface-split.md](simulator-interface-split.md)
+and roadmap 046 (2026-10-22): every simulator is a world server behind the world protocol, the
+bridge has one backend (`RemoteBackend`), and CARLA runs in its own process (`carla_world`).
+The study notes and the Isaac stack below still hold.
+
 **Date**: 2026-10-16. **Status**: design; phases 036 (bring-up), 035 (the seam) and 037
 (world server, `IsaacBackend`) done 2026-10-17, 038 (Autoware drives on Isaac) 2026-10-18. Phases [035](../roadmap/035-backend-seam.md)-[041](../roadmap/041-competition-director.md)
 implement it. Background: [survey-isaac-sim-and-digital-twin.md](survey-isaac-sim-and-digital-twin.md)

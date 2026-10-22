@@ -8,6 +8,12 @@ the as-built Isaac stack (037, 038, 043, 044, 045). Nothing here is implemented 
 [roadmap 046](../roadmap/046-unified-world-interface.md) implements steps 1-6 inside this
 repository (unify, test on both simulators) and then renames the project.
 
+**Implemented** by [roadmap 046](../roadmap/046-unified-world-interface.md) (2026-10-22),
+inside this repository and under the names `scenario-world-bridge` (`swb_`) after its part B.
+Where the build departed from this design (two round trips per frame, who tracks and reads
+back as capabilities, refusal rather than demotion, one config struct read from two files,
+the bridge surviving a world server restart), the phase doc's "As built" says why.
+
 The first draft of this document described the split as a move of today's modules into
 three packages, with a Rust trait as the simulator interface. Walking a developer through
 porting a fourth simulator against that draft (section "A porting walkthrough") showed that
