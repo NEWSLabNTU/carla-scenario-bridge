@@ -578,7 +578,9 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
 1. **`UC-ACC-001` on CARLA, CenterPoint stack** (the demo tour's: CenterPoint, tracker merger
    off): FAIL 0/3, peak deceleration -1.51 / -1.50 / -1.52 m/s^2 against the scenario's -1.5
    limit. The default stack passes 2/2 on CARLA, and Isaac passes on CenterPoint. The only
-   place SSv2's verdict differs between backends. Taken first.
+   place SSv2's verdict differs between backends. Taken first. **Closed (user, 2026-10-22):
+   a known limitation of the CenterPoint stack against this scenario, not a simulator gap;
+   no scenario variant, no Autoware tuning.**
 
    **Finding (2026-10-22): Isaac's pass is not a pass.** On Isaac the ego stops dead the
    moment `Npc1` spawns: 8.32 -> 0.19 m/s in one 50 ms frame, its position continuous
