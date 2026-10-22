@@ -48,11 +48,31 @@ soil model must return to the wheel has a working channel.
 
 ### Surface layer
 
-- **Ground regions carry USD physics materials**, one per surface class
-  (`/World/Materials/<class>`), bound with the `physics` purpose. For a CARLA town the export
-  already has per-material meshes (`physics_layer.py` writes the colliders); the class comes
-  from the mesh's CARLA material (road, sidewalk, terrain, grass). For the off-road field
-  (040) the zones are painted as polygons and cut into their own meshes.
+- **The surface map is `<map>/surfaces.yaml`** (047 D1, decided 2026-10-22), read by the
+  world server at load: semantic-label defaults for the whole town (SimReady labels every
+  ground mesh Road, SideWalk, RoadLine, Terrain or Ground), zones as map-frame polygons with
+  ids and a class, and per zone an optional raster for gradients (a ford's water depth):
+
+  ```yaml
+  classes: config/surface_classes.yaml        # friction, slip shape, soil parameters per class
+  defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass, Ground: dirt}
+  zones:
+    - id: mud_pit
+      class: mud_wet
+      soil: true                              # the soil layer, not only friction
+      polygon: [[120.0, -40.0], [160.0, -40.0], [160.0, -10.0], [120.0, -10.0]]
+    - id: ford_1
+      class: asphalt
+      water_depth: raster/ford_1_depth.png
+      origin: [300.0, 55.0]
+      resolution: 0.25
+  ```
+
+  A zone polygon need not follow mesh boundaries: each wheel has its own friction table, so
+  the server resolves the class per wheel from its ground hit (the hit shape's label, then
+  point-in-zone, then the zone's raster) and writes the table, rather than relying on a
+  material bound per mesh. USD physics materials, where used, are generated from the file,
+  never authored.
 - **The friction table holds the class's peak friction** (the survey's table: dry asphalt
   ~0.85, wet 0.5-0.7, gravel ~0.6, dry earth ~0.68, packed snow 0.2, ice 0.1; calibrate,
   do not copy). PhysX already does the per-wheel lookup, so mu-split (one side in a puddle)
@@ -139,10 +159,8 @@ SSv2 parses `Environment`, `Weather` and `RoadCondition`
 
 ### Proposal: the map says where, the scenario says what state
 
-- **Where** (static, per map): surface classes and soil zones belong to the map, next to the
-  world they describe: `<map>/isaac/world.yaml` gains a `surfaces:` section (class per
-  region, zone polygons with their soil class and parameters). CARLA maps can carry the same
-  from OpenDRIVE lane `<material surface friction roughness>`, which CARLA already parses.
+- **Where** (static, per map): `<map>/surfaces.yaml` (D1, above); both world servers read
+  it, the CARLA one turning zones into friction trigger boxes.
 - **What state** (per scenario, can change mid-run): the standard `RoadCondition`.
   `frictionScaleFactor` and `wetness` apply world-wide (wetness maps to a water depth and a
   friction factor per class); per-zone state rides in `Properties`, named by the map's zone

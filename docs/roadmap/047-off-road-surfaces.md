@@ -69,9 +69,20 @@ friction, force and re-cooked tiles.
 
 Each needs an answer before the step it gates; the design's proposal is in brackets.
 
-- [ ] **D1. Where the surface map lives** (gates S1): per-map `<map>/isaac/world.yaml`
-  `surfaces:` section, classes from the CARLA material of each exported mesh, zones as
-  polygons [proposed]; or a georeferenced raster (0.5-1 m cells) for the off-road field.
+- [x] **D1. Where the surface map lives** (gates S1). **Decided 2026-10-22 (user): a
+  simulator-neutral `<map>/surfaces.yaml` as the source of truth, with raster tiles allowed
+  per zone for gradients** (options B + C of five compared: USD-authored materials, the
+  YAML, raster tiles, Lanelet2 tags, OpenDRIVE `<material>`). The file holds semantic-label
+  defaults for the whole town (Road -> asphalt, Terrain -> grass, ...), zones as map-frame
+  polygons with stable ids and a class (`soil: true` for S3), and per zone an optional raster
+  (water depth, soil variant) with origin and resolution; per-class parameters sit in one
+  shared class table. Why: a CARLA town gets a surface map from its SimReady labels with no
+  painting; zones are reviewable text with the ids D3's scenario properties name; it survives
+  a town re-export; both world servers read it (CARLA: zones as friction trigger boxes).
+  Rejected: USD-authored materials (lost on re-export, unreviewable, Isaac-only), Lanelet2
+  tags (puts Autoware's map at risk, lanes only), OpenDRIVE materials (CARLA-only, lanes
+  only, and CARLA's towns carry none). USD materials become the world server's generated
+  output. Needs a plot of the zones over the map's top view (`just surfaces-plot <map>`).
 - [ ] **D2. Soil model implementation** (gates S3): our own SCM-style node loop in Python/warp
   inside the world server [proposed: Chrono SCM cannot drive a PhysX raycast wheel]; or Chrono
   as a library with its SCM terrain and a per-wheel rigid "tire".
@@ -90,8 +101,8 @@ Each needs an answer before the step it gates; the design's proposal is in brack
 - [x] Survey (above).
 - [x] Isaac spike: which hooks Isaac 6.1 honours (above).
 - [ ] **S1. Surface layer in aib and the world server.** A friction table per wheel in
-      `aib.isaac.vehicle`; USD physics materials per surface class on the exported town
-      meshes (D1); per-class friction and slip-curve shape (gravel flat or rising, asphalt
+      `aib.isaac.vehicle`; `<map>/surfaces.yaml` (D1) loaded by the world server: label
+      defaults, zones, per-zone rasters, a lint and `just surfaces-plot`; per-class friction and slip-curve shape (gravel flat or rising, asphalt
       falling); `mu_eff = mu_class(wetness) * f_hydroplane(v, depth)` written per wheel per
       step, blended over a contact patch at class edges. Measured: per-wheel write cost; the
       ABS/TC scenario set below on one town.
