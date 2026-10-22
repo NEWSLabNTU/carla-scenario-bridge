@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from csb_isaac import protocol as pb  # noqa: E402
-from csb_isaac.server import WorldServer  # noqa: E402
+from csb_isaac.server import Drive, WorldServer  # noqa: E402
 
 
 class FakeWorld:
@@ -29,18 +29,32 @@ class FakeWorld:
         self.loads.append((usd, ground_paths))
         self.bodies.clear()
 
-    def spawn(self, handle, name, kind, subtype, center, dims, pose, model=""):
+    def spawn(self, handle, name, kind, subtype, center, dims, pose, model="", motion="KINEMATIC"):
         self.bodies[handle] = {"name": name, "kind": kind, "pose": pose, "dims": dims,
-                               "model": model}
+                               "model": model, "motion": motion, "twist": None}
 
     def despawn(self, handle):
         del self.bodies[handle]
 
-    def step(self, poses, substeps, dt, render, sim_time):
-        self.steps.append((dict(poses), substeps, dt, render, sim_time))
-        for h, p in poses.items():
-            self.bodies[h]["pose"] = p
-        states = [(h, b["pose"]) for h, b in self.bodies.items()]
+    def step(self, drives, substeps, dt, render, sim_time):
+        self.steps.append((dict(drives), substeps, dt, render, sim_time))
+        for h, d in drives.items():
+            b = self.bodies[h]
+            if d.kinematic:
+                b["motion"] = "KINEMATIC"
+            if b["motion"] == "TRACKED":
+                if d.teleport:
+                    b["pose"] = d.pose
+                if d.twist is not None:
+                    (x, y, z), q = b["pose"]
+                    v = d.twist[0]
+                    t = substeps * dt
+                    b["pose"] = ((x + v[0] * t, y + v[1] * t, z + v[2] * t), q)
+                    b["twist"] = d.twist
+            elif d.pose is not None:
+                b["pose"] = d.pose
+        states = [(h, b["pose"], b["twist"] if b["motion"] == "TRACKED" else None)
+                  for h, b in self.bodies.items()]
         contacts = []
         for h, b in self.bodies.items():
             if b["kind"] != "EGO":
@@ -106,6 +120,35 @@ class ServerTest(unittest.TestCase):
         r = call(self.server, despawn=pb.Despawn(handle=npc))
         self.assertFalse(r.ok)
         self.assertIn("no entity with handle 2", r.error)
+
+    def test_a_tracked_body_takes_twists_teleports_and_the_fallback(self):
+        hello(self.server)
+        call(self.server, load_world=pb.LoadWorld())
+        r = call(self.server, spawn=pb.Spawn(
+            name="npc", kind=pb.KIND["VEHICLE"], box_center=pb.Vec3(x=1.5, z=0.9),
+            box_dimensions=pb.Vec3(x=4.5, y=2.1, z=1.8), motion=pb.MOTION["TRACKED"],
+            pose=pb.make_pose((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))))
+        npc = r.spawn.handle
+        self.assertEqual(self.world.bodies[npc]["motion"], "TRACKED")
+        twist = pb.make_twist((8.0, 0.0, 0.0), (0.0, 0.0, 0.1))
+        r = call(self.server, step=pb.Step(
+            poses=[pb.EntityPose(handle=npc, twist=twist)], substeps=3, dt=1 / 60))
+        self.assertTrue(r.ok, r.error)
+        drive = self.world.steps[-1][0][npc]
+        self.assertEqual(drive, Drive(pose=None, twist=((8.0, 0.0, 0.0), (0.0, 0.0, 0.1))))
+        state = r.step.states[0]
+        self.assertAlmostEqual(state.pose.position.x, 0.4)
+        self.assertEqual(pb.twist_tuple(state.twist), ((8.0, 0.0, 0.0), (0.0, 0.0, 0.1)))
+        r = call(self.server, step=pb.Step(poses=[pb.EntityPose(
+            handle=npc, teleport=True, twist=twist,
+            pose=pb.make_pose((10.0, 1.0, 0.0), (1.0, 0.0, 0.0, 0.0)))], substeps=3, dt=1 / 60))
+        self.assertAlmostEqual(r.step.states[0].pose.position.x, 10.4)
+        r = call(self.server, step=pb.Step(poses=[pb.EntityPose(
+            handle=npc, kinematic=True,
+            pose=pb.make_pose((20.0, 1.0, 0.0), (1.0, 0.0, 0.0, 0.0)))], substeps=3, dt=1 / 60))
+        self.assertEqual(self.world.bodies[npc]["motion"], "KINEMATIC")
+        self.assertAlmostEqual(r.step.states[0].pose.position.x, 20.0)
+        self.assertFalse(r.step.states[0].HasField("twist"))
 
     def test_bad_requests_are_refused_and_the_server_goes_on(self):
         hello(self.server)

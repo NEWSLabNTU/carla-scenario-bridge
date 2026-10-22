@@ -7,11 +7,13 @@
 //! the states of the last step, `UpdateFrame` sends them in one `Step` and keeps the states
 //! and contacts it returns. Nothing advances between requests.
 //!
-//! What this phase has (no Autoware yet, 038 brings the PhysX vehicle): every entity is a
-//! kinematic body with a box collider at the declared box, posed by SSv2 -- the ego too, when
-//! SSv2 drives it along a trajectory (`overwrite_ego_status`), else it stands where it
-//! spawned. Simulator- and agent-driven vehicles, traffic lights, weather and SSv2's sensors
-//! are `Unsupported`: honest failures (roadmap 006).
+//! Every entity is a body with a box collider at the declared box. Scenario vehicles under
+//! `npc_motion: tracked` (the default) are dynamic bodies driven by velocity with the CARLA
+//! backend's tracking law (`tracking.rs`, roadmap 044); the rest are kinematic, posed by SSv2
+//! -- the ego too, when SSv2 drives it along a trajectory (`overwrite_ego_status`), else
+//! Isaac moves it (aib's PhysX vehicle, 038) and SSv2 reads it back. Simulator- and
+//! agent-driven vehicles, weather and SSv2's sensors are `Unsupported`: honest failures
+//! (roadmap 006).
 //!
 //! Frames: Isaac's world frame is right-handed and Z-up like ROS, so a map-frame pose only
 //! loses the map origin (`<map dir>/isaac/world.yaml`) on its way to the server. Poses are at
@@ -34,22 +36,27 @@ use crate::backend::{
     BackendError, Driver, EntityKind, EntityStatus, Episode, Goal, Sensor, SimBackend,
     SpawnRequest, StatusBatch, StatusOutcome,
 };
+use crate::body_clearance::{self, BodyBox};
 use crate::budgets;
-use crate::config::BridgeConfig;
+use crate::config::{BridgeConfig, NpcMotion};
 use crate::contact_report::{self, ContactReport, RawCollision, ReportContact};
 use crate::coordinate_conversion::quaternion_to_euler;
 use crate::entity_manager::EntityType;
 use crate::gap_trace::{self, GapTrace};
 use crate::map_resolver::map_dir_of;
+use crate::npc_tracking::{self, TrackingStats};
 use crate::proto::csb_world as wire;
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::TrafficSignal;
 use crate::proto::traffic_simulator_msgs::{ActionStatus, BoundingBox};
+
+mod tracking;
 use crate::weather::WeatherRequest;
 use crate::world_services::WeatherReply;
+use tracking::{Drive, Tracked};
 
 /// csb's world protocol version; the server's is `csb_isaac/protocol.py`'s.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Physics step the frame is split into, at most: Isaac's default 60 Hz.
 const MAX_PHYSICS_DT: f64 = 1.0 / 60.0;
@@ -220,6 +227,33 @@ fn motion(prev: (&gap_trace::Pose6, &Motion), now: &gap_trace::Pose6, dt: f64) -
     }
 }
 
+/// The motion from a body's own world-frame `twist` at pose `now`, after `prev` over `dt`.
+fn motion_from_twist(
+    prev: &Motion,
+    now: &gap_trace::Pose6,
+    twist: &wire::Twist,
+    dt: f64,
+) -> Motion {
+    let v = twist.linear.unwrap_or_default();
+    let velocity = [v.x, v.y, v.z];
+    let (sin, cos) = now[5].sin_cos();
+    let body = [
+        velocity[0] * cos + velocity[1] * sin,
+        -velocity[0] * sin + velocity[1] * cos,
+    ];
+    let accel = if dt > 0.0 {
+        [(body[0] - prev.body[0]) / dt, (body[1] - prev.body[1]) / dt]
+    } else {
+        prev.accel
+    };
+    Motion {
+        velocity,
+        body,
+        yaw_rate: twist.angular.map_or(0.0, |w| w.z),
+        accel,
+    }
+}
+
 fn action_status(m: &Motion) -> ActionStatus {
     let v = |x, y, z| Some(geometry_msgs::Vector3 { x, y, z });
     ActionStatus {
@@ -244,6 +278,35 @@ struct Entity {
     pose: Pose,
     pose6: gap_trace::Pose6,
     motion: Motion,
+    /// The declared box (centre from the origin, dimensions), for clearances.
+    center: [f64; 3],
+    dims: [f64; 3],
+    /// A tracked body's law state (roadmap 044); `None` for kinematic ones.
+    tracked: Option<Tracked>,
+    /// The last [`ACCEL_SMOOTHING_FRAMES`] raw body-frame accelerations.
+    accel_history: std::collections::VecDeque<[f64; 2]>,
+}
+
+/// Frames the reported acceleration is the median of, as on CARLA (`backend/carla`'s
+/// `ACCEL_SMOOTHING_FRAMES`): a one-frame contact jolt -- the ego shoved by a tracked NPC,
+/// 35 m/s2 in `town01_rear_contact` (044 step 2) -- is discarded, a sustained profile passes.
+const ACCEL_SMOOTHING_FRAMES: usize = 3;
+
+fn median(mut v: Vec<f64>) -> f64 {
+    v.sort_by(f64::total_cmp);
+    match v.len() {
+        0 => 0.0,
+        n if n % 2 == 1 => v[n / 2],
+        n => (v[n / 2 - 1] + v[n / 2]) / 2.0,
+    }
+}
+
+/// The median of each axis over `history`.
+fn smoothed(history: &std::collections::VecDeque<[f64; 2]>) -> [f64; 2] {
+    [
+        median(history.iter().map(|a| a[0]).collect()),
+        median(history.iter().map(|a| a[1]).collect()),
+    ]
 }
 
 /// The ego's contacts over its run, for the contact report (021).
@@ -252,8 +315,11 @@ struct EgoRun {
     name: String,
     episode: u64,
     start_unix: f64,
+    handle: u32,
     /// By other entity handle (0: the environment, then by path), in order of first contact.
     contacts: Vec<(u32, String, ReportContact)>,
+    /// Tracked NPCs' own contacts (032 step 5's `npc_contacts`), by NPC and other, in order.
+    npc_contacts: Vec<(String, u32, String, ReportContact)>,
 }
 
 /// Why a round trip to the world server failed.
@@ -393,8 +459,10 @@ pub struct IsaacBackend {
     entities: BTreeMap<String, Entity>,
     /// Handle to SSv2 name, for contacts.
     names: BTreeMap<u32, String>,
-    /// World-frame poses for the next `Step`, by handle.
-    pending: BTreeMap<u32, wire::Pose>,
+    /// What the next `Step` does with each body, by handle.
+    pending: BTreeMap<u32, wire::EntityPose>,
+    /// Tracking stats of the episode's NPCs already despawned, by name (roadmap 044).
+    tracking_done: BTreeMap<String, TrackingStats>,
     map_origin: [f64; 3],
     /// The world the last `Initialize` loaded, for the shutdown's clearing load.
     world: WorldFile,
@@ -429,6 +497,7 @@ impl IsaacBackend {
             entities: BTreeMap::new(),
             names: BTreeMap::new(),
             pending: BTreeMap::new(),
+            tracking_done: BTreeMap::new(),
             map_origin: [0.0; 3],
             world: WorldFile::default(),
             step_time: 0.05,
@@ -486,6 +555,12 @@ impl IsaacBackend {
         let Some(run) = self.ego_run.take() else {
             return;
         };
+        let tracking = self.tracking_rows();
+        let npc_contacts = run
+            .npc_contacts
+            .into_iter()
+            .map(|(npc, _, _, contact)| contact_report::ReportNpcContact { npc, contact })
+            .collect();
         let contacts: Vec<ReportContact> = run.contacts.into_iter().map(|(_, _, c)| c).collect();
         tracing::info!(
             "Contacts of ego '{}' on Isaac: {} other(s), {} contact frame(s)",
@@ -507,15 +582,69 @@ impl IsaacBackend {
                 complete,
                 contacts,
                 geometry: Vec::new(),
-                tracking: Vec::new(),
-                npc_contacts: Vec::new(),
+                tracking,
+                npc_contacts,
             },
         );
     }
 
-    /// The contacts of one step: into the ego's run and the gap trace.
+    /// Every tracked NPC of the episode: those despawned, then those still here.
+    fn tracking_rows(&self) -> Vec<contact_report::ReportTracking> {
+        let live = self
+            .entities
+            .iter()
+            .filter_map(|(n, e)| e.tracked.as_ref().map(|t| (n, &t.stats)));
+        self.tracking_done
+            .iter()
+            .chain(live)
+            .map(|(name, stats)| {
+                let s = stats.summary();
+                contact_report::ReportTracking {
+                    name: name.clone(),
+                    frames: s.frames,
+                    error_p95: s.error_p95,
+                    error_max: s.error_max,
+                    yaw_p95: s.yaw_p95,
+                    yaw_max: s.yaw_max,
+                    snaps: s.snaps,
+                    missed: s.missed,
+                    fallback: s.fallback,
+                }
+            })
+            .collect()
+    }
+
+    /// One log line per tracked NPC of the episode, as the CARLA backend logs them.
+    fn log_tracking(&self) {
+        for row in self.tracking_rows() {
+            tracing::info!(
+                "Tracked '{}' on Isaac: {} frames, error p95 {:.3} / max {:.3} m, yaw p95 {:.2} \
+                 / max {:.2} deg, {} snap(s){}",
+                row.name,
+                row.frames,
+                row.error_p95,
+                row.error_max,
+                row.yaw_p95.unwrap_or_default(),
+                row.yaw_max.unwrap_or_default(),
+                row.snaps,
+                if row.fallback > 0 {
+                    format!(
+                        ", {} frame(s) kinematic after a blocked fallback",
+                        row.fallback
+                    )
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+
+    /// The contacts of one step: the ego's into its run, tracked NPCs' into theirs (and their
+    /// contact hold), all into the gap trace.
     fn record_contacts(&mut self, contacts: &[wire::Contact]) {
         let mut traced = Vec::new();
+        let ego = self.ego_run.as_ref().map(|r| r.handle);
+        let frame = self.frame;
         for c in contacts {
             let name = (c.other != 0)
                 .then(|| self.names.get(&c.other).cloned())
@@ -528,54 +657,92 @@ impl IsaacBackend {
                     .to_string(),
                 None => c.other_path.clone(),
             };
-            if let Some(run) = self.ego_run.as_mut() {
-                let key_path = if c.other == 0 {
-                    c.other_path.clone()
-                } else {
-                    String::new()
-                };
-                match run
-                    .contacts
-                    .iter_mut()
-                    .find(|(h, p, _)| *h == c.other && *p == key_path)
+            let subject = (Some(c.handle) != ego)
+                .then(|| self.names.get(&c.handle).cloned())
+                .flatten();
+            // The contact hold: a tracked NPC touching the ego, seen from either side.
+            for (npc, other) in [(c.handle, c.other), (c.other, c.handle)] {
+                if Some(other) != ego || npc == 0 {
+                    continue;
+                }
+                if let Some(t) = self
+                    .names
+                    .get(&npc)
+                    .and_then(|n| self.entities.get_mut(n))
+                    .and_then(|e| e.tracked.as_mut())
                 {
-                    Some((_, _, rc)) => {
-                        rc.count += 1;
-                        rc.max_impulse = rc.max_impulse.max(c.impulse);
+                    t.last_ego_contact = Some(frame);
+                }
+            }
+            let key_path = if c.other == 0 {
+                c.other_path.clone()
+            } else {
+                String::new()
+            };
+            let fresh = |count: u64| ReportContact {
+                other_id: (c.other != 0).then_some(c.other),
+                name: name.clone(),
+                other_type: other_type.clone(),
+                is_static: c.other == 0,
+                first_ssv2_frame: frame,
+                first_sim_time: self.sim_time,
+                count,
+                max_impulse: c.impulse,
+            };
+            if let Some(run) = self.ego_run.as_mut() {
+                if Some(c.handle) == ego {
+                    match run
+                        .contacts
+                        .iter_mut()
+                        .find(|(h, p, _)| *h == c.other && *p == key_path)
+                    {
+                        Some((_, _, rc)) => {
+                            rc.count += 1;
+                            rc.max_impulse = rc.max_impulse.max(c.impulse);
+                        }
+                        None => {
+                            tracing::info!(
+                                "Isaac contact: ego '{}' touches {} at frame {frame}",
+                                run.name,
+                                name.as_deref().unwrap_or(&c.other_path),
+                            );
+                            run.contacts.push((c.other, key_path.clone(), fresh(1)));
+                        }
                     }
-                    None => {
-                        tracing::info!(
-                            "Isaac contact: ego '{}' touches {} at frame {}",
-                            run.name,
-                            name.as_deref().unwrap_or(&c.other_path),
-                            self.frame
-                        );
-                        run.contacts.push((
-                            c.other,
-                            key_path,
-                            ReportContact {
-                                other_id: (c.other != 0).then_some(c.other),
-                                name: name.clone(),
-                                other_type: other_type.clone(),
-                                is_static: c.other == 0,
-                                first_ssv2_frame: self.frame,
-                                first_sim_time: self.sim_time,
-                                count: 1,
-                                max_impulse: c.impulse,
-                            },
-                        ));
+                } else if let Some(npc) = subject.as_ref() {
+                    match run
+                        .npc_contacts
+                        .iter_mut()
+                        .find(|(n, h, p, _)| n == npc && *h == c.other && *p == key_path)
+                    {
+                        Some((_, _, _, rc)) => {
+                            rc.count += 1;
+                            rc.max_impulse = rc.max_impulse.max(c.impulse);
+                        }
+                        None => {
+                            tracing::info!(
+                                "Isaac contact: NPC '{npc}' touches {} at frame {frame}",
+                                name.as_deref().unwrap_or(&c.other_path),
+                            );
+                            run.npc_contacts.push((
+                                npc.clone(),
+                                c.other,
+                                key_path.clone(),
+                                fresh(1),
+                            ));
+                        }
                     }
                 }
             }
             traced.push((
                 RawCollision {
-                    ssv2_frame: self.frame,
+                    ssv2_frame: frame,
                     carla_frame: self.server_frame,
                     sim_time: self.sim_time,
                     other_id: (c.other != 0).then_some(c.other),
                     other_type,
                     impulse: c.impulse,
-                    subject: None,
+                    subject,
                 },
                 name,
             ));
@@ -583,6 +750,134 @@ impl IsaacBackend {
         if self.gap_trace.recording() {
             self.gap_trace.contacts(traced);
         }
+    }
+
+    /// The smallest box-to-box clearance from `name` to any other entity, m.
+    fn clearance(&self, name: &str) -> Option<f64> {
+        let place = |e: &Entity| {
+            BodyBox {
+                offset_x: e.center[0],
+                offset_y: e.center[1],
+                half_length: e.dims[0] / 2.0,
+                half_width: e.dims[1] / 2.0,
+            }
+            .at(e.pose6[0], e.pose6[1], e.pose6[5].to_degrees())
+        };
+        let subject = place(self.entities.get(name)?);
+        body_clearance::min_clearance(
+            &subject,
+            self.entities
+                .iter()
+                .filter(|(n, _)| n.as_str() != name)
+                .map(|(_, e)| place(e)),
+        )
+    }
+
+    /// One frame of the tracked NPC `name` (roadmap 044): SSv2's map-frame `pose` and its
+    /// twist (`None` while held) into the next step's drive. Returns the gap trace's
+    /// `(contact_hold, kinematic)` flags.
+    fn track(&mut self, name: &str, pose: &Pose, twist: Option<(f64, f64, f64)>) -> (bool, bool) {
+        let clearance = self.clearance(name);
+        let origin = self.map_origin;
+        let frame = self.frame + 1;
+        let dt = self.step_time;
+        let Some(entity) = self.entities.get_mut(name) else {
+            return (false, false);
+        };
+        let world = to_world(pose, origin);
+        let target6 = pose6(&to_map(&world, [0.0; 3]));
+        let frame_in = tracking::Frame {
+            target: tracking::TargetPose {
+                x: target6[0],
+                y: target6[1],
+                z: target6[2],
+                roll_deg: target6[3].to_degrees(),
+                pitch_deg: target6[4].to_degrees(),
+                yaw_deg: target6[5].to_degrees(),
+            },
+            twist,
+            body: tracking::BodyPose {
+                x: entity.pose6[0] - origin[0],
+                y: entity.pose6[1] - origin[1],
+                yaw_deg: entity.pose6[5].to_degrees(),
+            },
+            clearance,
+            frame,
+            dt,
+        };
+        let handle = entity.handle;
+        let Some(t) = entity.tracked.as_mut() else {
+            return (false, false);
+        };
+        let o = tracking::track(t, &frame_in);
+        let v3 = |a: [f64; 3]| {
+            Some(wire::Vec3 {
+                x: a[0],
+                y: a[1],
+                z: a[2],
+            })
+        };
+        let twist_of = |linear: [f64; 3], yaw_rate: f64| {
+            Some(wire::Twist {
+                linear: v3(linear),
+                angular: v3([0.0, 0.0, yaw_rate]),
+            })
+        };
+        let entity_pose = match o.drive {
+            Drive::Twist { linear, yaw_rate } => wire::EntityPose {
+                handle,
+                twist: twist_of(linear, yaw_rate),
+                ..Default::default()
+            },
+            Drive::Teleport {
+                pose: p,
+                linear,
+                yaw_rate,
+            } => {
+                tracing::debug!(
+                    "Snap '{name}' on Isaac: error {:.2} m, yaw error {:.1} deg",
+                    o.error,
+                    o.yaw_error
+                );
+                let q = crate::coordinate_conversion::euler_to_quaternion(
+                    p.roll_deg.to_radians(),
+                    p.pitch_deg.to_radians(),
+                    p.yaw_deg.to_radians(),
+                );
+                wire::EntityPose {
+                    handle,
+                    pose: Some(wire::Pose {
+                        position: v3([p.x, p.y, p.z]),
+                        orientation: Some(wire::Quat {
+                            x: q.0,
+                            y: q.1,
+                            z: q.2,
+                            w: q.3,
+                        }),
+                    }),
+                    twist: twist_of(linear, yaw_rate),
+                    teleport: true,
+                    kinematic: false,
+                }
+            }
+            Drive::Kinematic => {
+                tracing::warn!(
+                    "Tracking '{name}' on Isaac: blocked -- {:.2} m off -- so not snapped into \
+                     what holds it: kinematic for the rest of the episode (SSv2's pose every \
+                     frame)",
+                    o.error
+                );
+                wire::EntityPose {
+                    handle,
+                    pose: Some(world),
+                    kinematic: true,
+                    ..Default::default()
+                }
+            }
+        };
+        let kinematic = t.kinematic;
+        self.pending.insert(handle, entity_pose);
+        (o.held, kinematic)
     }
 
     fn handle_of(&self, name: &str) -> Option<u32> {
@@ -618,6 +913,10 @@ impl SimBackend for IsaacBackend {
             episode.lanelet2_map_path
         );
         self.finish_ego_run(true);
+        if !self.entities.is_empty() {
+            self.log_tracking();
+        }
+        self.tracking_done.clear();
         if episode.lanelet2_map_path.is_empty() {
             return Err(BackendError::Failed(
                 "Initialize supplied no lanelet2_map_path, so the Isaac world cannot be chosen"
@@ -657,8 +956,12 @@ impl SimBackend for IsaacBackend {
         self.set_step_time(episode.step_time);
         self.frame = 0;
         self.episode += 1;
+        let motion = match self.config.npc_motion {
+            NpcMotion::Tracked => "tracked",
+            NpcMotion::Kinematic => "kinematic",
+        };
         self.gap_trace
-            .begin_episode(self.episode, "kinematic", contact_report::now_unix());
+            .begin_episode(self.episode, motion, contact_report::now_unix());
         tracing::info!(
             "Initialized on Isaac (step {} s = {} physics step(s) of {:.6} s)",
             self.step_time,
@@ -674,13 +977,7 @@ impl SimBackend for IsaacBackend {
             self.gap_trace
                 .frame_time(self.frame, current_simulation_time);
         }
-        let poses = std::mem::take(&mut self.pending)
-            .into_iter()
-            .map(|(handle, pose)| wire::EntityPose {
-                handle,
-                pose: Some(pose),
-            })
-            .collect();
+        let poses = std::mem::take(&mut self.pending).into_values().collect();
         let started = Instant::now();
         let reply = self.call(
             "Step",
@@ -717,9 +1014,26 @@ impl SimBackend for IsaacBackend {
             };
             let pose = to_map(pose, origin);
             let now = pose6(&pose);
-            entity.motion = motion((&entity.pose6, &entity.motion), &now, dt);
+            entity.motion = match state.twist.as_ref() {
+                // The body's own velocity, where the server has it (tracked bodies, the ego
+                // vehicle): a velocity step shows in one frame, not smeared over two by
+                // differencing poses, so a one-frame jolt is one frame for the median.
+                Some(t) => motion_from_twist(&entity.motion, &now, t, dt),
+                None => motion((&entity.pose6, &entity.motion), &now, dt),
+            };
+            entity.accel_history.push_back(entity.motion.accel);
+            if entity.accel_history.len() > ACCEL_SMOOTHING_FRAMES {
+                entity.accel_history.pop_front();
+            }
+            entity.motion.accel = smoothed(&entity.accel_history);
             entity.pose = pose;
             entity.pose6 = now;
+            if let (Some(t), Some(v)) = (
+                entity.tracked.as_mut(),
+                state.twist.as_ref().and_then(|t| t.linear),
+            ) {
+                t.velocity = [v.x, v.y, v.z];
+            }
         }
         self.record_contacts(&step.contacts);
         if self.gap_trace.recording() {
@@ -800,6 +1114,22 @@ impl SimBackend for IsaacBackend {
             }
         }
         let (center, dims) = entity_box(req.bounding_box.as_ref(), kind);
+        // Scenario vehicles are tracked dynamic bodies under `npc_motion: tracked` (044).
+        let tracked = match (&req.kind, self.config.npc_motion) {
+            (
+                EntityKind::Vehicle {
+                    driver: Driver::Scenario,
+                    axles,
+                    performance,
+                    ..
+                },
+                NpcMotion::Tracked,
+            ) => Some(Tracked::new(
+                *performance,
+                axles.and_then(|(front, rear)| npc_tracking::steering(front, rear, 70.0)),
+            )),
+            _ => None,
+        };
         // The body's look: the CARLA blueprint the CARLA backend would spawn for the asset key
         // (`blueprint_map` first, else the key itself); vehicles only.
         let model = match entity_type {
@@ -836,6 +1166,11 @@ impl SimBackend for IsaacBackend {
                 box_dimensions: v3(dims),
                 pose: Some(to_world(&pose, self.map_origin)),
                 model,
+                motion: if tracked.is_some() {
+                    wire::Motion::Tracked
+                } else {
+                    wire::Motion::Kinematic
+                } as i32,
             }),
             // An ego brings its vehicle and sensors (038): the world server warms the sensors
             // up before it answers, seconds on a loaded host.
@@ -862,6 +1197,10 @@ impl SimBackend for IsaacBackend {
                 pose,
                 pose6: p6,
                 motion: Motion::default(),
+                center,
+                dims,
+                tracked,
+                accel_history: Default::default(),
             },
         );
         self.names.insert(handle, name.clone());
@@ -890,15 +1229,22 @@ impl SimBackend for IsaacBackend {
                 name: name.clone(),
                 episode: self.episode,
                 start_unix: contact_report::now_unix(),
+                handle,
                 contacts: Vec::new(),
+                npc_contacts: Vec::new(),
             });
         }
         tracing::info!(
-            "Spawned {} '{name}' on Isaac (handle {handle}, box {:.2} x {:.2} x {:.2} m)",
+            "Spawned {} '{name}' on Isaac (handle {handle}, box {:.2} x {:.2} x {:.2} m{})",
             kind_name(entity_type),
             dims[0],
             dims[1],
-            dims[2]
+            dims[2],
+            if self.entities[&name].tracked.is_some() {
+                ", tracked"
+            } else {
+                ""
+            }
         );
         Ok(())
     }
@@ -915,13 +1261,19 @@ impl SimBackend for IsaacBackend {
         let entity = self.entities.remove(name).expect("looked up above");
         self.names.remove(&handle);
         self.pending.remove(&handle);
+        if let Some(t) = entity.tracked {
+            self.tracking_done.insert(name.to_string(), t.stats);
+        }
         if entity.entity_type == EntityType::Ego {
             self.finish_ego_run(true);
         }
         tracing::info!("Despawned '{name}' on Isaac (handle {handle})");
-        if self.entities.is_empty() && self.gap_trace.recording() {
-            // SSv2 despawns every entity when a scenario ends (as on CARLA).
-            self.gap_trace.end_episode();
+        if self.entities.is_empty() {
+            self.log_tracking();
+            if self.gap_trace.recording() {
+                // SSv2 despawns every entity when a scenario ends (as on CARLA).
+                self.gap_trace.end_episode();
+            }
         }
         Ok(())
     }
@@ -936,28 +1288,66 @@ impl SimBackend for IsaacBackend {
                 unknown.push(format!("'{}'", status.name));
                 continue;
             };
+            let handle = entity.handle;
             let read_back = entity.entity_type == EntityType::Ego && !batch.overwrite_ego_status;
+            let tracking = entity.tracked.as_ref().is_some_and(|t| !t.kinematic);
+            let mut flags = (false, entity.tracked.as_ref().is_some_and(|t| t.kinematic));
             let reported = if read_back {
-                // Isaac moves it (here: it stands where it is); SSv2 adopts the pose.
+                // Isaac moves it (aib's vehicle); SSv2 adopts the pose.
                 EntityStatus {
                     name: status.name.clone(),
                     action_status: Some(action_status(&entity.motion)),
                     pose: Some(entity.pose),
                 }
+            } else if tracking {
+                // A tracked body (044): the law turns SSv2's pose into a velocity (or a snap,
+                // or the fallback), SSv2's status is echoed as on CARLA.
+                if let Some(pose) = status.pose.as_ref() {
+                    // SSv2 holds its NPCs still until their logic starts, while the twist
+                    // already carries their Init speed: no motion until then.
+                    let twist = status
+                        .action_status
+                        .as_ref()
+                        .filter(|_| batch.npc_logic_started)
+                        .and_then(|a| a.twist.as_ref())
+                        .map(|t| {
+                            let l = t.linear.unwrap_or_default();
+                            (l.x, l.y, t.angular.map_or(0.0, |a| a.z))
+                        });
+                    let flags_now = self.track(&status.name, pose, twist);
+                    flags = flags_now;
+                }
+                status.clone()
             } else {
                 // SSv2 moves it: the pose goes to the next step, SSv2's status is echoed.
                 if let Some(pose) = status.pose.as_ref() {
-                    self.pending.insert(entity.handle, to_world(pose, origin));
+                    if entity.tracked.as_ref().is_some_and(|t| t.kinematic) {
+                        if let Some(t) = self
+                            .entities
+                            .get_mut(&status.name)
+                            .and_then(|e| e.tracked.as_mut())
+                        {
+                            t.stats.record_fallback();
+                        }
+                    }
+                    self.pending.insert(
+                        handle,
+                        wire::EntityPose {
+                            handle,
+                            pose: Some(to_world(pose, origin)),
+                            ..Default::default()
+                        },
+                    );
                 }
                 status.clone()
             };
             if let Some(pose) = reported.pose.as_ref() {
                 staged.push(gap_trace::StagedEntity {
                     name: status.name.clone(),
-                    actor_id: entity.handle,
+                    actor_id: handle,
                     ssv2: pose6(pose),
-                    contact_hold: false,
-                    kinematic: false,
+                    contact_hold: flags.0,
+                    kinematic: flags.1,
                 });
             }
             out.push(reported);

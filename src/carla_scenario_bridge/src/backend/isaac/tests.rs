@@ -20,7 +20,9 @@ fn ok(reply: Option<wire::reply::Reply>) -> wire::Reply {
 /// A server that behaves as the real one does, as far as the backend can tell.
 fn honest() -> Behaviour {
     let mut next = 1u32;
+    // handle -> (pose, ego, tracked velocity: Some for a tracked body)
     let mut bodies: HashMap<u32, (wire::Pose, bool)> = HashMap::new();
+    let mut velocity: HashMap<u32, [f64; 3]> = HashMap::new();
     let mut time = 0.0;
     let mut frame = 0u64;
     Box::new(move |req| {
@@ -38,19 +40,39 @@ fn honest() -> Behaviour {
                 let h = next;
                 next += 1;
                 bodies.insert(h, (s.pose.unwrap(), s.kind == wire::Kind::Ego as i32));
+                if s.motion == wire::Motion::Tracked as i32 {
+                    velocity.insert(h, [0.0; 3]);
+                }
                 ok(Some(wire::reply::Reply::Spawn(wire::SpawnReply {
                     handle: h,
                 })))
             }
             R::Despawn(d) => {
                 bodies.remove(&d.handle);
+                velocity.remove(&d.handle);
                 ok(None)
             }
             R::Step(s) => {
+                let span = s.substeps as f64 * s.dt;
                 for p in s.poses {
-                    bodies.get_mut(&p.handle).unwrap().0 = p.pose.unwrap();
+                    if p.kinematic {
+                        velocity.remove(&p.handle);
+                    }
+                    let tracked = velocity.contains_key(&p.handle);
+                    let body = bodies.get_mut(&p.handle).unwrap();
+                    if !tracked || p.teleport {
+                        body.0 = p.pose.unwrap();
+                    }
+                    if let (true, Some(t)) = (tracked, p.twist) {
+                        // A tracked body moves at the velocity it is given, exactly.
+                        let v = t.linear.unwrap();
+                        let pos = body.0.position.as_mut().unwrap();
+                        pos.x += v.x * span;
+                        pos.y += v.y * span;
+                        velocity.insert(p.handle, [v.x, v.y, v.z]);
+                    }
                 }
-                time += s.substeps as f64 * s.dt;
+                time += span;
                 frame += 1;
                 let x = |p: &wire::Pose| p.position.unwrap().x;
                 let mut contacts = Vec::new();
@@ -74,6 +96,14 @@ fn honest() -> Behaviour {
                         .map(|(h, (p, _))| wire::EntityState {
                             handle: *h,
                             pose: Some(*p),
+                            twist: velocity.get(h).map(|v| wire::Twist {
+                                linear: Some(wire::Vec3 {
+                                    x: v[0],
+                                    y: v[1],
+                                    z: v[2],
+                                }),
+                                angular: Some(wire::Vec3::default()),
+                            }),
                         })
                         .collect(),
                     contacts,
@@ -109,8 +139,16 @@ fn server(mut behaviour: Behaviour) -> String {
     endpoint
 }
 
+/// A backend whose NPCs are kinematic (037's every entity), posed by SSv2.
 fn backend(endpoint: &str) -> IsaacBackend {
-    let mut config = BridgeConfig::default();
+    backend_with(endpoint, NpcMotion::Kinematic)
+}
+
+fn backend_with(endpoint: &str, motion: NpcMotion) -> IsaacBackend {
+    let mut config = BridgeConfig {
+        npc_motion: motion,
+        ..Default::default()
+    };
     config.isaac.endpoint = endpoint.to_string();
     config.isaac.request_timeout_seconds = 1;
     config.contact_report_dir = Some(contact_report::OFF.to_string());
@@ -364,4 +402,132 @@ fn an_absent_box_is_the_kinds_default() {
         entity_box(Some(&flat), wire::Kind::MiscObject),
         default_box(wire::Kind::MiscObject)
     );
+}
+
+fn moving(name: &str, x: f64, speed: f64) -> EntityStatus {
+    use crate::proto::geometry_msgs::{Twist, Vector3};
+    EntityStatus {
+        name: name.into(),
+        action_status: Some(ActionStatus {
+            twist: Some(Twist {
+                linear: Some(Vector3 {
+                    x: speed,
+                    y: 0.0,
+                    z: 0.0,
+                }),
+                angular: Some(Vector3::default()),
+            }),
+            ..Default::default()
+        }),
+        pose: Some(pose(x, 0.0)),
+    }
+}
+
+#[test]
+fn a_tracked_npc_is_driven_by_velocity_and_follows_ssv2() {
+    let mut b = backend_with(&server(honest()), NpcMotion::Tracked);
+    b.initialize(&episode()).unwrap();
+    b.spawn(&vehicle("npc", Driver::Scenario, 0.0)).unwrap();
+    assert!(b.entities["npc"].tracked.is_some());
+    // SSv2 drives it along x at 8 m/s; the stand-in moves it at the velocity it is given.
+    for frame in 1..=40u32 {
+        let x = 8.0 * 0.05 * f64::from(frame);
+        let out = b.update_entity_status(StatusBatch {
+            entities: vec![moving("npc", x, 8.0)],
+            npc_logic_started: true,
+            overwrite_ego_status: false,
+        });
+        assert_eq!(out.failure, None);
+        // SSv2's status is echoed, not the body's.
+        assert_eq!(out.entities[0].pose.unwrap().position.unwrap().x, x);
+        let sent = &b.pending[&b.entities["npc"].handle];
+        assert!(sent.twist.is_some() && !sent.kinematic);
+        b.update_frame(0.05 * f64::from(frame)).unwrap();
+        let body = b.entities["npc"].pose.position.unwrap().x;
+        assert!(
+            (body - x).abs() < 1e-6,
+            "frame {frame}: body {body}, SSv2 {x}"
+        );
+    }
+    let s = b.entities["npc"].tracked.as_ref().unwrap().stats.summary();
+    assert_eq!((s.frames, s.snaps, s.fallback), (40, 0, 0));
+    assert!(s.error_max < 1e-6, "{s:?}");
+}
+
+#[test]
+fn a_tracked_npc_far_off_is_teleported() {
+    let mut b = backend_with(&server(honest()), NpcMotion::Tracked);
+    b.initialize(&episode()).unwrap();
+    b.spawn(&vehicle("npc", Driver::Scenario, 0.0)).unwrap();
+    b.update_entity_status(StatusBatch {
+        entities: vec![moving("npc", 5.0, 0.0)],
+        npc_logic_started: true,
+        overwrite_ego_status: false,
+    });
+    let sent = &b.pending[&b.entities["npc"].handle];
+    assert!(sent.teleport);
+    assert_eq!(sent.pose.unwrap().position.unwrap().x, 5.0);
+    b.update_frame(0.05).unwrap();
+    assert_eq!(b.entities["npc"].pose.position.unwrap().x, 5.0);
+}
+
+#[test]
+fn kinematic_npc_motion_keeps_037s_posed_bodies() {
+    let mut b = backend(&server(honest()));
+    b.initialize(&episode()).unwrap();
+    b.spawn(&vehicle("npc", Driver::Scenario, 0.0)).unwrap();
+    assert!(b.entities["npc"].tracked.is_none());
+    b.update_entity_status(StatusBatch {
+        entities: vec![moving("npc", 0.4, 8.0)],
+        npc_logic_started: true,
+        overwrite_ego_status: false,
+    });
+    let sent = &b.pending[&b.entities["npc"].handle];
+    assert!(sent.twist.is_none() && sent.pose.is_some());
+}
+
+#[test]
+fn npc_contacts_are_their_own_and_hold_the_npc() {
+    let mut b = backend_with(&server(honest()), NpcMotion::Tracked);
+    b.initialize(&episode()).unwrap();
+    b.spawn(&vehicle("ego", Driver::Ego, 0.0)).unwrap();
+    b.spawn(&vehicle("npc", Driver::Scenario, -3.0)).unwrap();
+    let (ego, npc) = (b.entities["ego"].handle, b.entities["npc"].handle);
+    b.frame = 7;
+    b.record_contacts(&[
+        wire::Contact {
+            handle: ego,
+            other: npc,
+            other_path: String::new(),
+            impulse: 2.0,
+        },
+        wire::Contact {
+            handle: npc,
+            other: ego,
+            other_path: String::new(),
+            impulse: 2.0,
+        },
+    ]);
+    let run = b.ego_run.as_ref().unwrap();
+    assert_eq!(run.contacts.len(), 1, "the ego's own contact, once");
+    assert_eq!(run.npc_contacts.len(), 1);
+    assert_eq!(run.npc_contacts[0].0, "npc");
+    let t = b.entities["npc"].tracked.as_ref().unwrap();
+    assert!(t.in_contact(7 + npc_tracking::CONTACT_HOLD_FRAMES));
+    assert!(!t.in_contact(8 + npc_tracking::CONTACT_HOLD_FRAMES));
+}
+
+#[test]
+fn a_one_frame_jolt_is_not_reported_as_acceleration() {
+    let mut h = std::collections::VecDeque::new();
+    for a in [0.1, 40.0, 0.2] {
+        h.push_back([a, 0.0]);
+    }
+    assert_eq!(smoothed(&h), [0.2, 0.0]);
+    h.pop_front();
+    h.push_back([3.0, 0.0]);
+    // Two frames agreeing pass: a sustained profile is not filtered away.
+    h.pop_front();
+    h.push_back([3.0, 0.0]);
+    assert_eq!(smoothed(&h)[0], 3.0);
 }

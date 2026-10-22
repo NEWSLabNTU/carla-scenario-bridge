@@ -25,6 +25,8 @@ class SkippedTest(unittest.TestCase):
         self.assertTrue(physics_layer.skipped("/Root/Lake/SM_TileLake3/Section0"))
         self.assertTrue(physics_layer.skipped("/Root/BackgroundPlanes_Tow01_2/x"))
         self.assertTrue(physics_layer.skipped("/Root/SM_sea2M/SM_sea2M"))
+        self.assertTrue(physics_layer.skipped("/Root/Decals/dirtDebris5_184/SM_DirtDebris01/Section1"))
+        self.assertTrue(physics_layer.skipped("/Root/Props/SM_DirtDebris03_2/Section0"))
         self.assertFalse(physics_layer.skipped("/Root/Buildings/Bl_Lakeside_House/Section0"))
         self.assertFalse(physics_layer.skipped("/Root/Roads/Road_12/Section0"))
 

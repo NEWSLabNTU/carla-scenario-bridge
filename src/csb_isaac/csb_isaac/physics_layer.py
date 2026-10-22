@@ -17,6 +17,10 @@ Left without a collider:
 - the far scenery and water: `BackgroundPlanes` (the skyline cards around the map), Town01's
   `Lake` tiles and Town10HD's sea (`SM_seaM`, `SM_sea2M`), which nothing drives on and whose
   huge flat triangles only slow the broad phase.
+- decals: Town01's `Decals` (dirt and debris laid on the road) and the `SM_DirtDebris*` meshes
+  of other towns, render-only in CARLA. As triangle meshes a few millimetres over the road
+  they were seams a tracked NPC's box caught on, and its contacts with them read as hits on
+  the static world (roadmap 044).
 - invisible meshes: CARLA's crosswalk areas (2 mm planes over the road that its pedestrian
   navigation is generated from) and the like. What the lidar cannot see should not hold a
   car up either.
@@ -30,8 +34,8 @@ import os
 import sys
 
 # Scenery left without colliders: prims of these names, and of names with these prefixes.
-SKIPPED_NAMES = {"Lake"}
-SKIPPED_PREFIXES = ("BackgroundPlanes", "SM_sea")
+SKIPPED_NAMES = {"Lake", "Decals"}
+SKIPPED_PREFIXES = ("BackgroundPlanes", "SM_sea", "SM_DirtDebris", "dirtDebris")
 
 
 def skipped(path):

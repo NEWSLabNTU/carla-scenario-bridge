@@ -12,7 +12,7 @@ from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 # Bump with csb's `backend::isaac::PROTOCOL_VERSION` on any change a peer of the other
 # version would misread.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 DESCRIPTOR_SET = Path(__file__).with_name("csb_world.desc")
 
@@ -26,10 +26,11 @@ def _load():
     classes = {n: message_factory.GetMessageClass(pool.FindMessageTypeByName(f"csb_world.{n}"))
                for n in names}
     kinds = {v.name: v.number for v in pool.FindEnumTypeByName("csb_world.Kind").values}
-    return classes, kinds
+    motions = {v.name: v.number for v in pool.FindEnumTypeByName("csb_world.Motion").values}
+    return classes, kinds, motions
 
 
-_CLASSES, KIND = _load()
+_CLASSES, KIND, MOTION = _load()
 Vec3 = _CLASSES["Vec3"]
 Quat = _CLASSES["Quat"]
 Pose = _CLASSES["Pose"]
@@ -39,6 +40,7 @@ LoadWorld = _CLASSES["LoadWorld"]
 Spawn = _CLASSES["Spawn"]
 SpawnReply = _CLASSES["SpawnReply"]
 Despawn = _CLASSES["Despawn"]
+Twist = _CLASSES["Twist"]
 EntityPose = _CLASSES["EntityPose"]
 Step = _CLASSES["Step"]
 EntityState = _CLASSES["EntityState"]
@@ -48,6 +50,7 @@ Shutdown = _CLASSES["Shutdown"]
 Request = _CLASSES["Request"]
 Reply = _CLASSES["Reply"]
 KIND_NAME = {v: k for k, v in KIND.items()}
+MOTION_NAME = {v: k for k, v in MOTION.items()}
 
 
 def pose_tuple(pose):
@@ -63,3 +66,15 @@ def make_pose(position, quat_wxyz):
     w, x, y, z = quat_wxyz
     return Pose(position=Vec3(x=position[0], y=position[1], z=position[2]),
                 orientation=Quat(x=x, y=y, z=z, w=w))
+
+
+def twist_tuple(twist):
+    """`((vx, vy, vz), (wx, wy, wz))` of a `Twist`."""
+    v, w = twist.linear, twist.angular
+    return (v.x, v.y, v.z), (w.x, w.y, w.z)
+
+
+def make_twist(linear, angular):
+    """A `Twist` from `(vx, vy, vz)` and `(wx, wy, wz)`."""
+    return Twist(linear=Vec3(x=linear[0], y=linear[1], z=linear[2]),
+                 angular=Vec3(x=angular[0], y=angular[1], z=angular[2]))

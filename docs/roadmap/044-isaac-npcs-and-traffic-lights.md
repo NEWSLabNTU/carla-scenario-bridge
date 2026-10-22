@@ -157,8 +157,9 @@ NPCs add a velocity write and a read per NPC per step; measured in the A spike.
 ## Steps
 
 1. [x] **Docs.** This design (2026-10-22).
-2. [ ] **A spike**: a velocity-driven dynamic NPC on Town01; `town01_rear_contact` with the
-   car-bodied ego and the 20-NPC bench, frame time; remedy kerb catching if seen.
+2. [x] **A spike**: a velocity-driven dynamic NPC on Town01; `town01_rear_contact` with the
+   car-bodied ego and the 20-NPC bench, frame time; remedy kerb catching if seen (skids,
+   decals out; 2026-10-22).
 3. [ ] **A**: proto, world server, `IsaacBackend` through `npc_tracking.rs`, NPC contacts;
    incidents 1, 4, 5 and `UC-ACC-001` on Isaac.
 4. [ ] **B**: signal table, `SetSignals`, lamps, aib's publisher; `town01_traffic_light`
@@ -168,6 +169,94 @@ NPCs add a velocity write and a read per NPC per step; measured in the A spike.
 6. [ ] **C spike, then C**: CARLA walkers through SimReady, else NVIDIA characters;
    incident 2, `town01_pedestrian`, `UC-AEB-001`.
 7. [ ] **F**: exit runs on both backends; 043's CARLA routes.
+
+## Step 2: the A spike
+
+**Plan** (2026-10-22). The spike builds the part of A it has to prove and nothing it does
+not: a tracked NPC on Isaac is a dynamic rigid body the world server drives by velocity,
+and csb drives it with `npc_tracking.rs`. What it adds, kept for step 3:
+
+- `csb_world.proto` (protocol 2): `Spawn.motion` (`KINEMATIC`, the default and every entity
+  so far, or `TRACKED`); `EntityPose.twist` (linear and angular velocity, world frame, at the
+  entity origin), `teleport` (the pose is set this step, then the twist) and `kinematic`
+  (hand the body to kinematic for the rest of its life: the fallback); `EntityState.twist`,
+  the body's velocity after the step at its origin, from PhysX.
+- World server: a tracked entity is a dynamic body (mass from CARLA's `physics.json` for its
+  model, else by kind; centre of mass at the box centre), its velocity written with PhysX's
+  tensor API (`omni.physics.tensors` rigid body views, not USD attributes) once before the
+  substeps, as `set_target_velocity` is once per CARLA tick; the twist at the origin becomes
+  the centre of mass's (`v + w x r`). Gravity and the road keep z, roll and pitch.
+- csb: `IsaacBackend` tracks every scenario vehicle under `npc_motion: tracked` with the
+  CARLA backend's law (`npc_tracking::command`, `bounded_command`, `first_frame_change`,
+  `pose_yaw_rate`), in the world frame (ROS: the law is frame-free as long as yaw and yaw
+  rate agree). No steer: a box has no tyres to undo a set yaw rate.
+- Measured: `basic/town01_rear_contact` with the car-bodied ego (aib's PhysX vehicle, the
+  ego stack driving), the 20-NPC bench (tracking error p95/max, snaps, pitch and roll of the
+  boxes, stalls), and the world server's step time against 043's 6.0 / 7.1 ms.
+
+Kerb catching, if seen, gets the remedies in the design's order. If none works, the spike
+stops and the choice goes back to the user.
+
+**Results** (2026-10-22, server139, Town01 SimReady world, world server with aib's ego,
+`just scenario ... backend:=isaac`, logs and gap traces in `/mnt/wd/aeon/csb-044/`).
+
+1. **The tensor API works for this.** One `omni.physics.tensors` rigid body view over every
+   tracked body, rebuilt when the set changes; a body spawned since the last step is not in
+   PhysX yet (`create_rigid_body_view` matches nothing), so its first drive goes through USD
+   (pose, initial velocity, read when PhysX creates it) and the view takes it after one
+   step. Two traps, both fixed: the server's first rigid body view zeroed the velocity of the
+   body it was made for (the first tracked NPC of a server's life started at rest), so a
+   throwaway tracked body takes that view at start-up; and the view needs the stage id
+   (`create_simulation_view("numpy", stage_id=...)`).
+2. **Kerb and seam catching: seen, and remedied by the second remedy.** With the declared box
+   flat on the road (its bottom at the entity origin), boxes in a standalone spike (20 boxes
+   driven at 8 m/s along Town01's y = -130 road, `IsaacWorld` directly) pitched up to 4 deg,
+   jumped up to 1.65 m and stalled; in `town01_rear_contact` the NPC stopped dead 1.4 m short
+   of the ego (pitched 1.7 deg, launched at 2.2 m/s up), fell back to kinematic as blocked,
+   and SSv2's blind NPC then drove it through the ego. Friction was already low (remedy 1:
+   0.1, combine `min`) and did not help: the box's front face meets an edge, a normal force.
+   Remedy 2, a rounded bottom: the box rides on two capsules along its length (radius 0.25 m,
+   left and right, bottoms on the declared box's bottom; `motion.skids`), its own bottom
+   raised by the radius; the top, length and width stay the declared box's. The same spike:
+   17 of 17 free boxes error p95 0.007-0.014 m, roll/pitch at most 1.6 deg, z within 4 cm;
+   a box driven sideways into the kerb at 2 m/s climbs it (pitch 0.9 deg) instead of being
+   launched (z 1.46 m, pitch 11.9 deg before). Remedy 3 (hover) was not needed.
+3. **Town01's decals were the seams.** The NPCs' own contacts named
+   `/World/env/Decals/dirtDebris*/SM_DirtDebris01`: dirt and debris meshes a few millimetres
+   over the road, render-only in CARLA, which `physics_layer` had given colliders.
+   `physics_layer` now skips `Decals` and `SM_DirtDebris*`/`dirtDebris*` (Town01 22 meshes,
+   Town05 10); the five towns' layers were regenerated (the old ones kept as
+   `*_physics.usda.pre044`).
+4. **SSv2's ego acceleration.** The first car-bodied runs failed on SSv2's
+   `current acceleration (35.3) is out of range [-15, 15]` for the ego at the contact: the
+   Isaac backend reported the raw differenced acceleration, while the CARLA backend reports
+   the median of the last three frames (`ACCEL_SMOOTHING_FRAMES`: a one-frame jolt is
+   discarded). Ported to Isaac; but differencing poses smears a velocity step over two
+   frames, which the median passes (16-57 m/s2 in the next three runs). The world server now
+   returns the ego vehicle's own velocity (aib's, from its last substep) in `EntityState.twist`
+   and csb takes the motion from a body's twist where it has one: a shove is one frame, the
+   median drops it.
+
+| run | verdict | NPC tracking before the contact | after it | NPC roll/pitch max | world server step p50 |
+|---|---|---|---|---|---|
+| `town01_rear_contact` x3 (decals in) | 3/3 PASS | no snap, no fallback | held by the ego (error p95 0.85-3.8 m, as SSv2's blind NPC drives on) | 0.28-1.0 deg | 28-31 ms |
+| `town01_rear_contact` x3 (decals out) | 3/3 PASS | no snap, no fallback | as above | 0.28 deg | 29-31 ms |
+| bench `town01_npc_20` x2 (decals in) | 2/2 PASS | error p95 median 0.026 m, yaw p95 median 0.04 deg; 0 snaps, 0 fallbacks | | median 1.6 deg | 14.0 / 14.1 ms |
+| bench `town01_npc_20` x1 (decals out) | PASS | error p95 median 0.026 m (worst 1.26), yaw p95 median 0.04 deg (worst 0.45); 0 snaps, 0 fallbacks | | median 1.6 deg | 14.0 ms (p95 15.6) |
+
+The bench's worst NPC (`npc_07`, error max 2.9 m, yaw up to 20.6 deg on `npc_10`, z up to
+0.96 m) is a collision SSv2 makes: from frame 1050 of 1201 its own boxes for `npc_07` and
+`npc_10` overlap at a junction (the generated bench drives them into each other), and Isaac's
+bodies meet there. The ego in `town01_rear_contact` is shoved 0.6-0.7 m/s when standing, from
+0.9 to 5.3 m/s when moving; CARLA's numbers for the same contact are 4 -> ~9 m/s.
+
+**Cost.** 20 tracked NPCs: 14.0 ms p50 per step against 043's 6.0 ms for 20 kinematic ones
+(no ego either time): ~0.4 ms per tracked NPC (one batched velocity write and read, and
+their contact reports, whose ground filter is now a per-path cache; uncached it was 30 ms).
+With the ego's sensors the step is the ego's, 28-31 ms, as in 043.
+
+**Decision**: velocity-driven dynamic NPCs work on Town01's roads with skids; step 3 builds on
+this code as it stands.
 
 ## Acceptance
 

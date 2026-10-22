@@ -12,6 +12,8 @@
 //
 // Bump PROTOCOL_VERSION (csb `backend/isaac`, server `csb_isaac/protocol.py`) on any change a
 // peer of the other version would misread; `Hello` refuses a mismatch with both versions.
+// Version 2 (roadmap 044): tracked bodies (`Motion`, `Twist`, teleport, the kinematic
+// fallback) and contacts per reporting side.
 
 syntax = "proto3";
 
@@ -62,7 +64,18 @@ message LoadWorld {
   repeated string ground_paths = 2;
 }
 
-// One entity: a kinematic body at `pose` with a box collider. The ego reports contacts.
+// How a body moves (roadmap 044).
+enum Motion {
+  // Kinematic: posed by every `EntityPose`, pushed by nothing (037's every entity).
+  KINEMATIC = 0;
+  // A dynamic body under gravity on the road, driven by the velocity each `EntityPose`
+  // carries (`twist`), as CARLA's `set_target_velocity`: contacts hold it back and push it.
+  // It reports its contacts, and its state carries its velocity.
+  TRACKED = 1;
+}
+
+// One entity: a body at `pose` with a box collider, moving as `motion` says. The ego and
+// tracked bodies report contacts.
 message Spawn {
   string name = 1;
   Kind kind = 2;
@@ -77,6 +90,7 @@ message Spawn {
   // the entity (render only: the box stays the collider); empty or unknown, the box shows.
   // Added without a version bump: a server that predates it ignores it.
   string model = 7;
+  Motion motion = 8;
 }
 
 message SpawnReply {
@@ -88,9 +102,22 @@ message Despawn {
   uint32 handle = 1;
 }
 
+message Twist {
+  // World frame, at the entity origin: m/s and rad/s.
+  Vec3 linear = 1;
+  Vec3 angular = 2;
+}
+
+// What the next step does with one body. A kinematic body goes to `pose`. A tracked body
+// takes `twist` before the substeps (its pose is ignored unless `teleport`); with `teleport`
+// it is first put at `pose`; with `kinematic` it is kinematic from this step on (csb's
+// fallback for a blocked body, 044) and goes to `pose`.
 message EntityPose {
   uint32 handle = 1;
   Pose pose = 2;
+  Twist twist = 3;
+  bool teleport = 4;
+  bool kinematic = 5;
 }
 
 message Step {
@@ -105,9 +132,13 @@ message EntityState {
   uint32 handle = 1;
   // The physics engine's pose of the body after the step.
   Pose pose = 2;
+  // The body's velocity after the step, at its origin: a tracked body's and an ego vehicle's
+  // (aib's, from its last substep); unset for kinematic bodies.
+  Twist twist = 3;
 }
 
-// A body touching another at any substep of the step, once per pair.
+// A reporting body (the ego, a tracked body) touching another at any substep of the step,
+// once per pair and reporting side: two reporters touching each other are two contacts.
 message Contact {
   uint32 handle = 1;
   // The other entity's handle; 0 for the environment.

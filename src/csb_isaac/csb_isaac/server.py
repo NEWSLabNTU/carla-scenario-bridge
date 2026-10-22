@@ -7,21 +7,44 @@ A `World` provides:
 
 - ``isaac_version``: str
 - ``load(usd, ground_paths)``: replace the environment, remove every entity
-- ``spawn(handle, name, kind, subtype, center, dims, pose)``: one kinematic body
+- ``spawn(handle, name, kind, subtype, center, dims, pose, model, motion)``: one body,
+  ``motion`` ``"KINEMATIC"`` or ``"TRACKED"`` (roadmap 044)
 - ``despawn(handle)``
-- ``step(poses, substeps, dt, render, sim_time)`` -> ``(states, contacts)``: apply
-  ``{handle: pose}`` (``sim_time`` is the clock at the step's start), run the physics steps,
-  and return ``[(handle, pose)]`` for every entity and
-  ``[(handle, other, other_path, impulse)]`` for the contacts (``other`` 0: environment)
+- ``step(drives, substeps, dt, render, sim_time)`` -> ``(states, contacts)``: apply
+  ``{handle: Drive}`` (``sim_time`` is the clock at the step's start), run the physics steps,
+  and return ``[(handle, pose, twist)]`` for every entity (``twist`` None but for tracked
+  bodies) and ``[(handle, other, other_path, impulse)]`` for the contacts (``other`` 0:
+  environment)
 
-Poses are ``((x, y, z), (qw, qx, qy, qz))`` in the world frame.
+Poses are ``((x, y, z), (qw, qx, qy, qz))`` in the world frame, twists ``((vx, vy, vz),
+(wx, wy, wz))`` in the world frame at the entity origin.
 """
 import logging
 import time
+from typing import NamedTuple, Optional
 
 from . import protocol as pb
 
 log = logging.getLogger("csb_isaac")
+
+
+class Drive(NamedTuple):
+    """What a step does with one body (`EntityPose`): a kinematic body goes to `pose`; a
+    tracked one takes `twist`, after being put at `pose` when `teleport`; `kinematic` hands
+    it to kinematic from this step on (then it goes to `pose`)."""
+
+    pose: Optional[tuple] = None
+    twist: Optional[tuple] = None
+    teleport: bool = False
+    kinematic: bool = False
+
+
+def drive_of(entity_pose):
+    """The `Drive` an `EntityPose` asks for."""
+    return Drive(
+        pose=pb.pose_tuple(entity_pose.pose) if entity_pose.HasField("pose") else None,
+        twist=pb.twist_tuple(entity_pose.twist) if entity_pose.HasField("twist") else None,
+        teleport=entity_pose.teleport, kinematic=entity_pose.kinematic)
 
 
 class RequestError(Exception):
@@ -85,7 +108,7 @@ class WorldServer:
         c = req.box_center
         self.world.spawn(handle, req.name, pb.KIND_NAME.get(req.kind, "KIND_UNSPECIFIED"),
                          req.subtype, (c.x, c.y, c.z), (d.x, d.y, d.z), pb.pose_tuple(req.pose),
-                         model=req.model)
+                         model=req.model, motion=pb.MOTION_NAME.get(req.motion, "KINEMATIC"))
         self.next_handle += 1
         self.entities[handle] = req.name
         return pb.Reply(ok=True, spawn=pb.SpawnReply(handle=handle))
@@ -116,15 +139,18 @@ class WorldServer:
         unknown = [p.handle for p in req.poses if p.handle not in self.entities]
         if unknown:
             raise RequestError(f"poses for unknown handle(s) {unknown}")
-        poses = {p.handle: pb.pose_tuple(p.pose) for p in req.poses}
+        drives = {p.handle: drive_of(p) for p in req.poses}
         started = time.perf_counter()
-        states, contacts = self.world.step(poses, req.substeps, req.dt, req.render, self.sim_time)
+        states, contacts = self.world.step(drives, req.substeps, req.dt, req.render,
+                                           self.sim_time)
         self.step_ms.append(1e3 * (time.perf_counter() - started))
         self.sim_time += req.substeps * req.dt
         self.frame += 1
         reply = pb.StepReply(sim_time=self.sim_time, frame=self.frame)
-        for handle, pose in states:
-            reply.states.add(handle=handle, pose=pb.make_pose(*pose))
+        for handle, pose, twist in states:
+            state = reply.states.add(handle=handle, pose=pb.make_pose(*pose))
+            if twist is not None:
+                state.twist.CopyFrom(pb.make_twist(*twist))
         for handle, other, path, impulse in contacts:
             reply.contacts.add(handle=handle, other=other, other_path=path, impulse=impulse)
         return pb.Reply(ok=True, step=reply)
