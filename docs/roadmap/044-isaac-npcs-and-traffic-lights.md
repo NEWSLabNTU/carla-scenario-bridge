@@ -163,8 +163,8 @@ NPCs add a velocity write and a read per NPC per step; measured in the A spike.
    decals out; 2026-10-22).
 3. [x] **A**: proto, world server, `IsaacBackend` through `npc_tracking.rs`, NPC contacts;
    incidents 1, 4, 5 and `UC-ACC-001` on Isaac (2026-10-22: all PASS, as on CARLA).
-4. [ ] **B**: signal table, `SetSignals`, lamps, aib's publisher; `town01_traffic_light`
-   and incident 3 on Isaac.
+4. [x] **B**: signal table, `SetSignals`, lamps, aib's publisher; `town01_traffic_light`
+   and incident 3 on Isaac (2026-10-22: 2/2 PASS each).
 5. [ ] **D**: two-wheelers by subtype (rider check), MiscObjects by model, props export;
    incident 6, incident 2's parked cars, `town01_pedestrian`'s barriers.
 6. [ ] **C spike, then C**: CARLA walkers through SimReady, else NVIDIA characters;
@@ -335,6 +335,23 @@ and 0.001 grey where not.
   confidence 1, as acb's publisher), every frame the ego publishes. aib builds
   `autoware_perception_msgs` for Isaac's Python (`build_msgs.sh`).
 - Runs: `town01_traffic_light` and incident 3 on Isaac.
+
+**Results** (2026-10-22, server139, the same stacks as step 3's incident 1 reruns).
+
+- **Lamps**: 36 of 36 table signals matched on Town01, all by `signalID` (108 lenses). A
+  standalone check bound the four materials on `TrafficLight11` (OpenDRIVE 377) and rendered
+  it from 4 m: dark, red, amber, green as commanded
+  (`/mnt/wd/aeon/csb-044/town01_signal_lamps.png`). `physics_layer` now leaves the heads out
+  (Town01 5943 -> 5727 colliders, Town02 3732 -> 3588; Town03/05/10HD name their lamps
+  otherwise and have no signal table).
+- **To Autoware**: aib `defb5d0` (`EgoRos.publish_signals`, `aib.signals`,
+  `autoware_perception_msgs` built for Isaac's Python); the topic has the world server as its
+  one publisher and `traffic_light_arbiter` as its subscriber in domain 1.
+
+| scenario | Isaac: SSv2 verdict | judge / oracle | CARLA (033 step 5, 032 step 7) |
+|---|---|---|---|
+| `town01_traffic_light` | 2/2 PASS (3409, 3394 frames) | G1-G3 0, G4 agree | PASS (3441 frames) |
+| incident 3, red light | 2/2 PASS | stopped 0.17 / 0.27 m before the line for 8.1 s, moved 1.6 / 1.5 s after green | PASS |
 
 ## Acceptance
 
