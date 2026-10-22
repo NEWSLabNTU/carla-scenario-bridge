@@ -579,6 +579,50 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
    off): FAIL 0/3, peak deceleration -1.51 / -1.50 / -1.52 m/s^2 against the scenario's -1.5
    limit. The default stack passes 2/2 on CARLA, and Isaac passes on CenterPoint. The only
    place SSv2's verdict differs between backends. Taken first.
+
+   **Finding (2026-10-22): Isaac's pass is not a pass.** On Isaac the ego stops dead the
+   moment `Npc1` spawns: 8.32 -> 0.19 m/s in one 50 ms frame, its position continuous
+   (`s7j-acc` frame 357; `s3-acc-*`, `s7i-acc*` the same). It then starts again from rest
+   behind an NPC that has already slowed to 1.9 m/s, and never closes on it at speed (peak
+   deceleration -0.6 to -0.9). On CARLA the ego meets `Npc1` at 8.3 m/s, 29 m behind it at
+   5.5 m/s, and brakes at -1.5 to -1.6. Every Isaac run with a mid-run spawn has it: incidents
+   1, 2, 4, 5, 6, `UC-AEB-001` (`Pedestrian0`), `UC-ACC-001`; no CARLA run does. So the A, C,
+   D and F verdicts for those scenarios on Isaac were taken with an ego that had been stopped
+   by the spawn.
+
+   Cause, isolated headless (aib's ego on the flat world, driven to 9.7 m/s, one edit, no
+   stack): **a prim with a USD reference composed in** -- a catalogue body (car, walker,
+   prop), or a trivial `.usda` with one cube -- makes PhysX rest every PhysX vehicle when the
+   change reaches it (`flush_changes`, or the next simulate): the chassis' linear velocity
+   goes to 0 and its wheels keep spinning (26.6 rad/s, i.e. 9.8 m/s). A prim defined in
+   place (a plain cube, a kinematic box with no body) does not; a free dynamic rigid body
+   keeps its velocity; opening the layer beforehand (`Sdf.Layer.FindOrOpen`) does not help,
+   nor does writing the chassis' USD velocity. Writing the chassis' velocity back through
+   the tensor API after the flush does: 9.85 -> 9.90 m/s, no dip.
+
+   Fix (`IsaacWorld._egos_keep_motion`): every structural edit of the world server's stage
+   (`spawn`, `_bury`) is handed to PhysX on the spot by a 1 us `update_simulation` and each
+   ego's chassis velocity is put back through the tensor API. (`flush_changes()` hands it
+   over too, but after a walker's spawn the next step crashed Kit: "terminate called without
+   an active exception".) Headless, the ego held 9.74 m/s through a tracked car, a walker, a
+   kinematic car and their despawn and burial.
+
+   Isaac again, the step 7 stacks (CenterPoint, `max_velocity:=11.11`), 2026-10-22 (`fx-*`):
+   no spawn drop in any run.
+
+   | Scenario | SSv2 | peak deceleration (trace, median of 3) | oracle |
+   |---|---|---|---|
+   | `UC-ACC-001` (1 variant) | 1/3 (`fx-acc-1..3`: FAIL, FAIL, PASS) | -1.76, -1.48, -1.46 | agree |
+   | `UC-AEB-001` (1 variant) | PASS | | agree, 0 contacts |
+   | incident 2 | PASS, judge PASS | | agree, 0 contacts |
+
+   So **`UC-ACC-001` on the CenterPoint stack fails on both backends** (CARLA 0/3, Isaac 1/3),
+   the ego braking right at the scenario's -1.5 m/s^2 when it meets `Npc1` (5.5 m/s, 29 m
+   ahead) at 8.3 m/s. Not a gap between the simulators any more: Autoware's ACC on this
+   stack. The default stack passes on CARLA only because its `max_velocity` (4.17 m/s) is
+   below `Npc1`'s, so it never closes on it. The other step 3-7 Isaac verdicts for scenarios
+   with a mid-run spawn (incidents 1, 2, 4, 5, 6, `UC-AEB-001`) were taken with the ego
+   stopped by the spawn; AEB and incident 2 pass again with the fix, the rest are to be re-run.
 2. **The two-wheeler rider stays in its bind pose** (step 5, `two_wheelers_bind_pose.png`):
    two UE attempts reverted. Next to try: the walkers' route (a plain `SkeletalMeshActor`
    playing the rider's seated sequence, exported as a `SkelAnimation`).

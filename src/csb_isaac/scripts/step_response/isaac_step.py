@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout,
 os.environ.pop("DISPLAY", None)
 from isaacsim import SimulationApp  # noqa: E402
 
-app = SimulationApp({"headless": True})
+app = SimulationApp({"headless": True, "extra_args": ["--/crashreporter/url="]})  # no crash uploads
 from aib.control import GEAR_DRIVE  # noqa: E402
 from csb_isaac.world import IsaacWorld  # noqa: E402
 

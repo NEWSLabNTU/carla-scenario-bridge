@@ -19,6 +19,7 @@ with Autoware's sensors and vehicle interface on its own ROS domain. Physics mov
 Autoware's commands, and SSv2 reads its pose back; a pose csb sends for it is a teleport.
 Rendering is then on every frame its sensors need, whatever the request asks.
 """
+import contextlib
 import logging
 import math
 import os
@@ -56,6 +57,8 @@ TRACKED_MATERIAL = "/World/Looks/csbTrackedBody"
 TRACKED_FRICTION = float(os.environ.get("CSB_TRACKED_FRICTION", "0.1"))
 # Where a despawned entity spends its last step (`despawn`), m.
 BURY_Z = -1000.0
+# The PhysX step that hands a structural stage edit over between frames, s (`_egos_keep_motion`).
+FLUSH_STEP = 1e-6
 # Traffic signals (roadmap 044 B): the lamps' bulbs in a CARLA town's SimReady export, by
 # the colour they show (nested Green -> Yellow -> Red), and the materials their lenses wear.
 SIGNAL_ID_ATTR = "omni:simready:signalID"
@@ -361,6 +364,10 @@ class IsaacWorld:
         log.info("preloaded %s in %.0f s", usd, time.perf_counter() - t)
 
     def spawn(self, handle, name, kind, subtype, center, dims, pose, model="", motion="KINEMATIC"):
+        with self._egos_keep_motion():
+            self._spawn(handle, name, kind, subtype, center, dims, pose, model, motion)
+
+    def _spawn(self, handle, name, kind, subtype, center, dims, pose, model, motion):
         path = f"{ENTITIES}/e{handle}"
         if path in self.buried:  # a handle used again before its old body's last step
             self.tracked_view = None
@@ -671,9 +678,49 @@ class IsaacWorld:
         them there."""
         if self.buried:
             self.tracked_view = None
-            for path in self.buried:
-                self.stage.RemovePrim(path)
+            with self._egos_keep_motion():
+                for path in self.buried:
+                    self.stage.RemovePrim(path)
             self.buried = []
+
+    @contextlib.contextmanager
+    def _egos_keep_motion(self):
+        """A structural edit of the stage keeps the egos moving. A prim with a USD reference
+        composed in (a catalogue body, any `.usda`) makes PhysX rest every PhysX vehicle
+        when the change reaches it: the chassis stops dead, its wheels keep spinning. Every
+        mid-run spawn stopped the ego, 8.3 -> 0.2 m/s in one frame (044, open item 1). So the
+        edit goes to PhysX here and each ego's chassis velocity is put back."""
+        paths = [ego.path for ego in self.egos.values()]
+        before = self._ego_velocities(paths) if paths else None
+        yield
+        if before is None:
+            return
+        import numpy as np
+
+        # A step of a microsecond hands PhysX the edit (and rests the vehicles): what the
+        # next step's simulate would do, so the velocities can go back before it.
+        # `flush_changes()` would too, but after a walker's spawn the next step then crashed
+        # Kit ("terminate called without an active exception").
+        self.physx.update_simulation(FLUSH_STEP, self.world.current_time)
+        view = self._ego_view(paths)
+        if view is None:
+            log.warning("egos' velocities not restored after a stage edit: no view of %s",
+                        paths)
+            return
+        view.set_velocities(before, np.arange(len(paths), dtype=np.int32))
+
+    def _ego_view(self, paths):
+        """A rigid body view over the egos' chassis, or None if PhysX has not got them all."""
+        if self.sim_view is None or not self.sim_view.is_valid:
+            self._sim_view()
+        view = self.sim_view.create_rigid_body_view(paths)
+        if view is None or getattr(view, "_backend", True) is None or view.count != len(paths):
+            return None
+        return view
+
+    def _ego_velocities(self, paths):
+        view = self._ego_view(paths)
+        return None if view is None else view.get_velocities().copy()
 
     def step(self, drives, substeps, dt, render, sim_time=0.0):
         """`drives`: `{handle: server.Drive}`. `sim_time`: the server's clock at the start of

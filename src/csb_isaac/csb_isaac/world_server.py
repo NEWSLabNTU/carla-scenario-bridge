@@ -82,7 +82,8 @@ def main(argv=None):
     started = time.monotonic()
     from isaacsim import SimulationApp
 
-    config = {"headless": not args.display}
+    # Kit uploads a crash's minidump to NVIDIA by default: kept on disk only (its dumpDir).
+    config = {"headless": not args.display, "extra_args": ["--/crashreporter/url="]}
     if args.display and args.follow:
         # A small render keeps the frame inside its 50 ms beside the lidar (1080p: 49.5 ms
         # p50 on a loaded host, 720p: 52); the window scales it up.
