@@ -26,6 +26,9 @@ log = logging.getLogger("csb_world_server")
 # lapses.
 LEASE_SECONDS = 15.0
 
+# How long a refused server (its port held) waits before it exits 1.
+REFUSED_PAUSE = 30
+
 
 def drive_of(entity_pose):
     """The `Drive` an `EntityPose` asks for."""
@@ -312,7 +315,10 @@ def bind(port, host="127.0.0.1"):
     try:
         socket.bind(f"tcp://{host}:{port}")
     except zmq.ZMQError as e:
-        log.error("cannot bind tcp://%s:%d: %s (another world server holds it)", host, port, e)
+        # A supervisor respawns on any exit: wait, so a refusal is not a loop.
+        log.error("cannot bind tcp://%s:%d: %s (another world server holds it); exiting in "
+                  "%d s", host, port, e, REFUSED_PAUSE)
+        time.sleep(REFUSED_PAUSE)
         raise SystemExit(1) from e
     return socket
 

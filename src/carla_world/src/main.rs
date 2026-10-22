@@ -7,8 +7,8 @@
 //!
 //! One process per CARLA server, and the only one that ticks it: it holds an exclusive lock
 //! on `/tmp/swb-locks/carla-<host>-<port>.lock` for its whole life, and a second one is
-//! refused (exit 1). It binds its world port before anything else, so a second server on the
-//! port is refused too (exit 1). It answers the protocol at once; until CARLA is up its
+//! refused (exit 1, after 30 s so a supervisor's respawn does not spin). It binds its world
+//! port before anything else, so a second server on the port is refused too. It answers the protocol at once; until CARLA is up its
 //! `Hello` says not ready, and it keeps trying. A CARLA call that never returns, or a CARLA
 //! that went away (the idle check), ends it with exit 75 for its supervisor to restart, with
 //! no further word to CARLA (roadmap 034; CLAUDE.md "A CARLA client must not outlive its
@@ -45,9 +45,18 @@ use csb_core::world_server::{self, End, Shell, World};
 
 /// Exit status when a CARLA call hung or CARLA went away (`EX_TEMPFAIL`): restarted.
 const RESTART_EXIT: i32 = 75;
-/// Exit status when this server must not run (its port or CARLA's lock is held): not
-/// restarted.
+/// Exit status when this server must not run (its port or CARLA's lock is held).
 const REFUSED_EXIT: i32 = 1;
+/// How long a refused server waits before it exits: play_launch respawns a node on any exit,
+/// so a refusal must not turn into a loop that floods the log every respawn_delay.
+const REFUSED_PAUSE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Refuse to run: say why, wait out [`REFUSED_PAUSE`], exit 1.
+fn refuse(why: &eyre::Report) -> ! {
+    tracing::error!("{why:#}; exiting in {} s", REFUSED_PAUSE.as_secs());
+    std::thread::sleep(REFUSED_PAUSE);
+    std::process::exit(REFUSED_EXIT);
+}
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -89,10 +98,7 @@ fn main() -> Result<()> {
     // One ticking client per CARLA server, held by the kernel for this process's life.
     let _lock = match carla_lock(&config.carla.host, config.carla.port) {
         Ok(lock) => lock,
-        Err(e) => {
-            tracing::error!("{e:#}");
-            std::process::exit(REFUSED_EXIT);
-        }
+        Err(e) => refuse(&e),
     };
 
     if let Some(map_dir) = generate_signal_table_arg() {
@@ -108,10 +114,7 @@ fn main() -> Result<()> {
     let endpoint = format!("tcp://127.0.0.1:{port}");
     let socket = match world_server::bind(&ctx, &endpoint) {
         Ok(s) => s,
-        Err(e) => {
-            tracing::error!("{e:#}");
-            std::process::exit(REFUSED_EXIT);
-        }
+        Err(e) => refuse(&e),
     };
     tracing::info!(
         "CARLA world server on {endpoint} (pid {}), CARLA {}:{}, config {}",

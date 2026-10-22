@@ -307,33 +307,47 @@ ps -eo pid,ppid,etimes,args --no-headers | grep -E "CarlaUE4-Linux|carla_scenari
 ss -lpn | grep 5555        # exactly one bridge should hold the SSv2 port
 ```
 
-**The simulation side is its own long-lived launch.** `just run` starts
-`csb_launch simulation.launch.xml` under play_launch (web 8084, scenario domain 9): the bridge
-(`respawn="true"`, so a crash restarts it) and the agent relay (TCP 5560) the ego's vehicle
-agent registers with. Scenario launches never include it, so it outlives sessions -- one
-bridge was once found serving scenarios 44 hours later, running code from two rebuilds
-earlier. Treat it as a tracked singleton: check its age against the build before trusting a
-measurement, and after `just build` restart it deliberately (stop the play_launch on 8084 by
-pid, then `setsid just run > log 2>&1 &`). It runs the *installed* binary, so `just build`
-must run first. Its config is the bridge's ROS parameter `config_file` (`just run
-config_file:=<file>`, default the installed `bridge_config.yaml`; `CSB_CONFIG_DIR` is
-refused): `ros2 param get /carla_scenario_bridge config_file` in domain 9 names the file a
-running bridge loaded.
+**The simulation side is its own long-lived launch.** `just run` (`sim:=carla`, the default)
+starts `csb_launch carla_simulation.launch.xml` under play_launch (web 8084, scenario domain
+9): the CARLA world server `carla_world`, the bridge driving it, and the agent relay (TCP 5560)
+the ego's vehicle agent registers with, each `respawn="true"`. Scenario launches never include
+it, so it outlives sessions -- one bridge was once found serving scenarios 44 hours later,
+running code from two rebuilds earlier. Treat it as a tracked singleton: check its age
+against the build before trusting a measurement, and after `just build` restart it
+deliberately (stop the play_launch on 8084 by pid, then `setsid just run > log 2>&1 &`). It
+runs the *installed* binaries, so `just build` must run first. Its configs are the bridge's
+`config_file` (`bridge_config.yaml`) and the world server's `carla_world_config`
+(`carla_world.yaml`); `ros2 param get /carla_scenario_bridge config_file` in domain 9 names
+the bridge's. `just world-health` probes the world server (owner, readiness) without
+touching it.
+
+Every process here ends with its play_launch: the world servers and the bridge ask the
+kernel for SIGTERM when their parent dies (`PR_SET_PDEATHSIG`), so a play_launch killed with
+SIGKILL leaves nothing behind, and `carla_world` puts CARLA back to asynchronous on the way
+out. Note that `just run`'s `play_launch` is a Python wrapper around the real binary
+(`.../play_launch/dist/.../bin/play_launch`), which is the nodes' parent: kill that one, or
+the process group. One bridge drives a world server at a time (the owner lease), and one
+`carla_world` drives a CARLA server (a `flock` on `/tmp/swb-locks/carla-<host>-<port>.lock`,
+across checkouts); a second of either is refused.
 
 ```bash
-ps -eo pid,etimes,args --no-headers | grep -E "[c]arla_scenario_bridge|[s]cenario_agent_relay"
-ss -lpn | grep -E ":5555 |:5560 "   # bridge, relay
+ps -eo pid,etimes,args --no-headers | grep -E "[c]arla_world|[c]arla_scenario_bridge|[s]cenario_agent_relay"
+ss -lpn | grep -E ":5555 |:5560 |:5591 "   # bridge, relay, CARLA world server
+just world-health                           # its simulator, owner, readiness
 ```
 
-**On Isaac (roadmap 043) there is a fourth stack, the world server**: `just isaac-world`
-(csb_launch `isaac_world.launch.xml`, web 8085, `play_log/isaac/`, respawned on death).
-`just scenario|acceptance|e2e <xosc> backend:=isaac` starts the world server, the simulation
-side on backend isaac and `just ego-isaac` when they are absent (`scripts/isaac_up.sh`) and
-leaves them up (`e2e` stops what it started); it refuses a CARLA bridge on 8084 or a
-`just ego-av` on 8082 rather than replace them. `just isaac-health` is the Hello probe. The
-world server holds ~17.5 GB of RAM with Town01's SimReady world: on a host whose memory other
-work has taken, the kernel's OOM killer picks it first (seen once, as the ego stack started),
-and the respawned one preloads again for ~7 minutes.
+**On Isaac (roadmap 043) the world server is its own stack**: `just isaac-world`
+(csb_launch `isaac_world.launch.xml`, web 8085, `play_log/isaac/`, respawned on death), and
+`just run sim:=isaac` is the bridge and the relay driving it (`isaac_simulation.launch.xml`).
+`just scenario|acceptance|e2e <xosc> sim:=isaac` starts the world server, the simulation
+side on Isaac and `just ego-isaac` when they are absent (`scripts/isaac_up.sh`; CARLA's is
+`scripts/carla_up.sh`, which starts CARLA itself too) and leaves them up (`e2e` stops what it
+started); it refuses a CARLA simulation side on 8084 or a `just ego-av` on 8082 rather than
+replace them. `just world-health sim:=isaac` is the Hello probe. The world server holds
+~17.5 GB of RAM with Town01's SimReady world: on a host whose memory other work has taken,
+the kernel's OOM killer picks it first (seen once, as the ego stack started), and the
+respawned one preloads again for ~7 minutes; the bridge forgets the old one's entities and
+takes the new one over without restarting.
 
 **The ego is reached through the relay, not ROS (roadmap 017).** SSv2 runs in the scenario
 domain (9), the ego stack in its own (1); a scenario whose ego never engages usually means
@@ -347,7 +361,8 @@ hand mid-run still can. Orphans show up as `ppid == 1`:
 ```bash
 ps -eo pid,ppid,etimes,comm --no-headers | awk '$2==1 && ($4=="component_node" ||
     $4=="add_two_ints_se" || $4=="zenohd" || $4=="carla_scenario_" ||
-    $4=="carla_manual_co" || $4=="auto_drive" || $4=="acb_bridge" || $4=="agent" || $4=="relay")'
+    $4=="carla_manual_co" || $4=="auto_drive" || $4=="acb_bridge" || $4=="agent" || $4=="relay" ||
+    $4=="carla_world")'
 ```
 
 A name-based list only finds what is on it. A `carla_manual_control` left over from the
@@ -398,8 +413,9 @@ A LibCarla client whose server died keeps a dead RPC connection (it never reconn
 streaming client that does reconnect, to the next server on the same port. Its light-update
 callback then blocks inside the stream for the client's whole timeout, and a synchronous
 server waits for every subscriber before the next frame: the whole server hangs (the "port
-2000 hang", `docs/design/failure-and-frame-budget.md`). csb exits for a fresh process when
-its idle probe finds the connection dead; acb drops and rebuilds such clients. Any other
+2000 hang", `docs/design/failure-and-frame-budget.md`). The CARLA world server (`carla_world`, the
+only csb process with a CARLA client since roadmap 046) exits 75 for a fresh process when its
+idle probe finds the connection dead, and its supervisor restarts it (the bridge stays); acb drops and rebuilds such clients. Any other
 long-lived client on the testbed's port needs the same, or must be restarted with CARLA.
 
 ### Never destroy a vehicle while its sensors are attached

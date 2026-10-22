@@ -37,7 +37,7 @@ Not in this phase: splitting repositories, moving the Autoware launch profile ou
 | weather | ROS `/carla/set_weather`, `/carla/get_weather` on CARLA's `Weather.msg`; Isaac `Unsupported` |
 | run tooling | `backend:=carla|isaac` in `scenario`, `acceptance`, `e2e`, `run`; `isaac_up.sh` brings up Isaac's stacks; CARLA's are brought up by hand or `demo.launch.xml` |
 
-## Design (proposed, for the user's review)
+## Design (as proposed; what changed in the building is under "As built")
 
 ### The protocol, version 4
 
@@ -253,6 +253,50 @@ sends the rest as `LoadWorld.world`:
 Fallbacks for one release: the old file names are read with a warning naming the new one.
 acb's `map_origin_path` and `traffic_light_map_path` defaults follow (an acb commit, pushed
 before the pin moves).
+
+## As built (part A, 2026-10-22)
+
+What changed from the design above while building it, and why:
+
+1. **Two round trips per frame, as SSv2 sends them** (`Apply`, then `Step`), not drives
+   carried by `Step`. The CARLA backend applies SSv2's poses and reads the ego back inside
+   `UpdateEntityStatus`, before the tick; keeping that order exactly is what keeps CARLA's
+   behaviour (and its gap trace) unchanged. Isaac's server stages an `Apply` and uses it in
+   the next `Step`, so its physics are unchanged too, at one more local round trip.
+2. **Who tracks, who reads back, is a capability.** CARLA tracks its NPCs itself, with steer
+   and walker control, and measures its own acceleration; Isaac is driven by the bridge's
+   velocity and read back by differencing. The protocol carries both: `TRACKED_MOTION` (the
+   bridge's law, Isaac) and `TRACKS_TARGETS` (the server's, CARLA, which reports a
+   `TrackingSample` per body per frame), `READS_BACK` (the server's read-back with
+   acceleration and jerk). A new simulator picks what it can do; the bridge does the rest.
+3. **`simulator_autopilot` on a server without `AUTOPILOT` is refused**, naming the
+   capability, not demoted to `Scenario`: SSv2 sends no poses for such an entity (its
+   behaviour is `do_nothing`), so a demoted vehicle would stand still and look like success
+   (006).
+4. **The configuration is one struct read from two files** (`bridge_config.yaml`,
+   `carla_world.yaml`), each refusing the other's keys by name (`BRIDGE_KEYS`,
+   `CARLA_WORLD_KEYS` in `csb_core::config`), rather than two structs: `CarlaBackend` reads
+   the same fields it always did. The Traffic Manager's port follows CARLA's (+6000).
+5. **The bridge survives a world server restart.** Its idle probe sees a new `instance` and
+   forgets the old one's entities; it gives up only after the server has been silent for
+   60 s (`WORLD_SERVER_LOST_AFTER`). So a CARLA restart restarts `carla_world` (exit 75) and
+   not the bridge.
+6. **The conformance check is a Rust binary**, `csb_world_check conformance <endpoint>`
+   (and `hello` for health), beside the bridge, not Python: the host's Python has no pyzmq,
+   and one tool serves both simulators. The Python shell has its own unit tests.
+7. **A refused world server waits 30 s before exiting 1.** play_launch respawns a node on
+   any exit and has no exit-code filter (`--disable-respawn` is all or nothing), so the
+   pause bounds the loop.
+8. **Shutdown when the supervisor is gone.** A bridge whose parent died skips `Release` (its
+   world server is going too, or the lease frees it); a world server stopped by a signal
+   undoes what it did (CARLA back to asynchronous, lights unfrozen). A server started
+   detached (`setsid ... &`) runs on: only a parent lost while starting ends it.
+9. **The signal table moved** to `<map dir>/traffic_lights.yaml`; the CARLA server writes it
+   there and links `carla/traffic_lights.yaml` to it, so acb's default path keeps working;
+   readers fall back to the old file. `carla/world.yaml` names a town when the directory
+   name is not one; `carla/map_origin.yaml` is still read.
+10. **A cross-checkout leak found on the way**: `just bg-av` and `two-av` put the first
+    background AV in domain 2, hard-coded (fixed on main, `BG_ROS_DOMAIN_ID`).
 
 ## Steps
 
