@@ -112,9 +112,108 @@ changes), a binary that serves the world protocol on carla-rust:
   ports keep their defaults and their derivation from `SSV2_PORT`, so acb changes nothing.
 - **Signal table**: `carla_world --generate-signal-table <map dir>` replaces the bridge's
   flag; it writes `<map>/traffic_lights.yaml` (below).
-- Launch: `carla_world.launch.xml` (respawned, its own web port), started by
-  `scripts/carla_up.sh`, which also starts or reuses CARLA itself (`just carla-start`), the
-  simulation side and `just ego-av`, as `isaac_up.sh` does for Isaac.
+- Launch: inside the simulation side (`carla_simulation.launch.xml`, below), started by
+  `scripts/carla_up.sh`, which also starts or reuses CARLA itself (`just carla-start`) and
+  `just ego-av`, as `isaac_up.sh` does for Isaac.
+
+### Process lifetime: one owner, no orphans (user question, 2026-10-22)
+
+Moving CARLA out of the bridge adds a process, and the world protocol now lets any number of
+clients connect to a server. Four rules keep a run to exactly one SSv2, one bridge, one world
+server and one ticking CARLA client, and leave nothing behind.
+
+```mermaid
+flowchart LR
+    subgraph sim["simulation side: one play_launch, one process group"]
+        bridge["swb bridge<br/>binds SSv2 port"]
+        relay["agent relay<br/>binds agent port"]
+        cw["carla_world<br/>binds world port<br/>flock carla-host-port"]
+    end
+    SSv2["SSv2 (scenario stack)"] -- "SSv2 port<br/>bind = one bridge" --> bridge
+    bridge -- "world protocol<br/>Hello owner lease" --> cw
+    cw -- "carla-rust<br/>flock = one ticking client" --> CARLA["CARLA server<br/>(systemd unit or by hand)"]
+    acb["acb_bridge (ego stack)"] -- "sensors, control;<br/>never ticks" --> CARLA
+    iws["Isaac world server<br/>own play_launch, long-lived"] -. "same lease rules" .- bridge
+```
+
+**1. Where `carla_world` runs: inside the simulation side.** `carla_simulation.launch.xml`
+starts the bridge, the relay and `carla_world` in one play_launch, so they share one process
+group, one web port (`CSB_WEB_PORT + 4`, as the simulation side has today) and one stop.
+`carla_world` is cheap to restart (a CARLA client, seconds), so it needs no life of its own;
+the CARLA server stays the long-lived piece, as today. Isaac's world server stays a separate
+launch (`+5`) because a restart costs ~7 minutes of preload and ~17.5 GB; it gets the same
+rules below. A simulator is free to choose either, and the bring-up script (`up.sh`) knows
+which.
+
+**2. Singletons, held by the kernel, never by pid files.** Each one is a resource the kernel
+releases when the holder dies, however it dies, so nothing is ever stale:
+
+| what must be one | held by | a second one |
+|---|---|---|
+| bridge per SSv2 port | `bind` of the SSv2 port (today) | fails at start with `Address already in use` and exits 1 (respawn policy below) |
+| world server per world port | `bind` of the world port | same |
+| ticking client per CARLA server | `carla_world` holds `flock(LOCK_EX \| LOCK_NB)` on `/tmp/swb-locks/carla-<host>-<port>.lock` (directory mode 1777) for its whole life | refused at start, naming the holder's pid (written in the file, for the message only) |
+| bridge per world server | the world server's **owner lease** (below) | refused at `Hello` with the owner's pid and host |
+
+The CARLA lock closes a hole that exists today: two checkouts on one host (csb-seps beside
+this one) both default to CARLA port 2000, and two synchronous-mode clients ticking one
+server corrupt each other's runs silently. The lock is per host; a CARLA on another host is
+protected only by its operator, which the user guide says.
+
+**3. The owner lease in the world protocol.** `Hello` gains `client_id` (host, pid, process
+start time from `/proc/<pid>/stat`) and `probe` (a health check that takes nothing). The
+server keeps one owner:
+
+- No owner: the first non-probe `Hello` becomes the owner. The server resets its world (every
+  entity despawned, signals cleared), so a new bridge never inherits the last one's state.
+- Owner present, a `Hello` from another client: taken over at once when the owner is
+  provably gone (same host and its pid is dead or has another start time); otherwise taken
+  over only when the lease has expired (no request from the owner for `lease_seconds`,
+  default 15; the bridge's idle probe sends `Hello` every 5 s between scenarios, so a live
+  bridge never lapses). Else refused: `owned by <host>:<pid> since <time>`.
+- Every non-`Hello` request carries the owner's id; one from a non-owner is refused, so a
+  stale bridge that wakes up cannot step a world it lost.
+- `probe` hellos (`just world-health sim:=...`, `up.sh`'s readiness wait) are answered with
+  version, capabilities and the current owner, and change nothing.
+
+**4. Orphans.** Three layers, each catching what the one before misses:
+
+- **Parent death signal.** Both world servers and the bridge call
+  `prctl(PR_SET_PDEATHSIG, SIGTERM)` at start, then exit at once if `getppid()` is already 1
+  (the parent died before the call). When play_launch is SIGKILLed -- the case CLAUDE.md's
+  orphan hunt exists for -- its nodes get SIGTERM from the kernel instead of living on.
+  Isaac's server does it through `ctypes` (Python 3.12, Linux only, as the rest).
+- **Process groups.** `up.sh` starts each stack with `setsid` and records the group, as
+  `isaac_up.sh` does today; `just e2e` and `stop` signal groups, never patterns.
+- **Self-checks.** `carla_world` exits when its CARLA connection is dead (the idle probe,
+  moved from the bridge: "a CARLA client must not outlive its server"); a world server whose
+  owner's lease lapsed while it was idle drops to "no owner" and keeps its world loaded, so it
+  is reusable, not an orphan. Nothing a run starts outlives its launch.
+
+Respawn policy, so a refusal never becomes a loop: a refused singleton exits **1** with its
+reason (the port or lock is held: a second copy was started by mistake, and retrying will not
+help); only exit **75** (wedged, server lost) and crashes are respawned. play_launch respawns
+on any exit, so the launch files wrap the binaries' `respawn` with `respawn_delay` and the
+binaries refuse fast; step 5 checks whether play_launch can respawn on a set of exit codes and
+uses that if so.
+
+**5. Availability for SSv2.** What SSv2 sees is one port that is either served or not:
+
+- The bridge does not bind the SSv2 port until its world server has answered an owner `Hello`
+  (today's behaviour: the connect loop precedes the bind), so a scenario never reaches a
+  bridge without a world.
+- A wedge cascades in a fixed order: `carla_world`'s tick watchdog (034's bound) exits 75;
+  the bridge's world request times out (its timeout is set above the watchdog's, and the
+  launch asserts it), it answers SSv2 and the drain with the error and exits 75; both are
+  respawned; the new bridge takes the lease from the dead owner at once (rule 3) and binds the
+  SSv2 port when the new `carla_world` answers. The scenario in flight fails with the reason;
+  the next one runs. That is today's behaviour, one process wider.
+- A CARLA restart: `carla_world` exits 75 when its idle probe fails, respawns, and waits for
+  CARLA (infinite retry, as the bridge does today); the bridge's lease survives (it keeps
+  probing), so the bridge does not restart for a CARLA restart between scenarios.
+- `just scenario` and `run_suite` check the chain before starting SSv2: `world-health` (probe
+  hello: up, version, owner is a live bridge) and the SSv2 port bound. Each missing link is
+  named.
 
 ### The Isaac world server
 
@@ -134,7 +233,9 @@ kind; kinematic pose echo; step and read back; tracked motion (if declared); ext
 vehicle read back (if declared); contacts between two overlapping bodies (if declared);
 signals set and read back from the server's own state (if declared); goal accepted (if
 `AUTOPILOT`); weather round trip (if declared); time monotonic across two loads; despawn of
-an unknown handle refused; a request after `Shutdown` refused. It replaces neither the
+an unknown handle refused; a request after `Shutdown` refused; the lease (a second client
+refused, a probe answered without taking ownership, takeover after the owner's lease lapses,
+a non-owner's `Step` refused). It replaces neither the
 coordinator's unit tests nor the scenario runs; it is the check a server passes before a
 scenario is worth running.
 
@@ -170,18 +271,22 @@ before the pin moves).
    Check: `just test`; Isaac's `town01_ego_drive` 1x.
 3. **Python shell** `csb_world_server` out of `csb_isaac`; `World` base class; Isaac's world
    subclasses it. **Conformance CLI** written against it and run on a fake `World` in CI and
-   on the Isaac server by hand. Check: conformance passes on Isaac; Isaac 1x.
+   on the Isaac server by hand. The owner lease, probe hellos and `PR_SET_PDEATHSIG` land here, in the shell, so every
+   server inherits them. Check: conformance passes on Isaac, including its lease group;
+   Isaac 1x.
 4. **`RemoteBackend`**: `IsaacBackend` renamed and stripped of Isaac constants; capability
    gating in the coordinator; driver demotion. Check: `just test` (new coordinator tests for
    gating on the fake); Isaac 1x.
 5. **Rust shell** `csb_world_server` crate and the **`carla_world` binary**: `CarlaBackend`
    and the CARLA-only modules moved, re-cut to world methods; episode clock, hung tick, idle
    probe, sensor release, collision monitor, signals, Traffic Manager goals, weather inside.
-   Built beside the old bridge; nothing launches it yet. Check: unit tests moved and
-   passing; conformance passes against `carla_world` on a live CARLA.
+   Built beside the old bridge; nothing launches it yet. The CARLA lock and the respawn exit codes land here.
+   Check: unit tests moved and passing; conformance passes against `carla_world` on a live
+   CARLA; the lifecycle drills (Acceptance) pass.
 6. **Switch CARLA over.** The bridge's CARLA path becomes `RemoteBackend` to `carla_world`;
    `CarlaBackend` deleted from the bridge; `carla` removed from its `Cargo.toml`;
-   `carla_world.launch.xml`, `carla_up.sh`; `simulation.launch.xml` takes the world endpoint;
+   `carla_simulation.launch.xml` (bridge, relay and `carla_world` in one launch), `carla_up.sh`;
+   `simulation.launch.xml` takes the world endpoint;
    `demo.launch.xml` and `two-av`, `demo-tour`, `bg-av`, `ego-av` start or require
    `carla_world`. Check: the CARLA baseline set (step 1) in full.
 7. **Config split and generic weather.** Retired keys refused with their new home; the
@@ -199,7 +304,8 @@ before the pin moves).
 
 ### Part B
 
-11. **Name.** User's decision, before any rename commit. Proposal below.
+11. **Name** (decided 2026-10-22): repository `scenario-world-bridge`, prefix `swb_`, bridge
+    `scenario_world_bridge`.
 12. **Rename inside this repository**, one commit per kind so each is reviewable and
     revertible: Cargo crates and binaries; colcon packages and `package.xml`s; Python
     packages; launch files and their arguments; ROS node and service names (the `/carla/*`
@@ -217,21 +323,21 @@ before the pin moves).
     `install/`, then `just e2e sim:=carla`, `just e2e sim:=isaac`, the CARLA 20-NPC bench
     gap trace identical to step 10's, and `multi_av/town01_two_av` on CARLA.
 
-## The name (step 11, proposal)
+## The name (decided 2026-10-22)
 
 The project is a bridge between SSv2 and any simulator, through one world protocol. Candidates,
 all without a simulator in them:
 
 | repository | Rust and colcon prefix | short | note |
 |---|---|---|---|
-| `scenario-world-bridge` | `swb_`, bridge `scenario_world_bridge` | swb | says what it bridges; recommended |
+| `scenario-world-bridge` | `swb_`, bridge `scenario_world_bridge` | swb | **chosen** (user, 2026-10-22) |
 | `ssv2-sim-bridge` | `ssb_` | ssb | ties the name to SSv2, which the project depends on anyway |
 | `scenario-sim-adapter` | `ssa_` | ssa | the design doc's word for L1 |
 
 What keeps its name: `scenario_agent_relay` (already simulator-free), acb and aib (their own
 repositories), `carla_world` (CARLA's server, rightly named), `csb_isaac` becomes
 `isaac_world`. Design-doc names (`ssv2_world_bridge`, `ssv2_world_protocol`) follow the
-chosen prefix.
+chosen prefix: `swb_world_protocol`, `swb_world_server`, `swb_agent`, `swb_launch`, `swb_interfaces`, `swb_examples`; the bridge binary `scenario_world_bridge`; environment `SWB_*`.
 
 ## Risks
 
@@ -243,8 +349,12 @@ chosen prefix.
   can move when a pose is applied relative to the tick, which the gap trace would show as a
   one-frame shift. The identical-trace check (035's) is the guard; a shift is a bug, not a
   tolerance.
-- **One more process to supervise on CARLA.** `carla_world` and the bridge both respawn;
-  a wedge now takes two restarts. CLAUDE.md's process accounting gains `carla_world`.
+- **One more process to supervise on CARLA.** Contained by running it inside the simulation
+  side's launch (one group, one stop) and by the lifetime rules above; a wedge still takes
+  two restarts. CLAUDE.md's process accounting gains `carla_world`.
+- **play_launch respawns on every exit.** A refused singleton would loop every
+  `respawn_delay`; the fast refusal and the delay bound the cost, and step 5 checks for a
+  respawn-on-exit-code option before relying on it.
 - **Isaac work in flight.** 044's open items and 039 touch the Isaac path. Land part A step
   2-4 quickly, or hold Isaac protocol changes until step 4 is in.
 - **The rename touches every host's `.env`** and every user's muscle memory. The retired-env
@@ -263,6 +373,18 @@ Part A:
 - Isaac: `town01_ego_drive` 5/5 with tracking within `acceptance.py`'s limits; 044's exit
   set with step 1's verdicts; the 20-NPC bench trace identical to step 1's.
 - The run tooling knows no simulator by name except through `sim:=` and `<sim>/up.sh`.
+- Lifecycle drills, each on CARLA and on Isaac:
+  - `kill -9` of the simulation side's play_launch: no bridge, relay or `carla_world` alive
+    2 s later (`ppid == 1` check from CLAUDE.md finds nothing).
+  - A second `carla_world` against the same CARLA is refused with the holder's pid and does
+    not respawn-loop faster than `respawn_delay`; a second simulation side is refused at the
+    SSv2 port.
+  - A second bridge against a world server with a live owner is refused; `kill -9` of the
+    owner bridge, and its respawn owns the world within 5 s.
+  - A forced hung tick (034's fault injection) fails the scenario in flight with the
+    reason, and the next scenario passes without a hand restart.
+  - A CARLA restart between scenarios: `carla_world` reconnects, the bridge does not
+    restart, the next scenario passes.
 
 Part B:
 
