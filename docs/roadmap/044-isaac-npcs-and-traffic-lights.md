@@ -643,9 +643,55 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
    with a mid-run spawn (incidents 1, 2, 4, 5, 6, `UC-AEB-001`) were taken with the ego
    stopped by the spawn. All pass again with the fix (`fx-i1`, `fx-i2`, `fx-i4`, `fx-i5`,
    `fx-i6`, `fx-aeb`: SSv2 PASS, judge PASS, oracle agree, 0 contacts, no spawn drop).
-2. **The two-wheeler rider stays in its bind pose** (step 5, `two_wheelers_bind_pose.png`):
+2. **The two-wheeler rider stays in its bind pose** (step 5, `two_wheelers_bind_pose.png`).
+   **Closed 2026-10-22: seated, below.** Was:
    two UE attempts reverted. Next to try: the walkers' route (a plain `SkeletalMeshActor`
    playing the rider's seated sequence, exported as a `SkelAnimation`).
+
+   **Plan** (2026-10-22). Found first (UE probe, `/mnt/wd/aeon/csb-044/riders/`): every
+   rider (`SK_Female`, `SK_femaleAfro_`, `SK_euroM_`, `SK_euroM_v2_`) is on CARLA's Gen2
+   skeleton `SK_Pedestrian_Generan` (66 `crl_*` joints), and **no seated sequence exists for
+   it**: `PedestrianOnSidecar` has no skeleton at all (Mixamo bone names, which is why step 5's
+   try exported nothing), `HandBikePose` and `man_manosMoto` are on the old `man_xfull`
+   skeleton. The one biker asset on the rider's skeleton, `AS_Pedestrian_BikeHands`, exports
+   through the walkers' route (a `SkeletalMeshActor` level, `SkelAnimation` of 126 frames) but
+   is static and differs from the rest pose only in the hands (wrists and fingers: the grip).
+   So `AB_Biker` is that grip plus IK, and the rest of the rider's component sits about 1 m
+   behind the bike (the anim blueprint moves the pelvis onto the saddle). The bike's own
+   skeleton carries the IK targets: `Seat`, `HandlerLeftSocket` / `HandlerRightSocket`,
+   `LeftPedalGeo` / `RightPedalGeo`.
+
+   So the rider is posed offline, once per two-wheeler, as `AB_Biker` would:
+   - `isaac_vehicles.sh riders:=true`: the grip exported from the editor (the walkers' route),
+     kept as `$CSB_VEHICLE_USD/riders/grip.npz`.
+   - `csb_isaac.rider` (numpy, unit-tested): from the rider's rest pose, the hips onto the
+     saddle, the spine leant forward until both hands reach the bars, two-bone IK of each arm
+     to its handlebar socket and each leg to its pedal (knees forward, elbows down and out),
+     feet kept level, the grip on the hands.
+   - `vehicle_usd_assets.py` writes the pose as a static `SkelAnimation` in each two-wheeler's
+     wrapper (`/Vehicle/RiderPose`, bound to the rider's `SkelRoot`), so the world server
+     needs no pose code. Collider unchanged (the box).
+   - Check: a headless render of all seven (`two_wheelers_seated.png` beside
+     `two_wheelers_bind_pose.png`), then incident 6 once on Isaac.
+
+   **Result** (2026-10-22): **the riders sit.** `just isaac-vehicles riders:=true` (levels and
+   export about 3 min, then every wrapper written again) seats all seven:
+   `/mnt/wd/aeon/csb-044/two_wheelers_seated.png` (side on, against
+   `two_wheelers_bind_pose_all.png`), `two_wheelers_seated_quarter.png` and
+   `two_wheelers_seated_world.png` (spawned through `IsaacWorld.spawn`, as a scenario's
+   cyclist is). Hips on the saddle, hands on the grips with the grip pose, feet on the pedals
+   or pegs, head up. Leans chosen: city bikes 10-40 degrees with no slide, Harley 14, Vespa 30,
+   the road bike, Ninja and YZF 48-60 degrees with the hips 0.15 m forward (their bars are low
+   and far); `vehicles.json` keeps them per entry (`rider_pose`).
+
+   - **A SkelAnimation inside an instance is not applied**: with the body instanceable the
+     rider stayed in its rest pose. A two-wheeler with `rider_pose` is therefore not
+     instanceable (`vehicle_assets.instanceable`); cars and props still are.
+   - Static: the legs do not pedal and the bars do not steer (CARLA's AB_Biker animates both).
+     Visual only; the collider is the declared box, as before.
+   - Also removed: the leftover of step 5's attempt in `ue_vehicle_levels.py` (the vehicles
+     mode still referenced an undefined `RIDER_ANIM` for two-wheelers, a `NameError` the next
+     time the vehicles' levels were made).
 3. **`walker.pedestrian.NNNN` -> blueprint is unreadable** (step 6): WalkerFactory builds it
    in its Blueprint graph, so `csb_isaac.walkers.pick` chooses by the id's number. Either a
    table taken from CARLA's source, or keep the numeric pick.

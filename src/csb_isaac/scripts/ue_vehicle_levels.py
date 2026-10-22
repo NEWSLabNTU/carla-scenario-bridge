@@ -14,7 +14,14 @@ levels under /Game/CSBWalkerExport/, `<id>_walk` and `<id>_idle`, each a plain
 SkeletalMeshActor of the walker's mesh playing a walk or an idle cycle in single-node mode
 (SimReady exports that as a SkelAnimation; the blueprint's own anim blueprint it does not).
 The id is the blueprint's name, lower case: which `walker.pedestrian.NNNN` a blueprint is
-lives in WalkerFactory's graph, not in a property an editor script reads."""
+lives in WalkerFactory's graph, not in a property an editor script reads.
+
+With CSB_VEH_KIND=riders (roadmap 044, open item 2), the two-wheelers' riders' grip: one level
+`/Game/CSBRiderExport/rider_grip`, a SkeletalMeshActor of a rider (`SK_Female`, on the Gen2
+skeleton every rider of a CARLA two-wheeler has) playing `AS_Pedestrian_BikeHands` in
+single-node mode. That pose is the only part of CARLA's `AB_Biker` an export can carry (the rest
+is IK, which `csb_isaac.rider` does offline); CARLA has no seated sequence on that skeleton
+(`PedestrianOnSidecar` has no skeleton at all)."""
 import json
 import os
 import sys
@@ -156,6 +163,38 @@ def walkers():
     write_meta(meta)
 
 
+RIDER_MESH = "/Game/Carla/Static/Pedestrian/Female/SK_Female"
+RIDER_GRIP = "/Game/Carla/Static/Pedestrian/Animations/Female/AS_Pedestrian_BikeHands"
+
+
+def riders():
+    mesh = unreal.EditorAssetLibrary.load_asset(RIDER_MESH)
+    anim = unreal.EditorAssetLibrary.load_asset(RIDER_GRIP)
+    entry = {"id": "rider_grip", "mesh": RIDER_MESH, "anim": RIDER_GRIP}
+    if mesh is None or anim is None:
+        entry["error"] = "no mesh or no animation"
+    elif anim.get_editor_property("skeleton") != mesh.get_editor_property("skeleton"):
+        entry["error"] = "the grip is not on the rider's skeleton"
+    else:
+        level = "/Game/CSBRiderExport/rider_grip"
+        blank_level(level)
+        xf = unreal.Transform(unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0), unreal.Vector(1, 1, 1))
+        a = unreal.OpenDriveToMap.spawn_actor_with_check_no_collisions(unreal.SkeletalMeshActor, xf)
+        c = a.skeletal_mesh_component
+        c.set_skeletal_mesh(mesh)
+        c.set_editor_property("animation_mode", unreal.AnimationMode.ANIMATION_SINGLE_NODE)
+        data = unreal.SingleAnimationPlayData()
+        data.set_editor_property("anim_to_play", anim)
+        data.set_editor_property("saved_looping", True)
+        data.set_editor_property("saved_playing", True)
+        c.set_editor_property("animation_data", data)
+        c.set_animation_mode(unreal.AnimationMode.ANIMATION_SINGLE_NODE)
+        c.set_animation(anim)
+        unreal.EditorLevelLibrary.save_current_level()
+        entry["level"] = level
+    write_meta([entry])
+
+
 def vehicles():
 
     fac_cls = unreal.EditorAssetLibrary.load_blueprint_class("/Game/Carla/Blueprints/Vehicles/VehicleFactory")
@@ -190,25 +229,6 @@ def vehicles():
         xf = unreal.Transform(unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0), unreal.Vector(1, 1, 1))
         actor = unreal.OpenDriveToMap.spawn_actor_with_check_no_collisions(cls, xf)
         entry["level"] = level
-        if nw == 2:
-            # The rider (roadmap 044 D): a two-wheeler's second skeletal mesh, posed in-game
-            # by AB_Biker (IK to the handlebars), which an export does not run: left alone it
-            # is exported in its bind pose, arms out and standing. SimReady exports the
-            # animation a single-node component plays, so the rider plays a seated pose.
-            anim = unreal.EditorAssetLibrary.load_asset(RIDER_ANIM)
-            for c in actor.get_components_by_class(unreal.SkeletalMeshComponent):
-                if c.get_name() == "VehicleMesh" or anim is None:
-                    continue
-                # As saved properties, which the export's load of the level initializes from.
-                c.set_editor_property("animation_mode", unreal.AnimationMode.ANIMATION_SINGLE_NODE)
-                data = unreal.SingleAnimationPlayData()
-                data.set_editor_property("anim_to_play", anim)
-                data.set_editor_property("saved_looping", True)
-                data.set_editor_property("saved_playing", True)
-                c.set_editor_property("animation_data", data)
-                c.set_animation_mode(unreal.AnimationMode.ANIMATION_SINGLE_NODE)
-                c.set_animation(anim)
-                entry["rider_anim"] = RIDER_ANIM
         try:
             bb = unreal.BoundingBoxCalculator.get_vehicle_bounding_box(actor)
             entry["carla_bbox"] = {"origin": v(bb.origin), "extent": v(bb.extent)}
@@ -251,5 +271,7 @@ def vehicles():
 
 if KIND == "walkers":
     walkers()
+elif KIND == "riders":
+    riders()
 elif KIND != "props":
     vehicles()

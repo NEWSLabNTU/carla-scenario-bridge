@@ -699,7 +699,7 @@ isaac-msgs:
 isaac-town town *args:
     ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/csb_isaac/scripts/isaac_town.sh" "$@"
 
-# Usage: just isaac-vehicles [only:=<id>,<id>...] [export:=true]
+# Usage: just isaac-vehicles [only:=<id>,<id>...] [export:=true] [props|walkers|riders:=true]
 #
 # SimReady export of each vehicle, render-only asset, vehicles.json, into CSB_VEHICLE_USD;
 # host paths from CARLA_SRC and CSB_VEHICLE_USD. Physics afterwards, with CARLA up:

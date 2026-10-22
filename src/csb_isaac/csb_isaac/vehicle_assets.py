@@ -24,7 +24,8 @@ degenerate in the export's metadata and their render width is the rider's. CARLA
 (`isaac_vehicles.sh props:=true`, `<root>/props/props.json`) dress MiscObjects that name a
 `static.prop.*` blueprint; one naming a vehicle wears that vehicle. CARLA's walkers
 (`isaac_vehicles.sh walkers:=true`, `<root>/walkers/walkers.json`, roadmap 044 C) dress
-pedestrians, played by `csb_isaac.walkers`.
+pedestrians, played by `csb_isaac.walkers`. A two-wheeler's rider sits on it
+(`csb_isaac.rider`, baked into the wrapper by `vehicle_usd_assets.py`).
 """
 import json
 import logging
@@ -119,8 +120,9 @@ def _invisible(prim):
 def add_npc_body(stage, entity_path, entry, center, collider=None):
     """`entry`'s car under the entity Xform at `entity_path` (the SSv2 entity origin): its
     CARLA bounding box centred on the declared box centre `center` in x and y, its ground at
-    the origin's. Instanceable, so every NPC of one model shares its meshes. `collider`, the
-    box, is made invisible."""
+    the origin's. Instanceable, so every NPC of one model shares its meshes, except a
+    two-wheeler whose rider is seated (`rider_pose`: its SkelAnimation is not applied inside an
+    instance). `collider`, the box, is made invisible."""
     from pxr import Gf, UsdGeom
 
     bb = entry.get("carla_bbox") or {"center": [0.0, 0.0, 0.0]}
@@ -130,10 +132,15 @@ def add_npc_body(stage, entity_path, entry, center, collider=None):
         Gf.Vec3d(center[0] - bb["center"][0], center[1] - bb["center"][1], 0.0))
     prim = x.GetPrim()
     prim.GetReferences().AddReference(entry["usd"])
-    prim.SetInstanceable(True)
+    prim.SetInstanceable(instanceable(entry))
     if collider is not None:
         _invisible(collider)
     return prim
+
+
+def instanceable(entry):
+    """Whether an NPC's body may be an instance: not a seated rider's (044 open item 2)."""
+    return not entry.get("rider_pose")
 
 
 def add_ego_body(stage, vehicle_path, entry, collider=None):

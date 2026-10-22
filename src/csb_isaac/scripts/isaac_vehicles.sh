@@ -4,7 +4,8 @@
 # with the catalogue csb_isaac.vehicle_assets reads (vehicles.json: each car's CARLA box,
 # wheels, wheel base).
 #
-#   isaac_vehicles.sh [only:=<id>,<id>...] [export:=true] [props:=true]
+#   isaac_vehicles.sh [only:=<id>,<id>...] [export:=true] [props:=true] [walkers:=true]
+#                     [riders:=true]
 #
 #   only:=<ids>     these blueprint ids only (vehicle.tesla.model3,...); default all
 #   export:=true    export again even if a vehicle's USD exists
@@ -14,6 +15,10 @@
 #   walkers:=true   CARLA's walkers instead (roadmap 044 C): every BP_Walker* blueprint with
 #                   a walk and an idle cycle, into $CSB_VEHICLE_USD/walkers/ with its
 #                   walkers.json (walker_usd_assets.py); only:= takes ids (bp_walker_female1_v1)
+#   riders:=true    the two-wheelers' riders' grip instead (roadmap 044, open item 2): CARLA's
+#                   AS_Pedestrian_BikeHands on a rider, into $CSB_VEHICLE_USD/riders/ as
+#                   grip.npz (rider_usd_assets.py); then the vehicles' wrappers are written
+#                   again, their riders seated with that grip (vehicle_usd_assets.py)
 #
 # Host paths from the environment:
 #   CARLA_SRC        CARLA 0.9.16 editor build with SimReady (default /mnt/disk1/carla-src),
@@ -37,24 +42,27 @@
 # newslab-server139 (the preparing editor hangs at exit there and is killed after 2 min).
 set -euo pipefail
 
-usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)    # src/csb_isaac
-only=""; force=false; props=false; walkers=false
+only=""; force=false; props=false; walkers=false; riders=false
 for a in "$@"; do
     case "$a" in
         only:=*) only=${a#only:=} ;;
         export:=*) force=${a#export:=} ;;
         props:=*) props=${a#props:=} ;;
         walkers:=*) walkers=${a#walkers:=} ;;
+        riders:=*) riders=${a#riders:=} ;;
         -h|--help) usage ;;
-        *) echo "isaac_vehicles: unknown argument '$a' (only:=, export:=, props:=, walkers:=)" >&2; exit 2 ;;
+        *) echo "isaac_vehicles: unknown argument '$a' (only:=, export:=, props:=, walkers:=, riders:=)" >&2; exit 2 ;;
     esac
 done
 CARLA_SRC=${CARLA_SRC:-/mnt/disk1/carla-src}
 root=${CSB_VEHICLE_USD:-/mnt/disk1/carla-usd/vehicles}
+vehicles_root=$root
 kind=vehicles
 if [ "$props" = true ]; then root="$root/props"; kind=props; fi
 if [ "$walkers" = true ]; then root="$root/walkers"; kind=walkers; fi
+if [ "$riders" = true ]; then root="$root/riders"; kind=riders; fi
 meta="$root/ue_meta.json"
 mkdir -p "$root/logs"
 
@@ -121,6 +129,7 @@ if [ "$need_levels" = true ]; then
     content=$(bash -c 'source "$1/env.sh" >/dev/null 2>&1; echo "$CARLA_ROOT/Unreal/CarlaUE4/Content"' _ "$CARLA_SRC")
     dir="$content/CSBVehicleExport"; [ "$kind" = props ] && dir="$content/CSBPropExport"
     [ "$kind" = walkers ] && dir="$content/CSBWalkerExport"
+    [ "$kind" = riders ] && dir="$content/CSBRiderExport"
     if [ -d "$dir" ]; then
         if [ -n "$only" ]; then
             for id in ${only//,/ }; do
@@ -199,6 +208,10 @@ fi
 if [ "$kind" = walkers ]; then
     python -I "$here/scripts/walker_usd_assets.py" "$root"
     exit 0
+fi
+if [ "$kind" = riders ]; then
+    python -I "$here/scripts/rider_usd_assets.py" "$root"
+    root=$vehicles_root
 fi
 python -I "$here/scripts/vehicle_usd_assets.py" "$root"
 [ -f "$root/physics.json" ] || echo "isaac_vehicles: no physics.json yet: with CARLA 0.9.16 up," \

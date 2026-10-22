@@ -9,6 +9,13 @@ default prim `/Vehicle` referencing the export's `/Root`, with the actor's lamps
 (SphereLights), its collision mesh, arrow and bounds box deactivated, and `customData` `csb`
 carrying the geometry below. Writes `<root>/vehicles.json` and `<root>/vehicles.md`.
 
+A two-wheeler's rider (roadmap 044, open item 2), exported in its rest pose, is seated on it:
+`csb_isaac.rider` poses it from the bike's Seat, handlebar and pedal joints, with the grip of
+`<root>/riders/grip.npz` when `isaac_vehicles.sh riders:=true` has made it, and the wrapper
+carries that pose as a static SkelAnimation `/Vehicle/RiderPose` bound to the rider's
+SkelRoot; vehicles.json marks the entry `rider_pose` (such a body cannot be instanceable: a
+SkelAnimation inside an instance is not applied).
+
 Frame (the export's, unchanged): metres, Z up, right-handed (CARLA's Y flipped), origin = the
 CARLA actor origin (on the ground, roughly mid-length); x forward, y left.
 """
@@ -16,7 +23,11 @@ import json
 import sys
 from pathlib import Path
 
-from pxr import Gf, Pcp, Sdf, Usd, UsdGeom, UsdLux
+import numpy as np
+from pxr import Gf, Pcp, Sdf, Usd, UsdGeom, UsdLux, UsdSkel, Vt
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # csb_isaac
+from csb_isaac import rider  # noqa: E402
 
 root = Path(sys.argv[1])
 meta = {m["id"]: m for m in json.loads((root / "ue_meta.json").read_text())}
@@ -26,6 +37,44 @@ DROP_NAMES = {"CustomCollision", "ArrowHolder", "VehicleBounds"}
 LAMPS_OFF = {"Left_Blinker", "Right_Blinker", "Brake", "Reverse", "Front_Fog", "Back_Fog", "High_Beam"}
 WHEEL_ORDER = ["Wheel_Front_Left", "Wheel_Front_Right", "Wheel_Middle_Left", "Wheel_Middle_Right",
                "Wheel_Rear_Left", "Wheel_Rear_Right"]
+grip_file = root / "riders" / "grip.npz"
+GRIP = None
+if grip_file.exists():
+    g = np.load(grip_file)
+    GRIP = {str(j).rsplit("/", 1)[-1]: q for j, q in zip(g["joints"], g["rotations"])
+            if "hand" in str(j).rsplit("/", 1)[-1]}
+    print(f"riders' grip from {grip_file} ({len(GRIP)} joints)")
+
+
+def _skeleton(sk):
+    """A Skeleton's joint paths, rest transforms (USD 4x4s) and local-to-asset transform."""
+    xf = UsdGeom.Xformable(sk.GetPrim()).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    return ([str(j) for j in sk.GetJointsAttr().Get()],
+            np.array([np.array(m) for m in sk.GetRestTransformsAttr().Get()]), np.array(xf))
+
+
+def seated_rider(actor):
+    """For a two-wheeler: `(the rider's SkelRoot path, joints, rotations, translations, scales,
+    (slide, lean))`, the rider posed on the bike's sockets; None for anything else."""
+    skels = [UsdSkel.Skeleton(p) for p in Usd.PrimRange(actor) if p.IsA(UsdSkel.Skeleton)]
+    bike = next((s for s in skels if "Seat" in [str(j).rsplit("/", 1)[-1]
+                                                for j in s.GetJointsAttr().Get()]), None)
+    person = next((s for s in skels if rider.HIPS in [str(j).rsplit("/", 1)[-1]
+                                                      for j in s.GetJointsAttr().Get()]), None)
+    if bike is None or person is None:
+        return None
+    skel_root = person.GetPrim().GetParent()
+    while skel_root and not skel_root.IsA(UsdSkel.Root):
+        skel_root = skel_root.GetParent()
+    if not skel_root:
+        return None
+    bike_pose = rider.Pose(*_skeleton(bike))
+    sockets = {k: bike_pose.pos(name) for k, name in rider.BIKE_SOCKETS.items()}
+    joints, rest, xf = _skeleton(person)
+    rotations, translations, scales, fit = rider.seat(joints, rest, xf, sockets, GRIP)
+    return skel_root.GetPath(), joints, rotations, translations, scales, fit
+
+
 rows = []
 for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("vehicle.")):
     bp_id = d.name
@@ -123,6 +172,11 @@ for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("v
                 wh["usd_prim"] = "/" + wh["name"]
             wl_layer.Save()
             info["prop"] = prop[0]
+    seated = seated_rider(actor)
+    if seated is not None:
+        info["rider_pose"] = {"slide": round(float(seated[5][0]), 3),
+                              "lean_deg": round(float(seated[5][1]), 1),
+                              "grip": GRIP is not None}
     rows.append(info)
     # The wrapper
     layer = Sdf.Layer.CreateNew(str(d / f"{bp_id}.usda"))
@@ -144,6 +198,16 @@ for d in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("v
     for wh in wl:
         csb[wh["name"]] = {"path": wh["path"], "pos": wh["pos"],
                            **({"radius": wh["radius"]} if wh["radius"] else {})}
+    if seated is not None:
+        skel_root, joints, rotations, translations, scales, _ = seated
+        anim = UsdSkel.Animation.Define(w, "/Vehicle/RiderPose")
+        anim.CreateJointsAttr(Vt.TokenArray(joints))
+        anim.CreateRotationsAttr(Vt.QuatfArray.FromNumpy(rotations))
+        anim.CreateTranslationsAttr(Vt.Vec3fArray.FromNumpy(translations))
+        anim.CreateScalesAttr(Vt.Vec3hArray([Gf.Vec3h(*map(float, s)) for s in scales]))
+        over = w.OverridePrim(str(skel_root).replace("/Root", "/Vehicle", 1))
+        UsdSkel.BindingAPI.Apply(over).CreateAnimationSourceRel().SetTargets([anim.GetPath()])
+        csb["rider_pose"] = info["rider_pose"]
     v.GetPrim().SetCustomDataByKey("csb", csb)
     layer.Save()
     print(f"{bp_id}: {info['render_size']} wheels {len(wl)} dropped {len(drop)}")
