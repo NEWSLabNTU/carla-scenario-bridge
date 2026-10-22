@@ -165,8 +165,9 @@ NPCs add a velocity write and a read per NPC per step; measured in the A spike.
    incidents 1, 4, 5 and `UC-ACC-001` on Isaac (2026-10-22: all PASS, as on CARLA).
 4. [x] **B**: signal table, `SetSignals`, lamps, aib's publisher; `town01_traffic_light`
    and incident 3 on Isaac (2026-10-22: 2/2 PASS each).
-5. [ ] **D**: two-wheelers by subtype (rider check), MiscObjects by model, props export;
-   incident 6, incident 2's parked cars, `town01_pedestrian`'s barriers.
+5. [x] **D**: two-wheelers by subtype (rider check), MiscObjects by model, props export;
+   incident 6, incident 2's parked cars, `town01_pedestrian`'s barriers (2026-10-22; the
+   rider stays in its bind pose, open).
 6. [ ] **C spike, then C**: CARLA walkers through SimReady, else NVIDIA characters;
    incident 2, `town01_pedestrian`, `UC-AEB-001`.
 7. [ ] **F**: exit runs on both backends; 043's CARLA routes.
@@ -352,6 +353,67 @@ and 0.001 grey where not.
 |---|---|---|---|
 | `town01_traffic_light` | 2/2 PASS (3409, 3394 frames) | G1-G3 0, G4 agree | PASS (3441 frames) |
 | incident 3, red light | 2/2 PASS | stopped 0.17 / 0.27 m before the line for 8.1 s, moved 1.6 / 1.5 s after green | PASS |
+
+## Step 5: D
+
+**Plan** (2026-10-22).
+
+- **Two-wheelers**: `vehicles.json` has 7 (`base_type` bicycle 3, motorcycle 4); their
+  exports are 78-253 MB with four UsdSkel prims each and a render width of 1.95 m, so the
+  rider is in them, skinned; the check is a render of each kind: does the rider sit, or
+  stand in its bind pose. Their CARLA boxes in the export's metadata are degenerate (x
+  extent 0), so `nearest(dims, subtype)` picks among the two-wheelers of the box's kind
+  (SSv2's `bicycle` / `motorcycle`) by length alone. Tracked, they get 200 kg (CARLA's
+  bicycles weigh 1 kg in `physics.json`).
+- **MiscObjects** wear their model: csb sends the asset key (`model3d`) for them too, CARLA's
+  default `static.prop.streetbarrier` when it names neither a vehicle nor a prop; the world
+  server puts a vehicle's body on a vehicle model (incident 2's parked van and car) and a
+  prop's on a prop, its CARLA box centred on the declared box, bottom on bottom.
+- **Props export**: `isaac_vehicles.sh props:=true` (`just isaac-vehicles props:=true`):
+  `ue_vehicle_levels.py` with `CSB_VEH_KIND=props` makes one level per `static.prop.*` of
+  the editor's `Default.Package.json` (its static mesh alone at the origin, the mesh bounds
+  as its CARLA box), the same SimReady commandlet exports them, `prop_usd_assets.py` wraps
+  them and writes `$CSB_VEHICLE_USD/props/props.json`. Crash uploads stay off (the engine
+  ini and the `-ini:` override, 043).
+- Runs on Isaac: incident 6 (the cyclist), incident 2 (its parked cars; its pedestrian is a
+  box until C), `town01_pedestrian` (its barriers).
+
+**Results** (2026-10-22, server139).
+
+- **Props export**: `just isaac-vehicles props:=true`: 98 props in `Default.Package.json`, 97
+  exported (`Bike Helmet` has a space in its id, which no shell word, path or SimReady map
+  name takes: skipped and logged); levels and export 4 min, `props.json` beside them
+  (`static.prop.streetbarrier` 1.22 x 0.37 x 1.07 m). No crash report written; the engine
+  ini keeps `bSendUnattendedBugReports=False` / `bSendUsageData=False` and
+  `DataRouterUrl=""`. Found on the way: an export with `export:=true` over levels an earlier
+  run made exported the old levels (the editor cannot delete them: "exists but is not
+  accessible"); `isaac_vehicles.sh` now removes the `.umap` files it is about to make again.
+- **MiscObjects**: incident 2's `vehicle.mercedes.sprinter` and `vehicle.tesla.model3` wear
+  those bodies, `town01_pedestrian`'s barriers the street barrier, a cone its cone
+  (`/mnt/wd/aeon/csb-044/misc_objects.png`).
+- **Two-wheelers: the rider is there but not seated.** Each of the 7 exports has two
+  skeletons, the bike's and the rider's (`SK_Female`, `SK_euroM_` ...); the rider renders in
+  its bind pose, arms out, standing over the bike (`two_wheelers_bind_pose.png`). In CARLA
+  the rider is posed by `AB_Biker` (IK to the handlebars and pedals), which an export does
+  not run. Two tries to export a pose failed, and were taken out again: the rider component
+  set to single-node animation with CARLA's seated `PedestrianOnSidecar` (SimReady exports a
+  single-node animation, `ExportAnimationAssetAsUSDToPathInternal`, but the blueprint's
+  component kept its anim blueprint through the export's load: no `SkelAnimation` in the
+  USD), and a separate `SkeletalMeshActor` for the rider (not in the export either). The
+  rider stays as exported: it is visual only (the collider is the declared box), and the
+  lidar still sees a person-sized shape on the bike. **Open**, for the user: a seated rider
+  needs a pose exported from the editor (C's walker work may give the means).
+- `i6_cyclist` (1.66 x 0.6 x 1.62 m box, no model) wears `vehicle.diamondback.century`, the
+  bicycle nearest in length, tracked at 200 kg on 0.15 m skids.
+
+| scenario | Isaac: SSv2 verdict | judge / oracle | CARLA (033) |
+|---|---|---|---|
+| incident 6, cyclist inside the turn | 2/2 PASS | ego yielded (stood 1.5 / 3.0 s), cyclist 0.13 m at the closest; cyclist error p95 0.028 m | PASS 3/3 on centerpoint with the 042 overlay |
+| incident 2, pedestrian dart (parked van and car) | 1/1 PASS | ego stopped 4.1 s, pedestrian (a box) 5.2 m away | PASS |
+| `town01_pedestrian` (barriers) | 0/1: timeout | the ego touched the pedestrian box at frame 373 and never reached its goal | PASS |
+
+`town01_pedestrian` is C's: its pedestrian is still 037's kinematic yellow box, which the ego
+ran into; the barriers did their part. It is rerun in step 6.
 
 ## Acceptance
 

@@ -110,6 +110,18 @@ elif [ -n "$only" ]; then
 fi
 if [ "$need_levels" = true ]; then
     echo "isaac_vehicles: preparing levels (log $root/logs/levels.log)"
+    # A level made by an earlier run is not replaced by the editor (it exists but is not
+    # accessible to delete_asset, so the new one is never made and the old one exported):
+    # remove the ones being made again first.
+    content=$(bash -c 'source "$1/env.sh" >/dev/null 2>&1; echo "$CARLA_ROOT/Unreal/CarlaUE4/Content"' _ "$CARLA_SRC")
+    dir="$content/CSBVehicleExport"; [ "$kind" = props ] && dir="$content/CSBPropExport"
+    if [ -d "$dir" ]; then
+        if [ -n "$only" ]; then
+            for id in ${only//,/ }; do rm -f "$dir/${id//./_}.umap" "$dir/${id//./_}_BuiltData.uasset"; done
+        elif [ "$force" = true ]; then
+            rm -f "$dir"/*.umap "$dir"/*_BuiltData.uasset
+        fi
+    fi
     stamp="$root/logs/.levels-start"; touch "$stamp"
     CSB_VEH_META="$meta" CSB_VEH_ONLY="$only" CSB_VEH_KIND="$kind" commandlet "$root/logs/levels.log" \
         "Execution of commandlet took" -run=pythonscript "-script=$here/scripts/ue_vehicle_levels.py"

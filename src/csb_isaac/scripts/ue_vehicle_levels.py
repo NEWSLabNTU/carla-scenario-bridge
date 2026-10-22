@@ -55,6 +55,9 @@ if KIND == "props":
         bp_id = "static.prop." + p["name"].lower()
         if ONLY and bp_id not in ONLY:
             continue
+        if " " in bp_id:  # "Bike Helmet": no shell, path or SimReady map name takes it
+            unreal.log_warning("CSB: skipped %r (a space in its id)" % bp_id)
+            continue
         entry = {"id": bp_id, "mesh": p["path"], "size": p.get("size")}
         mesh = unreal.EditorAssetLibrary.load_asset(p["path"].split(".")[0])
         if mesh is None:
@@ -108,6 +111,25 @@ def vehicles():
         xf = unreal.Transform(unreal.Vector(0, 0, 0), unreal.Rotator(0, 0, 0), unreal.Vector(1, 1, 1))
         actor = unreal.OpenDriveToMap.spawn_actor_with_check_no_collisions(cls, xf)
         entry["level"] = level
+        if nw == 2:
+            # The rider (roadmap 044 D): a two-wheeler's second skeletal mesh, posed in-game
+            # by AB_Biker (IK to the handlebars), which an export does not run: left alone it
+            # is exported in its bind pose, arms out and standing. SimReady exports the
+            # animation a single-node component plays, so the rider plays a seated pose.
+            anim = unreal.EditorAssetLibrary.load_asset(RIDER_ANIM)
+            for c in actor.get_components_by_class(unreal.SkeletalMeshComponent):
+                if c.get_name() == "VehicleMesh" or anim is None:
+                    continue
+                # As saved properties, which the export's load of the level initializes from.
+                c.set_editor_property("animation_mode", unreal.AnimationMode.ANIMATION_SINGLE_NODE)
+                data = unreal.SingleAnimationPlayData()
+                data.set_editor_property("anim_to_play", anim)
+                data.set_editor_property("saved_looping", True)
+                data.set_editor_property("saved_playing", True)
+                c.set_editor_property("animation_data", data)
+                c.set_animation_mode(unreal.AnimationMode.ANIMATION_SINGLE_NODE)
+                c.set_animation(anim)
+                entry["rider_anim"] = RIDER_ANIM
         try:
             bb = unreal.BoundingBoxCalculator.get_vehicle_bounding_box(actor)
             entry["carla_bbox"] = {"origin": v(bb.origin), "extent": v(bb.extent)}
