@@ -573,6 +573,27 @@ logged `Loading map 'Town10HD' (CARLA currently holds 'Town05')` and `Map 'Town1
 loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside acceptance.py's
 1.0 m.
 
+## Open items (2026-10-22, after step 7)
+
+1. **`UC-ACC-001` on CARLA, CenterPoint stack** (the demo tour's: CenterPoint, tracker merger
+   off): FAIL 0/3, peak deceleration -1.51 / -1.50 / -1.52 m/s^2 against the scenario's -1.5
+   limit. The default stack passes 2/2 on CARLA, and Isaac passes on CenterPoint. The only
+   place SSv2's verdict differs between backends. Taken first.
+2. **The two-wheeler rider stays in its bind pose** (step 5, `two_wheelers_bind_pose.png`):
+   two UE attempts reverted. Next to try: the walkers' route (a plain `SkeletalMeshActor`
+   playing the rider's seated sequence, exported as a `SkelAnimation`).
+3. **`walker.pedestrian.NNNN` -> blueprint is unreadable** (step 6): WalkerFactory builds it
+   in its Blueprint graph, so `csb_isaac.walkers.pick` chooses by the id's number. Either a
+   table taken from CARLA's source, or keep the numeric pick.
+4. **Perception on the CenterPoint stack**: the crossing walker is `unknown` on the approach
+   (20-30 m), so no crossing is predicted, on both backends; `town01_pedestrian` passes in
+   SSv2 while the ego touches the walker (Isaac 4 of 5, CARLA too). The scenario's and the
+   ego config's, not Isaac's.
+5. **CARLA free-runs while our simulation side is stopped**: the server goes asynchronous
+   at ~79 % GPU. Harmless to runs, costly to a host shared with Isaac; left alone.
+6. **A transient colcon failure**: `acb_bridge` once failed with "no matching package
+   `autoware_adapi_v1_msgs`"; a plain retry passed. Not reproduced.
+
 ## Acceptance
 
 - `town01_traffic_light`, `basic/*` (except `town01_simulator_autopilot`, deferred),
