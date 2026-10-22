@@ -231,19 +231,43 @@ A plain `colcon build` (no `--symlink-install`, the user path) is not affected. 
 pip uninstall -y setuptools   # falls back to the apt package
 ```
 
-### Push submodule commits before bumping the superproject pin
-Never update a submodule pin in this repo to a commit that only exists locally.
-Push the commit to the submodule's remote first, then stage and commit the pin
-here. A pin referencing an unpushed commit breaks `git submodule update` for
-everyone else cloning the repo.
+### Linear history
+
+Every repo and branch, this one and each submodule: rebase onto the remote, never push
+a merge commit. Pull with `git pull --rebase`; land a branch on `main` by fast-forward
+(`git rebase origin/main`, then `git push origin <branch>:main`).
+
+### Submodules move in lockstep with their remote
+
+What a pin may point at:
+
+- **Third-party code** (not ours, e.g. `color_names`): a commit on a stable release
+  (a tag), or one specific commit chosen on purpose and named in the commit message
+  that sets it. Never an arbitrary upstream head.
+- **Our own repos and forks** (NEWSLabNTU: `autoware_carla_bridge`,
+  `autoware_isaac_bridge`, the `scenario_simulator_v2` fork): a commit on a branch of
+  our repo that the pin tracks. Put that branch in `.gitmodules` (`branch = ...`, as
+  `scenario_simulator_v2` has `managed-ego-unforked`); without one, the branch is
+  `main`. A third-party project we need to change gets a fork under NEWSLabNTU, and
+  the pin tracks a branch there. Do not pin a commit that lives only in someone
+  else's repo.
+
+Order: **push the submodule commit to its remote first, then bump the pin here.**
+Never update a pin to a commit that only exists locally. A pin referencing an
+unpushed commit breaks `git submodule update` for everyone else cloning the repo.
 
 ```bash
 cd src/<submodule> && git push origin <branch>   # first
 cd - && git add src/<submodule> && git commit    # then
 ```
 
-Verify with `git submodule status` and confirm the SHA is reachable on the
-remote (e.g. `git ls-remote origin | grep <sha>`) before pushing the superproject.
+Verify with `git submodule status` and confirm the SHA is on the tracked branch of the
+remote before pushing the superproject (`git ls-remote` lists only branch tips, so an
+older commit does not show there):
+
+```bash
+cd src/<submodule> && git fetch origin && git branch -r --contains <sha>   # must list origin/<branch>
+```
 
 ### Account for every process a run starts, and reap what it leaves
 
