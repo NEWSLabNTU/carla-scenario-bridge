@@ -168,8 +168,9 @@ NPCs add a velocity write and a read per NPC per step; measured in the A spike.
 5. [x] **D**: two-wheelers by subtype (rider check), MiscObjects by model, props export;
    incident 6, incident 2's parked cars, `town01_pedestrian`'s barriers (2026-10-22; the
    rider stays in its bind pose, open).
-6. [ ] **C spike, then C**: CARLA walkers through SimReady, else NVIDIA characters;
-   incident 2, `town01_pedestrian`, `UC-AEB-001`.
+6. [x] **C spike, then C**: CARLA walkers through SimReady, else NVIDIA characters;
+   incident 2, `town01_pedestrian`, `UC-AEB-001` (2026-10-22: CARLA's walkers, no fallback;
+   all SSv2 PASS; the ego touches `town01_pedestrian`'s walker in 4 of 5, open).
 7. [ ] **F**: exit runs on both backends; 043's CARLA routes.
 
 ## Step 2: the A spike
@@ -473,6 +474,27 @@ any `BP_Walker*` with a Gen2 or Gen3 cycle for its skeleton.
 Measured in an empty world (`spike_walkers2`, three pedestrians at 1.3, 0 and 2.5 m/s, 90
 frames of 2 substeps): step p50 1.10 ms, p95 1.95; gaits walk / idle / walk. Picture:
 `/mnt/wd/aeon/csb-044/walkers_in_isaac.png`.
+
+**Results** (2026-10-22, Isaac, Town01, the car-bodied ego with CenterPoint at
+`max_velocity:=11.11`; runs under `/mnt/wd/aeon/csb-044/runs/s6-*`):
+
+| Scenario | SSv2 | Judge / oracle | CARLA |
+|---|---|---|---|
+| incident 2 (`town01_i2_ped_dart`) | 2/2 PASS | judge PASS 2/2: stopped, walker 2.14 / 5.11 m (origins), waited 7.2 / 5.8 s; 0 contacts | PASS |
+| `town01_pedestrian` | 5/5 PASS | oracle `PASS+contact` 4/5: the ego touches the walker | PASS, stops 4.66 m short (014) |
+| `UC-AEB-001` (vxi_ego 8.333, dxi 30) | 2/2 PASS | stopped 9.0 m (origins) short; 0 contacts | PASS |
+
+The walker wears `bp_walker_female1_v1` (`walker.pedestrian.0001`) in all three.
+
+**`town01_pedestrian`'s contact is perception, not the walker.** The ego meets the walker
+while it is still crossing into the lane (0.69 m/s). Logged from the ego's domain
+(`/perception/object_recognition/objects`, `/api/planning/velocity_factors`, runs 3-5):
+over the run CenterPoint calls the walker `pedestrian` (1622-1667 messages) but on the
+approach, 20-30 m out, `unknown` (27-30), so no crossing is predicted; the first stop factor
+is `route-obstacle` at 3.0 m once the walker is inside the ego's path, too late from 8.4 m/s.
+Step 5's run with the plain yellow box failed the same way (and then SSv2 failed too), so
+the walker does not cause it. Why CenterPoint loses the class at that range on Isaac's lidar
+and not on CARLA's is left open (the lidar's returns off a skinned mesh, intensity).
 
 ## Acceptance
 
