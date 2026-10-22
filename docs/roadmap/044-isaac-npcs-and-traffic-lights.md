@@ -110,8 +110,9 @@ simulation and tuning cost; not now.
   `LoadWorld`, logged (matched / unmatched). Town03/05/10 need their table generated when
   a scenario there uses signals.
 - **Lamps**: each bulb's emissive material switched on or off (not visibility: the bulbs
-  are nested Green -> Yellow -> Red); off by default; the bulb meshes leave the collider
-  layer if they carry colliders.
+  are nested Green -> Yellow -> Red); green until SSv2 commands a signal, as the CARLA
+  backend sets every mapped light (step 3 found a dark default stopping the ego); the bulb
+  meshes leave the collider layer if they carry colliders.
 - **To Autoware**: aib's `EgoRos` publishes `autoware_perception_msgs/TrafficLightGroupArray`
   on `/perception/traffic_light_recognition/external/traffic_signals` in the ego's domain,
   from the state the world server holds, keyed by the Lanelet2 regulatory element ids as
@@ -160,8 +161,8 @@ NPCs add a velocity write and a read per NPC per step; measured in the A spike.
 2. [x] **A spike**: a velocity-driven dynamic NPC on Town01; `town01_rear_contact` with the
    car-bodied ego and the 20-NPC bench, frame time; remedy kerb catching if seen (skids,
    decals out; 2026-10-22).
-3. [ ] **A**: proto, world server, `IsaacBackend` through `npc_tracking.rs`, NPC contacts;
-   incidents 1, 4, 5 and `UC-ACC-001` on Isaac.
+3. [x] **A**: proto, world server, `IsaacBackend` through `npc_tracking.rs`, NPC contacts;
+   incidents 1, 4, 5 and `UC-ACC-001` on Isaac (2026-10-22: all PASS, as on CARLA).
 4. [ ] **B**: signal table, `SetSignals`, lamps, aib's publisher; `town01_traffic_light`
    and incident 3 on Isaac.
 5. [ ] **D**: two-wheelers by subtype (rider check), MiscObjects by model, props export;
@@ -257,6 +258,83 @@ With the ego's sensors the step is the ego's, 28-31 ms, as in 043.
 
 **Decision**: velocity-driven dynamic NPCs work on Town01's roads with skids; step 3 builds on
 this code as it stands.
+
+## Step 3: A
+
+**Plan** (2026-10-22). The spike's code is A's (proto, world server, `IsaacBackend` through
+`npc_tracking`, NPC contacts, kinematic selectable). What step 3 adds:
+
+- The fallback checked on Isaac itself: a tracked body made kinematic mid-run follows the
+  poses it is sent and stops reporting a twist (standalone, `IsaacWorld`).
+- The contact report on Isaac carries the episode's `tracking` rows and the NPCs' own
+  contacts (`npc_contacts`), as on CARLA (done in the spike's code; checked in a report).
+- Runs on Isaac, with the ego stack as the demo tour runs it on CARLA (`just ego-isaac
+  max_velocity:=11.11 lidar_detection_model:=centerpoint use_multi_channel_tracker_merger:=false`),
+  gap trace on: incidents 1, 4 and 5 (`incident_judge` on each trace and its
+  `/simulation/context` log) and `UC-ACC-001-0001` cut to one variant as 024 and 032 ran it
+  (ego 8.333 m/s, NPC 5.556 -> 2.778 m/s); SSv2's verdict against CARLA's (033 step 5
+  verification: incidents 1-5 25/25 PASS; 032 step 7: UC-ACC 1 variant PASS).
+
+**Results** (2026-10-22, server139; one world server, `just run backend:=isaac` traced, the
+ego stack as the tour runs it: `max_velocity:=11.11 lidar_detection_model:=centerpoint
+use_multi_channel_tracker_merger:=false`; runs, traces, judges in `/mnt/wd/aeon/csb-044/runs/`).
+
+- **The fallback on Isaac** (standalone `IsaacWorld`): a tracked body handed to kinematic
+  goes to the poses it is sent from that step (5.0, then 9.0, 10.0, ... m) and its state
+  stops carrying a twist; the other tracked body keeps its velocity throughout.
+- **Despawning a tracked body** printed `physics.tensors simulationView was invalidated` (a
+  prim deleted under a live rigid body view); the view is now released before the prim
+  goes, and a body's neighbours keep their velocity across a despawn (7.95 m/s before and
+  after, standalone).
+- **The contact report** carries `tracking` (e.g. UC-ACC's `Npc1`: 812 frames, error p95
+  0.013 m) and `npc_contacts`, as on CARLA.
+
+| scenario | Isaac: SSv2 verdict | incident_judge | NPC tracking (error p95 / max, snaps) | gap oracle | CARLA (033 step 5, 032 step 7) |
+|---|---|---|---|---|---|
+| incident 1, lead brakes | 2/2 PASS | PASS: lead 6.05 m/s2, ego 8.4 m/s 50 m back at the brake, stood 7.4-7.6 s, 5.15 m behind | 0.019 / 0.037 m, 0 | G1-G3 0, G4 agree | PASS |
+| incident 4, blocked lane | 2/2 PASS | PASS: waited 12.0 s 5.2 m behind the broken car, oncoming 1.8 m clear, moved 2.1-2.2 s after | 0.013 / 0.020 m, 0 | G1-G3 0, G4 agree | PASS |
+| incident 5, cross turn | 2/2 PASS | PASS: yielded 1.5-1.6 s, crossing car 2.0 m clear | 0.013 / 0.019 m, 0 | G1-G3 0, G4 agree | PASS |
+| `UC-ACC-001-0001`, 1 variant (8.333 / 5.556 -> 1.944 m/s) | 2/2 PASS | | `Npc1` 0.013 / 0.278 m (spawned moving), 0 | G1-G3 0 (1 info), G4 agree | PASS |
+
+SSv2's verdict agrees with CARLA's on all four. Incident 1 first failed twice on the 300 s
+timeout: the ego stopped at the Town01 junction at (76, -331) and never moved on. Step 4's
+signal code was already in this build, and every lamp started dark, which reached Autoware
+as UNKNOWN on every group -- a stop line. The CARLA backend sets every mapped light GREEN
+before a scenario commands any (`set_mapped_lights_green`); the world server now does the
+same (B's "off by default" is changed to that), and incident 1 passed 2/2.
+
+## Step 4: B
+
+**Plan** (2026-10-22). What the survey of Town01's export found first: each of the 36
+`Root/Intersections/TrafficLight*` prims carries `omni:simready:signalID` = its OpenDRIVE
+signal id (375, 377, ...) and `signalOrder` `[red, amber, green]`, and sits at CARLA's
+actor position with Y flipped (`TrafficLight11` at (102.72, -52.85), the table's `377` at
+CARLA (102.72, 52.85)). Its bulbs are `Scene/Cylinder/GreenLight`, `.../YellowLight`,
+`.../RedLight`, nested; each has `SM_TLights_Leds/Section1`, the lens, bound to CARLA's
+`MI_StreetLightsOff.mdl` with `LightColor` (1, 0.016, 0) where lit (every red, as exported)
+and 0.001 grey where not.
+
+- **Wire** (`csb_world.proto`): `LoadWorld.signals` -- the map's signal table as csb reads it
+  from `<map>/carla/traffic_lights.yaml` (way id, regulatory element ids, OpenDRIVE id,
+  position in the world frame); `SetSignals { repeated SignalState { opendrive_id, colour } }`
+  (`Colour`: `OFF`, `RED`, `AMBER`, `GREEN`). Field and message additions; protocol 3.
+- **csb**: `IsaacBackend::initialize` sends the table with `LoadWorld` (none when the map has
+  no table: a scenario with no lights still runs); `update_traffic_lights` reduces each SSv2
+  signal to one colour as the CARLA backend does (a lit red wins, then amber, then green;
+  arrows flattened) and sends the changes as `SetSignals`, applied at the next step. An
+  unmapped way id is warned once, as on CARLA.
+- **World server**: at `LoadWorld` each table entry is matched to a lamp by `signalID`, else
+  by position (nearest within 1.5 m), logged matched / unmatched. Each lens is bound to one
+  of four materials made from the export's own (`MI_StreetLightsOff.mdl`, `LightColor`
+  red / amber / green / off); every lamp off at load. The bulbs leave the collider layer
+  (`physics_layer` skips `GreenLight`, which holds all three).
+- **To Autoware**: the world server hands aib's `EgoRos` the state each step;
+  `EgoRos.publish_signals` publishes `autoware_perception_msgs/TrafficLightGroupArray` on
+  `/perception/traffic_light_recognition/external/traffic_signals` in the ego's domain, one
+  group per regulatory element (the most restrictive colour of its lights, a solid circle at
+  confidence 1, as acb's publisher), every frame the ego publishes. aib builds
+  `autoware_perception_msgs` for Isaac's Python (`build_msgs.sh`).
+- Runs: `town01_traffic_light` and incident 3 on Isaac.
 
 ## Acceptance
 

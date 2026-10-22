@@ -12,7 +12,7 @@ from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
 # Bump with csb's `backend::isaac::PROTOCOL_VERSION` on any change a peer of the other
 # version would misread.
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 DESCRIPTOR_SET = Path(__file__).with_name("csb_world.desc")
 
@@ -27,10 +27,11 @@ def _load():
                for n in names}
     kinds = {v.name: v.number for v in pool.FindEnumTypeByName("csb_world.Kind").values}
     motions = {v.name: v.number for v in pool.FindEnumTypeByName("csb_world.Motion").values}
-    return classes, kinds, motions
+    colours = {v.name: v.number for v in pool.FindEnumTypeByName("csb_world.Colour").values}
+    return classes, kinds, motions, colours
 
 
-_CLASSES, KIND, MOTION = _load()
+_CLASSES, KIND, MOTION, COLOUR = _load()
 Vec3 = _CLASSES["Vec3"]
 Quat = _CLASSES["Quat"]
 Pose = _CLASSES["Pose"]
@@ -47,10 +48,14 @@ EntityState = _CLASSES["EntityState"]
 Contact = _CLASSES["Contact"]
 StepReply = _CLASSES["StepReply"]
 Shutdown = _CLASSES["Shutdown"]
+Signal = _CLASSES["Signal"]
+SignalState = _CLASSES["SignalState"]
+SetSignals = _CLASSES["SetSignals"]
 Request = _CLASSES["Request"]
 Reply = _CLASSES["Reply"]
 KIND_NAME = {v: k for k, v in KIND.items()}
 MOTION_NAME = {v: k for k, v in MOTION.items()}
+COLOUR_NAME = {v: k for k, v in COLOUR.items()}
 
 
 def pose_tuple(pose):

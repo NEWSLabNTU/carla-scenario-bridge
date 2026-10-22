@@ -17,13 +17,17 @@ blueprint (`origin_offset`). The ego's sits with its rear axle on base_link and 
 car's own wheels on the PhysX wheel prims, which follow suspension, steering and spin. The
 boxes stay the colliders, made invisible (to cameras and the RTX lidar alike) when a body
 covers them; the meshes carry no collision.
+
+Two-wheelers (roadmap 044 D): a bicycle or motorcycle box with no model wears the nearest
+exported two-wheeler of its kind (CARLA's `base_type`), by length -- their CARLA boxes are
+degenerate in the export's metadata and their render width is the rider's. CARLA's props
+(`isaac_vehicles.sh props:=true`, `<root>/props/props.json`) dress MiscObjects that name a
+`static.prop.*` blueprint; one naming a vehicle wears that vehicle.
 """
 import json
 import logging
 import os
 from pathlib import Path
-
-from pxr import Gf, UsdGeom
 
 log = logging.getLogger("csb_isaac")
 
@@ -50,6 +54,10 @@ class VehicleAssets:
         # index being regenerated.
         sidecar = self.root / "physics.json"
         self.physics_by_id = json.loads(sidecar.read_text()) if sidecar.exists() else {}
+        props = self.root / "props" / "props.json"
+        self.props = {e["id"]: e for e in json.loads(props.read_text())} if props.exists() else {}
+        if self.props:
+            log.info("%d CARLA props from %s", len(self.props), props)
 
     def physics(self, model):
         """CARLA's `get_physics_control()` for `model`, in the catalogue's frame, or None."""
@@ -63,10 +71,25 @@ class VehicleAssets:
             log.warning("no CARLA body for %r: a box", model)
         return entry
 
-    def nearest(self, dims):
+    def prop(self, model):
+        """The exported prop for a `static.prop.*` blueprint id, or None."""
+        entry = self.props.get(model or "")
+        if model and entry is None:
+            log.warning("no CARLA prop for %r: a box", model)
+        return entry
+
+    def nearest(self, dims, subtype=""):
         """The four-wheeled car whose CARLA box is closest in size to `dims` (length, width,
         height): what the CARLA backend does for a scenario vehicle that names no blueprint
-        (OpenSCENARIO's `model3d` unset; roadmap 022)."""
+        (OpenSCENARIO's `model3d` unset; roadmap 022). A `bicycle` or `motorcycle` gets the
+        two-wheeler of that kind closest in length (044 D)."""
+        if subtype in TWO_WHEELERS:
+            bikes = [e for e in self.by_id.values() if e.get("wheels_n") == 2
+                     and e.get("render_size")]
+            same = [e for e in bikes if e.get("base_type") == subtype]
+            if not (same or bikes):
+                return None
+            return min(same or bikes, key=lambda e: abs(e["render_size"][0] - dims[0]))
         cars = [e for e in self.by_id.values() if e.get("wheels_n") == 4 and e.get("carla_bbox")]
         if not cars:
             return None
@@ -78,7 +101,12 @@ class VehicleAssets:
         return min(cars, key=misfit)
 
 
+TWO_WHEELERS = ("bicycle", "motorcycle")
+
+
 def _invisible(prim):
+    from pxr import UsdGeom
+
     UsdGeom.Imageable(prim).MakeInvisible()
 
 
@@ -87,6 +115,8 @@ def add_npc_body(stage, entity_path, entry, center, collider=None):
     CARLA bounding box centred on the declared box centre `center` in x and y, its ground at
     the origin's. Instanceable, so every NPC of one model shares its meshes. `collider`, the
     box, is made invisible."""
+    from pxr import Gf, UsdGeom
+
     bb = entry.get("carla_bbox") or {"center": [0.0, 0.0, 0.0]}
     path = f"{entity_path}/model"
     x = UsdGeom.Xform.Define(stage, path)
@@ -105,6 +135,8 @@ def add_ego_body(stage, vehicle_path, entry, collider=None):
     axle centre on the ground): the body with its rear axle on base_link and its own wheels
     removed, and each wheel on vehicle.py's PhysX wheel prim of the same corner in place of
     the stand-in cylinder. `collider`, the chassis box, is made invisible."""
+    from pxr import Gf, UsdGeom
+
     path = f"{vehicle_path}/model"
     x = UsdGeom.Xform.Define(stage, path)
     x.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble).Set(
@@ -131,4 +163,28 @@ def add_ego_body(stage, vehicle_path, entry, collider=None):
         _invisible(collider)
     log.info("ego wears %s (rear axle at x=%.3f in the asset, %d wheel(s))",
              entry["id"], entry.get("rear_axle_x") or 0.0, dressed)
+    return prim
+
+
+def prop_offset(entry, center, dims):
+    """Where a prop's asset frame goes in the entity's: its CARLA box centred on the declared
+    box in x and y, its bottom on the declared box's bottom."""
+    bb = entry.get("carla_bbox") or {"center": [0.0, 0.0, 0.0], "extent": [0.0, 0.0, 0.0]}
+    (bx, by, bz), ez = bb["center"], bb["extent"][2]
+    return (center[0] - bx, center[1] - by, (center[2] - dims[2] / 2) - (bz - ez))
+
+
+def add_prop_body(stage, entity_path, entry, center, dims, collider=None):
+    """`entry`'s prop under the entity Xform (render only; `prop_offset`). Instanceable, so
+    every entity of one prop shares its meshes. `collider`, the box, is made invisible."""
+    from pxr import Gf, UsdGeom
+
+    x = UsdGeom.Xform.Define(stage, f"{entity_path}/model")
+    x.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble).Set(
+        Gf.Vec3d(*prop_offset(entry, center, dims)))
+    prim = x.GetPrim()
+    prim.GetReferences().AddReference(entry["usd"])
+    prim.SetInstanceable(True)
+    if collider is not None:
+        _invisible(collider)
     return prim

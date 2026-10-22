@@ -25,9 +25,14 @@ class FakeWorld:
         self.loads = []
         self.steps = []
 
-    def load(self, usd, ground_paths):
+    def load(self, usd, ground_paths, signals=()):
         self.loads.append((usd, ground_paths))
+        self.signals = list(signals)
+        self.colours = {}
         self.bodies.clear()
+
+    def set_signals(self, colours):
+        self.colours.update(colours)
 
     def spawn(self, handle, name, kind, subtype, center, dims, pose, model="", motion="KINEMATIC"):
         self.bodies[handle] = {"name": name, "kind": kind, "pose": pose, "dims": dims,
@@ -149,6 +154,23 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.world.bodies[npc]["motion"], "KINEMATIC")
         self.assertAlmostEqual(r.step.states[0].pose.position.x, 20.0)
         self.assertFalse(r.step.states[0].HasField("twist"))
+
+    def test_signals_come_with_the_world_and_take_colours(self):
+        hello(self.server)
+        r = call(self.server, load_world=pb.LoadWorld(usd="/maps/x.usd", signals=[
+            pb.Signal(way_id=43763, regulatory_element_ids=[43856], opendrive_id="377",
+                      position=pb.Vec3(x=102.72, y=-52.85, z=0.1)),
+            pb.Signal(way_id=43766, opendrive_id="376")]))
+        self.assertTrue(r.ok, r.error)
+        self.assertEqual(self.world.signals[0], {
+            "way_id": 43763, "regulatory_element_ids": [43856], "opendrive_id": "377",
+            "position": (102.72, -52.85, 0.1)})
+        self.assertIsNone(self.world.signals[1]["position"])
+        r = call(self.server, set_signals=pb.SetSignals(states=[
+            pb.SignalState(opendrive_id="377", colour=pb.COLOUR["RED"]),
+            pb.SignalState(opendrive_id="376", colour=pb.COLOUR["OFF"])]))
+        self.assertTrue(r.ok, r.error)
+        self.assertEqual(self.world.colours, {"377": "RED", "376": "OFF"})
 
     def test_bad_requests_are_refused_and_the_server_goes_on(self):
         hello(self.server)

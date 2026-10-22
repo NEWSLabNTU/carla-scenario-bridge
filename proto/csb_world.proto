@@ -13,7 +13,8 @@
 // Bump PROTOCOL_VERSION (csb `backend/isaac`, server `csb_isaac/protocol.py`) on any change a
 // peer of the other version would misread; `Hello` refuses a mismatch with both versions.
 // Version 2 (roadmap 044): tracked bodies (`Motion`, `Twist`, teleport, the kinematic
-// fallback) and contacts per reporting side.
+// fallback) and contacts per reporting side. Version 3: traffic signals (`LoadWorld.signals`,
+// `SetSignals`).
 
 syntax = "proto3";
 
@@ -62,6 +63,42 @@ message LoadWorld {
   // Prims of the environment a body rests on (terrain, road surface). Contacts with them
   // are not reported; the flat ground plane is always one.
   repeated string ground_paths = 2;
+  // The map's traffic signals (roadmap 044), from `<map>/carla/traffic_lights.yaml`: the
+  // server finds each one's lamp in the world and holds its colour (green until
+  // `SetSignals`, as the CARLA backend sets every mapped light).
+  repeated Signal signals = 3;
+}
+
+// One traffic light of the map: a Lanelet2 traffic light way and the lamp that shows it.
+message Signal {
+  // SSv2's id for it (`TrafficSignal.id`), a Lanelet2 traffic light way.
+  uint64 way_id = 1;
+  // The Lanelet2 regulatory elements that reference the way: what Autoware keys its
+  // `TrafficLightGroup` on.
+  repeated uint64 regulatory_element_ids = 2;
+  // The OpenDRIVE signal id: the lamp's `omni:simready:signalID` in a SimReady export.
+  string opendrive_id = 3;
+  // Where the lamp stands, world frame (CARLA's actor position, Y flipped): the match when
+  // no lamp carries the id.
+  Vec3 position = 4;
+}
+
+enum Colour {
+  OFF = 0;
+  RED = 1;
+  AMBER = 2;
+  GREEN = 3;
+}
+
+message SignalState {
+  string opendrive_id = 1;
+  Colour colour = 2;
+}
+
+// Signal colours from the next step on (SSv2's `UpdateTrafficLights`, reduced to one colour
+// per lamp). Lamps not named keep theirs.
+message SetSignals {
+  repeated SignalState states = 1;
 }
 
 // How a body moves (roadmap 044).
@@ -168,6 +205,7 @@ message Request {
     Despawn despawn = 4;
     Step step = 5;
     Shutdown shutdown = 6;
+    SetSignals set_signals = 7;
   }
 }
 

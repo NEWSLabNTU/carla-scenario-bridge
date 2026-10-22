@@ -109,7 +109,7 @@ fn honest() -> Behaviour {
                     contacts,
                 })))
             }
-            R::Shutdown(_) => ok(None),
+            R::Shutdown(_) | R::SetSignals(_) => ok(None),
         })
     })
 }
@@ -266,11 +266,12 @@ fn what_isaac_does_not_have_is_an_honest_failure() {
         assert!(matches!(e, BackendError::Unsupported(_)), "{e:?}");
     }
     assert_eq!(b.update_traffic_lights(&[]), Ok(()));
-    let light = TrafficSignal::default();
-    assert!(matches!(
-        b.update_traffic_lights(&[light]),
-        Err(BackendError::Unsupported(_))
-    ));
+    // A signal the map's table does not have is warned about, not a failure (as on CARLA).
+    let light = TrafficSignal {
+        id: 43763,
+        ..Default::default()
+    };
+    assert_eq!(b.update_traffic_lights(&[light]), Ok(()));
     assert!(matches!(
         b.attach_sensor(Sensor::Lidar),
         Err(BackendError::Unsupported(_))
@@ -530,4 +531,55 @@ fn a_one_frame_jolt_is_not_reported_as_acceleration() {
     h.pop_front();
     h.push_back([3.0, 0.0]);
     assert_eq!(smoothed(&h)[0], 3.0);
+}
+
+#[test]
+fn signal_changes_go_to_the_world_server_by_opendrive_id() {
+    use crate::proto::simulation_api_schema::{traffic_light, TrafficLight};
+    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = sent.clone();
+    let mut inner = honest();
+    let endpoint = server(Box::new(move |req| {
+        if let Some(wire::request::Request::SetSignals(s)) = &req.request {
+            log.lock().unwrap().push(s.states.clone());
+        }
+        inner(req)
+    }));
+    let mut b = backend(&endpoint);
+    b.initialize(&episode()).unwrap();
+    b.signals = SignalTable::parse(
+        "signals:\n- way_id: 43763\n  regulatory_element_ids: [43856]\n  opendrive_id: '377'\n",
+    )
+    .unwrap();
+    let red = TrafficSignal {
+        id: 43763,
+        traffic_light_status: vec![TrafficLight {
+            color: traffic_light::Color::Red as i32,
+            shape: traffic_light::Shape::Circle as i32,
+            status: traffic_light::Status::SolidOn as i32,
+            confidence: 1.0,
+        }],
+        ..Default::default()
+    };
+    // Every frame carries it; only the change is sent.
+    b.update_traffic_lights(std::slice::from_ref(&red)).unwrap();
+    b.update_traffic_lights(std::slice::from_ref(&red)).unwrap();
+    let sent = sent.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0][0].opendrive_id, "377");
+    assert_eq!(sent[0][0].colour, wire::Colour::Red as i32);
+}
+
+#[test]
+fn a_misc_object_wears_its_model_or_the_street_barrier() {
+    assert_eq!(
+        misc_object_model("vehicle.mercedes.sprinter"),
+        "vehicle.mercedes.sprinter"
+    );
+    assert_eq!(
+        misc_object_model("static.prop.trafficcone01"),
+        "static.prop.trafficcone01"
+    );
+    assert_eq!(misc_object_model(""), "static.prop.streetbarrier");
+    assert_eq!(misc_object_model("obstacle"), "static.prop.streetbarrier");
 }

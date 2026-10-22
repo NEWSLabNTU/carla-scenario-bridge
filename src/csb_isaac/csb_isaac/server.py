@@ -6,7 +6,11 @@ Isaac world is `world.py`; `world_server.py` puts the two together on a socket.
 A `World` provides:
 
 - ``isaac_version``: str
-- ``load(usd, ground_paths)``: replace the environment, remove every entity
+- ``load(usd, ground_paths, signals)``: replace the environment, remove every entity;
+  ``signals`` the map's traffic signals (dicts: ``way_id``, ``regulatory_element_ids``,
+  ``opendrive_id``, ``position`` or None), every signal green until set (roadmap 044)
+- ``set_signals({opendrive_id: colour})``: lamp colours (``"OFF"``, ``"RED"``, ``"AMBER"``,
+  ``"GREEN"``) from the next step on
 - ``spawn(handle, name, kind, subtype, center, dims, pose, model, motion)``: one body,
   ``motion`` ``"KINEMATIC"`` or ``"TRACKED"`` (roadmap 044)
 - ``despawn(handle)``
@@ -45,6 +49,15 @@ def drive_of(entity_pose):
         pose=pb.pose_tuple(entity_pose.pose) if entity_pose.HasField("pose") else None,
         twist=pb.twist_tuple(entity_pose.twist) if entity_pose.HasField("twist") else None,
         teleport=entity_pose.teleport, kinematic=entity_pose.kinematic)
+
+
+def signal_dict(signal):
+    """A `Signal` of `LoadWorld` as the world takes it."""
+    return {"way_id": signal.way_id,
+            "regulatory_element_ids": list(signal.regulatory_element_ids),
+            "opendrive_id": signal.opendrive_id,
+            "position": ((signal.position.x, signal.position.y, signal.position.z)
+                         if signal.HasField("position") else None)}
 
 
 class RequestError(Exception):
@@ -93,7 +106,7 @@ class WorldServer:
                                                      isaac_version=self.world.isaac_version))
 
     def _load_world(self, req):
-        self.world.load(req.usd, list(req.ground_paths))
+        self.world.load(req.usd, list(req.ground_paths), [signal_dict(s) for s in req.signals])
         self.entities.clear()
         log.info("world %s loaded", req.usd or "flat ground plane")
         return pb.Reply(ok=True)
@@ -154,6 +167,11 @@ class WorldServer:
         for handle, other, path, impulse in contacts:
             reply.contacts.add(handle=handle, other=other, other_path=path, impulse=impulse)
         return pb.Reply(ok=True, step=reply)
+
+    def _set_signals(self, req):
+        self.world.set_signals({s.opendrive_id: pb.COLOUR_NAME.get(s.colour, "OFF")
+                                for s in req.states})
+        return pb.Reply(ok=True)
 
     def _shutdown(self, _req):
         self.stopped = True

@@ -50,13 +50,15 @@ use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::simulation_api_schema::TrafficSignal;
 use crate::proto::traffic_simulator_msgs::{ActionStatus, BoundingBox};
 
+mod signals;
 mod tracking;
 use crate::weather::WeatherRequest;
 use crate::world_services::WeatherReply;
+use signals::SignalTable;
 use tracking::{Drive, Tracked};
 
 /// csb's world protocol version; the server's is `csb_isaac/protocol.py`'s.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Physics step the frame is split into, at most: Isaac's default 60 Hz.
 const MAX_PHYSICS_DT: f64 = 1.0 / 60.0;
@@ -463,6 +465,11 @@ pub struct IsaacBackend {
     pending: BTreeMap<u32, wire::EntityPose>,
     /// Tracking stats of the episode's NPCs already despawned, by name (roadmap 044).
     tracking_done: BTreeMap<String, TrackingStats>,
+    /// The map's signal table (roadmap 044 B), and the colour last sent per OpenDRIVE id.
+    signals: SignalTable,
+    signal_colours: BTreeMap<String, wire::Colour>,
+    /// Way ids SSv2 commanded that the table does not have, warned once each.
+    unmapped_signals: std::collections::BTreeSet<i32>,
     map_origin: [f64; 3],
     /// The world the last `Initialize` loaded, for the shutdown's clearing load.
     world: WorldFile,
@@ -498,6 +505,9 @@ impl IsaacBackend {
             names: BTreeMap::new(),
             pending: BTreeMap::new(),
             tracking_done: BTreeMap::new(),
+            signals: SignalTable::default(),
+            signal_colours: BTreeMap::new(),
+            unmapped_signals: Default::default(),
             map_origin: [0.0; 3],
             world: WorldFile::default(),
             step_time: 0.05,
@@ -885,6 +895,19 @@ impl IsaacBackend {
     }
 }
 
+/// CARLA's default MiscObject blueprint, as the CARLA backend spawns it.
+const DEFAULT_MISC_OBJECT: &str = "static.prop.streetbarrier";
+
+/// The body a MiscObject wears: its asset key when that names a CARLA vehicle or prop, else
+/// the default MiscObject.
+fn misc_object_model(key: &str) -> &str {
+    if key.starts_with("vehicle.") || key.starts_with("static.prop.") {
+        key
+    } else {
+        DEFAULT_MISC_OBJECT
+    }
+}
+
 fn kind_name(t: EntityType) -> &'static str {
     match t {
         EntityType::Ego => "ego",
@@ -940,14 +963,36 @@ impl SimBackend for IsaacBackend {
                 "No {WORLD_SUBPATH} beside the map: a flat ground plane, map frame = world frame"
             ),
         }
+        let map_dir = map_dir_of(Path::new(&episode.lanelet2_map_path));
+        let signals = SignalTable::for_map_dir(&map_dir)
+            .map_err(|e| BackendError::Failed(format!("Cannot read the signal table: {e:#}")))?;
+        match &signals.path {
+            Some(p) if signals.is_empty() => {
+                tracing::warn!("{} lists no traffic signals", p.display())
+            }
+            Some(p) => tracing::info!("{} traffic signal(s) from {}", signals.len(), p.display()),
+            None => tracing::info!(
+                "No {} beside the map: no traffic signals on Isaac",
+                signals::TABLE_SUBPATH
+            ),
+        }
         self.call(
             "LoadWorld",
             wire::request::Request::LoadWorld(wire::LoadWorld {
                 usd: world.usd.clone(),
                 ground_paths: world.ground_paths.clone(),
+                signals: signals.wire(world.map_origin),
             }),
             self.load_timeout,
         )?;
+        // The world server shows every signal green until SSv2 commands it (as on CARLA).
+        self.signal_colours = signals
+            .entries
+            .iter()
+            .map(|e| (e.opendrive_id.clone(), wire::Colour::Green))
+            .collect();
+        self.signals = signals;
+        self.unmapped_signals.clear();
         self.map_origin = world.map_origin;
         self.world = world;
         self.entities.clear();
@@ -1131,14 +1176,16 @@ impl SimBackend for IsaacBackend {
             _ => None,
         };
         // The body's look: the CARLA blueprint the CARLA backend would spawn for the asset key
-        // (`blueprint_map` first, else the key itself); vehicles only.
+        // (`blueprint_map` first, else the key itself). A MiscObject names a vehicle or a
+        // prop (`model3d`), else it is CARLA's default MiscObject, the street barrier (044 D).
+        let key = self
+            .config
+            .blueprint_for(&req.asset_key)
+            .unwrap_or(req.asset_key.as_str());
         let model = match entity_type {
-            EntityType::Ego | EntityType::Vehicle => self
-                .config
-                .blueprint_for(&req.asset_key)
-                .unwrap_or(req.asset_key.as_str())
-                .to_string(),
-            _ => String::new(),
+            EntityType::Ego | EntityType::Vehicle => key.to_string(),
+            EntityType::MiscObject => misc_object_model(key).to_string(),
+            EntityType::Pedestrian => String::new(),
         };
         let pose = req.pose.unwrap_or(Pose {
             position: Some(geometry_msgs::Point::default()),
@@ -1379,14 +1426,49 @@ impl SimBackend for IsaacBackend {
     }
 
     fn update_traffic_lights(&mut self, signals: &[TrafficSignal]) -> Result<(), BackendError> {
-        // SSv2 sends the states every frame, an empty list when the scenario has no lights.
-        if signals.is_empty() {
+        // SSv2 sends every signal's state every frame; only changes go to the world server.
+        let mut changed = Vec::new();
+        let mut unmapped = Vec::new();
+        for signal in signals {
+            let colour = signals::colour_for_signal(signal);
+            let Some(opendrive_id) = u64::try_from(signal.id)
+                .ok()
+                .and_then(|id| self.signals.opendrive_id(id))
+            else {
+                if self.unmapped_signals.insert(signal.id) {
+                    unmapped.push(signal.id);
+                }
+                continue;
+            };
+            if self.signal_colours.get(opendrive_id) != Some(&colour) {
+                self.signal_colours.insert(opendrive_id.to_string(), colour);
+                changed.push(wire::SignalState {
+                    opendrive_id: opendrive_id.to_string(),
+                    colour: colour as i32,
+                });
+            }
+        }
+        if !unmapped.is_empty() {
+            // As on CARLA: a configuration gap, not a request failure.
+            tracing::warn!(
+                "No lamp mapped for lanelet signal(s) {unmapped:?} on Isaac (not in {}): these \
+                 signals are not shown",
+                self.signals
+                    .path
+                    .as_ref()
+                    .map_or(signals::TABLE_SUBPATH.into(), |p| p.display().to_string())
+            );
+        }
+        if changed.is_empty() {
             return Ok(());
         }
-        Err(BackendError::Unsupported(format!(
-            "{} traffic light state(s) commanded, but the Isaac world has no traffic lights",
-            signals.len()
-        )))
+        tracing::debug!("{} signal colour(s) changed on Isaac", changed.len());
+        self.call(
+            "SetSignals",
+            wire::request::Request::SetSignals(wire::SetSignals { states: changed }),
+            self.request_timeout,
+        )?;
+        Ok(())
     }
 
     fn attach_sensor(&mut self, _sensor: Sensor) -> Result<(), BackendError> {
@@ -1462,6 +1544,7 @@ impl SimBackend for IsaacBackend {
         let empty = wire::request::Request::LoadWorld(wire::LoadWorld {
             usd: self.world.usd.clone(),
             ground_paths: self.world.ground_paths.clone(),
+            signals: self.signals.wire(self.map_origin),
         });
         if let Err(e) = self.call("LoadWorld (shutdown)", empty, Duration::from_secs(5)) {
             tracing::warn!("Could not clear the Isaac world at shutdown: {e}");

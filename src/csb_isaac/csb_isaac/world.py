@@ -29,7 +29,7 @@ from isaacsim.core.api import World
 from isaacsim.core.utils.stage import add_reference_to_stage
 from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics
 
-from . import motion as body_motion, vehicle_assets
+from . import motion as body_motion, signals as signal_table, vehicle_assets
 from .catalogue import check_ego, ego_model, load_ego
 
 log = logging.getLogger("csb_isaac")
@@ -51,6 +51,14 @@ GROUND_PLANE = "/World/defaultGroundPlane"
 # over the frame's substeps; a body held back by a contact is held by the contact, not this.
 TRACKED_MATERIAL = "/World/Looks/csbTrackedBody"
 TRACKED_FRICTION = float(os.environ.get("CSB_TRACKED_FRICTION", "0.1"))
+# Traffic signals (roadmap 044 B): the lamps' bulbs in a CARLA town's SimReady export, by
+# the colour they show (nested Green -> Yellow -> Red), and the materials their lenses wear.
+SIGNAL_ID_ATTR = "omni:simready:signalID"
+BULBS = {"GREEN": "GreenLight", "AMBER": "YellowLight", "RED": "RedLight"}
+SIGNAL_LOOKS = "/World/Looks/csbSignals"
+# CARLA's MI_StreetLightsOff.mdl LightColor per colour (the export's red is CARLA's own).
+SIGNAL_LIGHT = {"RED": (1.0, 0.015686, 0.0, 1.0), "AMBER": (1.0, 0.35, 0.0, 1.0),
+                "GREEN": (0.0, 1.0, 0.2, 1.0), "OFF": (0.001, 0.001, 0.001, 1.0)}
 # Kind -> display colour (sRGB): what an operator watching on VNC tells apart.
 COLOURS = {
     "EGO": (0.10, 0.45, 0.85),
@@ -147,6 +155,10 @@ class IsaacWorld:
         # their first drive goes through USD (pose, initial velocity), read at their creation.
         self.fresh = set()
         self.ground_cache = {}  # prim path -> whether it is ground (contacts)
+        self.signal_table = []  # the map's signals, as LoadWorld gave them (044 B)
+        self.signal_colours = {}  # OpenDRIVE id -> colour shown
+        self.lenses = {}  # OpenDRIVE id -> {colour: [lens prim paths]}
+        self.signal_groups = []  # [(regulatory element id, colour)] for Autoware
         self.by_path = {}  # rigid body path -> handle
         self.reporters = set()  # handles whose contacts are reported (the ego)
         self.egos = {}  # handle -> Ego (038)
@@ -164,7 +176,11 @@ class IsaacWorld:
 
     # --- World -----------------------------------------------------------------------------
 
-    def load(self, usd, ground_paths):
+    def load(self, usd, ground_paths, signals=()):
+        self._load_env(usd, ground_paths)
+        self._load_signals(list(signals))
+
+    def _load_env(self, usd, ground_paths):
         usd = os.path.realpath(usd) if usd else usd
         for handle in list(self.entities):
             self.despawn(handle)
@@ -191,6 +207,131 @@ class IsaacWorld:
         own = bool(env) and any(p.HasAPI(UsdLux.LightAPI) for p in Usd.PrimRange(env))
         for path in (SUN, SKY):
             self.stage.GetPrimAtPath(path).SetActive(not own)
+
+    # --- Traffic signals (roadmap 044 B) --------------------------------------------------
+
+    def _lamps(self):
+        """`[(path, signal id, (x, y, z))]`: the world's traffic light prims (SimReady writes
+        CARLA's OpenDRIVE id into `omni:simready:signalID`)."""
+        env = self.stage.GetPrimAtPath(ENVIRONMENT)
+        out = []
+        if not env:
+            return out
+        it = iter(Usd.PrimRange(env))
+        for prim in it:
+            attr = prim.GetAttribute(SIGNAL_ID_ATTR)
+            if attr and attr.HasValue():
+                t = UsdGeom.Xformable(prim).ComputeLocalToWorldTransform(
+                    Usd.TimeCode.Default()).ExtractTranslation()
+                out.append((str(prim.GetPath()), str(attr.Get()), (t[0], t[1], t[2])))
+                it.PruneChildren()
+        return out
+
+    def _lenses_of(self, lamp_path):
+        """`{colour: [lens paths]}` of a lamp: under each bulb prim, the meshes of its
+        `SM_TLights_Leds` that wear CARLA's street light material (the lens, not the body)."""
+        from pxr import UsdShade
+
+        out = {c: [] for c in BULBS}
+        names = {v: k for k, v in BULBS.items()}
+        lamp = self.stage.GetPrimAtPath(lamp_path)
+        # An instanced lamp shares its meshes: made its own, so its lenses can be rebound.
+        for prim in Usd.PrimRange(lamp, Usd.TraverseInstanceProxies()):
+            if prim.IsInstance():
+                prim.SetInstanceable(False)
+        for prim in Usd.PrimRange(lamp):
+            colour = names.get(prim.GetName())
+            if colour is None:
+                continue
+            for leds in prim.GetChildren():
+                for mesh in leds.GetChildren():
+                    if not mesh.IsA(UsdGeom.Mesh):
+                        continue
+                    mat = UsdShade.MaterialBindingAPI(mesh).ComputeBoundMaterial()[0]
+                    if mat and "streetlight" in mat.GetPrim().GetName().lower():
+                        out[colour].append(mesh)
+        return out
+
+    def _signal_materials(self, lens):
+        """The four lens materials (`SIGNAL_LIGHT`), made from the material `lens` wears:
+        CARLA's MDL with its inputs, the colour and the on/off switch set."""
+        from pxr import UsdShade
+
+        if self.stage.GetPrimAtPath(SIGNAL_LOOKS):
+            return {c: UsdShade.Material.Get(self.stage, f"{SIGNAL_LOOKS}/{c}") for c in SIGNAL_LIGHT}
+        src = UsdShade.MaterialBindingAPI(lens).ComputeBoundMaterial()[0]
+        shader = src.ComputeSurfaceSource("mdl")[0] if src else None
+        if not shader:
+            return None
+        UsdGeom.Scope.Define(self.stage, SIGNAL_LOOKS)
+        out = {}
+        for colour, rgba in SIGNAL_LIGHT.items():
+            mat = UsdShade.Material.Define(self.stage, f"{SIGNAL_LOOKS}/{colour}")
+            sh = UsdShade.Shader.Define(self.stage, f"{SIGNAL_LOOKS}/{colour}/Shader")
+            sh.SetSourceAsset(Sdf.AssetPath(shader.GetSourceAsset("mdl").resolvedPath), "mdl")
+            sub = shader.GetSourceAssetSubIdentifier("mdl")
+            if sub:
+                sh.SetSourceAssetSubIdentifier(sub, "mdl")
+            for i in shader.GetInputs():
+                v = i.Get()
+                if isinstance(v, Sdf.AssetPath):
+                    v = Sdf.AssetPath(v.resolvedPath or v.path)
+                if v is not None:
+                    sh.CreateInput(i.GetBaseName(), i.GetTypeName()).Set(v)
+            sh.CreateInput("LightColor", Sdf.ValueTypeNames.Float4).Set(Gf.Vec4f(*rgba))
+            sh.CreateInput("On_Off", Sdf.ValueTypeNames.Float).Set(0.0 if colour == "OFF" else 1.0)
+            mat.CreateSurfaceOutput("mdl").ConnectToSource(sh.ConnectableAPI(), "out")
+            out[colour] = mat
+        return out
+
+    def _load_signals(self, signals):
+        """Find each signal's lamp (`signals.match_lamps`), and show every signal GREEN."""
+        self.signal_table = signals
+        self.signal_colours = {}
+        self.lenses = {}
+        self.signal_groups = signal_table.groups(signals, {})
+        if not signals:
+            return
+        lamps = self._lamps()
+        by_id, how, unmatched = signal_table.match_lamps(signals, lamps)
+        self.materials = None
+        for od, path in by_id.items():
+            self.lenses[od] = self._lenses_of(path)
+            if self.materials is None:
+                first = next((m for ms in self.lenses[od].values() for m in ms), None)
+                if first is not None:
+                    self.materials = self._signal_materials(first)
+        bulbs = sum(len(ms) for lens in self.lenses.values() for ms in lens.values())
+        n_id = sum(1 for h in how.values() if h == "id")
+        log.info("traffic signals: %d of %d matched to the world's %d lamp(s) (%d by signal "
+                 "id, %d by position; %d lens(es))%s", len(by_id), len(signals), len(lamps),
+                 n_id, len(by_id) - n_id, bulbs,
+                 f"; no lamp for OpenDRIVE id(s) {', '.join(unmatched)}" if unmatched else "")
+        # Every signal GREEN until SSv2 commands it, as the CARLA backend sets every mapped
+        # light (`set_mapped_lights_green`): deterministic and permissive; a dark lamp would
+        # reach Autoware as UNKNOWN, a stop at every intersection on the route.
+        if self.materials is None:
+            log.warning("traffic signals: no lens found to make the lamp materials from: the "
+                        "lamps show as exported")
+        self.set_signals({str(s["opendrive_id"]): "GREEN" for s in signals})
+
+    def set_signals(self, colours):
+        """Show `colours` (OpenDRIVE id -> OFF, RED, AMBER or GREEN) on the lamps."""
+        from pxr import UsdShade
+
+        materials = getattr(self, "materials", None)
+        with Sdf.ChangeBlock():
+            for od, colour in colours.items():
+                self.signal_colours[od] = colour
+                lens = self.lenses.get(od)
+                if not lens or not materials:
+                    continue
+                for bulb, meshes in lens.items():
+                    m = materials[bulb if bulb == colour else "OFF"]
+                    for mesh in meshes:
+                        UsdShade.MaterialBindingAPI.Apply(mesh).Bind(
+                            m, UsdShade.Tokens.strongerThanDescendants)
+        self.signal_groups = signal_table.groups(self.signal_table, self.signal_colours)
 
     def preload(self, usd, renders=PRELOAD_RENDERS):
         """Load `usd` and render it before csb asks for it: the first render of a large world
@@ -269,12 +410,23 @@ class IsaacWorld:
         UsdGeom.XformCommonAPI(cube.GetPrim()).SetTranslate(Gf.Vec3d(*center))
         UsdGeom.XformCommonAPI(cube.GetPrim()).SetScale(Gf.Vec3f(*dims))
         UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
-        asset = None
+        asset = prop = None
         if kind in ("VEHICLE", "EGO"):
-            # No model named: the car closest to the declared box, as the CARLA backend picks.
-            asset = self.vehicle_assets.get(model) if model else self.vehicle_assets.nearest(dims)
+            # No model named: the car (or two-wheeler, by subtype) closest to the declared
+            # box, as the CARLA backend picks.
+            asset = (self.vehicle_assets.get(model) if model
+                     else self.vehicle_assets.nearest(dims, subtype))
+        elif kind == "MISC_OBJECT" and model:
+            # A MiscObject wears its model3d: a vehicle's body (incident 2's parked cars) or a
+            # CARLA prop (044 D).
+            asset = self.vehicle_assets.by_id.get(model)
+            if asset is None:
+                prop = self.vehicle_assets.prop(model)
         if asset is not None:
             vehicle_assets.add_npc_body(self.stage, path, asset, center, collider=cube.GetPrim())
+        elif prop is not None:
+            vehicle_assets.add_prop_body(self.stage, path, prop, center, dims,
+                                         collider=cube.GetPrim())
         mass = None
         if tracked:
             self._skids(path, cube.GetPrim(), center, dims)
@@ -295,8 +447,9 @@ class IsaacWorld:
             self.reporters.add(handle)
         self.entities[handle] = (path, translate, orient)
         self.by_path[path] = handle
+        body = asset or prop
         log.info("spawned %s %r as %s (box %s at %s%s%s)", kind, name, path, dims, center,
-                 f", body {asset['id']}" if asset is not None else "",
+                 f", body {body['id']}" if body is not None else "",
                  f", tracked, {mass:.0f} kg" if tracked else "")
 
     def _skids(self, path, cube, center, dims):
@@ -443,6 +596,8 @@ class IsaacWorld:
             ego.close()
         self.reporters.discard(handle)
         if self.tracked.pop(handle, None) is not None:
+            # Released before the prim goes: a prim deleted under a live rigid body view
+            # invalidates the whole simulation view (044 step 3).
             self.tracked_view = None
         self.fresh.discard(handle)
         self.stage.RemovePrim(path)
@@ -510,6 +665,9 @@ class IsaacWorld:
             stamp = self.ego_ros.publish_clock(end)
             for ego in egos:
                 ego.publish(end, stamp)
+            if self.signal_table and egos:
+                # Every frame, as acb publishes CARLA's lights (044 B).
+                self.ego_ros.publish_signals(self.signal_groups, stamp)
         t3 = time.perf_counter()
         if t3 - t0 > SLOW_STEP_S:
             log.warning("slow step at sim time %.2f: %.0f ms (commands %.0f, physics and render "

@@ -21,6 +21,8 @@ Left without a collider:
   of other towns, render-only in CARLA. As triangle meshes a few millimetres over the road
   they were seams a tracked NPC's box caught on, and its contacts with them read as hits on
   the static world (roadmap 044).
+- traffic light heads (`GreenLight`, which holds the nested yellow and red bulbs): their
+  lenses' materials are switched per signal state (roadmap 044), and nothing drives 3 m up.
 - invisible meshes: CARLA's crosswalk areas (2 mm planes over the road that its pedestrian
   navigation is generated from) and the like. What the lidar cannot see should not hold a
   car up either.
@@ -34,7 +36,7 @@ import os
 import sys
 
 # Scenery left without colliders: prims of these names, and of names with these prefixes.
-SKIPPED_NAMES = {"Lake", "Decals"}
+SKIPPED_NAMES = {"Lake", "Decals", "GreenLight"}
 SKIPPED_PREFIXES = ("BackgroundPlanes", "SM_sea", "SM_DirtDebris", "dirtDebris")
 
 

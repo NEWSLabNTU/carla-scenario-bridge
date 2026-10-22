@@ -4,10 +4,13 @@
 # with the catalogue csb_isaac.vehicle_assets reads (vehicles.json: each car's CARLA box,
 # wheels, wheel base).
 #
-#   isaac_vehicles.sh [only:=<id>,<id>...] [export:=true]
+#   isaac_vehicles.sh [only:=<id>,<id>...] [export:=true] [props:=true]
 #
 #   only:=<ids>     these blueprint ids only (vehicle.tesla.model3,...); default all
 #   export:=true    export again even if a vehicle's USD exists
+#   props:=true     CARLA's props instead (roadmap 044): every static.prop.* of the editor's
+#                   Content/Carla/Config/Default.Package.json, into $CSB_VEHICLE_USD/props/
+#                   with its props.json (prop_usd_assets.py); only:= takes prop ids
 #
 # Host paths from the environment:
 #   CARLA_SRC        CARLA 0.9.16 editor build with SimReady (default /mnt/disk1/carla-src),
@@ -33,17 +36,20 @@ set -euo pipefail
 
 usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)    # src/csb_isaac
-only=""; force=false
+only=""; force=false; props=false
 for a in "$@"; do
     case "$a" in
         only:=*) only=${a#only:=} ;;
         export:=*) force=${a#export:=} ;;
+        props:=*) props=${a#props:=} ;;
         -h|--help) usage ;;
-        *) echo "isaac_vehicles: unknown argument '$a' (only:=, export:=)" >&2; exit 2 ;;
+        *) echo "isaac_vehicles: unknown argument '$a' (only:=, export:=, props:=)" >&2; exit 2 ;;
     esac
 done
 CARLA_SRC=${CARLA_SRC:-/mnt/disk1/carla-src}
 root=${CSB_VEHICLE_USD:-/mnt/disk1/carla-usd/vehicles}
+kind=vehicles
+if [ "$props" = true ]; then root="$root/props"; kind=props; fi
 meta="$root/ue_meta.json"
 mkdir -p "$root/logs"
 
@@ -105,7 +111,7 @@ fi
 if [ "$need_levels" = true ]; then
     echo "isaac_vehicles: preparing levels (log $root/logs/levels.log)"
     stamp="$root/logs/.levels-start"; touch "$stamp"
-    CSB_VEH_META="$meta" CSB_VEH_ONLY="$only" commandlet "$root/logs/levels.log" \
+    CSB_VEH_META="$meta" CSB_VEH_ONLY="$only" CSB_VEH_KIND="$kind" commandlet "$root/logs/levels.log" \
         "Execution of commandlet took" -run=pythonscript "-script=$here/scripts/ue_vehicle_levels.py"
     # The script's own log lines do not reach the commandlet's output: judge by its file.
     [ "$meta" -nt "$stamp" ] || { echo "isaac_vehicles: no new $meta; see $root/logs/levels.log" >&2; exit 1; }
@@ -153,6 +159,10 @@ source "$here/scripts/isaac_env.sh"
 set -u
 # The export's props are crate 0.7.0; pxr warns once per file without this.
 export PXR_USDC_EMIT_DEPRECATION_WARNINGS=0
+if [ "$kind" = props ]; then
+    python -I "$here/scripts/prop_usd_assets.py" "$root"
+    exit 0
+fi
 python -I "$here/scripts/vehicle_usd_assets.py" "$root"
 [ -f "$root/physics.json" ] || echo "isaac_vehicles: no physics.json yet: with CARLA 0.9.16 up," \
     "run $here/scripts/dump_vehicle_physics.py --root $root"
