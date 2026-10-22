@@ -1,4 +1,4 @@
-# One SSv2 simulator interface, one glue per simulator
+# One SSv2 simulator interface, one world server per simulator
 
 **Date**: 2026-10-22, revised the same day after a porting walkthrough (below). **Status**:
 proposal (user direction 2026-10-22: SSv2 and the simulators modular; csb is the CARLA glue,
@@ -7,10 +7,13 @@ side). Builds on [simulator-backends.md](simulator-backends.md) (the seam, roadm
 the as-built Isaac stack (037, 038, 043, 044, 045). Nothing here is implemented yet.
 
 The first draft of this document described the split as a move of today's modules into
-three packages. Walking a developer through porting a fourth simulator against that draft
-(section "A porting walkthrough") showed that the move alone leaves the next port as hard as
-the Isaac one was. The revised design (section "Revised layering") changes five things,
-listed under "What the walkthrough changed".
+three packages, with a Rust trait as the simulator interface. Walking a developer through
+porting a fourth simulator against that draft (section "A porting walkthrough") showed that
+the move alone leaves the next port as hard as the Isaac one was, and that a trait and a
+wire protocol side by side are two interfaces where one is wanted (user direction, same
+day: one unified way in). The revised design (section "Revised layering") makes the world
+protocol the one simulator interface; the changes are listed under "What the walkthrough
+changed".
 
 ## What exists
 
@@ -215,107 +218,117 @@ simulator; a BeamNG ego driven by Autoware registers with the relay exactly as t
 Isaac egos do. The trait's vocabulary (entities by SSv2 name, map-frame poses, one call per
 request) also read as right at every step.
 
-The AWSIM case closes the walkthrough: AWSIM implements SSv2's `simulation_interface`
-natively, in C#, with no glue. A simulator that wants that path needs only the protocol
-package. So there are three doors into SSv2, and the design should name all three.
+One more observation closes the walkthrough. Mina's cheapest path was the wire (a Python
+world server), and the draft's trait-level path (a Rust backend linked into the adapter)
+was never the better one for any simulator but CARLA, whose Rust client is already there.
+Two ways in means two interfaces to keep conformant, two kits, and a choice at the start of
+every port. The revision keeps one: the wire. (AWSIM, which implements SSv2's
+`simulation_interface` natively in C#, is SSv2's concern and needs nothing from here.)
+
 
 ## What the walkthrough changed
 
-1. **The world protocol is promoted from the Isaac glue to the adapter layer** as its own
-   package, `ssv2_sim_world`: the `.proto` (renamed from `csb_world`), the Python
-   `WorldServer` shell with the `World` duck type, and a generic Rust `RemoteBackend` (today's
-   `IsaacBackend` minus four Isaac details). A Python-API simulator ports by writing one
-   Python class; the Isaac glue becomes the first `World`, and its Rust half disappears.
-2. **The trait gets a required core, defaulted lifecycle hooks and declared capabilities.**
-   `Capabilities` (signals, simulator autopilot, agent-driven vehicles, tracked NPC motion,
-   weather, contacts) is declared once; the adapter refuses what is not declared without
-   calling, and the acceptance suite reports "skipped: needs signals" instead of a failure.
+1. **One way in: every simulator is a world server.** The world protocol (today
+   `csb_world.proto`, the Isaac glue's private wire) becomes *the* simulator interface:
+   language-neutral, versioned, published by the adapter. The adapter is one fixed binary
+   that speaks SSv2 on one side and the world protocol on the other; the `SimBackend` trait
+   becomes its internal seam (one implementation, `RemoteBackend`, and the fake for tests),
+   not a public one. CARLA, Isaac and the next simulator are each a world server. A port is
+   one process that implements the protocol, in whatever language its simulator's API has,
+   with a shell provided in Python and in Rust.
+2. **Declared capabilities.** A world server says in its `Hello` reply what it offers
+   (signals, simulator autopilot, tracked NPC motion, weather, contacts); the adapter
+   refuses what is not offered without asking, and the acceptance suite reports "skipped:
+   needs signals" instead of a failure.
 3. **The map directory's contract with a simulator is written down**:
    `<map dir>/<simulator>/world.yaml` (the world the map means, the map origin), and
    `<map dir>/traffic_lights.yaml` as an adapter-defined schema any simulator fills.
-4. **A glue has a fixed shape**: a `backend:` config subtree the glue owns, a
-   `<sim>_simulation.launch.xml`, a bring-up script `up.sh <map dir>` with the exit codes
-   `isaac_up.sh` has today, and a package name `<sim>_scenario_bridge`. The run tooling
-   dispatches on the name and never learns a simulator.
+4. **A world server package has a fixed shape**: the server, its `backend:` config, a
+   `<sim>_world.launch.xml`, a bring-up script `up.sh <map dir>` with the exit codes
+   `isaac_up.sh` has today, and the package name `<sim>_world`. The run tooling dispatches
+   on the name and never learns a simulator.
 5. **The Autoware-side simulator-free pieces move to the adapter repository**: the launch
    profile out of acb, the vehicle agent `acb_pilot` beside `csb_agent` (it is `csb_agent`'s
    runner), and a written I5 contract. aib's pure generator and `aib.ros` are noted as the
    next candidates, not moved now.
 
+Why one way and not three. A trait-level door (link a Rust backend into the adapter) and a
+wire-level door (a world server) are two interfaces to keep conformant, two conformance
+kits, two places a capability is declared, and a choice every port must make first. The
+walkthrough's finding that the Isaac glue's Rust half is already a generic remote backend
+means the wire-level door already carries everything the trait does, minus what only CARLA
+needed (a tick gate, a spawn ladder, blueprint boxes, acb's sensor-release channel), and
+those are CARLA's world server's business. The cost is one local ZMQ round trip per frame
+for CARLA, which Isaac pays today without it showing in the budget (`frame_stats` measures
+the SSv2 request end to end; the world server's step is the same thread's wait either way).
+A simulator that already speaks SSv2's `simulation_interface` natively (AWSIM) is SSv2's
+concern, not this design's: it needs nothing from here and gains nothing.
+
 ## Revised layering
 
-Three layers, each a package someone else can depend on, with three doors into the system.
-"Glue" is what this repository calls a scenario bridge.
+Three layers, each a package someone else can depend on. "World server" is what the first
+draft called a glue.
 
 ```mermaid
 flowchart TB
     SSv2["SSv2 fork, pinned to the interface version"]
-    subgraph L0["L0  ssv2_sim_interface  (protocol package)"]
+    subgraph L0["L0  ssv2_sim_interface  (SSv2's protocol, as a package)"]
         proto["simulation_interface .proto<br/>Rust types, Python descriptor, version N"]
     end
-    subgraph L1["L1  simulator-free (adapter repository)"]
+    subgraph L1["L1  the adapter repository (simulator-free)"]
         direction LR
-        adapter["ssv2_sim_adapter (Rust library)<br/>zmq_server, coordinator, budgets, drain<br/>SimBackend + Capabilities, fake, serve()<br/>entity table, Driver rules, agent link,<br/>autopilot commander, contacts, gap trace,<br/>episode clock, generic weather, conformance"]
-        world["ssv2_sim_world<br/>world .proto, RemoteBackend (Rust),<br/>WorldServer shell + World duck type (Python),<br/>world conformance"]
+        bridge["ssv2_world_bridge (one binary)<br/>zmq_server, coordinator, budgets, drain<br/>entity table, Driver rules, agent link,<br/>autopilot commander, contacts, gap trace,<br/>episode continuity, RemoteBackend"]
+        wp["ssv2_world_protocol<br/>world .proto, version M<br/>shells: Rust WorldServer trait,<br/>Python World base class<br/>conformance CLI (wire level)"]
         side["agent relay, csb_agent, vehicle agent,<br/>scenario_vehicle_launch (Autoware profile),<br/>run_suite, acceptance, gap oracle, examples"]
-        adapter --> world
+        bridge --> wp
     end
-    subgraph L2["L2  one glue per simulator (own repository each)"]
+    subgraph L2["L2  one world server per simulator (own repository each)"]
         direction LR
-        csb["carla_scenario_bridge<br/>CarlaBackend + CARLA policy<br/>(door 2: Rust backend)"]
-        isb["isaac_scenario_bridge<br/>IsaacWorld (Python) + USD tooling<br/>(door 3: World)"]
-        xsb["beamng_scenario_bridge<br/>BeamNGWorld (Python)<br/>(door 3: World)"]
+        cw["carla_world (Rust)<br/>carla-rust, tick gate, spawn ladder,<br/>blueprints, signal table, weather presets"]
+        iw["isaac_world (Python)<br/>IsaacWorld, USD tooling, aib"]
+        xw["beamng_world (Python)<br/>BeamNGWorld"]
     end
-    AWSIM["AWSIM-style simulator<br/>(door 1: native protocol)"]
     SSv2 -- "ZMQ + protobuf" --> L0
-    L0 --> adapter
-    L0 -. "implements directly" .-> AWSIM
-    adapter -- "SimBackend" --> csb
-    world -- "world protocol" --> isb
-    world -- "world protocol" --> xsb
+    L0 --> bridge
+    wp -- "world protocol<br/>(ZMQ + protobuf)" --> cw
+    wp -- "world protocol" --> iw
+    wp -- "world protocol" --> xw
     subgraph VB["vehicle bridges, one per simulator (unchanged)"]
         acb["acb (CARLA)"]
         aib["aib (Isaac)"]
         vbx["BeamNG's"]
     end
-    csb ~~~ acb
-    isb ~~~ aib
-    xsb ~~~ vbx
+    cw ~~~ acb
+    iw ~~~ aib
+    xw ~~~ vbx
     side -- "Autoware profile, agent" --> VB
 ```
 
-### The three doors
-
-| door | who | what they implement | what they depend on |
-|---|---|---|---|
-| 1. native protocol | a simulator with its own SSv2 server (AWSIM's shape) | `simulation_interface` v N | `ssv2_sim_interface` only |
-| 2. Rust backend | a simulator with a Rust or C++ client worth linking (CARLA) | `SimBackend` core + declared capabilities | `ssv2_sim_adapter` |
-| 3. world server | a simulator with a Python API or one whose sensors must render in the stepping process (Isaac, BeamNG, Gazebo through its Python bindings) | the Python `World` duck type | `ssv2_sim_world` (which brings the adapter) |
-
-Door 3 is the default recommendation for a new port: one process owns the simulator, the
-bridge binary is the adapter's own `ssv2_sim_world` executable, time is the world's and
-monotonic, and the port's Rust content is zero.
+A port, in one sentence: implement the world protocol in a process that owns the simulator,
+declare what it offers, drop a `world.yaml` beside each map, and pass the conformance CLI.
 
 ```mermaid
 flowchart TD
-    q1{"Does the simulator already serve<br/>SSv2's simulation_interface?"}
-    q2{"Is there a Rust or C++ client<br/>you want to link in-process?"}
-    d1["Door 1: pin ssv2_sim_interface,<br/>run SSv2 against it"]
-    d2["Door 2: a binary crate on ssv2_sim_adapter,<br/>impl SimBackend, declare Capabilities"]
-    d3["Door 3: a Python World on ssv2_sim_world,<br/>run the adapter's world bridge"]
-    conf["conformance: trait or World kit,<br/>then acceptance on the starter scenarios"]
+    start["a new simulator"]
+    lang{"its API's language"}
+    py["Python: subclass ssv2_world_protocol.World<br/>(load, spawn, despawn, step, set_signals, ...)"]
+    rs["Rust or C++: impl the WorldServer trait<br/>(same methods)"]
+    other["anything else: speak the .proto on a ZMQ REP socket"]
+    pkg["package it: &lt;sim&gt;_world with its config,<br/>&lt;sim&gt;_world.launch.xml, up.sh, world.yaml per map"]
+    conf["ssv2_world_conformance tcp://host:port<br/>(wire level, any language)"]
+    acc["just acceptance sim:=&lt;sim&gt;<br/>(skips what Hello did not declare)"]
     vb["a vehicle bridge for the Autoware ego (I5),<br/>on scenario_vehicle_launch"]
-    q1 -- yes --> d1
-    q1 -- no --> q2
-    q2 -- yes --> d2
-    q2 -- no --> d3
-    d2 --> conf
-    d3 --> conf
-    d1 --> vb
-    conf --> vb
+    start --> lang
+    lang -- Python --> py
+    lang -- "Rust, C++" --> rs
+    lang -- other --> other
+    py --> pkg
+    rs --> pkg
+    other --> pkg
+    pkg --> conf --> acc --> vb
 ```
 
-### L0: `ssv2_sim_interface`, the protocol
+### L0: `ssv2_sim_interface`, SSv2's protocol as a package
 
 One package holding the `simulation_interface` protobuf schemas exactly as the SSv2 fork
 builds them (the fork's `simulation_interface` package points at it, or vendors a copy with
@@ -323,124 +336,116 @@ a test that the two are byte-identical; today they are), with a Rust crate (`pro
 today's `proto.rs`) and the Python descriptor. Its version is the interface version: the
 fork's 23 patches define v1 (controllers `agent` and `simulator_autopilot`,
 `UpdateEntityGoal`, the subtype, bounded waits). Upstreaming to tier4 is the long-term
-home; until then this package is the spec, and a glue states which version it implements.
-The world protocol is not here: it is the adapter's, below.
+home; until then this package is the spec, and the adapter states which version it
+implements. Only the adapter depends on it; a simulator never sees it.
 
-### L1: `ssv2_sim_adapter`, the simulator-free core
+### L1: `ssv2_world_protocol`, the simulator interface
 
-A library crate (ament_cargo package, path dependency for the glues) that is everything in
-the crate that knows no simulator, made to say so:
+The one interface a simulator implements. It is today's `csb_world.proto` with the Isaac
+details removed and the CARLA-only trait surface added, versioned on its own (M):
 
-- `zmq_server`, `coordinator`, `SimBackend` and its types, `fake` (exported, for tests), and
-  a `serve(config, backend)` entry that is today's `main.rs` minus the backend choice.
-- **The trait, restated.** A required core: `initialize`, `update_frame`,
-  `update_step_time`, `spawn`, `despawn`, `update_entity_status`, `entity_count`,
-  `capabilities`. Capability-gated methods with default bodies that answer `Unsupported`:
-  `update_entity_goal` (needs `SimulatorAutopilot` or `AgentDriven`),
-  `update_traffic_lights` (`Signals`), `set_weather`/`get_weather` (`Weather`),
-  `attach_sensor` (never: the vehicle bridge owns sensors; the default refusal stays).
-  Lifecycle hooks with default bodies: `before_serving`, `probe_connection_idle`,
-  `take_tick_time`, `wedged`, `server_lost`, `abandon_after_hang`, `shutdown`. The
-  coordinator checks `capabilities()` before a gated call, so a refusal never reaches a
-  backend that did not opt in, and `Driver::of_vehicle` demotes `SimulatorAutopilot` to
-  `Scenario` with a logged reason when the capability is absent rather than failing the
-  spawn.
-- The policy modules both backends use, renamed to what they are: `episode_clock`
-  ("simulation time continued across reloads"; the epoch marker becomes a backend hook,
-  `fn epoch_marker(&self) -> Option<...>`, default none), `contact_report` (the report
-  format; who produces contacts is the backend), `gap_trace` ("SSv2's world against the
+| message | today | change |
+|---|---|---|
+| `Hello` / `HelloReply` | protocol version, `isaac_version` | `simulator_name`, `simulator_version`, and `capabilities`: `SIGNALS`, `AUTOPILOT`, `TRACKED_MOTION`, `WEATHER`, `CONTACTS`, `EGO_PHYSICS` |
+| `LoadWorld` | a USD path, ground paths, the map's signals | the `world.yaml` contents as the server's own string plus `map_origin`; `step_time` and `realtime_factor` from `Initialize`; same signals |
+| `Spawn` / `SpawnReply` | kind, subtype, box, model, motion, pose | unchanged; `model` is the asset key after the adapter's asset map |
+| `Despawn` | | unchanged |
+| `Step` / `StepReply` | drives, substep count, render; states, contacts, time | the substep length sent, not a constant; `time` stays the server's, monotonic over its lifetime |
+| `SetSignals` | per-signal colour | unchanged |
+| `SetGoal` | (none; `UpdateEntityGoal` is CARLA's Traffic Manager today) | new: entity, waypoints, clear, target speed; refused unless `AUTOPILOT` |
+| `SetWeather` / `GetWeather` | (none; CARLA's fourteen floats through ROS) | new: preset name plus `map<string, double>`; reply with what was applied |
+| `Shutdown` | | unchanged |
+
+What the protocol fixes, as the trait does today: entities by SSv2 name (the handle is the
+server's), poses at the entity origin in the world frame (the adapter applies `map_origin`;
+a left-handed simulator flips inside its server), one `Step` per SSv2 frame carrying every
+entity's drive, every failure a reply with text and never a success the simulator did not
+deliver, time monotonic over the server's life (so episode continuity is the adapter's
+bookkeeping and no server needs an epoch marker), contacts per step from whatever the server
+senses, sensors never (the vehicle bridge owns them).
+
+With it, in the same package:
+
+- A Python shell: the `WorldServer` loop (today `server.py`, `protocol.py`, pure Python,
+  tested on a fake world), a `World` abstract base class with the methods above, and
+  `main(world_factory)` (today `world_server.py` minus its Isaac arguments).
+- A Rust shell: a `WorldServer` trait with the same methods and the same loop, for a
+  simulator with a Rust or C++ client (CARLA).
+- The conformance CLI, `ssv2_world_conformance <endpoint>`: a wire-level client that runs
+  the kit against any running server, whatever its language: hello and capabilities, load,
+  spawn by name, step and read back, kinematic pose echo, tracked motion when declared,
+  despawn of an unknown handle fails, signals set and read back through a second load when
+  declared, weather round trip when declared, time monotonic across loads. One kit, because
+  there is one interface.
+
+### L1: `ssv2_world_bridge`, the adapter
+
+One binary (an ament_cargo package) that is today's crate minus every simulator: it serves
+SSv2 (`zmq_server`, `coordinator`, budgets, the drain and the hung-request exit), keeps the
+entity table and the `Driver` rules, links agents through the relay, commands simulator
+autopilots, writes contacts and the gap trace, keeps time continuous across `Initialize`,
+and talks to exactly one world server through `RemoteBackend` (today's `IsaacBackend` with
+`tracking.rs` and `signals.rs`, Isaac's four details gone). Inside, `SimBackend` remains as
+the seam between the coordinator and `RemoteBackend`, with the fake for the coordinator's
+tests; it is not exported.
+
+- The policy modules renamed to what they are: `episode_clock` ("simulation time continued
+  across reloads"), `contact_report`, `gap_trace` ("SSv2's world against the
   simulator's"), `map_resolver` (the map directory, its origin and the simulator's
-  `world.yaml` under it; see the map contract), `budgets` (SSv2's deadlines; the backend
-  declares its own inner bounds), `coordinate_conversion` (the ROS-frame helpers; the
-  Y-flip moves into the CARLA glue).
-- Weather as a generic request: a preset name plus an optional `map<string, double>` of
-  parameters, replied with what the backend applied; the ROS services become
-  `/<node>/set_weather`, `/<node>/get_weather` on a generic message (`csb_interfaces`
-  keeps `Weather.msg` for CARLA's parameter set, declared by the CARLA glue). The adapter
-  re-applies "the requested weather after every map load and reconnect" as today, by name.
-- Configuration split in two: the adapter's keys (`ssv2`, `agent_relay`, `npc_motion`,
-  `gap_trace_dir`, `contact_report_dir`, `sensor_release`, `weather`, `ego`) and a
-  `backend:` subtree handed to the glue as an opaque YAML value it parses with its own
-  schema (`carla:` host, port, `blueprint_map`, `traffic_manager`, `substeps`,
-  `carla_tick_seconds`, `collision_monitor`; `isaac:` endpoint, timeouts, render).
-- A conformance kit, `ssv2_sim_adapter::conformance::run(backend, capabilities)`: the
-  coordinator's fake-backend tests restated as "what a backend must do" (spawn by name,
-  echo or read back poses as its `Driver` says, refuse what it cannot do with `Unsupported`,
-  report time monotonic across `initialize`, batched calls, despawn of an unknown name
-  fails), with the gated groups run only for declared capabilities.
+  `world.yaml` under it), `budgets` (SSv2's deadlines, with the world request timeouts),
+  `coordinate_conversion` (the ROS-frame helpers only; the Y-flip leaves with CARLA).
+- Weather through the protocol: the ROS services become `/<node>/set_weather` and
+  `/<node>/get_weather` on a generic message (preset plus parameters); `csb_interfaces`'
+  CARLA `Weather.msg` goes with the CARLA server, which may serve CARLA's own service beside
+  it if the fourteen floats are wanted.
+- Configuration in two parts: the adapter's keys (`ssv2`, `world` endpoint and timeouts,
+  `agent_relay`, `npc_motion`, `gap_trace_dir`, `contact_report_dir`, `weather`, `ego`,
+  `asset_map`) and nothing else; a world server has its own config file, which is its
+  business.
 - The agent relay, `csb_agent`, the vehicle agent (today acb's `acb_pilot`, which runs
   `csb_agent`'s `AutowareAgent`), `run_suite`, `acceptance.py`, the gap oracle, the starter
-  scenarios (`csb_examples`) and the scenario launch (`scenario.launch.xml`): already
-  simulator-free, they belong beside the adapter.
+  scenarios (`csb_examples`), `scenario.launch.xml` and `simulation.launch.xml` (the bridge
+  plus the relay, taking the world endpoint): already simulator-free, they sit beside the
+  bridge.
 
-Cargo enforces the boundary: the adapter crate has no simulator dependency, so the
-"`carla::` appears nowhere outside `backend/carla/`" test becomes the dependency graph.
+Cargo enforces the boundary: the adapter repository has no simulator dependency at all.
 
-### L1: `ssv2_sim_world`, the world protocol and its shell
-
-The second adapter-layer package, for door 3. It is today's Isaac glue with the four Isaac
-details removed, which is why it costs little:
-
-- `world.proto` (today `csb_world.proto`): `Hello`, `LoadWorld` (a `world` string the glue
-  interprets, today `usd`; ground paths; the map's signals), `Spawn` with kind, subtype,
-  box, model and motion (`KINEMATIC`, `TRACKED`), `Despawn`, `Step` with every entity's
-  drive and the substep count, `StepReply` with states, contacts and the server's monotonic
-  time, `SetSignals`, `Shutdown`. The physics substep is sent, not a constant, and
-  `HelloReply.simulator_version` replaces `isaac_version`. Versioned on its own.
-- `RemoteBackend` (Rust, today's `IsaacBackend` with `tracking.rs` and `signals.rs`): a
-  `SimBackend` over the wire. It derives its `Capabilities` from the `HelloReply`, so a
-  `World` that has no signals says so once.
-- A Python package `ssv2_sim_world` with the `WorldServer` shell (today `server.py` and
-  `protocol.py`, pure Python, tested on a fake world), the descriptor set, the `World`
-  duck type as a documented abstract base, and `main(world_factory)`, which is today's
-  `world_server.py` without the Isaac arguments.
-- A `World` conformance kit in Python: load, spawn, step, read back, despawn, contacts,
-  signal refusal, run against a `World` without the adapter.
-- The executable the glue launches: `ssv2_sim_world` (the adapter's binary with
-  `RemoteBackend`), configured by `backend: {endpoint, request_timeout_seconds,
-  load_timeout_seconds}`.
+One SSv2 frame through the layers, the same for every simulator:
 
 ```mermaid
 sequenceDiagram
     participant S as SSv2
-    participant A as ssv2_sim_adapter<br/>(zmq_server, coordinator)
-    participant R as RemoteBackend
-    participant W as WorldServer shell<br/>(Python)
-    participant X as World<br/>(IsaacWorld, BeamNGWorld)
-    S->>A: UpdateEntityStatus (every pose)
-    A->>R: update_entity_status(batch)
-    R-->>A: states of the last step (echo for SSv2-driven)
-    A-->>S: UpdateEntityStatusResponse
-    S->>A: UpdateFrame
-    A->>R: update_frame(t)
-    R->>W: Step {drives, substeps, dt}
+    participant B as ssv2_world_bridge<br/>(zmq_server, coordinator, RemoteBackend)
+    participant W as world server shell<br/>(Python or Rust)
+    participant X as the simulator's World<br/>(CarlaWorld, IsaacWorld, BeamNGWorld)
+    S->>B: UpdateEntityStatus (every pose)
+    B-->>S: states of the last step (echo for SSv2-driven entities)
+    S->>B: UpdateFrame
+    B->>W: Step {drives, substeps, dt}
     W->>X: step(drives, substeps, dt, render, sim_time)
     X-->>W: states, contacts
-    W-->>R: StepReply {states, contacts, time}
-    R-->>A: time (ns, monotonic)
-    A-->>S: UpdateFrameResponse
+    W-->>B: StepReply {states, contacts, time}
+    B-->>S: UpdateFrameResponse (time continued across Initialize)
 ```
 
-### L2: one glue per simulator, standalone
+### L2: one world server per simulator, standalone
 
-Each glue is a package named `<sim>_scenario_bridge` with the same shape, in its own
-repository in time:
+Each is a package `<sim>_world` with the same shape, in its own repository:
 
-| the glue ships | door 2 (CARLA) | door 3 (Isaac, BeamNG) |
-|---|---|---|
-| the backend | a binary crate: `CarlaBackend`, `blueprint_boxes`, `actor_census`, `spawn_ladder`, `tick_gate`, `tick_watchdog`, `lanelet_map`, `sensor_release` (acb's channel), the CARLA weather presets and `Weather.msg`, carla-rust and its version pin | a Python package with its `World` (`IsaacWorld`: today's `world.py` and the USD, physics, walker and catalogue modules; `BeamNGWorld`), importing its vehicle bridge where sensors render in-process (aib) |
-| `backend:` schema | `carla:` keys | `isaac:` or `beamng:` keys, plus the world endpoint |
-| `<sim>_simulation.launch.xml` | the glue binary + the adapter's relay launch | the adapter's `ssv2_sim_world` binary + relay, and `<sim>_world.launch.xml` for the world server |
-| `scripts/up.sh <map dir>` | starts or reuses the simulator, the simulation side and the ego stack, in order, waiting for each; refuses another glue's stack on the same web port; appends what it started to `$SIM_UP_STARTED` | same contract (today's `isaac_up.sh`) |
-| `<map dir>/<sim>/world.yaml` reader | `town`, `map_origin` | `world` (a USD stage, a BeamNG level), `ground_paths`, `map_origin` |
-| its tooling | `carla-start`, `download_maps.sh`, the town maps, `--generate-signal-table` | the Isaac install, town and vehicle export, `isaac-health`, `isaac-town` |
-| its vehicle bridge | acb, a separate ROS node | aib as a submodule, imported by the `World` |
+| the package ships | `carla_world` (Rust) | `isaac_world` (Python) | `beamng_world` (Python) |
+|---|---|---|---|
+| the server | the `WorldServer` trait on carla-rust: today's `CarlaBackend` plus `blueprint_boxes`, `actor_census`, `spawn_ladder`, `tick_gate`, `tick_watchdog`, `lanelet_map`, `sensor_release` (acb's channel), the collision monitor, the traffic-light mapper, the weather presets, the version pin | `IsaacWorld`: today's `world.py` and the USD, physics, walker and catalogue modules, importing aib for the ego | `BeamNGWorld` on the Python API |
+| its config | `carla_world.yaml`: host, port, substeps, tick seconds, traffic manager, blueprint map | endpoint, render, physics rate, ego config | host, port, level, deterministic rate |
+| `<sim>_world.launch.xml` | the server under play_launch, respawned | today's `isaac_world.launch.xml` | likewise |
+| `scripts/up.sh <map dir>` | starts or reuses the simulator, the world server, the simulation side and the ego stack, in order, waiting for each; refuses another simulator's stack on the same web port; appends what it started to `$SIM_UP_STARTED` | today's `isaac_up.sh` | likewise |
+| `<map dir>/<sim>/world.yaml` | `town`, `map_origin` | `world` (USD), `ground_paths`, `map_origin` | `world` (level), `map_origin` |
+| its tooling | `carla-start`, `download_maps.sh`, the towns, `--generate-signal-table` | the Isaac install, town and vehicle export, `isaac-health`, `isaac-town` | |
+| its vehicle bridge | acb, a separate ROS node | aib, a submodule the `World` imports | its own, on `scenario_vehicle_launch` |
 
-The backend is chosen by which glue's launch a run starts, never by a parameter: the
-`backend` parameter goes. The adapter repository's `just scenario|acceptance|e2e <xosc>
-sim:=<name>` finds `<name>_scenario_bridge` in the sourced workspace, runs its `up.sh`, and
-starts the scenario; `sim:=carla` is the default. The recipes know the contract, not the
-simulators.
+The adapter repository's `just scenario|acceptance|e2e <xosc> sim:=<name>` finds
+`<name>_world` in the sourced workspace, runs its `up.sh`, and starts the scenario;
+`sim:=carla` is the default. The recipes know the contract, not the simulators. The
+`backend` parameter goes.
 
 ### The map directory's contract
 
@@ -456,15 +461,16 @@ name:
             beamng/world.yaml            world: west_coast_usa, map_origin
 ```
 
-The adapter resolves `<map dir>/<glue name>/world.yaml` and hands the parsed file to the
-backend; a missing file is the backend's default (CARLA: the directory name as the town;
-world server: a ground plane); a file that does not parse fails `Initialize`, as today.
-`traffic_lights.yaml` moves up one level because every simulator with signals reads it; the
-CARLA glue keeps writing it with `--generate-signal-table`, and a glue without signals
-ignores it. `carla/map_origin.yaml` folds into `carla/world.yaml`; acb's `map_origin_path`
-default follows. The map itself (a level that matches a Lanelet2 map in one frame, offset
-recorded as `map_origin`) is map authoring, outside every glue; the user guide's section 2
-says so for CARLA and gets a paragraph per door.
+The adapter reads `<map dir>/<simulator name>/world.yaml` (the name from `HelloReply`),
+takes `map_origin` for itself and sends the rest in `LoadWorld` as the server's string; a
+missing file is the server's default (CARLA: the directory name as the town; a ground plane
+elsewhere); a file that does not parse fails `Initialize`, as today. `traffic_lights.yaml`
+moves up one level because every simulator with signals reads it; the CARLA server keeps
+writing it with `--generate-signal-table`, and a server without signals never receives it.
+`carla/map_origin.yaml` folds into `carla/world.yaml`; acb's `map_origin_path` default
+follows. The map itself (a level that matches a Lanelet2 map in one frame, offset recorded
+as `map_origin`) is map authoring, outside every world server; the user guide's section 2
+says so for CARLA and gets a paragraph per simulator.
 
 ### The vehicle side
 
@@ -477,99 +483,95 @@ The vehicle bridges stay one per simulator. What moves to the adapter repository
   with a launch wrapper, beside `csb_agent`.
 - The I5 contract written down in the adapter's docs: the topics and message set
   (`/sensing/*`, `/vehicle/status/*`, `/control/command/*`, `/clock`, the signal V2X
-  table from `traffic_lights.yaml`), the frames, and the clock rule (one `/clock` per
-  domain, the simulator's time continued across reloads, with the epoch marker as CARLA's
-  way and the world server's monotonic clock as door 3's).
+  table from `traffic_lights.yaml`), the frames, and the clock rule: one `/clock` per
+  domain, carrying the world server's time, so that the vehicle bridge and the adapter
+  agree without an epoch marker (acb's epoch marker was the CARLA way of continuing time
+  across CARLA's reloads; `carla_world` keeps time monotonic itself and acb reads it).
 
 Later candidates, named so the next port can ask for them: aib's pure spec-to-description
 generator (`aib.gen`, `aib.spec`) and `aib.ros` (the rclpy vehicle interface and sensor
-publishers), which a door-3 port would import as they are.
-
-### What the interface guarantees (unchanged, now written down)
-
-Entities by SSv2 name; poses in the map frame at the entity origin, in SSv2's message types;
-`Episode` carries SSv2's map path and the backend finds its world and origin for it through
-`<map dir>/<glue>/world.yaml`; one call per SSv2 request, batched as SSv2 batches; `Driver`
-decided by the adapter from the controller and the declared capabilities, executed by the
-backend; every failure a `BackendError` with text, never a success the simulator did not
-deliver (006); sensors answered by the adapter's policy (refused: the vehicle bridge owns
-them); time reported by the backend, kept continuous by the adapter; contacts in the
-adapter's report format from whatever the backend senses; weather by preset name. The
-lifecycle hooks stay, with defaults.
+publishers), which a Python world server would import as they are.
 
 ### The walkthrough, replayed on the revised design
 
-Mina's port, door 3: a `beamng_scenario_bridge` package with a `BeamNGWorld` class
-(`load` opens the level named by `beamng/world.yaml`, `spawn` adds a vehicle or a static
-prop at the pose, `step` calls the lockstep step for `substeps` and reads every vehicle's
-pose back, `despawn` removes it, no `set_signals`; `HelloReply` declares contacts and
-tracked motion, not signals or autopilot), a vehicle bridge that publishes the ego's
-sensors and status from the same connection and imports `aib.ros`-style publishers,
-`beamng/world.yaml` beside each map, `beamng_simulation.launch.xml`, `up.sh`, and the
-`backend: {beamng: {host, port}}` schema. The Python conformance kit passes without the
-adapter running; `just acceptance sim:=beamng` reports the signal and autopilot scenarios
-as skipped for a declared reason and the rest as passed or failed. No Rust, no copy of
-another glue, no edit to the adapter.
+Mina's port: a `beamng_world` package with a `BeamNGWorld` class (`load` opens the level
+named by `beamng/world.yaml`, `spawn` adds a vehicle or a static prop at the pose, `step`
+calls the lockstep step for the substeps and reads every vehicle's pose back, `despawn`
+removes it; `hello` declares `CONTACTS` and `TRACKED_MOTION`, not `SIGNALS` or
+`AUTOPILOT`), a vehicle bridge that publishes the ego's sensors and status from the same
+connection, `beamng/world.yaml` beside each map, `beamng_world.launch.xml`, `up.sh`, and
+its own config file. `ssv2_world_conformance` passes against the running server before the
+adapter is ever started; `just acceptance sim:=beamng` reports the signal and autopilot
+scenarios as skipped for a declared reason and the rest as passed or failed. No Rust, no
+copy of another simulator's package, no edit to the adapter, and no choice to make at the
+start.
 
 ## How to get there
 
 Package-level first, repository-level second: the first is a move inside this workspace
 that the existing tests and exit runs can prove changed nothing; the second is then a
-`git mv` with history.
+`git mv` with history. The CARLA path is the one with risk, so it goes last among the
+servers and is measured.
 
 1. **Protocol package** `ssv2_sim_interface` (proto, build, Rust types, Python descriptor);
    the SSv2 submodule's `simulation_interface` checked against it by a test.
-2. **Adapter crate** `ssv2_sim_adapter`: lift `zmq_server`, `coordinator`, `backend/mod.rs`,
-   `fake`, the shared policy modules; rename as above; the trait restated with defaults and
-   `Capabilities`; generic weather; the config split with the opaque `backend:` subtree;
-   `serve()`; the conformance kit from the coordinator tests. `carla_scenario_bridge`
-   becomes a binary crate using it with no behaviour change (the CARLA suite and the 033
-   demo tour as the check).
-3. **World package** `ssv2_sim_world`: `csb_world.proto` renamed and generalised (the
-   `world` string, the substep in `Step`, `simulator_version`), `IsaacBackend` renamed
-   `RemoteBackend` with its Isaac details moved behind the wire, `server.py` and
-   `protocol.py` as the Python shell with `World` as a base class, the Python conformance
-   kit from `test_server.py`. The Isaac world server runs on it with no behaviour change
-   (the 043/045 exit runs: `town01_ego_drive` 5/5, tracking within `acceptance.py`'s
-   limits).
-4. **Map contract**: `map_resolver` reads `<map dir>/<glue>/world.yaml`; CARLA's town and
-   origin move into `carla/world.yaml` with the old files read as a fallback for one
+2. **World protocol package** `ssv2_world_protocol`: `csb_world.proto` renamed and
+   generalised (`simulator_name`, `capabilities`, the world string, `step_time` in
+   `LoadWorld`, the substep length in `Step`, `SetGoal`, `SetWeather`/`GetWeather`); the
+   Python shell from `server.py`, `protocol.py` and `world_server.py` with `World` as a
+   base class; the conformance CLI grown from `test_server.py` and the coordinator's
+   fake-backend tests. The Isaac world server runs on it with no behaviour change (the
+   043/045 exit runs: `town01_ego_drive` 5/5, tracking within `acceptance.py`'s limits).
+3. **Adapter binary** `ssv2_world_bridge`: `IsaacBackend` renamed `RemoteBackend` and made
+   the only backend; `CarlaBackend` and the CARLA-only modules move out to step 5's crate;
+   the policy modules renamed; generic weather; the config reduced; `backend:=` removed.
+   Checked on Isaac as in step 2.
+4. **Map contract**: `map_resolver` reads `<map dir>/<simulator>/world.yaml`; CARLA's town
+   and origin move into `carla/world.yaml` with the old files read as a fallback for one
    release; `traffic_lights.yaml` moves up with a fallback likewise; acb's defaults follow.
-5. **Isaac glue as a package** `isaac_scenario_bridge` in this workspace: `IsaacWorld` and
-   its modules, the USD tooling, `isaac_world.launch.xml`, `isaac_simulation.launch.xml`,
-   `up.sh` from `isaac_up.sh`; `backend:=` removed; the recipes dispatch on `sim:=`.
-6. **Vehicle launch profile** out of acb into `scenario_vehicle_launch`, the vehicle agent
+5. **CARLA as a world server** `carla_world`: the Rust `WorldServer` shell wrapping today's
+   `CarlaBackend` and its modules; `UpdateEntityGoal` through `SetGoal`; the weather presets
+   behind `SetWeather`; the sensor-release channel and the signal-table generator inside it.
+   Checked by the CARLA suite, the 033 demo tour, and `frame_stats` before and after (the
+   added hop must not show against the 10 ms budget; Isaac's numbers say it will not).
+6. **Isaac as a package** `isaac_world` in this workspace: `IsaacWorld` and its modules,
+   the USD tooling, the launch, `up.sh` from `isaac_up.sh`; the recipes dispatch on
+   `sim:=`.
+7. **Vehicle launch profile** out of acb into `scenario_vehicle_launch`, the vehicle agent
    beside `csb_agent`; aib's `isaac_simulator.launch.xml` and acb's
    `carla_simulator.launch.xml` include the profile; the I5 contract written.
-7. **Repositories**: `isaac_scenario_bridge` to its own repository (aib as its submodule),
-   then the adapter layer (interface, adapter, world, relay, agent SDK and agent, vehicle
-   launch, examples, run tooling) to a `scenario_sim_adapter` repository that both glues
-   pin; csb keeps CARLA. Each glue repo builds as acb does today (its own colcon workspace,
-   the adapter as a submodule or a released crate).
+8. **Repositories**: `isaac_world` and `carla_world` to their own repositories (aib and acb
+   as their submodules), then the adapter layer (interface, world protocol, bridge, relay,
+   agent SDK and agent, vehicle launch, examples, run tooling) to a `scenario_sim_adapter`
+   repository that every world server pins for its tests. Each server repo builds as acb
+   does today (its own colcon workspace).
 
-Open points for the user: the names (`ssv2_sim_adapter` says what it is; the repo could keep
-"csb" for the adapter and rename the CARLA glue instead); whether to upstream the interface
-patches to tier4 before or after the split; whether the gap campaign (024-026, 039) wants the
-gap oracle in the adapter repo or beside the scenarios; whether `aib.ros` and the generator
-move with step 6 or wait for the first door-3 port that asks.
+Open points for the user: the names (`ssv2_world_bridge` says what it is; the repo could
+keep "csb" for the adapter and name the CARLA server `carla_world`); whether to upstream
+the SSv2 interface patches to tier4 before or after the split; whether the gap campaign
+(024-026, 039) wants the gap oracle in the adapter repo or beside the scenarios; whether
+`aib.ros` and the generator move with step 7 or wait for the first Python port that asks.
 
 ## Risks
 
-- **ament_cargo with path dependencies**: `cargo-ament-build` builds one Cargo package per
-  colcon package; a library crate the glue depends on by path works when both are in one
-  workspace (acb's workspace has several Rust packages), and across repositories needs the
-  adapter vendored as a submodule or published. To be tried in step 2 before the rename.
-- **Trait churn**: 044 added tracked NPCs, signals and contacts on Isaac and touched
-  `SimBackend`; its trait changes have landed (2026-10-22). Do the split on the landed
-  trait; a further Isaac phase on the split crate, not both at once.
+- **The CARLA hop.** CARLA's world server adds a local ZMQ round trip to every frame and
+  moves `tick_gate`, `tick_watchdog` and the hung-tick exit (034) into the server, where a
+  hung LibCarla call now wedges the server, and the adapter sees a request timeout as it
+  does with Isaac. Same outcome (the adapter drains, exits 75, the supervisor restarts), one
+  more process to restart. Measured in step 5; the Isaac path has run this way since 037.
 - **The world protocol becomes a public contract.** Today a `csb_world` change bumps
-  `PROTOCOL_VERSION` on both halves in one commit; once a second `World` exists, the proto
-  needs a compatibility rule (additive fields only within a major version, as the `model`
-  field was added) and the conformance kit as its test.
-- **Capabilities can lie.** A `World` that declares signals and ignores `set_signals` passes
-  the trait kit and fails scenarios silently. The Python kit must drive a signal and read it
-  back through the world's own state, and the acceptance suite must include one scenario
-  per capability.
+  `PROTOCOL_VERSION` on both halves in one commit; with three servers, the proto needs a
+  compatibility rule (additive fields only within a major version, as the `model` field was
+  added) and the conformance CLI as its test.
+- **Capabilities can lie.** A server that declares `SIGNALS` and ignores `SetSignals` passes
+  a shallow kit and fails scenarios silently. The kit must read a signal back through the
+  server's own state, and the acceptance suite must include one scenario per capability.
+- **ament_cargo across repositories**: the Rust shell is a library crate the CARLA server
+  depends on; across repositories it is vendored as a submodule or published. To be tried
+  in step 5 before the repository split.
+- **Trait churn is over, protocol churn begins**: 044's trait changes have landed
+  (2026-10-22); the next Isaac phase (039: several egos, V2X) will want protocol additions.
+  Do them on the split packages, not on both layouts at once.
 - **The renames are large diffs** over code with measured behaviour (budgets, episode clock,
   npc tracking). Rename without reflowing; keep each module's tests; re-run the CARLA
   suite and the Isaac exit runs after each step, not at the end.
