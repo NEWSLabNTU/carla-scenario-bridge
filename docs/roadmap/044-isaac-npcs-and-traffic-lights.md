@@ -692,6 +692,12 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
    - Also removed: the leftover of step 5's attempt in `ue_vehicle_levels.py` (the vehicles
      mode still referenced an undefined `RIDER_ANIM` for two-wheelers, a `NameError` the next
      time the vehicles' levels were made).
+   - Incident 6 on Isaac **not run yet**: another workload held 13 GB of the GPU for hours
+     (15.5 GB free, under the 16 GB the Isaac stacks need). Instead, headless through
+     `IsaacWorld`: incident 6's cyclist box (1.66 x 0.6 x 1.62 m, bicycle, TRACKED) wears
+     `vehicle.diamondback.century` with its rider seated, not instanceable, and tracks 4 m/s
+     over 150 frames (error p95 0.016 m, step p50 2.0 ms with a render every third frame),
+     then despawns cleanly. Owed: one `town01_i6_cyclist_inside` run when the GPU is free.
 3. **`walker.pedestrian.NNNN` -> blueprint is unreadable** (step 6): WalkerFactory builds it
    in its Blueprint graph, so `csb_isaac.walkers.pick` chooses by the id's number. Either a
    table taken from CARLA's source, or keep the numeric pick.
