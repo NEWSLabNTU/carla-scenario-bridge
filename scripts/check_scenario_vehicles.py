@@ -15,7 +15,9 @@ vehicle specs. In a scenario:
   `$(find-pkg-share sim_vehicle_spec)/catalogs`.
 
 The catalog's own entries are checked against the measured table like any declaration, by
-their `model3d`.
+their `model3d`, and against their specs: an entry whose `swb.spec_hash` is not the hash of
+`sim_vehicle_spec/vehicles/<entry>.yaml` as it stands fails (a spec changed and the catalog
+was not regenerated).
 
 PATHs are `.xosc` files or directories searched for them (default: `src/swb_examples` and
 `scenarios`). For each `<Vehicle name="...">` whose name is a blueprint with axles in the
@@ -121,6 +123,27 @@ def check_references(path, root, parents, where_of, catalog):
     return failures
 
 
+def check_catalog_specs(path=catalog_scenarios.CATALOG):
+    """Failures for catalog entries whose spec_hash is not their spec's (a stale catalog)."""
+    sys.path.insert(0, str(ROOT / "src/sim_vehicle_spec"))
+    from sim_vehicle_spec import spec as specs
+
+    failures = []
+    for vehicle in ET.parse(path).getroot().iter("Vehicle"):
+        name = vehicle.get("name")
+        named = {p.get("name"): p.get("value") for p in vehicle.iter("Property")}
+        source = ROOT / "src/sim_vehicle_spec/vehicles" / f"{name}.yaml"
+        if "swb.spec_hash" not in named or not source.exists():
+            failures.append(f"{path.name}: {name}: no swb.spec_hash or no spec {source.name}")
+            continue
+        want = specs.spec_hash(specs.load(source))
+        if named["swb.spec_hash"] != want:
+            failures.append(f"{path.name}: {name} names spec {named['swb.spec_hash'][:12]}, but "
+                            f"vehicles/{name}.yaml is {want[:12]}: the catalog is stale "
+                            f"(sim_vehicle_spec's `just generate`)")
+    return failures
+
+
 def check_file(path, table, tolerance, catalog=None, bodies=None):
     """(failures, exemptions, vehicles checked) for one file. `catalog` ({entry: parameters})
     and `bodies` ({model3d: entry}) are the vehicle catalog's; `bodies` None checks no
@@ -185,7 +208,7 @@ def main():
     catalog, bodies = catalog_parameters(), catalog_scenarios.entries()
     failures, exemptions, checked, files = [], [], 0, 0
     f, e, c = check_file(catalog_scenarios.CATALOG, table, args.tolerance)
-    failures, exemptions, checked, files = f, e, c, 1
+    failures, exemptions, checked, files = f + check_catalog_specs(), e, c, 1
     for path in scenario_files(args.paths or DEFAULT_PATHS):
         f, e, c = check_file(path.resolve(), table, args.tolerance, catalog, bodies)
         failures += f
