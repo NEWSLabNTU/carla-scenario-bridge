@@ -14,6 +14,13 @@
 # next run; their pids are appended to $SIM_UP_STARTED when that is set, so a caller can take
 # them down (`just e2e`).
 #
+# The ego stack runs under `swb-agent supervise` (roadmap 051): a CARLA episode change (a world
+# load, a restarted CARLA) ends it -- acb_bridge exits and takes the stack with it -- and the
+# supervisor starts it again, on the same map, in the new episode. A stack found on another
+# map than the scenario's is replaced by one on the scenario's: that one ends once more at the
+# scenario's load of its town and comes back in that town's episode, so a town change costs
+# two stack starts.
+#
 # Environment, host settings all (from the justfile): CARLA_PORT, WORLD_PORT, SSV2_PORT,
 # AGENT_PORT, SWB_WEB_PORT, SWB_LOG_ROOT, and the waits CARLA_READY_TIMEOUT (s, default 300:
 # a first start on a host serves RPC in 50-180 s) and EGO_READY_TIMEOUT (s, default 1200).
@@ -56,14 +63,41 @@ start() {
     echo "$pid"
 }
 alive() { kill -0 "$1" 2>/dev/null; }
-# Stop a stack by its process group (the play_launch `start` put in one), and wait for it.
+# The `swb-agent supervise` above play_launch $1, if any (it would start the stack again).
+supervisor_of() {
+    local p=$1
+    while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+        p=$(ps -o ppid= "$p" 2>/dev/null | tr -d ' ')
+        [ -n "$p" ] && cmdline "$p" | grep -q "swb_agent supervise" && { echo "$p"; return 0; }
+    done
+    return 1
+}
+# Stop a stack and wait for it: through its supervisor when it has one (which stops its group
+# and does not start it again), else by its process group (the play_launch `start` put in one).
 stop_stack() {
-    local pgid
-    pgid=$(ps -o pgid= "$1" 2>/dev/null | tr -d ' ')
-    [ -n "$pgid" ] || return 0
-    kill -TERM -"$pgid" 2>/dev/null
+    local sup pgid
+    if sup=$(supervisor_of "$1"); then
+        kill -TERM "$sup" 2>/dev/null
+    else
+        pgid=$(ps -o pgid= "$1" 2>/dev/null | tr -d ' ')
+        [ -n "$pgid" ] || return 0
+        kill -TERM -"$pgid" 2>/dev/null
+    fi
     for _ in $(seq 1 30); do alive "$1" || return 0; sleep 2; done
-    kill -KILL -"$pgid" 2>/dev/null
+    pgid=$(ps -o pgid= "$1" 2>/dev/null | tr -d ' ')
+    [ -n "$pgid" ] && kill -KILL -"$pgid" 2>/dev/null
+    return 0
+}
+# The ego stack under its supervisor, in a session of its own; the supervisor's pid is the one
+# recorded (SIGTERM to it stops the stack).
+start_ego() {
+    say "starting ego (supervised): just ego-av map_path:=$map_dir"
+    PYTHONPATH="$here/src/swb_agent${PYTHONPATH:+:$PYTHONPATH}" setsid python3 -m swb_agent \
+        supervise --entity ego --relay "tcp://localhost:$agent_port" \
+        --agent "just ego-av map_path:=$map_dir" > "$logs/ego.console" 2>&1 < /dev/null &
+    local pid=$!
+    started "$pid"
+    echo "$pid"
 }
 listening() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
 carla_ok() { "$here/src/autoware_carla_bridge/scripts/carla_health.py" --port "$carla_port" > /dev/null 2>&1; }
@@ -130,7 +164,7 @@ if pid=$(stack_on_port "$web_ego"); then
     esac
 fi
 if [ -z "${pid:-}" ]; then
-    pid=$(start ego ego-av "map_path:=$map_dir")
+    pid=$(start_ego)
     deadline=$((SECONDS + ${EGO_READY_TIMEOUT:-1200}))
     until grep -q "Startup complete" "$logs/ego.console" 2>/dev/null; do
         alive "$pid" || { say "the ego stack exited; see $logs/ego.console"; exit 1; }
