@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::backend::{
     BackendError, Driver, EntityKind, EntityStatus, Environment, Episode, Goal, RoadCondition,
-    Sensor, SimBackend, SpawnRequest, StatusBatch,
+    Sensor, SimBackend, SpawnRequest, StatusBatch, Wheels,
 };
 use crate::environment::{self, Precipitation, ScenarioWeather, Sun, TimeOfDay, Wind};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
@@ -93,6 +93,15 @@ impl Coordinator {
                 performance: parameters
                     .and_then(|p| p.performance.as_ref())
                     .map(|p| (p.max_acceleration, p.max_deceleration)),
+                wheels: parameters.and_then(|p| p.axles.as_ref()).and_then(|a| {
+                    let (front, rear) = (a.front_axle.as_ref()?, a.rear_axle.as_ref()?);
+                    Some(Wheels {
+                        front_x: front.position_x,
+                        rear_x: rear.position_x,
+                        track: front.track_width,
+                        radius: front.wheel_diameter / 2.0,
+                    })
+                }),
             },
         };
         api::SpawnVehicleEntityResponse {
@@ -548,6 +557,12 @@ mod tests {
                 subtype: ts::entity_subtype::Enum::Truck,
                 axles: Some((2.8, 0.0)),
                 performance: Some((3.0, 5.0)),
+                wheels: Some(Wheels {
+                    front_x: 2.8,
+                    rear_x: 0.0,
+                    track: 0.0,
+                    radius: 0.0,
+                }),
             }
         );
         c.spawn_vehicle_entity(vehicle("ego", true, "agent"));

@@ -43,7 +43,7 @@ use serde::Deserialize;
 use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::backend::{
     BackendError, Driver, EntityKind, EntityStatus, Environment, Episode, Goal, Sensor, SimBackend,
-    SpawnRequest, StatusBatch, StatusOutcome,
+    SpawnRequest, StatusBatch, StatusOutcome, Wheels,
 };
 use crate::body_clearance::{self, BodyBox};
 use crate::budgets;
@@ -161,6 +161,45 @@ fn entity_box(declared: Option<&BoundingBox>, kind: wire::Kind) -> ([f64; 3], [f
         }
         _ => (fallback.0, fallback.1, false),
     }
+}
+
+/// How far an ego's body may be from the car SSv2 declared, m (roadmap 051).
+const EGO_BODY_TOLERANCE: f64 = 0.02;
+
+/// What separates an ego's body, as its world server reports it, from what SSv2 declared
+/// (the vehicle catalog's car), beyond [`EGO_BODY_TOLERANCE`]: each field with both values,
+/// declared first. The box is compared when the server measured one, the wheels when both
+/// sides know them; the box's y by size only (left-handed simulators flip it).
+fn ego_body_mismatches(
+    center: [f64; 3],
+    dims: [f64; 3],
+    declared_wheels: Option<Wheels>,
+    body: &wire::Body,
+) -> Vec<String> {
+    let mut off = Vec::new();
+    let mut compare = |what: &str, declared: f64, measured: f64| {
+        if (declared - measured).abs() > EGO_BODY_TOLERANCE {
+            off.push(format!("{what} declared {declared:.3}, body {measured:.3}"));
+        }
+    };
+    if body.has_box && body.origin_yaw == 0.0 {
+        let o = body.origin_offset.unwrap_or_default();
+        let l = body.box_location.unwrap_or_default();
+        let e = body.box_extent.unwrap_or_default();
+        compare("box centre x", center[0], o.x + l.x);
+        compare("box centre |y|", center[1].abs(), (o.y + l.y).abs());
+        compare("box centre z", center[2], o.z + l.z);
+        compare("length", dims[0], 2.0 * e.x);
+        compare("width", dims[1], 2.0 * e.y);
+        compare("height", dims[2], 2.0 * e.z);
+    }
+    if let (Some(d), Some(w)) = (declared_wheels, body.wheels.as_ref()) {
+        compare("front axle x", d.front_x, w.front_x);
+        compare("rear axle x", d.rear_x, w.rear_x);
+        compare("track", d.track, w.track);
+        compare("wheel radius", d.radius, w.radius);
+    }
+    off
 }
 
 fn v3(a: [f64; 3]) -> Option<wire::Vec3> {
@@ -1629,6 +1668,30 @@ impl SimBackend for RemoteBackend {
             }
         };
         let body = body.unwrap_or_default();
+        if entity_type == EntityType::Ego && declared {
+            let wheels = match &req.kind {
+                EntityKind::Vehicle { wheels, .. } => *wheels,
+                _ => None,
+            };
+            let off = ego_body_mismatches(center, dims, wheels, &body);
+            if !off.is_empty() {
+                // Not an ego of this scenario: take the body back before refusing.
+                if let Err(e) = self.call(
+                    &format!("Despawn '{name}'"),
+                    wire::request::Request::Despawn(wire::Despawn { handle }),
+                    self.request_timeout,
+                ) {
+                    tracing::warn!("Despawning the refused ego '{name}' failed: {e:?}");
+                }
+                return Err(BackendError::Failed(format!(
+                    "Spawn '{name}': the ego's body on {} ({}) is not the car SSv2 declared \
+                     (the vehicle catalog's), more than {EGO_BODY_TOLERANCE} m off: {}",
+                    self.sim(),
+                    body.model,
+                    off.join("; ")
+                )));
+            }
+        }
         let sim_id = if body.sim_id != 0 {
             body.sim_id
         } else {

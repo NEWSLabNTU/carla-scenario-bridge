@@ -293,6 +293,7 @@ fn vehicle(name: &str, driver: Driver, x: f64) -> SpawnRequest {
             subtype: crate::proto::traffic_simulator_msgs::entity_subtype::Enum::Car,
             axles: None,
             performance: None,
+            wheels: None,
         },
     }
 }
@@ -1024,4 +1025,72 @@ fn a_pedestrian_names_its_walker_only_when_the_key_is_one() {
     );
     assert_eq!(pedestrian_model("pedestrian"), "");
     assert_eq!(pedestrian_model(""), "");
+}
+
+/// The Model 3 as the vehicle catalog declares it (roadmap 051).
+const M3_CENTER: [f64; 3] = [1.416, 0.0, 0.744];
+const M3_DIMS: [f64; 3] = [4.792, 2.163, 1.488];
+const M3_WHEELS: Wheels = Wheels {
+    front_x: 3.005,
+    rear_x: 0.0,
+    track: 1.667,
+    radius: 0.37,
+};
+
+/// The Model 3 as the CARLA world server reports it: actor origin 1.387 ahead of the entity
+/// origin, CARLA's box 0.029 ahead of the actor's, the measured axles moved to the entity.
+fn carla_m3_body() -> wire::Body {
+    let vec = |x, y, z| Some(wire::Vec3 { x, y, z });
+    wire::Body {
+        model: "vehicle.tesla.model3".into(),
+        has_box: true,
+        origin_offset: vec(1.387, 0.0, 0.0),
+        box_location: vec(0.029, -0.004, 0.744),
+        box_extent: vec(2.396, 1.0815, 0.744),
+        wheels: Some(wire::Wheels {
+            front_x: 3.005,
+            rear_x: 0.001,
+            track: 1.667,
+            radius: 0.37,
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_catalogs_model3_is_its_carla_body() {
+    let off = ego_body_mismatches(M3_CENTER, M3_DIMS, Some(M3_WHEELS), &carla_m3_body());
+    assert!(off.is_empty(), "{off:?}");
+}
+
+#[test]
+fn an_ego_off_the_catalog_is_named_field_by_field() {
+    let mut body = carla_m3_body();
+    body.box_extent = Some(wire::Vec3 {
+        x: 2.5,
+        y: 1.0815,
+        z: 0.744,
+    });
+    body.wheels.as_mut().unwrap().front_x = 2.9;
+    let off = ego_body_mismatches(M3_CENTER, M3_DIMS, Some(M3_WHEELS), &body);
+    assert_eq!(
+        off,
+        vec![
+            "length declared 4.792, body 5.000".to_string(),
+            "front axle x declared 3.005, body 2.900".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn what_a_server_does_not_report_is_not_compared() {
+    let body = wire::Body {
+        model: "fake:box".into(),
+        ..Default::default()
+    };
+    assert!(ego_body_mismatches(M3_CENTER, M3_DIMS, Some(M3_WHEELS), &body).is_empty());
+    let mut body = carla_m3_body();
+    body.wheels = None;
+    assert!(ego_body_mismatches(M3_CENTER, M3_DIMS, Some(M3_WHEELS), &body).is_empty());
+    assert!(ego_body_mismatches(M3_CENTER, M3_DIMS, None, &carla_m3_body()).is_empty());
 }
