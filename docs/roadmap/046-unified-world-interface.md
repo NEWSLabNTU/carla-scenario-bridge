@@ -421,9 +421,10 @@ Checks after a clean build from an empty `install/`:
 | Isaac 20-NPC bench (headless, no ego) | PASS; trace identical to part A's first run |
 | node, services, parameter | `/scenario_world_bridge`, its two weather services, `config_file` |
 
-Not run: `just e2e` on either simulator. On CARLA, the bench, two_av and the suites of
-part A cover what it runs; on Isaac it needs the Isaac ego, which this host's GPUs cannot
-render (part A results).
+`just e2e sim:=carla` (2026-10-23, after the 047 S1/S2 commits; its own CARLA on 2010, GPU 1):
+PASS, `town01_ego_drive` through `carla_up.sh` from nothing, the stacks it started stopped
+after. Not run: `just e2e sim:=isaac`, which needs the Isaac ego, which this host's GPUs
+cannot render (part A results).
 
 ## Steps
 
