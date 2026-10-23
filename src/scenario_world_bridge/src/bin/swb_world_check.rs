@@ -202,8 +202,9 @@ fn spawn(
             } else {
                 "car".into()
             },
-            box_center: v3(1.5, 0.0, 0.9),
-            box_dimensions: v3(4.5, 2.1, 1.8),
+            // The Model 3's measured box from its rear axle (roadmap 050).
+            box_center: v3(1.415, 0.0, 0.744),
+            box_dimensions: v3(4.792, 2.163, 1.488),
             pose: Some(at),
             model: "vehicle.tesla.model3".into(),
             motion: motion as i32,

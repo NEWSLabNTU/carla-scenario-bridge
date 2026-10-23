@@ -36,6 +36,20 @@ through the agent relay, so everything SSv2 offers for an ego works as usual:
 The ego cannot be told to change lanes or follow a relative speed: SSv2 refuses both for an
 ego, by design.
 
+**Its box is the car's.** SSv2's vehicle origin is the rear axle on the ground. A `<Vehicle>`
+named by a CARLA blueprint (`vehicle.tesla.model3` for the ego) declares that blueprint's
+measured box and axles, from `src/carla_world/config/blueprint_boxes_<version>.yaml`
+(`scripts/measure_blueprint_boxes.py`): for the Model 3, `Center` (1.415, 0, 0.744),
+`Dimensions` 4.792 x 2.163 x 1.488, axles 3.004 m apart, track 1.667, wheel diameter 0.74.
+`scripts/scenario_vehicle.py <blueprint>` prints them, the generators use it, and
+`scripts/check_scenario_vehicles.py` (in `just test`) fails on a named vehicle that declares
+anything else, within 2 cm. A deliberate mismatch carries
+`<Property name="swb.box_exempt" value="why" />` in the vehicle's `Properties`. The world
+server lines the declared box up with CARLA's: a declared box equal to its body's measured
+one has the table's box centre taken off the origin offset, so the rear axle lands on SSv2's
+origin (roadmap 050). Vehicles declared by size instead (any other name) get the body that
+fits, and their declared centre is the offset, as before.
+
 ## Other vehicles, pedestrians and objects
 
 Driven by SSv2 by default: its behavior tree computes each pose and the bridge places the

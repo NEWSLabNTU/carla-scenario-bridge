@@ -4044,6 +4044,17 @@ impl CarlaBackend {
             tracing::info!("'{name}' spawns '{blueprint_key}' turned 90° to fit its box");
         }
 
+        // An entity that declares its vehicle body's measured box (roadmap 050) declares the
+        // box centre from the rear axle. CARLA's box centre sits the table's `center` from
+        // the actor origin, so the actor origin goes the difference from the entity origin,
+        // and SSv2's box and CARLA's coincide.
+        if let Some(c) =
+            measured_vehicle_box_center(self.blueprint_boxes.as_ref(), &blueprint_key, &shape)
+        {
+            shape.origin_offset.x -= c[0];
+            shape.origin_offset.y += c[1]; // CARLA's y is ROS's -y
+        }
+
         let origin_offset = shape.origin_offset;
         tracing::info!(
             "Spawn {}: name={name}, asset_key={asset_key}, origin offset \
@@ -6670,12 +6681,42 @@ fn carla_trace_state(
     ([x, y, z, roll, pitch, yaw], [vx, vy, vz])
 }
 
+/// How close a declared box must be to a blueprint's measured one to be that box, m: the
+/// scenario lint's tolerance (scripts/check_scenario_vehicles.py).
+const MEASURED_BOX_TOLERANCE: f64 = 0.02;
+
+/// The measured box centre (CARLA frame, from the actor origin) of a `vehicle.*` body whose
+/// box the entity declares: length, width and height within `MEASURED_BOX_TOLERANCE` of
+/// the table's, a declared centre, the body not turned. Such a declaration is the car's
+/// own box from its rear axle (scripts/scenario_vehicle.py), whatever the entity is named.
+/// `None` otherwise: a declared size the body only fits keeps its centre as the offset.
+fn measured_vehicle_box_center(
+    table: Option<&BoxTable>,
+    blueprint_key: &str,
+    shape: &EntityShape,
+) -> Option<[f64; 3]> {
+    if !blueprint_key.starts_with("vehicle.")
+        || shape.origin_offset.yaw != 0.0
+        || shape.center == [0.0; 3]
+    {
+        return None;
+    }
+    let bp = table?.get(blueprint_key)?;
+    let declared = shape.declared?;
+    let near = |a: f64, b: f64| (a - b).abs() <= MEASURED_BOX_TOLERANCE;
+    (near(declared.length, bp.length)
+        && near(declared.width, bp.width)
+        && near(declared.height, bp.height))
+    .then_some(bp.center)
+}
+
 /// The origin offset an SSv2 entity declares: its `bounding_box.center` x and y. Absent or
 /// zero (pedestrians and misc objects usually) means the SSv2 and CARLA origins coincide.
 ///
-/// The declaration is trusted over CARLA's geometry. Vehicles declare 1.5 m, while
-/// `vehicle.tesla.model3`'s rear axle is 1.386 m behind its origin; the 0.11 m residual is a
-/// blueprint-fidelity matter (roadmap 014, gap 9), not something this shift should absorb.
+/// The declaration is trusted over CARLA's geometry. An entity that declares its vehicle
+/// body's measured box has the table's box centre subtracted at spawn, so the two boxes
+/// coincide (`measured_vehicle_box_center`, roadmap 050): for `vehicle.tesla.model3`,
+/// 1.415 - 0.029, its rear axle 1.386 m behind the actor origin.
 fn origin_offset_of(bounding_box: Option<&BoundingBox>) -> OriginOffset {
     bounding_box
         .and_then(|b| b.center.as_ref())
@@ -7380,6 +7421,43 @@ mod tests {
         assert_eq!(prop_offset_in_actor_frame(0.2, 0.1, -90.0), (-0.1, 0.2));
         assert_eq!(prop_offset_in_actor_frame(0.2, 0.1, 180.0), (-0.2, -0.1));
         assert_eq!(prop_offset_in_actor_frame(0.0, 0.0, 270.0), (0.0, 0.0));
+    }
+
+    /// A vehicle declaring its body's measured box (roadmap 050) gets the table's box
+    /// centre taken off its offset; a declared size the body only fits keeps its own.
+    #[test]
+    fn a_measured_box_lines_up_with_carlas() {
+        let table =
+            BoxTable::from_yaml(include_str!("../../../config/blueprint_boxes_0.9.16.yaml"))
+                .unwrap();
+        let bbox = |cx: f64, cz: f64, l: f64, w: f64, h: f64| BoundingBox {
+            center: Some(geometry_msgs::Point {
+                x: cx,
+                y: 0.0,
+                z: cz,
+            }),
+            dimensions: Some(geometry_msgs::Vector3 { x: l, y: w, z: h }),
+        };
+        let m3 = "vehicle.tesla.model3";
+        let measured = bbox(1.415, 0.744, 4.792, 2.163, 1.488);
+        let shape = EntityShape::of(Some(&measured), EntitySubtype::Car);
+        let c = measured_vehicle_box_center(Some(&table), m3, &shape).unwrap();
+        // The actor origin lands on CARLA's: 1.415 - 0.029 = 1.386 ahead of the rear axle.
+        assert!((shape.origin_offset.x - c[0] - 1.386).abs() < 1e-9, "{c:?}");
+        // The starter car box (a size the Model 3 fits), no box, no table: unchanged.
+        let starter = EntityShape::of(Some(&bbox(1.5, 0.9, 4.5, 2.1, 1.8)), EntitySubtype::Car);
+        assert_eq!(
+            measured_vehicle_box_center(Some(&table), m3, &starter),
+            None
+        );
+        let none = EntityShape::of(None, EntitySubtype::Car);
+        assert_eq!(measured_vehicle_box_center(Some(&table), m3, &none), None);
+        assert_eq!(measured_vehicle_box_center(None, m3, &shape), None);
+        // A walker's or prop's body never moves this way.
+        assert_eq!(
+            measured_vehicle_box_center(Some(&table), "static.prop.trafficcone01", &shape),
+            None
+        );
     }
 
     /// A prop matched turned (roadmap 022) keeps its position and is turned a quarter

@@ -99,6 +99,12 @@ The bridge spawns the CARLA vehicle closest in size to the declared box within i
 `vehicleCategory`; a 4.5 x 2.1 x 1.8 m car keeps the Tesla Model 3. A `truck` gets a truck, a
 `bicycle` a bicycle. To force a body, set `model3d="vehicle.audi.tt"` on the `Vehicle`.
 
+A vehicle *named* by a CARLA blueprint, as the ego is (`vehicle.tesla.model3`), declares that
+car's measured box and axles instead: SSv2 then measures distances on the car CARLA drives.
+`scripts/scenario_vehicle.py vehicle.tesla.model3` prints them (centre 1.415 m ahead of the
+rear axle, 4.792 x 2.163 x 1.488 m), and `just test` fails on a named vehicle that declares
+anything else (`scripts/check_scenario_vehicles.py`, roadmap 050).
+
 **Init**: teleport both, give the ego its goal, start the lead car at a parameterized speed.
 Paste the poses from step 2; the ego's goal is the `AcquirePositionAction`:
 

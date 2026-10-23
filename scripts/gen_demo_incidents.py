@@ -41,9 +41,13 @@ Usage:
 import argparse
 import math
 import re
+import sys
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scenario_vehicle  # noqa: E402  scripts/, beside this file
 
 ROOT = Path(__file__).resolve().parent.parent
 SITES = ROOT / "scripts/demo_town01_sites.yaml"
@@ -86,14 +90,21 @@ BLUEPRINT_BOX = {
 # ---------------------------------------------------------------------------- entities
 
 CAR = """<Vehicle name="{bp}" vehicleCategory="car">
-				<BoundingBox><Center x="1.5" y="0.0" z="0.9" /><Dimensions width="2.1" height="1.8" length="4.5" /></BoundingBox>
+				<BoundingBox><Center x="{center_x}" y="{center_y}" z="{center_z}" /><Dimensions width="{width}" height="{height}" length="{length}" /></BoundingBox>
 				<Performance maxSpeed="{vmax}" maxAcceleration="15.0" maxDeceleration="15.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="{wheel_diameter}" trackWidth="{track}" positionX="{front_x}" positionZ="{axle_z}" />
+					<RearAxle maxSteering="0.0" wheelDiameter="{wheel_diameter}" trackWidth="{track}" positionX="0.0" positionZ="{axle_z}" />
 				</Axles>
 				<Properties />
 			</Vehicle>"""
+# A vehicle named by its blueprint declares the blueprint's measured box and axles (roadmap
+# 050, scripts/scenario_vehicle.py). A car named after itself (`car`) declares a size, and the
+# world server picks the body that fits it (roadmap 022): the starter car box.
+MODEL3 = scenario_vehicle.strings("vehicle.tesla.model3")
+STARTER_CAR = {"center_x": "1.5", "center_y": "0.0", "center_z": "0.9", "length": "4.5",
+               "width": "2.1", "height": "1.8", "wheel_diameter": "0.6", "track": "1.8",
+               "front_x": "3.1", "axle_z": "0.3"}
 
 # vehicle.diamondback.century's box (022 picks it for a bicycle of this size).
 BICYCLE = """<Vehicle name="{bp}" vehicleCategory="bicycle">
@@ -114,7 +125,7 @@ WALKER = """<Pedestrian model="unspecified" mass="70.0" name="walker.pedestrian.
 
 def ego_object():
     return f"""<ScenarioObject name="ego">
-			{CAR.format(bp="vehicle.tesla.model3", vmax=EGO_MAX_SPEED)}
+			{CAR.format(bp="vehicle.tesla.model3", vmax=EGO_MAX_SPEED, **MODEL3)}
 			<ObjectController><Controller name="Autoware"><Properties>
 				<Property name="maxJerk" value="1.5" /><Property name="minJerk" value="-1.5" />
 			</Properties></Controller></ObjectController>
@@ -131,7 +142,7 @@ def npc_object(name, body, props=None):
 
 
 def car(name, props=None):
-    return npc_object(name, CAR.format(bp=name, vmax=20), props)
+    return npc_object(name, CAR.format(bp=name, vmax=20, **STARTER_CAR), props)
 
 
 def bicycle(name):

@@ -17,13 +17,13 @@
 		<ScenarioObject name="npc_00">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -36,13 +36,13 @@
 		<ScenarioObject name="npc_01">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -55,13 +55,13 @@
 		<ScenarioObject name="npc_02">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -74,13 +74,13 @@
 		<ScenarioObject name="npc_03">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -93,13 +93,13 @@
 		<ScenarioObject name="npc_04">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -112,13 +112,13 @@
 		<ScenarioObject name="npc_05">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -131,13 +131,13 @@
 		<ScenarioObject name="npc_06">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -150,13 +150,13 @@
 		<ScenarioObject name="npc_07">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -169,13 +169,13 @@
 		<ScenarioObject name="npc_08">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -188,13 +188,13 @@
 		<ScenarioObject name="npc_09">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -207,13 +207,13 @@
 		<ScenarioObject name="npc_10">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -226,13 +226,13 @@
 		<ScenarioObject name="npc_11">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -245,13 +245,13 @@
 		<ScenarioObject name="npc_12">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -264,13 +264,13 @@
 		<ScenarioObject name="npc_13">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -283,13 +283,13 @@
 		<ScenarioObject name="npc_14">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -302,13 +302,13 @@
 		<ScenarioObject name="npc_15">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -321,13 +321,13 @@
 		<ScenarioObject name="npc_16">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -340,13 +340,13 @@
 		<ScenarioObject name="npc_17">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -359,13 +359,13 @@
 		<ScenarioObject name="npc_18">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -378,13 +378,13 @@
 		<ScenarioObject name="npc_19">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="1.415" y="0.0" z="0.744" />
+					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>

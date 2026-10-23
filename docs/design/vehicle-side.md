@@ -215,8 +215,10 @@ from the rig through aib's library.
 ### SSv2 uses the same car
 
 The catalog's ego entry is named after the spec (`tesla_model3`). Its `BoundingBox` comes
-from the geometry: the centre at the box's middle in the rear-axle frame, so 1.532,
-0, 0.744. Its `Axles` come from the wheel base, track and radius, and its `Performance`
+from the geometry: the centre at the box's middle in the rear-axle frame, so 1.415,
+0, 0.744 (measured by roadmap 050: CARLA's rear axle sits 1.386 m behind the actor origin,
+not half a wheel base; acb's `vehicle_info` overhangs, 0.923 front and 0.864 rear, assume the
+half wheel base and are 0.116 m off the car's 0.807 and 0.981, which the spec fixes). Its `Axles` come from the wheel base, track and radius, and its `Performance`
 from the powertrain envelope. Scenarios use `CatalogReference`. The world servers resolve
 the entry name to the spec: CARLA's blueprint and physics, or Isaac's rig.
 

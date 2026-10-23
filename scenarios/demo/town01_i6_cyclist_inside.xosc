@@ -12,11 +12,11 @@
 	<Entities>
 		<ScenarioObject name="ego">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox><Center x="1.5" y="0.0" z="0.9" /><Dimensions width="2.1" height="1.8" length="4.5" /></BoundingBox>
+				<BoundingBox><Center x="1.415" y="0.0" z="0.744" /><Dimensions width="2.163" height="1.488" length="4.792" /></BoundingBox>
 				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>

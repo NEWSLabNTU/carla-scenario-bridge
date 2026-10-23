@@ -230,6 +230,10 @@ test:
     # world's pure modules
     python3 -m unittest discover -s src/swb_world_server/test
     python3 -m unittest discover -s src/isaac_world/test
+    # Every vehicle named by a CARLA blueprint declares that car's measured box and axles
+    # (roadmap 050), and the module the generators take them from
+    python3 -m pytest -q scripts/test_scenario_vehicle.py
+    python3 scripts/check_scenario_vehicles.py
 
 # Run CI checks: build, check (format + clippy), and tests
 ci: build check test
@@ -313,7 +317,7 @@ two-av *args: _require-carla
             sleep 5
         done
     fi
-    pgrep -x carla_scenario_ >/dev/null || { echo "[two-av] bridge failed to start; see $logs/bridge.log"; exit 1; }
+    pgrep -x scenario_world_ >/dev/null || { echo "[two-av] bridge failed to start; see $logs/bridge.log"; exit 1; }
 
     # One stack at a time, deliberately: two Autoware stacks building their TensorRT nodes at
     # once pushed both past their load budget ("composable 88/89 loaded (1 pending)").

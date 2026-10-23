@@ -15,7 +15,7 @@
 	last frame; an end just after that hold, where SSv2's blind NPC still overlaps the ego
 	by ~0.5 m, is a one-frame G1 of its own. Failure = 120 s with no collision.
 	Both cars declare the box of the body they get, vehicle.tesla.model3 (4.792 x 2.163 x
-	1.488 m, centre 1.532 m ahead of the rear axle): with the old 4.5 m boxes CARLA's bodies
+	1.488 m, centre 1.415 m ahead of the rear axle; roadmap 050): with the old 4.5 m boxes CARLA's bodies
 	met ~0.3 m before SSv2's did, a one-frame G1 at the contact onset (roadmap 032 N7).
 	The contact is the point, so csbExpectedContacts declares it: run_suite
 	physical-verdict accepts the contact with npc_rear, and fails on any other contact.
@@ -33,13 +33,13 @@
 		<ScenarioObject name="ego">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.532" y="0.0" z="0.744" />
+					<Center x="1.415" y="0.0" z="0.744" />
 					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -55,13 +55,13 @@
 		<ScenarioObject name="npc_rear">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.532" y="0.0" z="0.744" />
+					<Center x="1.415" y="0.0" z="0.744" />
 					<Dimensions width="2.163" height="1.488" length="4.792" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
+					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
 				</Axles>
 				<Properties />
 			</Vehicle>

@@ -115,6 +115,20 @@ pub struct BlueprintBox {
     /// Box centre relative to the actor origin, CARLA frame, m.
     #[serde(default)]
     pub center: [f64; 3],
+    /// A vehicle's axles (roadmap 050); absent on walkers and props.
+    #[serde(default)]
+    pub axles: Option<Axles>,
+}
+
+/// A vehicle's axles in the actor's frame (x forward), m, measured from `physics_control`.
+/// The rear axle is not at `-wheel_base / 2` (the Model 3's is at -1.386, its front at
+/// +1.618), which is what a scenario's box needs: SSv2's vehicle origin is the rear axle.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct Axles {
+    pub front_x: f64,
+    pub rear_x: f64,
+    pub track: f64,
+    pub wheel_radius: f64,
 }
 
 impl BlueprintBox {
@@ -372,6 +386,20 @@ mod tests {
         }
         let m3 = t.get(MODEL3).unwrap();
         assert!((m3.length - 4.792).abs() < 0.01, "{m3:?}");
+    }
+
+    #[test]
+    fn every_vehicle_has_axles_and_the_model3_matches_its_vehicle_info() {
+        let t = shipped();
+        for (name, bp) in &t.blueprints {
+            assert_eq!(bp.kind == "vehicle", bp.axles.is_some(), "{name}");
+        }
+        let a = t.get(MODEL3).unwrap().axles.unwrap();
+        // acb's vehicle_info: wheel_base 3.005, wheel_tread 1.667, wheel_radius 0.37.
+        assert!((a.front_x - a.rear_x - 3.005).abs() < 0.002, "{a:?}");
+        assert!((a.track - 1.667).abs() < 0.002, "{a:?}");
+        assert!((a.wheel_radius - 0.37).abs() < 0.002, "{a:?}");
+        assert!((a.rear_x + 1.386).abs() < 0.002, "{a:?}");
     }
 
     #[test]

@@ -151,7 +151,8 @@ Per file:
 - Both: the ego's vehicle placeholders, which the AWF evaluator fills with its own vehicle's,
   set to this project's ego (`acb_vehicle`, CARLA's `vehicle.tesla.model3`):
   `__ego_dimensions_length__/width__/height__` 4 / 2 / 1.5 -> 4.792 / 2.163 / 1.488,
-  `__ego_center_x__` 0 -> 1.532 (box centre ahead of the rear axle, the ego's origin),
+  `__ego_center_x__` 0 -> 1.415 (box centre ahead of the rear axle, the ego's origin; 1.532
+  until roadmap 050 measured the rear axle at -1.386 from CARLA's actor origin),
   `__ego_center_z__` 0 -> 0.744. The bridge places the CARLA car by the declared box centre
   (`origin_offset_of` in `coordinator.rs`), so the upstream box, centred on the rear axle,
   spawned the car 1.39 m behind the pose SSv2 initialized Autoware's localization at; the

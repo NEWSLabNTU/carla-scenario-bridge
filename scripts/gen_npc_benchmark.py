@@ -32,6 +32,9 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scenario_vehicle  # noqa: E402  scripts/, beside this file
+
 ROOT = Path(__file__).resolve().parent.parent
 MAP = ROOT / "data/carla-autoware-bridge/Town01/lanelet2_map.osm"
 DEFAULT_OUT = ROOT / "scenarios/bench"
@@ -191,16 +194,17 @@ def start_positions(lanelets, count, usable=lambda xy: True):
     return [(lanelet_id, s) for lanelet_id, s, _ in picked]
 
 
-VEHICLE = """		<ScenarioObject name="{name}">
+# The Model 3's measured box and axles (roadmap 050, scripts/scenario_vehicle.py).
+VEHICLE = """		<ScenarioObject name="{{name}}">
 			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
 				<BoundingBox>
-					<Center x="1.5" y="0.0" z="0.9" />
-					<Dimensions width="2.1" height="1.8" length="4.5" />
+					<Center x="{center_x}" y="{center_y}" z="{center_z}" />
+					<Dimensions width="{width}" height="{height}" length="{length}" />
 				</BoundingBox>
 				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
 				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.6" trackWidth="1.8" positionX="3.1" positionZ="0.3" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.6" trackWidth="1.8" positionX="0.0" positionZ="0.3" />
+					<FrontAxle maxSteering="0.5" wheelDiameter="{wheel_diameter}" trackWidth="{track}" positionX="{front_x}" positionZ="{axle_z}" />
+					<RearAxle maxSteering="0.0" wheelDiameter="{wheel_diameter}" trackWidth="{track}" positionX="0.0" positionZ="{axle_z}" />
 				</Axles>
 				<Properties />
 			</Vehicle>
@@ -211,6 +215,7 @@ VEHICLE = """		<ScenarioObject name="{name}">
 			</ObjectController>
 		</ScenarioObject>
 """
+VEHICLE = VEHICLE.format(**scenario_vehicle.strings("vehicle.tesla.model3"))
 
 INIT = """				<Private entityRef="{name}">
 					<PrivateAction>

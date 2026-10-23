@@ -14,10 +14,10 @@
 #     to 0.01 m and match CARLA's lane centre. See ../../README.md.
 #   - The ego's vehicle placeholders (__ego_dimensions_*, __ego_center_*), which the AWF
 #     evaluator fills with its vehicle's, are set to this project's ego (acb_vehicle,
-#     CARLA's vehicle.tesla.model3): 4.792 x 2.163 x 1.488 m, centre 1.532 m ahead of the
-#     rear axle, 0.744 m up. The upstream 4 x 2 m box centred on the rear axle put the CARLA
-#     car 1.39 m behind the pose SSv2 initialized Autoware's localization at, and every
-#     variant failed before engage (see ../../README.md).
+#     CARLA's vehicle.tesla.model3): 4.792 x 2.163 x 1.488 m, centre 1.415 m ahead of the
+#     rear axle (measured, roadmap 050), 0.744 m up. The upstream 4 x 2 m box centred on
+#     the rear axle put the CARLA car 1.39 m behind the pose SSv2 initialized Autoware's
+#     localization at, and every variant failed before engage (see ../../README.md).
 # Everything else is the upstream file as published.
 ScenarioModifiers:
   ScenarioModifier:
@@ -61,7 +61,7 @@ OpenSCENARIO:
         value: '1.488'
       - name: __ego_center_x__
         parameterType: double
-        value: '1.532'
+        value: '1.415'
       - name: __ego_center_y__
         parameterType: double
         value: '0'
