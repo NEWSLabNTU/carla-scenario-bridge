@@ -73,8 +73,8 @@
     <arg name="architecture_type" value="awf/universe/20250130" />
     <!-- Still required with launch_autoware:=false: EgoEntity reads both before it
          reaches the launch_autoware branch (ego_entity.cpp:64-65). -->
-    <arg name="sensor_model" value="acb_sensor_kit" />
-    <arg name="vehicle_model" value="acb_vehicle" />
+    <arg name="sensor_model" value="tesla_model3_sensor_kit" />
+    <arg name="vehicle_model" value="tesla_model3" />
 
     <!-- CARLA adapter mode - no built-in simulator, real sensors -->
     <arg name="launch_simple_sensor_simulator" value="false" />

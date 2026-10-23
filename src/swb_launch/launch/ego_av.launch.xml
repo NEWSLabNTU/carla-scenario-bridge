@@ -42,8 +42,8 @@
        derives them from SSV2_PORT). Must match the simulation side's. -->
   <arg name="release_notify_endpoint" default="tcp://127.0.0.1:5556" />
   <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557" />
-  <arg name="vehicle_model" default="acb_vehicle" />
-  <arg name="sensor_model" default="acb_sensor_kit" />
+  <arg name="vehicle_model" default="tesla_model3" />
+  <arg name="sensor_model" default="tesla_model3_sensor_kit" />
   <arg name="launch_rviz" default="false" />
 
   <!-- Who routes and engages this ego (roadmap 017): the vehicle agent (swb_agent's
@@ -82,8 +82,8 @@
        map_path. Empty turns acb's signal publisher off. -->
   <arg name="traffic_light_map_path" default="$(var map_path)/carla/traffic_lights.yaml" />
   <arg name="control_trace_path" default="" />
-  <arg name="accel_map_path" default="$(find-pkg-share acb_vehicle_description)/config/accel_map.csv" />
-  <arg name="brake_map_path" default="$(find-pkg-share acb_vehicle_description)/config/brake_map.csv" />
+  <arg name="accel_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/accel_map.csv" />
+  <arg name="brake_map_path" default="$(find-pkg-share $(var vehicle_model)_description)/config/brake_map.csv" />
   <!-- clustering = CPU-only rule-based lidar detection. This host shares its GPU;
        CARLA takes what headroom there is and centerpoint's TensorRT engine does
        not fit beside it. -->

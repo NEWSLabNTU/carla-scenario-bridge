@@ -149,7 +149,7 @@ Per file:
 - Both: `LogicFile` `maps/Town01.osm -> $(env CARLA_MAPS)/Town01`; `SceneGraphFile`
   (`maps/dummy.pcd`) removed, as in this project's other scenarios.
 - Both: the ego's vehicle placeholders, which the AWF evaluator fills with its own vehicle's,
-  set to this project's ego (`acb_vehicle`, CARLA's `vehicle.tesla.model3`):
+  set to this project's ego (`tesla_model3`, CARLA's `vehicle.tesla.model3`):
   `__ego_dimensions_length__/width__/height__` 4 / 2 / 1.5 -> 4.792 / 2.163 / 1.488,
   `__ego_center_x__` 0 -> 1.415 (box centre ahead of the rear axle, the ego's origin; 1.532
   until roadmap 050 measured the rear axle at -1.386 from CARLA's actor origin),

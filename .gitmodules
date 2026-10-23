@@ -29,3 +29,7 @@
 	path = src/autoware_sim_vehicle
 	url = https://github.com/NEWSLabNTU/autoware_sim_vehicle.git
 	branch = target-shape
+[submodule "src/sim_vehicle_spec"]
+	path = src/sim_vehicle_spec
+	url = https://github.com/NEWSLabNTU/sim_vehicle_spec.git
+	branch = target-shape

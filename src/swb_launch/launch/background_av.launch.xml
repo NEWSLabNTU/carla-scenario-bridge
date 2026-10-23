@@ -49,8 +49,8 @@
        description="scenario_world_bridge's release PUB socket (ssv2_port + 1)" />
   <arg name="release_ack_endpoint" default="tcp://127.0.0.1:5557"
        description="scenario_world_bridge's release PULL socket (ssv2_port + 2)" />
-  <arg name="vehicle_model" default="acb_vehicle" />
-  <arg name="sensor_model" default="acb_sensor_kit" />
+  <arg name="vehicle_model" default="tesla_model3" />
+  <arg name="sensor_model" default="tesla_model3_sensor_kit" />
   <arg name="launch_rviz" default="false" />
   <arg name="rviz_config" default="$(find-pkg-share autoware_launch)/rviz/autoware.rviz"
        description="RViz config when launch_rviz (a screencast passes its own window layout)" />

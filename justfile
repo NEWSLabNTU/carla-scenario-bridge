@@ -903,14 +903,13 @@ carla-stop:
 carla-status:
     systemctl --user status "carla-run-{{carla_port}}" || true
 
-# Measure a CARLA blueprint's geometry and print it as Autoware vehicle_info parameters.
-#
-# Pass --write to update acb_vehicle_description's vehicle_info.param.yaml, --list to see the
-# available blueprints. Refuses to run while CARLA is in synchronous mode, because settling a
+# Measure a CARLA blueprint's geometry and print it as a vehicle spec's geometry block
+# (sim_vehicle_spec: paste it into the spec, then `just generate` there and in
+# autoware_sim_vehicle). Pass --list to see the available blueprints. Refuses to run while CARLA is in synchronous mode, because settling a
 # spawned car there would steal the tick from a running scenario.
 #
 # Usage: just vehicle-params [blueprint] [args...]
-#        just vehicle-params vehicle.audi.etron --write
+#        just vehicle-params vehicle.audi.etron
 vehicle-params blueprint="vehicle.tesla.model3" *args:
     "{{acb_src}}/scripts/extract_vehicle_params.py" {{blueprint}} --port {{carla_port}} {{args}}
 
@@ -1135,8 +1134,8 @@ ego-av *args: _require-carla
         acb_launch carla_simulator.launch.xml "${launch_args[@]}"
 
 # The ego's Autoware on Isaac Sim (roadmaps 038, 045): aib_launch isaac_simulator.launch.xml,
-# which is `just ego-av`'s stack (acb's carla_simulator.launch.xml) with aib's vehicle and
-# sensor kit (aib_vehicle, aib_sensor_kit) and no acb_bridge -- the world server (`just
+# which is `just ego-av`'s stack (acb's carla_simulator.launch.xml) with the same car's
+# packages (tesla_model3, autoware_sim_vehicle) and no acb_bridge -- the world server (`just
 # isaac-world`) is the vehicle interface, the sensors and /clock on the ego's domain -- and
 # the same vehicle agent registered with the relay. Long-lived like `just ego-av`; start it
 # once the world server is up.
@@ -1334,7 +1333,7 @@ scenario scenario_file *args:
         SSV2_PORT={{ssv2_port}} AGENT_PORT={{agent_port}} \
         "$up" "$map_dir" "$(IFS=,; echo "${resolved[*]}")"
     just _clear-stale-scenario
-    # The interpreter resolves the vehicle description package (acb_vehicle_description).
+    # The interpreter resolves the vehicle description package (tesla_model3_description).
     source "{{autoware_setup}}"
     if [ -f "{{acb_src}}/install/setup.bash" ]; then source "{{acb_src}}/install/setup.bash"; fi
     source "{{project}}/install/setup.bash"
