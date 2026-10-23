@@ -14,6 +14,7 @@ from isaac_world.soil import SoilError, SoilGrid, wong_reece  # noqa: E402
 TABLE = surfaces.load_classes()
 SAND = TABLE["sand"].soil
 LOAM = TABLE["dirt"].soil
+MUD = TABLE["mud_wet"].soil  # unvalidated, a wet clay row (047 D6)
 R, B = 0.37, 0.235
 
 
@@ -34,12 +35,26 @@ def wr(p, load=4500.0, slip=0.2, speed=5.0):
 
 
 class ParamsTest(unittest.TestCase):
-    def test_the_table_has_soil_for_sand_dirt_and_snow_and_none_for_mud(self):
+    def test_the_table_has_soil_for_sand_dirt_snow_and_unvalidated_mud(self):
         self.assertAlmostEqual(SAND.friction_angle, math.radians(28.0))
         self.assertEqual(LOAM.n, 0.7)
         self.assertIsNotNone(TABLE["snow_loose"].soil)
-        self.assertIsNone(TABLE["mud_wet"].soil)  # 047 D6
+        self.assertIsNotNone(MUD)
+        self.assertIsNotNone(TABLE["mud_wet"].unvalidated)
+        self.assertIsNone(TABLE["sand"].unvalidated)
         self.assertIsNone(TABLE["asphalt"].soil)
+
+    def test_mud_grips_least_and_sinks_like_loam(self):
+        """Wet clay: cohesive with a low friction angle, so the soil-limited friction is
+        below sand's and loam's while it sinks about as deep as loam, deeper with slip."""
+        mud, loam, sand = (drive(SoilGrid(p)) for p in (MUD, LOAM, SAND))
+        for other in (loam, sand):
+            self.assertLess(mud["traction_limit"] / mud["load"],
+                            0.5 * other["traction_limit"] / other["load"])
+        self.assertLess(mud["sinkage"], sand["sinkage"])
+        self.assertAlmostEqual(mud["sinkage"], loam["sinkage"], delta=0.015)
+        self.assertGreater(drive(SoilGrid(MUD), slip=0.5)["sinkage"],
+                           drive(SoilGrid(MUD), slip=0.1)["sinkage"])
 
     def test_every_problem_is_listed(self):
         with self.assertRaises(SoilError) as e:

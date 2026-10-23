@@ -17,7 +17,11 @@
 #          isaac_world.soil): n, k_c N/m^(n+1), k_phi N/m^(n+2), cohesion Pa, friction_angle
 #          deg, janosi_k m; elastic_k Pa/m optional. A class without them cannot be a soil
 #          zone's. From Wong, Theory of Ground Vehicles (Table 2.3, the Land Locomotion Lab's
-#          measurements; Janosi K from its typical ranges); mud has none until 047 D6.
+#          measurements; Janosi K from its typical ranges).
+#   unvalidated  why the class's soil parameters are a stand-in, not a measurement of the
+#          ground the class names (047 D6). A soil zone of such a class is refused unless the
+#          map's surfaces.yaml lists the class in `allow_unvalidated:`, and the world server
+#          and `just surfaces-check` warn about it at every load.
 #
 # The values are the survey's literature table (survey-localized-deformable-terrain.md, wet
 # and loose surfaces), not measurements: calibrate before trusting a number.
@@ -79,6 +83,12 @@ classes:
   mud_wet:
     mu: 0.3
     slip: [[0.0, 0.7], [0.25, 1.0], [1.0, 0.9]]
+    # Wong's wettest clay row (clayey soil, Thailand, 55 % moisture), Janosi K at the soft
+    # end of its range. No published real-time mud model exists (survey): no pore water, no
+    # rate dependence, no clogging; the grid's slip sinkage is the only dig-in.
+    soil: {n: 0.7, k_c: 16030.0, k_phi: 1262530.0, cohesion: 2070.0, friction_angle: 10.0,
+           janosi_k: 0.025}
+    unvalidated: "a wet clay row stands in for mud, nothing measured on mud backs it; 047 D6"
   snow_packed:
     mu: 0.2
     wet: {moist: 0.8, wetWithPuddles: 0.6}

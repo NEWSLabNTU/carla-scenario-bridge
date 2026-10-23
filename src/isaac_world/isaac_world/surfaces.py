@@ -6,6 +6,9 @@ anywhere and the maths is unit-tested.
 
     classes: surface_classes.yaml      # optional: a class table beside the map; default the
                                        # one shipped in src/isaac_world/config/
+    allow_unvalidated: [mud_wet]       # optional: classes whose soil parameters are a stand-in
+                                       # (the table's `unvalidated:`) that soil zones here may
+                                       # use; any other such zone is refused (047 D6)
     defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass,
                Ground: dirt, unlabelled: grass}
     zones:
@@ -100,6 +103,7 @@ class SurfaceClass:
     slip: tuple = None  # ((0, f0), (s_peak, 1), (1, f_lock)), or None: the vehicle's
     hydroplaning: bool = False
     soil: object = None  # soil.SoilParams: the class can be a soil zone's (047 S3)
+    unvalidated: str = None  # why its soil parameters are a stand-in (047 D6), or None
 
 
 @dataclass(frozen=True)
@@ -166,8 +170,12 @@ def parse_classes(data, where="classes"):
                 params = soil_model.parse_params(c["soil"], f"{where}: class {name}: soil")
             except soil_model.SoilError as e:
                 problems.append(str(e))
+        unvalidated = c.get("unvalidated")
+        if unvalidated is not None and (not isinstance(unvalidated, str) or not unvalidated):
+            problems.append(f"{where}: class {name}: unvalidated is the reason, a string")
+            unvalidated = None
         classes[name] = SurfaceClass(name, float(c["mu"]), tuple(wet), slip,
-                                     bool(c.get("hydroplaning", False)), params)
+                                     bool(c.get("hydroplaning", False)), params, unvalidated)
     reference = data.get("reference", "asphalt")
     if reference not in classes:
         problems.append(f"{where}: reference class {reference!r} is not in the table")
@@ -316,6 +324,13 @@ class SurfaceMap:
     table: ClassTable
     defaults: dict  # label (or UNLABELLED) -> class
     zones: list
+    allow_unvalidated: tuple = ()  # classes with stand-in soil parameters soil zones may use
+
+    @property
+    def unvalidated(self):
+        """`(zone id, class, reason)` for every soil zone on stand-in parameters (047 D6)."""
+        return [(z.id, z.cls, self.table[z.cls].unvalidated) for z in self.zones
+                if z.soil and z.cls in self.table.classes and self.table[z.cls].unvalidated]
 
     def at(self, x, y, label=None):
         """The surface at map point (x, y) over ground labelled `label` (None: unlabelled)."""
@@ -351,9 +366,10 @@ def parse(data, path=FILE, table=None, base=None):
     if not isinstance(data, dict):
         raise SurfaceError(f"{path}: not a mapping")
     problems = []
-    unknown = set(data) - {"classes", "defaults", "zones"}
+    unknown = set(data) - {"classes", "defaults", "zones", "allow_unvalidated"}
     if unknown:
-        problems.append(f"{path}: unknown key(s) {sorted(unknown)} (classes, defaults, zones)")
+        problems.append(f"{path}: unknown key(s) {sorted(unknown)} (classes, defaults, zones, "
+                        f"allow_unvalidated)")
     if table is None:
         classes = data.get("classes")
         try:
@@ -366,6 +382,12 @@ def parse(data, path=FILE, table=None, base=None):
             problems.append(f"{where}: unknown class {cls!r} (the table has "
                             f"{', '.join(sorted(table.classes))})")
 
+    allow = data.get("allow_unvalidated") or []
+    if not isinstance(allow, list) or not all(isinstance(c, str) for c in allow):
+        problems.append(f"{path}: allow_unvalidated is a list of class names")
+        allow = []
+    for cls in allow:
+        known(cls, f"{path}: allow_unvalidated")
     defaults = dict(data.get("defaults") or {})
     for label, cls in defaults.items():
         if label not in LABELS and label != UNLABELLED:
@@ -443,6 +465,11 @@ def parse(data, path=FILE, table=None, base=None):
             have = ", ".join(sorted(n for n, c in table.classes.items() if c.soil)) or "none"
             problems.append(f"{where}: class {z['class']!r} has no soil parameters (soil "
                             f"classes: {have})")
+        elif model and z["class"] in table.classes and table[z["class"]].unvalidated \
+                and z["class"] not in allow:
+            problems.append(f"{where}: class {z['class']!r} has unvalidated soil parameters "
+                            f"({table[z['class']].unvalidated}): list it in allow_unvalidated "
+                            f"to use them")
         ground_z = z.get("ground_z")
         if ground_z is not None:
             if not isinstance(ground_z, (int, float)) or not math.isfinite(ground_z):
@@ -454,7 +481,7 @@ def parse(data, path=FILE, table=None, base=None):
                           float(ground_z) if isinstance(ground_z, (int, float)) else None))
     if problems:
         raise SurfaceError("\n".join(problems))
-    return SurfaceMap(str(path), table, defaults, zones)
+    return SurfaceMap(str(path), table, defaults, zones, tuple(allow))
 
 
 def load(map_or_file):
@@ -753,7 +780,9 @@ def main(argv=None):
     ways = lanelet_ways(osm) if osm.exists() else []
     for w in warnings(smap, ways):
         print(f"warning: {w}")
-    print(f"{path}: {len(smap.zones)} zone(s), {sum(z.soil for z in smap.zones)} with soil; "
+    for zid, cls, why in smap.unvalidated:
+        print(f"warning: zone {zid}: soil on unvalidated {cls} parameters: {why}")
+    print(f"{path}: {len(smap.zones)} zone(s), {sum(bool(z.soil) for z in smap.zones)} with soil; "
           f"{len(smap.table.classes)} classes")
     if args.command == "plot":
         out = args.output or str(path.parent / "surfaces.png")

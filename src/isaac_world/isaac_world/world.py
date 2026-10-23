@@ -270,6 +270,9 @@ class IsaacWorld(WorldBase):
         self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin, self._apply_force,
                                     self._make_tiles)
         log.info("surface map %s: %d zone(s)", path, len(self.surface.map.zones))
+        for zid, cls, why in self.surface.map.unvalidated:
+            log.warning("surface map %s: zone %s: soil on unvalidated %s parameters: %s", path,
+                        zid, cls, why)
         if self.surface.tiles:
             self._settle_cut()
 

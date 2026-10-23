@@ -17,6 +17,8 @@ applies it. Cases:
   brake_<lane>   full braking from 15 m/s in the zone (ABS)
   entry          the largest change of the soil's resistance between two substeps on entry
                  at 20 m/s, against the edge blend, and in steady state 10 m on
+  mud (047 D6)   the coast, hold (twice), launch and brake cases in a mud_wet lane, the
+                 class's unvalidated clay row (SOIL_SPIKE_ONLY=mud: those alone)
   rut_fresh, rut_from_set  047 D5: after rut_2 its ruts are saved, then a pass on fresh
                  ground, then the saved set loaded by `swb.ruts` and the same pass again
   rut_1, rut_2   the `sand_rut` lane: sand whose ground is the server's tiles (`ground_z`, a
@@ -52,7 +54,8 @@ from isaac_world.surface_layer import QCODE_ATTR, SurfaceLayer  # noqa: E402
 FRAME, SUB = 0.05, 3
 dt = FRAME / SUB
 ZONE_X0, ZONE_X1 = 100.0, 400.0
-LANES = {"asphalt": 0.0, "sand": 10.0, "dirt": 20.0, "sand_cf": 30.0, "sand_rut": 40.0}
+LANES = {"asphalt": 0.0, "sand": 10.0, "dirt": 20.0, "sand_cf": 30.0, "sand_rut": 40.0,
+         "mud": 50.0}
 RUT_X1 = 160.0
 
 
@@ -62,12 +65,14 @@ def band(y0, y1):
 
 SURFACES = {
     "defaults": {"Road": "asphalt"},
+    "allow_unvalidated": ["mud_wet"],
     "zones": [
         {"id": "sand", "class": "sand", "soil": "grid", "polygon": band(6, 14)},
         {"id": "dirt", "class": "dirt", "soil": "grid", "polygon": band(16, 24)},
         {"id": "sand_cf", "class": "sand", "soil": "closed_form", "polygon": band(26, 34)},
         {"id": "sand_rut", "class": "sand", "soil": "grid", "ground_z": 0.0,
          "polygon": [[ZONE_X0, 36], [RUT_X1, 36], [RUT_X1, 44], [ZONE_X0, 44]]},
+        {"id": "mud", "class": "mud_wet", "soil": "grid", "polygon": band(46, 54)},
     ],
 }
 
@@ -310,23 +315,24 @@ T0 = time.perf_counter()
 out = {}
 out["kernel"] = "warp" if soil_model.SoilGrid(surfaces.load_classes()["sand"].soil).warp \
     else "numpy"
-ONLY = os.environ.get("SOIL_SPIKE_ONLY")  # e.g. "rut": just those cases
-for lane in ("asphalt", "sand", "dirt", "sand_cf") if not ONLY else ():
+ONLY = os.environ.get("SOIL_SPIKE_ONLY")  # "rut" or "mud": just those cases
+GRID = ("asphalt", "sand", "dirt", "mud") if not ONLY else ("mud",) if ONLY == "mud" else ()
+for lane in (*GRID[:3], "sand_cf", "mud") if not ONLY else GRID:
     progress(f"coast_{lane}")
     out[f"coast_{lane}"] = coast(lane)
 layer.fresh_soil()
-for lane in ("asphalt", "sand", "dirt") if not ONLY else ():
+for lane in GRID:
     progress(f"hold_{lane}")
     out[f"hold_{lane}"] = hold(lane)
-if not ONLY:
-    progress("hold_sand_2")
-    out["hold_sand_2"] = hold("sand")
+for lane in ("sand", "mud") if not ONLY else GRID:
+    progress(f"hold_{lane}_2")
+    out[f"hold_{lane}_2"] = hold(lane)
 layer.fresh_soil()
-for lane in ("asphalt", "sand", "dirt") if not ONLY else ():
+for lane in GRID:
     progress(f"launch_{lane}")
     out[f"launch_{lane}"] = launch(lane)
 layer.fresh_soil()
-for lane in ("asphalt", "sand", "dirt") if not ONLY else ():
+for lane in GRID:
     progress(f"brake_{lane}")
     out[f"brake_{lane}"] = brake(lane)
 layer.fresh_soil()
@@ -334,6 +340,9 @@ if not ONLY:
     progress("entry")
     out["entry"] = entry()
 layer.fresh_soil()
+if ONLY == "mud":
+    print("SPIKE-RESULT " + json.dumps(out), flush=True)
+    os._exit(0)
 out["pad_body_z_cm"] = None
 start("asphalt", 0.0)
 out["pad_body_z_cm"] = round(state.position[2] * 100, 2)

@@ -206,9 +206,48 @@ after two passes and loaded on fresh ground put the next pass in the ruts at -10
 third pass's 591 N, in 0.17 s.
 
 The render mesh of a dirty tile is the same geometry, so RTX lidar and cameras see the ruts
-the wheels feel. Mud is an engineered model (low friction angle, cohesion for undrained
-strength, slip-rate softening, a clogging state); no published real-time model exists, so it
-is documented as unvalidated.
+the wheels feel.
+
+### Mud (047 D6, decided 2026-10-23: B)
+
+No published real-time mud model exists (survey): Bekker-Wong has no pore water, no rate
+dependence and no clogging, and nothing measured on mud is available to fit one. So mud is a
+stand-in on the same grid as sand, marked as one. `mud_wet` carries Wong's wettest clay row
+(clayey soil, Thailand, 55 % moisture: n 0.7, k_c 16.03 kN/m^1.7, k_phi 1262.5 kN/m^2.7,
+c 2.07 kPa, phi 10 deg; Janosi K 2.5 cm, the soft end) and a class key `unvalidated:` giving
+the reason. The row's numbers are as the literature reproduces Wong's Table 2.3; they were not
+checked against the book here. A soil zone of an unvalidated class is refused unless the
+map opts in by name:
+
+```yaml
+allow_unvalidated: [mud_wet]
+zones:
+  - {id: pit, class: mud_wet, soil: grid, polygon: [...]}
+```
+
+and the world server (at every load) and `just surfaces-check` warn about each such zone with
+the reason. Listing classes rather than a yes/no keeps a stand-in added to the table later
+from passing silently. A `mud_wet` zone without `soil` is friction only, as before, and needs
+nothing. Everything the grid does for sand it does for mud: ruts in the collision and the
+lidar, rut sets, slip sinkage (the only dig-in: no rate softening or clogging, which stay
+open until a scenario needs them; see the D6 options in the roadmap).
+
+Offline (`test_soil.py`, aib's wheel at 4.5 kN): mud's soil-limited friction is 0.20 against
+loam's 0.58 and sand's 0.55, and it sinks like loam (3.4 cm at 10 % slip, 5.0 at 50 %).
+On the pad (`soil_drive.py`, `SOIL_SPIKE_ONLY=mud`, warp kernel):
+
+| case | asphalt | mud (grid) |
+|---|---|---|
+| coast in at 15 m/s, 3 s: deceleration | 0.00 m/s^2 | 0.67 (3.4 cm, 1195 N, friction 0.17) |
+| hold 10 m/s for 80 m: speed, acceleration demand | 10.0, 0.00 | 9.53, 0.70 (1265 N) |
+| the same line again (ruts) | | 9.87, 0.19 (4.3 cm, 351 N) |
+| full throttle from rest, 3 s | 10.84 m/s | 0.02 m/s: stuck, dug in to 5.7 cm, 1941 N |
+| full braking from 15 m/s (ABS) | 14.3 m | 30.8 m |
+
+The rear-driven Model 3 cannot pull away from rest in mud: the spinning rear wheels dig in
+(slip sinkage) until the resistance, 1.9 kN, exceeds what friction 0.19 on the rear axle
+gives. That is plausible for a road car on road tyres, but it comes from a stand-in, which is
+why the map has to ask for it.
 
 ### Soil layer on a pad (047 S3, 2026-10-23)
 

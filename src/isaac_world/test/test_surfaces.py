@@ -95,7 +95,7 @@ class MapTest(unittest.TestCase):
                                  {"id": "soft", "soil": True, "water_depth": 0.1,
                                   "polygon": SQUARE},
                                  {"id": "nowhere", "class": "sand"},
-                                 {"id": "mud", "class": "mud_wet", "soil": True,
+                                 {"id": "turf", "class": "grass", "soil": True,
                                   "polygon": SQUARE},
                                  {"id": "deep", "class": "sand", "soil": "deep",
                                   "polygon": SQUARE},
@@ -105,10 +105,38 @@ class MapTest(unittest.TestCase):
                                   "polygon": SQUARE}]})
         for part in ("zoness", "tarmac", "'Sky'", "Bad-Id", "three or more", "used twice",
                      "crosses itself", "sets none", "soaked", "soil needs", "needs a polygon",
-                     "class 'mud_wet' has no soil parameters (soil classes: dirt, sand",
+                     "class 'grass' has no soil parameters (soil classes: dirt, mud_wet, sand",
                      "soil 'deep' is not one of", "ground_z (the ruts' ground) needs soil: grid",
                      "ground_z is a height in metres, not 'low'"):
             self.assertIn(part, msg)
+
+
+class UnvalidatedTest(unittest.TestCase):
+    """047 D6: mud's soil parameters are a stand-in, used only where the map says so."""
+
+    MUD = {"id": "pit", "class": "mud_wet", "soil": "grid", "polygon": SQUARE}
+
+    def test_a_mud_soil_zone_needs_the_maps_opt_in(self):
+        msg = refused({"zones": [self.MUD]})
+        self.assertIn("zone pit: class 'mud_wet' has unvalidated soil parameters", msg)
+        self.assertIn("list it in allow_unvalidated", msg)
+        m = smap([self.MUD], allow_unvalidated=["mud_wet"])
+        self.assertEqual([(z, c) for z, c, _ in m.unvalidated], [("pit", "mud_wet")])
+        self.assertIn("047 D6", m.unvalidated[0][2])
+
+    def test_friction_only_mud_and_validated_soil_need_nothing(self):
+        m = smap([{"id": "slick", "class": "mud_wet", "polygon": SQUARE},
+                  {"id": "sand", "class": "sand", "soil": "grid", "polygon": SQUARE}])
+        self.assertEqual(m.unvalidated, [])
+
+    def test_bad_opt_ins_are_refused(self):
+        self.assertIn("allow_unvalidated: unknown class 'mudd'",
+                      refused({"allow_unvalidated": ["mudd"]}))
+        self.assertIn("allow_unvalidated is a list of class names",
+                      refused({"allow_unvalidated": "mud_wet"}))
+        with self.assertRaises(SurfaceError) as cm:
+            surfaces.parse_classes({"classes": {"asphalt": {"mu": 1.0, "unvalidated": True}}})
+        self.assertIn("unvalidated is the reason, a string", str(cm.exception))
 
 
 class RutsTest(unittest.TestCase):

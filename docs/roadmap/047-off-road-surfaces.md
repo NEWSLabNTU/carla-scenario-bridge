@@ -125,8 +125,12 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   loaded its blocks. Carrying over was rejected (a run's start depends on the runs before it
   and on restarts); a map default can come later on the same file format. A set goes in only
   before any wheel has driven on the soil; a different one later is refused.
-- [ ] **D6. Mud** (gates S4): ship an engineered mud model marked unvalidated [proposed], or
-  limit zones to sand and dry soil until a validation source exists.
+- [x] **D6. Mud** (gates S4), decided 2026-10-23: **B**, mud as a clay row in the soil table,
+  marked unvalidated. Options were A (no mud soil zones), B (Wong's wettest clay row plus an
+  `unvalidated:` flag and a map opt-in; no new physics), C (B plus rate softening, damping, a
+  water-content friction cap and a clogging state per tire: engineered knobs with nothing to
+  check them against) and D (a BeamNG-style resistive volume: no ruts, a second model).
+  C's terms come one at a time only when a scenario needs them (clogging first).
 
 ## Steps
 
@@ -248,7 +252,7 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         node blocks at 5 cm, float32, allocated on first contact; Bekker pressure with elastic
         reload, so a second pass rides in the rut; Janosi shear; Lyasko slip sinkage) and
         `wong_reece` (C). Soil parameters per class in `surface_classes.yaml` (sand, dirt =
-        sandy loam, snow_loose; mud none, D6); a zone's `soil: grid | closed_form`, refused on
+        sandy loam, snow_loose; mud since D6, unvalidated); a zone's `soil: grid | closed_form`, refused on
         a class without them.
   - [x] D4 answered offline: the grid sweeps each wheel from its last position to its
         current one, one node spacing at a time, so 60 Hz reads as 600 Hz (sinkage within
@@ -289,7 +293,7 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         too, on a host at load 30-130 from other jobs. Rerun on a quiet host.
 - [ ] **S4. Persistence and the second pass** (D5, D6): node blocks saved per tile, loaded per
       scenario; every vehicle reads and writes the same grid in a fixed order (determinism);
-      mud model if D6 says so.
+      mud (D6: B).
   - [x] Rut sets (D5): `swb.ruts=<name>|fresh` in a scenario's RoadCondition loads
         `<map>/ruts/<name>.npz` (every grid zone's blocks and spacing) and shows it in the
         zones' tiles at once; refused with every problem listed for a map without a grid zone,
@@ -305,7 +309,12 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         a third pass.
   - [ ] Every vehicle on the same grid in a fixed order: the ego only today (NPCs are
         kinematic); background AVs (039) when they drive on soil.
-  - [ ] Mud (D6).
+  - [x] Mud (D6: B): `mud_wet` has Wong's clayey soil at 55 % moisture and `unvalidated:` (the
+        reason); a soil zone on it is refused unless surfaces.yaml lists the class in
+        `allow_unvalidated:`, and the world server and `just surfaces-check` warn at every
+        load. Tests: `UnvalidatedTest` (3), a mud trend test in `test_soil.py`. On the pad:
+        friction 0.17, 3.4 cm, 1.2 kN at 10 m/s, the second pass 351 N; the Model 3 cannot
+        pull away from rest (dug in to 5.7 cm); ABS stops from 15 m/s in 30.8 m.
 - [ ] **S5. Calibration**: Chrono CRM offline as a virtual bevameter per soil class (plate
       sinkage, shear, single-wheel drawbar pull vs slip at our wheel); cone index from the field
       when 040 can measure it.
