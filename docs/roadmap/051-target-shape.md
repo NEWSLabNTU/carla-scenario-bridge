@@ -119,6 +119,10 @@ What depends on what:
     time go back. `acb_bridge` is declared `on_exit="shutdown"` in its launch and never
     respawned, so its exit ends the whole stack. aib does the same on the Isaac world
     server's episode id.
+  - aib's `clock_offset: wall` goes. Today `aib.ros` stamps sim time plus the wall clock
+    at its creation, so on Isaac Autoware's time and SSv2's differ by that offset, and
+    its one `EgoRos` per process keeps `/clock` running across episodes. It stamps
+    `sim + BASE_NS` like acb, and ends the stack on an episode change.
   - The stack comes back through what roadmap 030 built: `swb-agent supervise` restarts
     a group whose agent exited, and `run_suite`'s restart ladder counts an episode change
     as a reason to restart. A restarted stack takes the new episode's map: the ego launch
