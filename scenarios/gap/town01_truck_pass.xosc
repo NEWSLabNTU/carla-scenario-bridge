@@ -2,8 +2,8 @@
 <!--
 	Roadmap 024 step 6: the gap oracle's positive control. A declared 12 m truck whose CARLA
 	body is pinned to vehicle.tesla.model3 (4.79 m) closes on the driving ego from behind and
-	holds station with CARLA's Model 3 about 1.2 m off the ego's CARLA rear, while SSv2's 12 m
-	box reaches about 2.25 m into the ego's declared box. gap_oracle must report G1 (overlap in
+	holds station with CARLA's Model 3 about 1.6 m off the ego's CARLA rear, while SSv2's 12 m
+	box reaches about 2 m into the ego's declared box. gap_oracle must report G1 (overlap in
 	SSv2's geometry only) on the ego-truck pair, and no CARLA contact.
 
 	The body is pinned with model3d, which names a CARLA blueprint: 022's second rule (the
@@ -15,8 +15,12 @@
 	CARLA body), so a truck passing 1 m to the side is clear in both geometries. Along the
 	lane, SSv2's box ends 3.6 m past each end of CARLA's body (declared centre 4.0 m ahead of
 	the rear axle, the body centred there). Distances from the truck's origin (rear axle) to
-	the ego's, along the lane: SSv2's boxes meet at 10.75 m, CARLA's at 7.29 m; the truck holds
-	at 8.5 m (reference points, not freespace, so the condition reads the same in both worlds).
+	the ego's, along the lane: SSv2's boxes meet at 10.98 m, CARLA's at 7.41 m; the truck holds
+	at 9.0 m (reference points, not freespace, so the condition reads the same in both worlds).
+	Roadmap 050 gave the ego the Model 3's measured box (its rear 0.981 m behind the rear axle,
+	not 0.75) and put its CARLA body on that rear axle, which moved CARLA's meeting point
+	0.11 m out; the hold moved from 8.5 m to keep the margin, since the tracked truck body
+	overshoots its SSv2 pose by up to 1.1 m when it brakes to hold (2 of 4 runs touched at 8.5).
 
 	Verdict: SSv2 fails it, by design. Its CollisionCondition fires when the declared boxes
 	meet, and the scenario ends 3 s later with exitFailure, so the overlap lasts ~3 s of frames.
@@ -163,7 +167,7 @@
 												<EntityRef entityRef="truck" />
 											</TriggeringEntities>
 											<EntityCondition>
-												<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="false" rule="lessThan" value="8.5" />
+												<RelativeDistanceCondition entityRef="ego" relativeDistanceType="longitudinal" coordinateSystem="entity" freespace="false" rule="lessThan" value="9.0" />
 											</EntityCondition>
 										</ByEntityCondition>
 									</Condition>

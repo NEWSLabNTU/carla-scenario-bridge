@@ -175,10 +175,11 @@ def summarise(label_dir, bridge_dirs):
                     if f["check"] == "G1" and f["priority"] == "high":
                         entry["g1_ego"].append({"entities": f["entities"],
                                                 "numbers": f.get("numbers", {})})
-        # The bridge logs a run's frame budget at the next Initialize or at shutdown.
-        after = [b for t, b in budget_rows if run["start"] < t <= run["end"] + 120]
+        # The bridge logs a run's frame budget at the next Initialize (the next run's start)
+        # or at shutdown: the first one after the run ended is this run's.
+        after = [b for t, b in budget_rows if t > run["end"]]
         if after:
-            entry["frame_budget"] = after[-1]
+            entry["frame_budget"] = after[0]
         entry["driven_m"] = round(entry["driven_m"], 1)
         for g in entry["pairs"].values():
             for k in ("ssv2_min", "carla_min"):

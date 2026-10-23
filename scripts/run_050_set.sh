@@ -127,6 +127,12 @@ for g in "${groups[@]}"; do
                 run "gap_$s" "scenarios/gap/$s.xosc"
             done
             ;;
+        truck)
+            stack_pid $((web + 2)) > /dev/null || start_ego default
+            for i in 1 2 3 4; do
+                run "gap_town01_truck_pass_$i" scenarios/gap/town01_truck_pass.xosc
+            done
+            ;;
         two_av)
             stack_pid $((web + 2)) > /dev/null || start_ego default
             two_av
