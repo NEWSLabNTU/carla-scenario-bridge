@@ -45,8 +45,8 @@ but Autoware has to *see* the pedestrian, the car ahead and the traffic light.
 
 - **Scenario side.** SSv2 runs the scenario and gives the verdict. The **bridge**
   (`scenario_world_bridge`) translates SSv2's requests into the **world protocol**. It
-  knows no simulator. The **agent relay** passes the scenario's goals to whatever drives
-  the ego.
+  knows no simulator. The **agent relay** passes the scenario's goals to the agent
+  that drives each vehicle, by entity name.
 - **World servers.** One per simulator: `swb_carla_world` for CARLA and `swb_isaac_world`
   for Isaac Sim. Each loads the map, spawns and moves the scenario's vehicles and people,
   sets the traffic lights and steps the simulation. Another simulator becomes a backend by
@@ -54,13 +54,32 @@ but Autoware has to *see* the pedestrian, the car ahead and the traffic light.
 - **Vehicle side.** Your Autoware, connected to the simulator through a **vehicle bridge**:
   acb (`autoware_carla_bridge`) for CARLA, aib (`autoware_isaac_bridge`) for Isaac Sim.
   The vehicle bridge publishes the simulator's sensors, the vehicle status and `/clock`,
-  and drives the car from Autoware's commands. A **vehicle agent** takes the scenario's
-  goals from the relay. The vehicle side can run on another host and in another ROS
-  domain.
+  and drives the car from Autoware's commands. A **vehicle agent** registers with the
+  relay under its entity's name and sets Autoware's route and engages it. The vehicle side
+  can run on another host and in another ROS domain.
 
 The vehicle bridge and Autoware meet at the **I5 contract**: the topics, frames and clock
 rule Autoware expects of any simulated car. Autoware sees the same contract from CARLA and
 from Isaac Sim, with or without SSv2.
+
+### Several Autoware vehicles in one scenario
+
+Each Autoware instance is a vehicle side of its own: its vehicle bridge, its vehicle agent
+and its own ROS domain. A scenario marks a vehicle as Autoware-driven by giving it the
+controller `agent`:
+
+```xml
+<ScenarioObject name="bg_av_1"> ... <Controller name="agent"><Properties/></Controller> ...
+```
+
+The world server spawns that vehicle under the entity's name, and the vehicle side started
+for it (`background_av.launch.xml entity:=bg_av_1`) attaches to it and registers with the
+relay. SSv2 drives the ego's Autoware itself, through the relay. For every other
+Autoware-driven vehicle the bridge forwards what the scenario asks of it (its route, a
+speed limit, a stop) to that vehicle's agent. A vehicle whose agent is missing fails the
+scenario, naming the vehicle. `just two-av` runs the starter scenario
+`multi_av/town01_two_av.xosc` with two Autoware stacks on CARLA. On Isaac Sim, one Autoware
+per scenario for now ([roadmap 039](docs/roadmap/039-isaac-multi-autoware.md)).
 
 ## Autoware without a scenario runner
 
