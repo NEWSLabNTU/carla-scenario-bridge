@@ -23,6 +23,7 @@ use crate::backend::{
 };
 use crate::config::{BridgeConfig, NpcMotion};
 use crate::coordinate_conversion::euler_to_quaternion;
+use crate::environment::{Precipitation, PrecipitationType, ScenarioWeather, Sun, TimeOfDay, Wind};
 use crate::proto::geometry_msgs::{self, Pose};
 use crate::proto::swb_world as wire;
 use crate::proto::traffic_simulator_msgs::entity_subtype::Enum as EntitySubtype;
@@ -257,6 +258,7 @@ impl World for CarlaWorld {
             C::Weather,
             C::Contacts,
             C::RoadCondition,
+            C::Environment,
         ]
     }
 
@@ -606,6 +608,23 @@ impl World for CarlaWorld {
                 wetness: req.wetness.clone(),
                 properties: req.properties.clone().into_iter().collect(),
             }),
+            ..Default::default()
+        };
+        let backend = self.backend()?;
+        let result = backend.update_environment(&env);
+        result.map_err(|e| refusal(e, backend))
+    }
+
+    fn set_environment(&mut self, req: &wire::SetEnvironment) -> WorldResult<()> {
+        let env = Environment {
+            weather: req.weather.as_ref().map(scenario_weather),
+            time_of_day: req.time_of_day.as_ref().map(|t| TimeOfDay {
+                hours: t.hours,
+                day_of_year: t.day_of_year,
+                animation: t.animation,
+                date_time: t.date_time.clone(),
+            }),
+            ..Default::default()
         };
         let backend = self.backend()?;
         let result = backend.update_environment(&env);
@@ -661,5 +680,31 @@ impl World for CarlaWorld {
         if let Some(backend) = self.backend.as_mut() {
             backend.shutdown();
         }
+    }
+}
+
+/// The world protocol's scenario weather as the backend takes it.
+fn scenario_weather(w: &wire::ScenarioWeather) -> ScenarioWeather {
+    use wire::scenario_weather::PrecipitationType as P;
+    ScenarioWeather {
+        cloud_cover_oktas: w.cloud_cover.map(|c| c.oktas.min(9) as u8),
+        sun: w.sun.map(|s| Sun {
+            azimuth: s.azimuth,
+            elevation: s.elevation,
+            illuminance: s.illuminance,
+        }),
+        fog_visual_range: w.fog.map(|f| f.visual_range),
+        precipitation: w.precipitation.map(|p| Precipitation {
+            kind: match P::try_from(p.r#type).unwrap_or(P::Dry) {
+                P::Dry => PrecipitationType::Dry,
+                P::Rain => PrecipitationType::Rain,
+                P::Snow => PrecipitationType::Snow,
+            },
+            intensity: p.intensity,
+        }),
+        wind: w.wind.map(|w| Wind {
+            direction: w.direction,
+            speed: w.speed,
+        }),
     }
 }

@@ -14,6 +14,7 @@ pub mod config;
 pub mod contact_report;
 pub mod coordinate_conversion;
 pub mod entity_manager;
+pub mod environment;
 pub mod episode_clock;
 pub mod fake;
 pub mod gap_trace;

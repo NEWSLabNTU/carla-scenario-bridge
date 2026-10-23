@@ -30,8 +30,8 @@ mod world;
 
 pub(crate) use swb_core::{
     agent_link, autopilot, body_clearance, budgets, config, contact_report, coordinate_conversion,
-    entity_manager, episode_clock, gap_trace, lanelet_map, map_resolver, npc_tracking, proto,
-    ros_args, weather,
+    entity_manager, environment, episode_clock, gap_trace, lanelet_map, map_resolver, npc_tracking,
+    proto, ros_args, weather,
 };
 
 use std::io::Write;

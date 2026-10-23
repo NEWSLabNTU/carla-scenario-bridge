@@ -47,6 +47,23 @@ def signal_dict(signal_):
                          if signal_.HasField("position") else None)}
 
 
+def environment_weather(w):
+    """A `ScenarioWeather` as the world takes it: only the parts given (the rest unchanged)."""
+    out = {}
+    if w.HasField("cloud_cover"):
+        out["cloud_cover_oktas"] = w.cloud_cover.oktas
+    if w.HasField("sun"):
+        out["sun"] = (w.sun.azimuth, w.sun.elevation, w.sun.illuminance)
+    if w.HasField("fog"):
+        out["fog_visual_range"] = w.fog.visual_range
+    if w.HasField("precipitation"):
+        kind = pb.PRECIPITATION_NAME.get(w.precipitation.type, "DRY").lower()
+        out["precipitation"] = (kind, w.precipitation.intensity)
+    if w.HasField("wind"):
+        out["wind"] = (w.wind.direction, w.wind.speed)
+    return out
+
+
 def describe(client):
     return f"{client.host}:{client.pid}" if client.pid else "(unnamed client)"
 
@@ -298,6 +315,21 @@ class WorldServer:
                                           dict(rc.properties))
         except ValueError as e:
             raise RequestError(f"RoadCondition refused:\n{e}") from e
+        return pb.Reply(ok=True)
+
+    def _set_environment(self, req):
+        if not self.offers("ENVIRONMENT"):
+            raise RequestError("the weather and time of day are not offered by this server")
+        weather = environment_weather(req.weather) if req.HasField("weather") else None
+        time_of_day = None
+        if req.HasField("time_of_day"):
+            t = req.time_of_day
+            time_of_day = {"hours": t.hours, "day_of_year": t.day_of_year,
+                           "animation": t.animation, "date_time": t.date_time}
+        try:
+            self.world.set_environment(weather, time_of_day, self.sim_time)
+        except ValueError as e:
+            raise RequestError(f"Weather refused:\n{e}") from e
         return pb.Reply(ok=True)
 
     def _shutdown(self, _req):

@@ -200,6 +200,9 @@ pub const SWB_PROPERTY_PREFIX: &str = "swb.";
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Environment {
     pub road_condition: Option<RoadCondition>,
+    /// The parts of a `Weather` given; each part not given is unchanged.
+    pub weather: Option<crate::environment::ScenarioWeather>,
+    pub time_of_day: Option<crate::environment::TimeOfDay>,
 }
 
 /// The sensors SSv2 can ask a simulator to attach.

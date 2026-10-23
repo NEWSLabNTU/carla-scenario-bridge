@@ -34,6 +34,7 @@ const ISAAC_LIKE: &[wire::Capability] = &[
     wire::Capability::TrackedMotion,
     wire::Capability::Contacts,
     wire::Capability::RoadCondition,
+    wire::Capability::Environment,
 ];
 
 const CARLA_LIKE: &[wire::Capability] = &[
@@ -45,6 +46,7 @@ const CARLA_LIKE: &[wire::Capability] = &[
     wire::Capability::Weather,
     wire::Capability::Contacts,
     wire::Capability::RoadCondition,
+    wire::Capability::Environment,
 ];
 
 /// A server that behaves as the real ones do, as far as the backend can tell, with
@@ -210,6 +212,7 @@ fn honest_with(caps: &'static [wire::Capability], instance: &'static str) -> Beh
             | R::Shutdown(_)
             | R::SetSignals(_)
             | R::SetRoadCondition(_)
+            | R::SetEnvironment(_)
             | R::Release(_) => ok(None),
             R::SetWeather(_) | R::GetWeather(_) => {
                 let (_, w) = crate::weather::preset("ClearNoon").unwrap();
@@ -489,6 +492,7 @@ fn road(f: f64, wetness: &str, props: &[(&str, &str)]) -> Environment {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
         }),
+        ..Default::default()
     }
 }
 
@@ -533,6 +537,88 @@ fn the_road_condition_goes_to_a_server_offering_it() {
     let n = seen.lock().unwrap().len();
     assert_eq!(b.update_environment(&Environment::default()), Ok(()));
     assert_eq!(seen.lock().unwrap().len(), n);
+}
+
+#[test]
+fn the_weather_and_time_of_day_go_to_a_server_offering_them() {
+    use crate::environment::{Precipitation, PrecipitationType, ScenarioWeather, TimeOfDay};
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let mut inner = honest();
+    let mut b = backend(&server(Box::new(move |req| {
+        if let Some(wire::request::Request::SetEnvironment(e)) = &req.request {
+            log.lock().unwrap().push(e.clone());
+        }
+        inner(req)
+    })));
+    b.initialize(&episode()).unwrap();
+    let env = Environment {
+        weather: Some(ScenarioWeather {
+            cloud_cover_oktas: Some(4),
+            precipitation: Some(Precipitation {
+                kind: PrecipitationType::Rain,
+                intensity: 5.0,
+            }),
+            ..Default::default()
+        }),
+        time_of_day: Some(TimeOfDay {
+            hours: 18.5,
+            day_of_year: 296,
+            animation: true,
+            date_time: "2026-10-23T18:30:00".into(),
+        }),
+        ..Default::default()
+    };
+    assert_eq!(b.update_environment(&env), Ok(()));
+    let sent = seen.lock().unwrap().last().cloned().unwrap();
+    let w = sent.weather.unwrap();
+    assert_eq!(w.cloud_cover.unwrap().oktas, 4);
+    assert!(w.sun.is_none() && w.fog.is_none() && w.wind.is_none());
+    let p = w.precipitation.unwrap();
+    assert_eq!(
+        (p.r#type, p.intensity),
+        (wire::scenario_weather::PrecipitationType::Rain as i32, 5.0)
+    );
+    let t = sent.time_of_day.unwrap();
+    assert_eq!((t.hours, t.day_of_year, t.animation), (18.5, 296, true));
+    // An empty Weather and no time: nothing to send.
+    let n = seen.lock().unwrap().len();
+    let empty = Environment {
+        weather: Some(ScenarioWeather::default()),
+        ..Default::default()
+    };
+    assert_eq!(b.update_environment(&empty), Ok(()));
+    assert_eq!(seen.lock().unwrap().len(), n);
+}
+
+#[test]
+fn nothing_is_sent_when_a_part_is_not_offered() {
+    use crate::environment::TimeOfDay;
+    const ROAD_ONLY: &[wire::Capability] = &[
+        wire::Capability::TrackedMotion,
+        wire::Capability::RoadCondition,
+    ];
+    let roads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = roads.clone();
+    let mut inner = honest_with(ROAD_ONLY, "one");
+    let mut b = backend(&server(Box::new(move |req| {
+        if let Some(wire::request::Request::SetRoadCondition(_)) = &req.request {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        inner(req)
+    })));
+    b.initialize(&episode()).unwrap();
+    let mut env = road(0.5, "moist", &[]);
+    env.time_of_day = Some(TimeOfDay {
+        hours: 12.0,
+        day_of_year: 1,
+        animation: false,
+        date_time: "2026-01-01T12:00:00".into(),
+    });
+    let e = b.update_environment(&env).unwrap_err();
+    assert!(e.to_string().contains("does not offer ENVIRONMENT"), "{e}");
+    // The road condition was not sent either.
+    assert_eq!(roads.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 #[test]

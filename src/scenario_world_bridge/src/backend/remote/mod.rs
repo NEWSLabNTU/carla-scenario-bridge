@@ -51,6 +51,7 @@ use crate::config::{BridgeConfig, NpcMotion};
 use crate::contact_report::{self, ContactReport, RawCollision, ReportContact};
 use crate::coordinate_conversion::quaternion_to_euler;
 use crate::entity_manager::EntityType;
+use crate::environment::{PrecipitationType, ScenarioWeather};
 use crate::gap_trace::{self, GapTrace};
 use crate::map_resolver::{load_map_origin, map_dir_of};
 use crate::npc_tracking::{self, TrackingStats};
@@ -1151,6 +1152,36 @@ fn trace_kind(t: EntityType) -> gap_trace::Kind {
     }
 }
 
+/// The scenario's weather as the world protocol carries it.
+fn wire_weather(w: &ScenarioWeather) -> wire::ScenarioWeather {
+    use wire::scenario_weather as sw;
+    wire::ScenarioWeather {
+        cloud_cover: w.cloud_cover_oktas.map(|oktas| sw::CloudCover {
+            oktas: u32::from(oktas),
+        }),
+        sun: w.sun.map(|s| sw::Sun {
+            azimuth: s.azimuth,
+            elevation: s.elevation,
+            illuminance: s.illuminance,
+        }),
+        fog: w
+            .fog_visual_range
+            .map(|visual_range| sw::Fog { visual_range }),
+        precipitation: w.precipitation.map(|p| sw::Precipitation {
+            r#type: match p.kind {
+                PrecipitationType::Dry => sw::PrecipitationType::Dry,
+                PrecipitationType::Rain => sw::PrecipitationType::Rain,
+                PrecipitationType::Snow => sw::PrecipitationType::Snow,
+            } as i32,
+            intensity: p.intensity,
+        }),
+        wind: w.wind.map(|w| sw::Wind {
+            direction: w.direction,
+            speed: w.speed,
+        }),
+    }
+}
+
 fn unsupported(what: &str, needs: wire::Capability, sim: &str) -> BackendError {
     BackendError::Unsupported(format!(
         "{what}: the {sim} world server does not offer {}",
@@ -1983,41 +2014,71 @@ impl SimBackend for RemoteBackend {
     }
 
     fn update_environment(&mut self, environment: &Environment) -> Result<(), BackendError> {
-        let Some(rc) = &environment.road_condition else {
-            return Ok(());
-        };
-        if !self.offers(wire::Capability::RoadCondition) {
+        // What the server lacks, before anything is sent: a refusal changes nothing.
+        let road = environment
+            .road_condition
+            .as_ref()
             // The default road changes nothing, whatever the simulator.
-            if rc.is_default() {
-                return Ok(());
-            }
+            .filter(|rc| self.offers(wire::Capability::RoadCondition) || !rc.is_default());
+        if road.is_some() && !self.offers(wire::Capability::RoadCondition) {
             return Err(unsupported(
                 "RoadCondition",
                 wire::Capability::RoadCondition,
                 self.sim(),
             ));
         }
-        let properties = rc
-            .swb_properties()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        tracing::info!(
-            "RoadCondition: friction scale {}, {}, {:?}",
-            rc.friction_scale_factor,
-            rc.wetness,
-            properties
-        );
-        self.call(
-            "SetRoadCondition",
-            wire::request::Request::SetRoadCondition(wire::SetRoadCondition {
-                road_condition: Some(wire::RoadCondition {
-                    friction_scale_factor: rc.friction_scale_factor,
-                    wetness: rc.wetness.clone(),
-                    properties,
+        let weather = environment.weather.as_ref().filter(|w| !w.is_empty());
+        let sky = weather.is_some() || environment.time_of_day.is_some();
+        if sky && !self.offers(wire::Capability::Environment) {
+            return Err(unsupported(
+                "Weather and TimeOfDay",
+                wire::Capability::Environment,
+                self.sim(),
+            ));
+        }
+        if let Some(rc) = road {
+            let properties = rc
+                .swb_properties()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            tracing::info!(
+                "RoadCondition: friction scale {}, {}, {:?}",
+                rc.friction_scale_factor,
+                rc.wetness,
+                properties
+            );
+            self.call(
+                "SetRoadCondition",
+                wire::request::Request::SetRoadCondition(wire::SetRoadCondition {
+                    road_condition: Some(wire::RoadCondition {
+                        friction_scale_factor: rc.friction_scale_factor,
+                        wetness: rc.wetness.clone(),
+                        properties,
+                    }),
                 }),
-            }),
-            self.request_timeout,
-        )?;
+                self.request_timeout,
+            )?;
+        }
+        if sky {
+            tracing::info!(
+                "Environment: weather {:?}, time of day {:?}",
+                weather,
+                environment.time_of_day
+            );
+            self.call(
+                "SetEnvironment",
+                wire::request::Request::SetEnvironment(wire::SetEnvironment {
+                    weather: weather.map(wire_weather),
+                    time_of_day: environment.time_of_day.as_ref().map(|t| wire::TimeOfDay {
+                        hours: t.hours,
+                        day_of_year: t.day_of_year,
+                        animation: t.animation,
+                        date_time: t.date_time.clone(),
+                    }),
+                }),
+                self.request_timeout,
+            )?;
+        }
         Ok(())
     }
 

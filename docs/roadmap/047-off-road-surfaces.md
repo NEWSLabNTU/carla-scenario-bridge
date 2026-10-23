@@ -194,6 +194,33 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         every ego despawn logged one error per wheel and leaked the tables. They now live at
         `/World/vehicleTireFriction/<vehicle>/<wheel>` and stay: two conformance runs and a
         zones run afterwards without the error, the per-wheel friction as before.
+- [x] **S2b. Weather and time of day from the scenario** (asked 2026-10-23, after the Isaac
+      probe; design doc "Weather and time of day from the scenario"). Done 2026-10-23:
+  - [x] SSv2 fork: `UpdateEnvironment` carries `Weather` (each part optional) and `TimeOfDay`.
+        Upstream refused any Environment missing an optional part whose type cannot be
+        default-constructed (`TimeOfDay`, `Weather` and every one of its attributes and
+        elements, a Fog's `BoundingBox`, `RoadCondition`); all optional now.
+  - [x] Bridge: every part checked, `dateTime` to clock time and day, `SetEnvironment`
+        (request 15, `CAPABILITY_ENVIRONMENT`), capabilities checked before any part is sent;
+        conformance checks a clear noon.
+  - [x] Isaac (`isaac_world.sky`): the scenario's sun takes over the world's (time of day over
+        the map's latitude, or placed), domes dimmed at night, clouds as dimming, RTX fog,
+        lidar rain, snow refused. CARLA (`scenario_weather.rs`): cloudiness, precipitation,
+        fog, wind, the sun; snow refused.
+  - [x] Measured 2026-10-23: `spikes/sky_world.py` (a world with its own sun and dome):
+        the town's sun off and ours on at 3000 at noon, 1425 at 07:00, 0 at 21:30 (dome 800 to
+        24, camera 208 to 20), 600 under 8 oktas, snow refused, the town's lights back after a
+        reset. Conformance: Isaac 23/23, CARLA 24/24. `scenarios/surfaces/town01_weather.xosc`
+        (07:00, rain 5 mm/h, fog 300 m, 2 oktas; at 20 s 21:30, dry, clear) PASS on Isaac (sun
+        east 14 deg up at x0.38, then off, dome x0.03; the rain warning logged) and on CARLA
+        (cloudiness 25, precipitation 20, fog density 70, then 0 and 0); town01_zones on Isaac
+        and town01_wet on CARLA PASS on the same builds. After the runs CARLA held the wet run's
+        look over the weather from before: the weather run's sky was undone at Initialize.
+        Not checked: CARLA's sun azimuth reference.
+      Found on the way: on a loaded host the simulation side's play_launch wrapper ran three
+      minutes before the real one, `isaac_up.sh` timed out at 120 s and the next run started a
+      second simulation side whose bridge fought the first for the world server. Both bring-up
+      scripts now count the wrapper as the stack, and Isaac's bridge wait is 300 s.
 - [ ] **S3. Soil layer in one zone** (D2, D4): SCM-style per-wheel model on a sparse tiled grid,
       allocated on first contact; traction cap through the wheel's table, resistance through
       `apply_force_at_pos`, ruts through re-cooked 2 x 2 m tiles (budgeted per frame); zone-edge

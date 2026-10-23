@@ -197,6 +197,7 @@ fn what_is_not_offered_is_refused() {
         wire::request::Request::SetWeather(Default::default()),
         wire::request::Request::GetWeather(Default::default()),
         wire::request::Request::SetRoadCondition(Default::default()),
+        wire::request::Request::SetEnvironment(Default::default()),
     ] {
         let r = call(&mut s, 1, q);
         assert!(!r.ok && r.error.contains("not offered"), "{}", r.error);

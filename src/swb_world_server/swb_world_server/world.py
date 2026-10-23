@@ -85,6 +85,16 @@ class World:
         applied, and change nothing then. `load` and `reset` go back to the default."""
         raise NotImplementedError("this simulator has no road condition")
 
+    def set_environment(self, weather, time_of_day, sim_time=0.0):
+        """`ENVIRONMENT`: the scenario's weather and time of day, from the next step on.
+        `weather`: the parts given, each replacing that part (``cloud_cover_oktas``, ``sun``
+        (azimuth, elevation, illuminance), ``fog_visual_range``, ``precipitation`` (``dry``,
+        ``rain`` or ``snow``, mm/h), ``wind`` (direction, speed)), or None; `time_of_day`:
+        ``hours``, ``day_of_year``, ``animation``, ``date_time``, or None. `sim_time`: the
+        clock now. Raise ValueError, listing every problem, for what cannot be shown, and change
+        nothing then. `load` and `reset` go back to the world's own."""
+        raise NotImplementedError("this simulator has no weather or time of day")
+
     def reset(self, handles):
         """A new owner, or the old one released the world: every entity goes. The world
         stays loaded."""

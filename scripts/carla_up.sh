@@ -31,10 +31,16 @@ web_base="${SWB_WEB_PORT:-8080}"
 web_ego=$((web_base + 2)); web_bridge=$((web_base + 4))
 say() { echo "[carla-up] $*" >&2; }
 
+# The play_launch serving web port $1, if any: stacks are told apart by their port. Its Python
+# wrapper counts too (`comm` python3): on a loaded host it ran three minutes before the real
+# play_launch started, and a run that looked only for the latter started a second simulation
+# side, whose bridge then fought the first for the world server.
 stack_on_port() {
-    local p
-    for p in $(pgrep -x play_launch); do
-        tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q -- "--web-addr [0-9.]*:$1 " \
+    local f p
+    for f in /proc/[0-9]*/cmdline; do
+        p=${f#/proc/}; p=${p%/cmdline}
+        { tr '\0' ' ' < "$f"; } 2>/dev/null \
+            | grep -qE -- "play_launch launch .*--web-addr [0-9.]*:$1 " \
             && { echo "$p"; return 0; }
     done
     return 1

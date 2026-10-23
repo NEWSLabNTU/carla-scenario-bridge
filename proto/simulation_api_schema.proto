@@ -405,11 +405,61 @@ message RoadCondition {
 }
 
 /**
+ * A weather (OpenSCENARIO Weather). Every part is optional: one not set is unchanged.
+ *  - fractional_cloud_cover: zeroOktas .. nineOktas; cloud_state: the deprecated free, cloudy,
+ *    overcast, rainy, skyOff. Empty: not given.
+ *  - sun: azimuth (rad, clockwise from north) and elevation (rad); illuminance in lx (0: not
+ *    given).
+ *  - fog: visual range in m (its bounding box is not carried).
+ *  - precipitation: type dry, rain or snow; intensity in mm/h.
+ *  - wind: direction it blows to (rad, counterclockwise from x) and speed in m/s.
+ **/
+message Weather {
+  message Sun {
+    double azimuth = 1;
+    double elevation = 2;
+    double illuminance = 3;
+  }
+  message Fog {
+    double visual_range = 1;
+  }
+  message Precipitation {
+    string precipitation_type = 1;
+    double precipitation_intensity = 2;
+  }
+  message Wind {
+    double direction = 1;
+    double speed = 2;
+  }
+  string fractional_cloud_cover = 1;
+  string cloud_state = 2;
+  Sun sun = 3;
+  Fog fog = 4;
+  Precipitation precipitation = 5;
+  Wind wind = 6;
+  bool has_temperature = 7;
+  double temperature = 8;           // K
+  bool has_atmospheric_pressure = 9;
+  double atmospheric_pressure = 10; // Pa
+}
+
+/**
+ * A time of day (OpenSCENARIO TimeOfDay): date_time as written in the scenario (xsd:dateTime);
+ * animation: the time runs on with the simulation.
+ **/
+message TimeOfDay {
+  string date_time = 1;
+  bool animation = 2;
+}
+
+/**
  * Requests changing the environment (OpenSCENARIO EnvironmentAction). An unset condition is
  * unchanged.
  **/
 message UpdateEnvironmentRequest {
   RoadCondition road_condition = 1;
+  Weather weather = 2;
+  TimeOfDay time_of_day = 3;
 }
 
 /**

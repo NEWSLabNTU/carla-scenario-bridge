@@ -12,7 +12,7 @@ mod zmq_server;
 // The simulator-free core, under the paths the bridge's modules name.
 pub(crate) use swb_core::{
     agent_link, autopilot, body_clearance, budgets, config, contact_report, coordinate_conversion,
-    entity_manager, gap_trace, map_resolver, npc_tracking, proto, ros_args, weather,
+    entity_manager, environment, gap_trace, map_resolver, npc_tracking, proto, ros_args, weather,
 };
 
 use color_eyre::eyre::Result;

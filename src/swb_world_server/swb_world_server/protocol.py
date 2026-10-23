@@ -38,6 +38,10 @@ globals().update(_CLASSES)
 KIND = _ENUMS["Kind"]
 MOTION = _ENUMS["Motion"]
 COLOUR = _ENUMS["Colour"]
+# Nested in ScenarioWeather: the descriptor set lists only top-level enums.
+_PRECIPITATION = _CLASSES["ScenarioWeather"].DESCRIPTOR.enum_types_by_name["PrecipitationType"]
+PRECIPITATION = {v.name: v.number for v in _PRECIPITATION.values}
+PRECIPITATION_NAME = {v: k for k, v in PRECIPITATION.items()}
 # Capabilities by their short name (`SIGNALS`), as `World.capabilities` lists them.
 CAPABILITY = {k.removeprefix("CAPABILITY_"): v for k, v in _ENUMS["Capability"].items()
               if k != "CAPABILITY_UNSPECIFIED"}

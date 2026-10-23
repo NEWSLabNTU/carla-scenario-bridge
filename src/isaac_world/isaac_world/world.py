@@ -37,7 +37,8 @@ from pxr import Gf, PhysicsSchemaTools, PhysxSchema, Sdf, Usd, UsdGeom, UsdLux, 
 
 from swb_world_server.world import World as WorldBase
 
-from . import motion as body_motion, signals as signal_table, surfaces, vehicle_assets
+from . import motion as body_motion, signals as signal_table, sky as scenario_sky, surfaces
+from . import vehicle_assets
 from . import walkers as walker_gait
 from .catalogue import check_ego, ego_model, load_ego
 from .surface_layer import SurfaceLayer
@@ -50,6 +51,7 @@ ENTITIES = "/World/entities"
 CHASE_CAMERA = "/World/chaseCamera"
 SUN = "/World/sun"
 SKY = "/World/sky"
+SUN_ROTATE = (-50.0, 20.0, 30.0)  # our sun's default, where the scenario places none
 # Renders after a preload: the first compiles the world's materials, the rest settle it.
 PRELOAD_RENDERS = 5
 # A handle the server never gives out (they start at 1): the preload's throwaway ego.
@@ -103,7 +105,7 @@ class IsaacWorld(WorldBase):
     """The world protocol's `World` on Isaac Sim (roadmap 046: `swb_world_server`)."""
 
     simulator_name = "isaac"
-    capabilities = ("SIGNALS", "TRACKED_MOTION", "CONTACTS", "ROAD_CONDITION")
+    capabilities = ("SIGNALS", "TRACKED_MOTION", "CONTACTS", "ROAD_CONDITION", "ENVIRONMENT")
     # The bridge splits SSv2's step into PhysX steps of at most Isaac's default 60 Hz.
     max_physics_dt = 1 / 60
 
@@ -119,6 +121,10 @@ class IsaacWorld(WorldBase):
         self.follow = follow
         self.surface_maps = dict(surface_maps or {})
         self.surface = None  # SurfaceLayer of the loaded world, if it has a surface map
+        self.sky = scenario_sky.Sky()  # the scenario's weather and time of day (047)
+        self.sky_moved_at = 0.0  # the clock when an animated time last moved the sun, s
+        self.latitude = 0.0  # the loaded map's, deg
+        self.light_backup = None  # the world's lights as they were, while the scenario's sun rules
         self.ego_config = None
         self.ego_rig = None
         self.ego_ros = None
@@ -165,7 +171,7 @@ class IsaacWorld(WorldBase):
         sun = UsdLux.DistantLight.Define(self.stage, SUN)
         sun.CreateIntensityAttr(2500.0)
         sun.CreateAngleAttr(1.0)
-        UsdGeom.XformCommonAPI(sun.GetPrim()).SetRotate(Gf.Vec3f(-50.0, 20.0, 30.0))
+        UsdGeom.XformCommonAPI(sun.GetPrim()).SetRotate(Gf.Vec3f(*SUN_ROTATE))
         UsdLux.DomeLight.Define(self.stage, SKY).CreateIntensityAttr(600.0)
         self.loaded_usd = None
         for prim in self.stage.Traverse():
@@ -210,6 +216,9 @@ class IsaacWorld(WorldBase):
     # --- World -----------------------------------------------------------------------------
 
     def load(self, usd, ground_paths, signals=(), request=None):
+        self._reset_sky()
+        self.latitude = scenario_sky.map_latitude(request.map_dir) \
+            if request is not None and request.map_dir else 0.0
         self._load_env(usd, ground_paths)
         self._load_signals(list(signals))
 
@@ -270,13 +279,134 @@ class IsaacWorld(WorldBase):
         self.surface = layer
 
     def reset(self, handles):
-        """A new owner, or a release: the entities go, the road goes back to the map's."""
+        """A new owner, or a release: the entities go, the road goes back to the map's, the sky
+        to the world's own."""
         super().reset(handles)
+        self._reset_sky()
         if self.surface is not None:
             if self.surface.base.path == surfaces.NO_MAP:
                 self.surface = None
             else:
                 self.surface.set_condition()
+
+    # --- The scenario's weather and time of day (047; `sky`) ------------------------------
+
+    def set_environment(self, weather, time_of_day, sim_time=0.0):
+        """`ENVIRONMENT`: what Isaac can show of the scenario's weather and time of day (`sky`);
+        a ValueError (snow) changes nothing."""
+        before = self.sky
+        self.sky = self.sky.with_(weather, time_of_day, now=sim_time)
+        self.sky_moved_at = sim_time
+        if before.rain_rate and self.sky.rain_rate == 0.0:
+            log.warning("rain stopped: the RTX lidar does not fully recover (measured: 29 % "
+                        "fewer points per scan after rain at 0 mm/h), until the server restarts")
+        self._apply_sky(sim_time)
+        lights = self.sky.lights(self.latitude, sim_time)
+        log.info("weather %s, time of day %s (latitude %.2f): changed %s; lights %s, fog %s, "
+                 "rain %s mm/h", weather, time_of_day and time_of_day.get("date_time"),
+                 self.latitude, ", ".join(self.sky.changed) or "nothing",
+                 None if lights is None else
+                 f"sun x{lights[1]:.2f} toward {tuple(round(c, 2) for c in lights[0] or ())}, "
+                 f"dome x{lights[2]:.2f}", self.sky.fog_visual_range, self.sky.rain_rate)
+
+    def _apply_sky(self, now):
+        import carb
+
+        settings = carb.settings.get_settings()
+        if self.sky.rain_rate is not None:
+            settings.set_float(scenario_sky.RAIN_RATE, float(self.sky.rain_rate))
+        fog = self.sky.fog_settings()
+        if fog:
+            for path, value in fog.items():
+                (settings.set_bool if isinstance(value, bool) else settings.set_float)(path, value)
+        else:
+            settings.set_bool(f"{scenario_sky.FOG}/enabled", False)
+        lights = self.sky.lights(self.latitude, now)
+        if lights is None:
+            self._give_back_lights()
+            return
+        direction, sun_f, dome_f = lights
+        self._take_lights()
+        sun = UsdLux.DistantLight(self.stage.GetPrimAtPath(SUN))
+        sun.GetIntensityAttr().Set(self.light_backup["sun_base"] * sun_f)
+        if direction is not None:
+            # A distant light shines down its -Z: its +Z toward the sun.
+            q = Gf.Rotation(Gf.Vec3d(0, 0, 1), Gf.Vec3d(*direction)).GetQuat()
+            xf = UsdGeom.Xformable(sun.GetPrim())
+            orient = [op for op in xf.GetOrderedXformOps()
+                      if op.GetOpType() == UsdGeom.XformOp.TypeOrient]
+            if not orient:
+                xf.ClearXformOpOrder()
+                orient = [xf.AddOrientOp(precision=UsdGeom.XformOp.PrecisionDouble)]
+            orient[0].Set(Gf.Quatd(q.GetReal(), *q.GetImaginary()))
+        for path, intensity in self.light_backup["domes"].items():
+            prim = self.stage.GetPrimAtPath(path)
+            if prim:
+                UsdLux.DomeLight(prim).GetIntensityAttr().Set(intensity * dome_f)
+
+    def _take_lights(self):
+        """The scenario's sun rules: the world's own distant lights off, ours on with their
+        brightness, the domes' intensities kept to scale and to put back."""
+        if self.light_backup is not None:
+            return
+        sun = UsdLux.DistantLight(self.stage.GetPrimAtPath(SUN))
+        backup = {"active": {SUN: sun.GetPrim().IsActive()}, "domes": {},
+                  "sun": {"intensity": sun.GetIntensityAttr().Get(),
+                          "angle": sun.GetAngleAttr().Get()},
+                  "sun_base": sun.GetIntensityAttr().Get()}
+        env = self.stage.GetPrimAtPath(ENVIRONMENT)
+        prims = list(Usd.PrimRange(env)) if env else []
+        own_suns = [p for p in prims if p.IsA(UsdLux.DistantLight) and p.IsActive()]
+        if own_suns:
+            first = UsdLux.DistantLight(own_suns[0])
+            backup["sun_base"] = first.GetIntensityAttr().Get() * \
+                2.0 ** (first.GetExposureAttr().Get() or 0.0)
+            sun.GetAngleAttr().Set(first.GetAngleAttr().Get())
+        # Everything read before anything is deactivated: a deactivated prim's descendants
+        # expire (SimReady's sun has children), and touching one raises.
+        domes = [p for p in prims if p.IsA(UsdLux.DomeLight) and p.IsActive()
+                 and not any(p.GetPath().HasPrefix(q.GetPath()) for q in own_suns)]
+        for p in own_suns:
+            backup["active"][str(p.GetPath())] = True
+            p.SetActive(False)
+        sun.GetPrim().SetActive(True)
+        sky_prim = self.stage.GetPrimAtPath(SKY)
+        if sky_prim and sky_prim.IsActive():
+            domes.append(sky_prim)
+        for p in domes:
+            backup["domes"][str(p.GetPath())] = UsdLux.DomeLight(p).GetIntensityAttr().Get()
+        self.light_backup = backup
+
+    def _give_back_lights(self):
+        b, self.light_backup = self.light_backup, None
+        if b is None:
+            return
+        for path, active in b["active"].items():
+            prim = self.stage.GetPrimAtPath(path)
+            if prim:
+                prim.SetActive(active)
+        for path, intensity in b["domes"].items():
+            prim = self.stage.GetPrimAtPath(path)
+            if prim:
+                UsdLux.DomeLight(prim).GetIntensityAttr().Set(intensity)
+        sun = UsdLux.DistantLight(self.stage.GetPrimAtPath(SUN))
+        sun.GetIntensityAttr().Set(b["sun"]["intensity"])
+        sun.GetAngleAttr().Set(b["sun"]["angle"])
+        xf = UsdGeom.Xformable(sun.GetPrim())
+        xf.ClearXformOpOrder()
+        UsdGeom.XformCommonAPI(sun.GetPrim()).SetRotate(Gf.Vec3f(*SUN_ROTATE))
+
+    def _reset_sky(self):
+        """The world's own lights, no fog, no rain."""
+        import carb
+
+        had_rain = bool(self.sky.rain_rate)
+        self.sky = scenario_sky.Sky()
+        self._give_back_lights()
+        settings = carb.settings.get_settings()
+        settings.set_bool(f"{scenario_sky.FOG}/enabled", False)
+        if had_rain:
+            settings.set_float(scenario_sky.RAIN_RATE, 0.0)
 
     # --- Traffic signals (roadmap 044 B) --------------------------------------------------
 
@@ -815,6 +945,10 @@ class IsaacWorld(WorldBase):
                 self.egos[handle].teleport(d.pose, self.physx)
                 if self.surface is not None:
                     self.surface.reset(self.egos[handle].path)
+        if self.sky.time is not None and self.sky.time.get("animation") \
+                and sim_time - self.sky_moved_at >= 1.0:
+            self.sky_moved_at = sim_time  # an animated time of day: the sun moves each second
+            self._apply_sky(sim_time)
         egos = list(self.egos.values())
         t0 = time.perf_counter()
         for ego in egos:

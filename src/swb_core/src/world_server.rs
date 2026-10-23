@@ -99,6 +99,13 @@ pub trait World {
             "road conditions are not offered by this server",
         ))
     }
+    /// `ENVIRONMENT`: the scenario's weather and time of day, each part given replacing that
+    /// part; refuse what cannot be shown, every problem listed, and then change nothing.
+    fn set_environment(&mut self, _request: &wire::SetEnvironment) -> WorldResult<()> {
+        Err(Refusal::new(
+            "the weather and time of day are not offered by this server",
+        ))
+    }
     /// A new owner: every entity of the last one goes (`handles`); the world stays.
     fn reset(&mut self, handles: &[u32]) -> WorldResult<()> {
         for h in handles {
@@ -373,6 +380,7 @@ impl<W: World> Shell<W> {
             Q::GetWeather(_) => "get_weather",
             Q::Release(_) => "release",
             Q::SetRoadCondition(_) => "set_road_condition",
+            Q::SetEnvironment(_) => "set_environment",
         };
         self.check_owner(what, client)?;
         self.last_world_request = Instant::now();
@@ -477,6 +485,14 @@ impl<W: World> Shell<W> {
                 self.need(wire::Capability::RoadCondition, "road conditions are")?;
                 self.world
                     .set_road_condition(&req.road_condition.unwrap_or_default())?;
+                ok(None)
+            }
+            Q::SetEnvironment(req) => {
+                self.need(
+                    wire::Capability::Environment,
+                    "the weather and time of day are",
+                )?;
+                self.world.set_environment(&req)?;
                 ok(None)
             }
             Q::Release(_) => {

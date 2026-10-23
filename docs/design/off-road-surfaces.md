@@ -320,12 +320,52 @@ Two findings matter for using it:
   make its own, and `SimulationApp.close()` then never returned in the probe.
 - One run of four got no lidar data at all (the probe's annotator, not the weather).
 
-So Isaac covers time of day well, fog for cameras, rain for the lidar, and nothing else; CARLA's
-`WeatherParameters` cover all of it visually (none of it physically, as with wetness). A
-`Weather` and `TimeOfDay` step would extend the fork's `UpdateEnvironment` with both, the world
-protocol with a `SetEnvironment`-style request (or the existing `SetWeather` widened), Isaac
-applying the rows above and refusing what it has not (snow, a camera-visible rain), and CARLA
-mapping all of it to its weather.
+So Isaac covers time of day well, fog for cameras, rain for the lidar, and nothing else;
+CARLA's `WeatherParameters` cover all of it visually (none of it physically, as with wetness).
+
+### Weather and time of day from the scenario (047, built 2026-10-23)
+
+```xml
+<Environment name="morning_rain">
+  <TimeOfDay animation="false" dateTime="2026-06-21T07:00:00"/>
+  <Weather fractionalCloudCover="twoOktas">
+    <Fog visualRange="300"/>
+    <Precipitation precipitationType="rain" precipitationIntensity="$rain_mm_h"/>
+  </Weather>
+</Environment>
+```
+
+Within a `Weather` every attribute and element is optional, and one not given keeps its last
+value (a story event that only stops the rain leaves the fog); a `TimeOfDay` replaces the last.
+`Initialize`, a new owner and a release go back to the world's own sky.
+
+1. **SSv2 fork**: `UpdateEnvironment` carries `Weather` (cloud cover or the deprecated
+   `cloudState`, sun, fog's visual range, precipitation type and mm/h -- the deprecated [0..1]
+   `intensity` as a fraction of 25 mm/h -- wind, temperature, pressure) and `TimeOfDay`
+   (`dateTime` as written, `animation`). Upstream read `temperature`, `atmosphericPressure`
+   and `fractionalCloudCover` as required and could not take a `Weather` without each of its
+   elements; all of it is optional now. `DomeImage` is not sent.
+2. **Bridge**: checks every part (all problems in one refusal), turns `dateTime` into the
+   clock time written and the day of the year (the zone is not applied: the time as written is
+   the local solar time), drops temperature and pressure (nothing renders them), and sends
+   `SetEnvironment` (world protocol request 15, `CAPABILITY_ENVIRONMENT`). It checks the
+   capabilities of the whole environment before sending any part.
+3. **Isaac** (`isaac_world.sky`, `IsaacWorld.set_environment`): a time of day or a placed sun
+   (a placed one wins) takes over the world's sun: the town's own distant lights go off and
+   ours, with their brightness, turns to where the sun stands over the map's latitude
+   (`map_projector_info.yaml`; CARLA's towns: 0), full from 30 deg up, off below the horizon;
+   the domes dim with it to 3 % at night. Cloud cover dims the sun (to 20 % at 8 oktas, off at
+   9): a lighting approximation, no clouds drawn. Fog: RTX fog to the visual range, none from
+   1000 m. Rain: the lidar's `rainRate` (a warning when it stops: the lidar does not fully
+   recover). Snow refused; wind taken and ignored. An animated time moves the sun each
+   simulated second. `spikes/sky_world.py` measures it on a world with its own sun and dome.
+4. **CARLA** (`scenario_weather.rs`): `cloudiness` (8 oktas = 100), `precipitation` (25 mm/h
+   = 100), `fog_density` (none from 1000 m, 100 at 0 m), `wind_intensity` (20 m/s = 100), the
+   sun's altitude and azimuth (from the time of day with the same sun model as Isaac's, or
+   placed); snow refused. The azimuth's reference (CARLA's 0 taken as east, clockwise) is
+   assumed, not checked against CARLA's renderer. All of it lies over the weather from before
+   the scenario together with the road's wet look, and that weather comes back at
+   `Initialize`.
 
 Autoware is not told: a real car does not know the friction either. Its ABS/TC (in aib's
 powertrain) and its planner meet the surface as a driver would.

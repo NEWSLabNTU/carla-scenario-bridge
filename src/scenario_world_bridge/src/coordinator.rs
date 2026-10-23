@@ -12,6 +12,7 @@ use crate::backend::{
     BackendError, Driver, EntityKind, EntityStatus, Environment, Episode, Goal, RoadCondition,
     Sensor, SimBackend, SpawnRequest, StatusBatch,
 };
+use crate::environment::{self, Precipitation, ScenarioWeather, Sun, TimeOfDay, Wind};
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs::entity_subtype::Enum as EntitySubtype;
 use crate::weather::WeatherRequest;
@@ -314,34 +315,140 @@ pub const WETNESS: [&str; 5] = [
     "highFlooded",
 ];
 
+/// SSv2's environment, checked: every problem in one refusal, one per line.
 fn environment_of(req: api::UpdateEnvironmentRequest) -> Result<Environment, BackendError> {
-    let Some(rc) = req.road_condition else {
-        return Ok(Environment::default());
-    };
+    let mut problems = Vec::new();
+    let road_condition = req
+        .road_condition
+        .and_then(|rc| road_condition_of(rc, &mut problems));
+    let weather = req.weather.map(|w| weather_of(w, &mut problems));
+    let time_of_day = req
+        .time_of_day
+        .and_then(|t| match environment::date_time(&t.date_time) {
+            Ok((hours, day_of_year)) => Some(TimeOfDay {
+                hours,
+                day_of_year,
+                animation: t.animation,
+                date_time: t.date_time,
+            }),
+            Err(e) => {
+                problems.push(format!("TimeOfDay: {e}"));
+                None
+            }
+        });
+    if !problems.is_empty() {
+        return Err(BackendError::Failed(problems.join("\n")));
+    }
+    Ok(Environment {
+        road_condition,
+        weather,
+        time_of_day,
+    })
+}
+
+fn road_condition_of(rc: api::RoadCondition, problems: &mut Vec<String>) -> Option<RoadCondition> {
     let wetness = if rc.wetness.is_empty() {
         "dry".to_string()
     } else {
         rc.wetness
     };
+    let before = problems.len();
     if !WETNESS.contains(&wetness.as_str()) {
-        return Err(BackendError::Failed(format!(
+        problems.push(format!(
             "RoadCondition: wetness {wetness:?} is not one of {}",
             WETNESS.join(", ")
-        )));
+        ));
     }
     let f = rc.friction_scale_factor;
     if !(f.is_finite() && f >= 0.0) {
-        return Err(BackendError::Failed(format!(
+        problems.push(format!(
             "RoadCondition: frictionScaleFactor {f} is not in [0, inf)"
-        )));
+        ));
     }
-    Ok(Environment {
-        road_condition: Some(RoadCondition {
-            friction_scale_factor: f,
-            wetness,
-            properties: rc.properties.into_iter().collect(),
-        }),
+    (problems.len() == before).then(|| RoadCondition {
+        friction_scale_factor: f,
+        wetness,
+        properties: rc.properties.into_iter().collect(),
     })
+}
+
+/// A `Weather`'s parts. Temperature and air pressure are dropped: nothing renders them.
+fn weather_of(w: api::Weather, problems: &mut Vec<String>) -> ScenarioWeather {
+    let mut out = ScenarioWeather::default();
+    if !w.fractional_cloud_cover.is_empty() {
+        out.cloud_cover_oktas = environment::fractional_cloud_cover(&w.fractional_cloud_cover);
+        if out.cloud_cover_oktas.is_none() {
+            problems.push(format!(
+                "Weather: fractionalCloudCover {:?} is not zeroOktas .. nineOktas",
+                w.fractional_cloud_cover
+            ));
+        }
+    } else if !w.cloud_state.is_empty() {
+        out.cloud_cover_oktas = environment::cloud_state(&w.cloud_state);
+        if out.cloud_cover_oktas.is_none() {
+            problems.push(format!(
+                "Weather: cloudState {:?} is not free, cloudy, overcast, rainy or skyOff",
+                w.cloud_state
+            ));
+        }
+    }
+    if let Some(sun) = w.sun {
+        let finite = [sun.azimuth, sun.elevation, sun.illuminance]
+            .iter()
+            .all(|x| x.is_finite());
+        if finite && sun.illuminance >= 0.0 {
+            out.sun = Some(Sun {
+                azimuth: sun.azimuth,
+                elevation: sun.elevation,
+                illuminance: sun.illuminance,
+            });
+        } else {
+            problems.push(format!(
+                "Weather: Sun azimuth {}, elevation {}, illuminance {} is not a sun",
+                sun.azimuth, sun.elevation, sun.illuminance
+            ));
+        }
+    }
+    if let Some(fog) = w.fog {
+        if fog.visual_range.is_finite() && fog.visual_range >= 0.0 {
+            out.fog_visual_range = Some(fog.visual_range);
+        } else {
+            problems.push(format!(
+                "Weather: Fog visualRange {} is not in [0, inf) m",
+                fog.visual_range
+            ));
+        }
+    }
+    if let Some(p) = w.precipitation {
+        let kind = environment::precipitation_type(&p.precipitation_type);
+        let intensity = p.precipitation_intensity;
+        match kind {
+            Some(kind) if intensity.is_finite() && intensity >= 0.0 => {
+                out.precipitation = Some(Precipitation { kind, intensity })
+            }
+            Some(_) => problems.push(format!(
+                "Weather: Precipitation intensity {intensity} is not in [0, inf) mm/h"
+            )),
+            None => problems.push(format!(
+                "Weather: precipitationType {:?} is not dry, rain or snow",
+                p.precipitation_type
+            )),
+        }
+    }
+    if let Some(wind) = w.wind {
+        if wind.direction.is_finite() && wind.speed.is_finite() && wind.speed >= 0.0 {
+            out.wind = Some(Wind {
+                direction: wind.direction,
+                speed: wind.speed,
+            });
+        } else {
+            problems.push(format!(
+                "Weather: Wind direction {}, speed {} is not a wind",
+                wind.direction, wind.speed
+            ));
+        }
+    }
+    out
 }
 
 fn ok() -> ProtoResult {
@@ -627,6 +734,7 @@ mod tests {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .collect(),
             }),
+            ..Default::default()
         }
     }
 
@@ -660,6 +768,91 @@ mod tests {
             fake.last_call(),
             Call::UpdateEnvironment(Environment::default())
         );
+    }
+
+    #[test]
+    fn the_weather_and_time_of_day_reach_the_backend_part_by_part() {
+        let fake = FakeBackend::default();
+        let mut c = coordinator(&fake);
+        let r = c.update_environment(api::UpdateEnvironmentRequest {
+            weather: Some(api::Weather {
+                cloud_state: "overcast".into(),
+                fog: Some(api::weather::Fog { visual_range: 80.0 }),
+                precipitation: Some(api::weather::Precipitation {
+                    precipitation_type: "rain".into(),
+                    precipitation_intensity: 12.0,
+                }),
+                has_temperature: true,
+                temperature: 280.0,
+                ..Default::default()
+            }),
+            time_of_day: Some(api::TimeOfDay {
+                date_time: "2026-06-21T07:45:00+08:00".into(),
+                animation: true,
+            }),
+            ..Default::default()
+        });
+        assert!(r.result.unwrap().success);
+        let Call::UpdateEnvironment(env) = fake.last_call() else {
+            panic!("no environment");
+        };
+        assert!(env.road_condition.is_none());
+        let w = env.weather.unwrap();
+        assert_eq!(w.cloud_cover_oktas, Some(8));
+        assert_eq!(w.fog_visual_range, Some(80.0));
+        assert_eq!(
+            w.precipitation,
+            Some(Precipitation {
+                kind: environment::PrecipitationType::Rain,
+                intensity: 12.0
+            })
+        );
+        assert!(w.sun.is_none() && w.wind.is_none());
+        let t = env.time_of_day.unwrap();
+        assert_eq!((t.hours, t.day_of_year, t.animation), (7.75, 172, true));
+    }
+
+    #[test]
+    fn every_problem_in_an_environment_is_listed() {
+        let fake = FakeBackend::default();
+        let mut c = coordinator(&fake);
+        let result = c
+            .update_environment(api::UpdateEnvironmentRequest {
+                road_condition: Some(api::RoadCondition {
+                    friction_scale_factor: -1.0,
+                    ..Default::default()
+                }),
+                weather: Some(api::Weather {
+                    fractional_cloud_cover: "tenOktas".into(),
+                    fog: Some(api::weather::Fog { visual_range: -5.0 }),
+                    precipitation: Some(api::weather::Precipitation {
+                        precipitation_type: "hail".into(),
+                        precipitation_intensity: 1.0,
+                    }),
+                    ..Default::default()
+                }),
+                time_of_day: Some(api::TimeOfDay {
+                    date_time: "noon".into(),
+                    animation: false,
+                }),
+            })
+            .result
+            .unwrap();
+        assert!(!result.success);
+        for needle in [
+            "frictionScaleFactor -1",
+            "\"tenOktas\"",
+            "visualRange -5",
+            "\"hail\"",
+            "dateTime \"noon\"",
+        ] {
+            assert!(
+                result.description.contains(needle),
+                "{}",
+                result.description
+            );
+        }
+        assert!(fake.calls().is_empty());
     }
 
     #[test]

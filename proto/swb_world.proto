@@ -31,8 +31,9 @@
 // misread; `Hello` refuses a mismatch with both versions. 2 (044): tracked bodies, contacts per
 // reporting side. 3: traffic signals. 4 (046): the unified interface -- capabilities, the
 // owner lease, `Apply`, `SetStepTime`, `SetGoal`, the weather, `Release`, the rich spawn and
-// read-back a server that moves its own bodies needs. (047's `SetRoadCondition` needs no bump:
-// the bridge sends it only to a server declaring `CAPABILITY_ROAD_CONDITION`.)
+// read-back a server that moves its own bodies needs. (047's `SetRoadCondition` and
+// `SetEnvironment` need no bump: the bridge sends each only to a server declaring its
+// capability.)
 
 syntax = "proto3";
 
@@ -92,6 +93,8 @@ enum Capability {
   CAPABILITY_CONTACTS = 8;
   // `SetRoadCondition` (047): OpenSCENARIO's road condition, world-wide and per zone.
   CAPABILITY_ROAD_CONDITION = 9;
+  // `SetEnvironment` (047): OpenSCENARIO's weather and time of day from the scenario.
+  CAPABILITY_ENVIRONMENT = 10;
 }
 
 // Who sends a request: what the owner lease is checked against.
@@ -459,6 +462,62 @@ message SetRoadCondition {
   RoadCondition road_condition = 1;
 }
 
+// SSv2's `UpdateEnvironment` weather and time of day (OpenSCENARIO `Weather`, `TimeOfDay`;
+// roadmap 047). Every part is optional: one not set leaves that part as it was. `LoadWorld` and
+// `Release` go back to the world's own sky and weather. A server refuses, with every problem
+// listed, a part it cannot show, and then changes nothing.
+message ScenarioWeather {
+  message CloudCover {
+    // 0 (clear) to 8 (overcast); 9: the sky cannot be seen.
+    uint32 oktas = 1;
+  }
+  message Sun {
+    // Map frame: azimuth clockwise from north (+y), rad; elevation above the horizon, rad.
+    double azimuth = 1;
+    double elevation = 2;
+    // lx; 0: not given.
+    double illuminance = 3;
+  }
+  message Fog {
+    double visual_range = 1;  // m
+  }
+  enum PrecipitationType {
+    DRY = 0;
+    RAIN = 1;
+    SNOW = 2;
+  }
+  message Precipitation {
+    PrecipitationType type = 1;
+    double intensity = 2;  // mm/h
+  }
+  message Wind {
+    // Map frame: the direction it blows to, rad counterclockwise from +x; speed m/s.
+    double direction = 1;
+    double speed = 2;
+  }
+  CloudCover cloud_cover = 1;
+  Sun sun = 2;
+  Fog fog = 3;
+  Precipitation precipitation = 4;
+  Wind wind = 5;
+}
+
+message TimeOfDay {
+  // The scenario's local clock time, h (0-24), and day of the year (1-366), from its
+  // dateTime; the server puts the sun where it stands then over the map's latitude.
+  double hours = 1;
+  uint32 day_of_year = 2;
+  // The time runs on with the simulation.
+  bool animation = 3;
+  // As the scenario wrote it, for the log.
+  string date_time = 4;
+}
+
+message SetEnvironment {
+  ScenarioWeather weather = 1;
+  TimeOfDay time_of_day = 2;
+}
+
 // The owner leaves: the server undoes what it did for it (entities destroyed, the simulator's
 // settings restored) and has no owner after. The world stays loaded.
 message Release {}
@@ -481,6 +540,7 @@ message Request {
     GetWeather get_weather = 12;
     Release release = 13;
     SetRoadCondition set_road_condition = 14;
+    SetEnvironment set_environment = 15;
   }
   // The sender (every request, `Hello` included).
   ClientId client = 100;

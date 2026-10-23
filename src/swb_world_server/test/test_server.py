@@ -212,7 +212,8 @@ class ServerTest(unittest.TestCase):
         self.assertIn("other than the ego", r.error)
         for request in ({"set_goal": pb.SetGoal(handle=1)},
                         {"set_weather": pb.SetWeather()}, {"get_weather": pb.GetWeather()},
-                        {"set_road_condition": pb.SetRoadCondition()}):
+                        {"set_road_condition": pb.SetRoadCondition()},
+                        {"set_environment": pb.SetEnvironment()}):
             r = call(self.server, **request)
             self.assertFalse(r.ok)
             self.assertIn("not offered", r.error)
@@ -254,6 +255,36 @@ class ServerTest(unittest.TestCase):
         r = call(server, set_road_condition=pb.SetRoadCondition(road_condition=rc))
         self.assertFalse(r.ok)
         self.assertIn("RoadCondition refused:\nswb.zone.nowhere.class: no zone", r.error)
+
+    def test_the_weather_reaches_the_world_part_by_part(self):
+        calls = []
+
+        def set_environment(weather, time_of_day, sim_time):
+            if weather and weather.get("precipitation", ("",))[0] == "snow":
+                raise ValueError("snow: none here")
+            calls.append((weather, time_of_day))
+
+        self.world.capabilities = ("ENVIRONMENT",)
+        self.world.set_environment = set_environment
+        server = WorldServer(self.world, clock=self.clock)
+        hello(server)
+        w = pb.ScenarioWeather()
+        w.fog.visual_range = 50.0
+        w.precipitation.type = pb.PRECIPITATION["RAIN"]
+        w.precipitation.intensity = 4.0
+        r = call(server, set_environment=pb.SetEnvironment(
+            weather=w, time_of_day=pb.TimeOfDay(hours=7.5, day_of_year=100, animation=True)))
+        self.assertTrue(r.ok, r.error)
+        weather, time_of_day = calls[-1]
+        self.assertEqual(weather, {"fog_visual_range": 50.0, "precipitation": ("rain", 4.0)})
+        self.assertEqual((time_of_day["hours"], time_of_day["animation"]), (7.5, True))
+        call(server, set_environment=pb.SetEnvironment(time_of_day=pb.TimeOfDay(hours=1.0)))
+        self.assertIsNone(calls[-1][0])
+        w = pb.ScenarioWeather()
+        w.precipitation.type = pb.PRECIPITATION["SNOW"]
+        r = call(server, set_environment=pb.SetEnvironment(weather=w))
+        self.assertFalse(r.ok)
+        self.assertIn("Weather refused:\nsnow", r.error)
 
     def test_signals_come_with_the_world_and_take_colours(self):
         hello(self.server)

@@ -729,6 +729,35 @@ fn conformance(endpoint: &str, map: Option<String>) -> ExitCode {
     } else {
         r.skip("road condition", "no ROAD_CONDITION");
     }
+    if has(wire::Capability::Environment) {
+        use wire::scenario_weather as sw;
+        // A clear noon with no fog and no rain: what every server can show.
+        let clear = wire::SetEnvironment {
+            weather: Some(wire::ScenarioWeather {
+                cloud_cover: Some(sw::CloudCover { oktas: 0 }),
+                fog: Some(sw::Fog {
+                    visual_range: 100_000.0,
+                }),
+                precipitation: Some(sw::Precipitation {
+                    r#type: sw::PrecipitationType::Dry as i32,
+                    intensity: 0.0,
+                }),
+                ..Default::default()
+            }),
+            time_of_day: Some(wire::TimeOfDay {
+                hours: 12.0,
+                day_of_year: 172,
+                animation: false,
+                date_time: "2026-06-21T12:00:00".into(),
+            }),
+        };
+        r.check(
+            "a clear noon is taken (ENVIRONMENT)",
+            call(&mut c, Q::SetEnvironment(clear), TIMEOUT * 5).map(|_| String::new()),
+        );
+    } else {
+        r.skip("weather and time of day", "no ENVIRONMENT");
+    }
     if has(wire::Capability::Autopilot) {
         r.skip("autopilot", "needs a road; the scenario suite checks it");
     }

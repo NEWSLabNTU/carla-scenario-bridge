@@ -17,8 +17,17 @@ use crate::body_clearance::{self, BodyBox};
 use crate::budgets::{self, Deadline, HUNG_STATE_READ_WAIT};
 use crate::config::{BridgeConfig, NpcMotion, SensorReleaseConfig};
 use crate::gap_trace::{self, GapTrace};
-use crate::map_resolver::{lanelet_map_file, load_map_origin, town_from_map_path};
+use crate::map_resolver::{lanelet_map_file, load_map_origin, map_dir_of, town_from_map_path};
 use crate::tick_watchdog::{HangHook, WatchError, Watchdog};
+
+/// A scenario's time of day on SSv2's clock.
+#[derive(Debug, Clone)]
+struct ScenarioClock {
+    time: TimeOfDay,
+    /// SSv2's clock when it was set, and when the sun last moved, s.
+    set_at: f64,
+    refreshed_at: f64,
+}
 
 /// The default road: friction as the vehicles have it, dry.
 const DRY_ROAD: AppliedRoad = AppliedRoad {
@@ -430,6 +439,7 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
 
 use super::collision_monitor::CollisionMonitor;
 use super::road_condition::{self, Applied as AppliedRoad};
+use super::scenario_weather::{self, Sky};
 use crate::actor_census;
 use crate::backend::{
     BackendError, Driver, EntityKind, EntityStatus, Environment, Episode, Goal, Sensor, SimBackend,
@@ -450,6 +460,7 @@ use crate::sensor_release::SensorReleaseNotifier;
 use crate::spawn_ladder;
 use crate::weather::WeatherReply;
 use crate::weather::{Weather, WeatherRequest};
+use swb_core::environment::{self, TimeOfDay};
 
 /// `(elapsed_seconds, delta_seconds)` of `world`'s current snapshot.
 /// Why a watched tick failed (roadmap 032 N5).
@@ -1168,9 +1179,17 @@ pub struct CarlaBackend {
     /// Each vehicle's own tire friction per wheel, by actor id, read before the road first
     /// scaled it.
     own_friction: HashMap<u32, Vec<f32>>,
-    /// The weather before the road changed its look, put back at `Initialize`; a
-    /// `set_weather` in between replaces it.
-    weather_before_road: Option<Weather>,
+    /// The weather before the scenario changed it (the road's look, its sky), put back at
+    /// `Initialize`; a `set_weather` in between replaces it.
+    weather_before_scenario: Option<Weather>,
+    /// The scenario's weather parts so far (`scenario_weather`).
+    sky: Sky,
+    /// The scenario's time of day, when it set one.
+    scenario_clock: Option<ScenarioClock>,
+    /// SSv2's clock at the last frame, s.
+    ssv2_time: f64,
+    /// The map's latitude, deg, for the time of day's sun.
+    latitude: f64,
     /// Measured blueprint boxes for this CARLA version (roadmap 022); `None` spawns as
     /// before: the kind's default, no size check.
     blueprint_boxes: Option<BoxTable>,
@@ -1338,7 +1357,11 @@ impl CarlaBackend {
             requested_weather,
             road: DRY_ROAD,
             own_friction: HashMap::new(),
-            weather_before_road: None,
+            weather_before_scenario: None,
+            sky: Sky::default(),
+            scenario_clock: None,
+            ssv2_time: 0.0,
+            latitude: 0.0,
             blueprint_boxes,
             warned_stale_boxes: HashSet::new(),
             gap_trace,
@@ -1503,8 +1526,8 @@ impl CarlaBackend {
             },
         };
         self.requested_weather = Some((label.clone(), w));
-        // The user's weather replaces the road's look too.
-        self.weather_before_road = None;
+        // The user's weather replaces the scenario's too.
+        self.weather_before_scenario = None;
         if let Err(e) = self.world.set_weather(&super::weather::to_carla(w)) {
             return WeatherReply::failed(
                 format!("set weather {label}: {e}; kept, and applied on the next connect"),
@@ -1522,42 +1545,72 @@ impl CarlaBackend {
     }
 
     /// `UpdateEnvironment` (roadmap 047): the road condition, as far as CARLA has one
-    /// (`road_condition`). Refused whole, with every problem, before anything changes.
+    /// (`road_condition`), and the weather and time of day (`scenario_weather`). Refused whole,
+    /// with every problem, before anything changes.
     pub fn update_environment(&mut self, env: &Environment) -> Result<(), BackendError> {
-        let Some(rc) = &env.road_condition else {
-            return Ok(());
-        };
-        let road = road_condition::applied(rc)
-            .or_else(|e| failed(format!("RoadCondition refused:\n{e}")))?;
-        if road.look != self.road.look {
-            let now = self
-                .weather()
-                .or_else(|e| failed(format!("RoadCondition: {e:#}")))?;
-            let before = *self.weather_before_road.get_or_insert(now);
-            let look = if road.look == DRY_ROAD.look {
-                before
-            } else {
-                road_condition::with_look(before, road.look)
-            };
-            if let Err(e) = self.world.set_weather(&super::weather::to_carla(look)) {
-                return failed(format!("RoadCondition: set the wet look: {e}"));
+        let mut problems = Vec::new();
+        let road = match env.road_condition.as_ref().map(road_condition::applied) {
+            Some(Err(e)) => {
+                problems.push(format!("RoadCondition refused:\n{e}"));
+                None
             }
+            Some(Ok(road)) => Some(road),
+            None => None,
+        };
+        let sky = match env.weather.as_ref().map(|w| self.sky.with(w)) {
+            Some(Err(e)) => {
+                problems.push(format!("Weather refused:\n{e}"));
+                self.sky
+            }
+            Some(Ok(sky)) => sky,
+            None => self.sky,
+        };
+        if !problems.is_empty() {
+            return failed(problems.join("\n"));
         }
-        self.road = road;
+        self.sky = sky;
+        if let Some(t) = &env.time_of_day {
+            self.scenario_clock = Some(ScenarioClock {
+                time: t.clone(),
+                set_at: self.ssv2_time,
+                refreshed_at: self.ssv2_time,
+            });
+        }
+        let friction = road.map(|r| r.friction_factor != self.road.friction_factor);
+        if let Some(road) = road {
+            self.road = road;
+        }
+        if let Err(e) = self.refresh_weather() {
+            return failed(format!("UpdateEnvironment: {e:#}"));
+        }
+        if let Some(rc) = &env.road_condition {
+            tracing::info!(
+                "RoadCondition: friction scale {}, {}: tire friction x{:.3}, wetness {} deposits {}",
+                rc.friction_scale_factor,
+                rc.wetness,
+                self.road.friction_factor,
+                self.road.look.0,
+                self.road.look.1
+            );
+        }
+        if env.weather.is_some() || env.time_of_day.is_some() {
+            tracing::info!(
+                "Weather {:?}, time of day {:?} (latitude {}): {:?}",
+                env.weather,
+                env.time_of_day.as_ref().map(|t| &t.date_time),
+                self.latitude,
+                self.sky
+            );
+        }
+        if friction.is_none() && road.is_none() {
+            return Ok(());
+        }
         let mut problems = Vec::new();
         for name in self.entities.names().collect::<Vec<_>>() {
             if let Err(e) = self.apply_road_friction(&name) {
                 problems.push(format!("'{name}': {e:#}"));
             }
         }
-        tracing::info!(
-            "RoadCondition: friction scale {}, {}: tire friction x{:.3}, wetness {} deposits {}",
-            rc.friction_scale_factor,
-            rc.wetness,
-            road.friction_factor,
-            road.look.0,
-            road.look.1
-        );
         if problems.is_empty() {
             Ok(())
         } else {
@@ -1565,6 +1618,60 @@ impl CarlaBackend {
                 "RoadCondition: tire friction not set on {}",
                 problems.join("; ")
             ))
+        }
+    }
+
+    /// CARLA's weather from the scenario's parts: the weather from before the scenario changed
+    /// it, the road's wet look, the scenario's sky and its sun (placed, or from the time of
+    /// day). With none of them set, the weather from before.
+    fn refresh_weather(&mut self) -> Result<()> {
+        let set = self.road.look != DRY_ROAD.look
+            || !self.sky.is_empty()
+            || self.scenario_clock.is_some();
+        if !set {
+            if let Some(w) = self.weather_before_scenario.take() {
+                self.world
+                    .set_weather(&super::weather::to_carla(w))
+                    .map_err(|e| eyre::eyre!("put the weather back: {e}"))?;
+            }
+            return Ok(());
+        }
+        let base = match self.weather_before_scenario {
+            Some(w) => w,
+            None => {
+                let now = self.weather()?;
+                self.weather_before_scenario = Some(now);
+                now
+            }
+        };
+        let mut w = base;
+        if self.road.look != DRY_ROAD.look {
+            w = road_condition::with_look(w, self.road.look);
+        }
+        let sun = self.scenario_clock.as_ref().map(|c| {
+            let (hours, day) = environment::hours_after(&c.time, self.ssv2_time - c.set_at);
+            let (azimuth, elevation) = environment::sun_position(hours, day, self.latitude);
+            scenario_weather::carla_sun(azimuth, elevation)
+        });
+        let w = self.sky.apply(w, sun);
+        self.world
+            .set_weather(&super::weather::to_carla(w))
+            .map_err(|e| eyre::eyre!("set the scenario's weather: {e}"))
+    }
+
+    /// Each frame, with SSv2's clock (s): an animated time of day moves the sun once a
+    /// simulated second.
+    fn advance_scenario_clock(&mut self, now: f64) {
+        self.ssv2_time = now;
+        let due = matches!(&self.scenario_clock,
+            Some(c) if c.time.animation && now - c.refreshed_at >= 1.0);
+        if due {
+            if let Some(c) = self.scenario_clock.as_mut() {
+                c.refreshed_at = now;
+            }
+            if let Err(e) = self.refresh_weather() {
+                tracing::warn!("Time of day: {e:#}");
+            }
         }
     }
 
@@ -1597,15 +1704,16 @@ impl CarlaBackend {
         Ok(())
     }
 
-    /// `Initialize`: the default road; the vehicles it scaled are gone, the weather goes
-    /// back to what it was before the road's look.
-    fn reset_road(&mut self) {
+    /// `Initialize`: the default road, sky and time; the vehicles the road scaled are gone,
+    /// the weather goes back to what it was before the scenario changed it.
+    fn reset_environment(&mut self) {
         self.road = DRY_ROAD;
         self.own_friction.clear();
-        if let Some(w) = self.weather_before_road.take() {
-            if let Err(e) = self.world.set_weather(&super::weather::to_carla(w)) {
-                tracing::warn!("Could not put the weather back after the road's look: {e}");
-            }
+        self.sky = Sky::default();
+        self.scenario_clock = None;
+        self.ssv2_time = 0.0;
+        if let Err(e) = self.refresh_weather() {
+            tracing::warn!("Could not put the weather back after the scenario's: {e:#}");
         }
     }
 
@@ -2130,7 +2238,7 @@ impl CarlaBackend {
             self.trace_emit_staged(None);
         }
         self.destroy_all_spawned();
-        self.reset_road();
+        self.reset_environment();
         self.gap_trace.shutdown(Duration::from_secs(5));
         if let Some(mut link) = self.agent_link.take() {
             link.shutdown();
@@ -2164,6 +2272,8 @@ impl CarlaBackend {
             );
         }
 
+        self.latitude =
+            environment::map_latitude(&map_dir_of(std::path::Path::new(lanelet2_map_path)));
         let town = town_from_map_path(lanelet2_map_path, &self.map_aliases).ok_or_else(|| {
             eyre::eyre!(
                 "cannot resolve a CARLA town from lanelet2_map_path '{lanelet2_map_path}'; \
@@ -3364,7 +3474,7 @@ impl CarlaBackend {
         }
         self.entities.clear();
         self.commanded_lights.clear();
-        self.reset_road();
+        self.reset_environment();
         // The previous run's simulator-driven vehicles are gone, so is the Traffic Manager:
         // a scenario without one ticks with no TM in this process (034 step 1). The next
         // `simulator_autopilot` spawn starts a new one, seeded as configured, so
@@ -3755,6 +3865,7 @@ impl CarlaBackend {
     }
 
     pub fn update_frame(&mut self, current_simulation_time: f64) -> Result<i64, BackendError> {
+        self.advance_scenario_clock(current_simulation_time);
         // Stamp this frame's collisions with this frame's number, and log last frame's.
         let frame = self.collision_monitor.next_frame();
         self.drain_collisions();
