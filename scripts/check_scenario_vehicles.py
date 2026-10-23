@@ -1,8 +1,21 @@
 #!/usr/bin/env python3
-"""Lint: every `<Vehicle>` named by a CARLA blueprint declares that blueprint's box and axles
-(roadmap 050).
+"""Lint: scenario vehicles come from the vehicle catalog, and every other `<Vehicle>` named by a
+CARLA blueprint declares that blueprint's box and axles (roadmaps 050, 051).
 
     scripts/check_scenario_vehicles.py [PATH ...] [--tolerance M]
+
+The catalog (roadmap 051) is sim_vehicle_spec's `catalogs/vehicles.xosc`, generated from the
+vehicle specs. In a scenario:
+
+- an inline `<Vehicle>` whose body (`model3d`, else `name`) is a cataloged car fails: it must
+  be a `CatalogReference` to the entry (`scripts/catalog_scenarios.py --rewrite` makes it one);
+- a `CatalogReference` to the `vehicles` catalog must name an entry and assign exactly the
+  entry's parameters, every one (the entry declares no defaults: in SSv2 a declared default
+  would shadow the assignment), and the file's `CatalogLocations` must reach the catalog through
+  `$(find-pkg-share sim_vehicle_spec)/catalogs`.
+
+The catalog's own entries are checked against the measured table like any declaration, by
+their `model3d`.
 
 PATHs are `.xosc` files or directories searched for them (default: `src/swb_examples` and
 `scenarios`). For each `<Vehicle name="...">` whose name is a blueprint with axles in the
@@ -25,7 +38,8 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import scenario_vehicle  # scripts/, beside this file
+import catalog_scenarios  # scripts/, beside this file
+import scenario_vehicle
 
 ROOT = scenario_vehicle.ROOT
 DEFAULT_PATHS = [ROOT / "src/swb_examples", ROOT / "scenarios"]
@@ -70,24 +84,76 @@ def entity_of(parents, vehicle):
     return "?"
 
 
-def check_file(path, table, tolerance):
-    """(failures, exemptions, vehicles checked) for one file."""
+def catalog_parameters(path=catalog_scenarios.CATALOG):
+    """{entry name: {parameter names its attributes refer to ($name)}} of the vehicle catalog."""
+    root = ET.parse(path).getroot()
+    return {v.get("name"): {value[1:] for node in v.iter() for value in node.attrib.values()
+                            if value.startswith("$")}
+            for v in root.iter("Vehicle")}
+
+
+def check_references(path, root, parents, where_of, catalog):
+    """Failures of the file's references to the vehicle catalog."""
+    failures = []
+    refs = [r for r in root.iter("CatalogReference")
+            if r.get("catalogName") == catalog_scenarios.CATALOG_NAME]
+    for ref in refs:
+        where = where_of(ref)
+        entry = ref.get("entryName")
+        if entry not in catalog:
+            failures.append(f"{where}: no catalog entry {entry!r} (have {sorted(catalog)})")
+            continue
+        assigned = [a.get("parameterRef")
+                    for a in ref.findall("ParameterAssignments/ParameterAssignment")]
+        for name in assigned:
+            if name not in catalog[entry]:
+                failures.append(f"{where}: {entry} has no parameter {name!r} "
+                                f"(has {sorted(catalog[entry])})")
+        missing = sorted(catalog[entry] - set(assigned))
+        if missing:
+            failures.append(f"{where}: {entry} needs {missing} assigned (the catalog declares "
+                            "no defaults)")
+    if refs:
+        dirs = [d.get("path") for d in root.findall("CatalogLocations/VehicleCatalog/Directory")]
+        if dirs != [catalog_scenarios.CATALOG_DIR]:
+            failures.append(f"{where_of(root)}: VehicleCatalog is {dirs}, not "
+                            f"[{catalog_scenarios.CATALOG_DIR!r}]")
+    return failures
+
+
+def check_file(path, table, tolerance, catalog=None, bodies=None):
+    """(failures, exemptions, vehicles checked) for one file. `catalog` ({entry: parameters})
+    and `bodies` ({model3d: entry}) are the vehicle catalog's; `bodies` None checks no
+    cataloging (the catalog file itself)."""
     failures, exemptions, checked = [], [], 0
     try:
         root = ET.parse(path).getroot()
     except ET.ParseError as e:
         return [f"{path}: not XML ({e})"], [], 0
     parents = {child: parent for parent in root.iter() for child in parent}
+    rel = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+
+    def where_of(node):
+        return f"{rel}: {entity_of(parents, node)}" if node is not root else str(rel)
+
+    if catalog is not None:
+        failures += check_references(path, root, parents, where_of, catalog)
     for vehicle in root.iter("Vehicle"):
-        geometry = scenario_vehicle.geometry(vehicle.get("name", ""), table)
-        if geometry is None:
-            continue
+        body = catalog_scenarios.body_of(vehicle)
+        geometry = scenario_vehicle.geometry(body, table)
         entity = entity_of(parents, vehicle)
-        where = f"{path.relative_to(ROOT) if path.is_relative_to(ROOT) else path}: {entity}"
+        where = f"{rel}: {entity}"
         exempt = [p.get("value", "") for p in vehicle.findall("Properties/Property")
                   if p.get("name") == EXEMPT]
-        if exempt:
-            exemptions.append(f"{where} ({vehicle.get('name')}): {exempt[0]}")
+        if exempt and (geometry is not None or body in (bodies or {})):
+            exemptions.append(f"{where} ({body}): {exempt[0]}")
+            continue
+        if bodies and body in bodies:
+            failures.append(f"{where}: an inline {body}; refer to the catalog "
+                            f"(CatalogReference entryName=\"{bodies[body]}\", "
+                            "scripts/catalog_scenarios.py --rewrite)")
+            continue
+        if geometry is None:
             continue
         checked += 1
         for element, attribute, key in FIELDS:
@@ -116,9 +182,12 @@ def main():
     ap.add_argument("--table", type=Path, default=scenario_vehicle.TABLE)
     args = ap.parse_args()
     table = scenario_vehicle.load_table(args.table)
+    catalog, bodies = catalog_parameters(), catalog_scenarios.entries()
     failures, exemptions, checked, files = [], [], 0, 0
+    f, e, c = check_file(catalog_scenarios.CATALOG, table, args.tolerance)
+    failures, exemptions, checked, files = f, e, c, 1
     for path in scenario_files(args.paths or DEFAULT_PATHS):
-        f, e, c = check_file(path.resolve(), table, args.tolerance)
+        f, e, c = check_file(path.resolve(), table, args.tolerance, catalog, bodies)
         failures += f
         exemptions += e
         checked += c

@@ -269,7 +269,8 @@ def main():
     sites = yaml.safe_load(a.sites.read_text())
     amb = None if a.no_ambient or not a.ambient.exists() else yaml.safe_load(a.ambient.read_text())
     a.out.parent.mkdir(parents=True, exist_ok=True)
-    a.out.write_text(tour(sites, amb))
+    # The Model 3s refer to sim_vehicle_spec's catalog (roadmap 051)
+    a.out.write_text(G.catalog_scenarios.rewrite(tour(sites, amb))[0])
     print(a.out)
 
 

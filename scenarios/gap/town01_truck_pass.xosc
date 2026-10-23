@@ -33,24 +33,20 @@
 <OpenSCENARIO>
 	<FileHeader author="scenario-world-bridge" date="2026-10-13T00:00:00+00:00" description="Town01 declared 12 m truck on a Model 3 body holding behind the driving ego, the gap oracle positive control" revMajor="1" revMinor="2" />
 	<ParameterDeclarations />
-	<CatalogLocations />
+	<CatalogLocations><VehicleCatalog><Directory path="$(find-pkg-share sim_vehicle_spec)/catalogs" /></VehicleCatalog></CatalogLocations>
 	<RoadNetwork>
 		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
 	</RoadNetwork>
 	<Entities>
 		<ScenarioObject name="ego">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="50" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="15.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="15.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="Autoware">
 					<Properties>
@@ -72,7 +68,9 @@
 					<FrontAxle maxSteering="0.5" wheelDiameter="1.0" trackWidth="2.0" positionX="7.0" positionZ="0.5" />
 					<RearAxle maxSteering="0.0" wheelDiameter="1.0" trackWidth="2.0" positionX="0.0" positionZ="0.5" />
 				</Axles>
-				<Properties />
+				<Properties>
+					<Property name="swb.box_exempt" value="a 12 m truck box on the Model 3 body: the gap case is the declared box, the body only draws it" />
+				</Properties>
 			</Vehicle>
 			<ObjectController>
 				<Controller name="">

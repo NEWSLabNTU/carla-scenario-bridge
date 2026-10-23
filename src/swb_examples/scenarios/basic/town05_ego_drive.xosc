@@ -2,24 +2,20 @@
 <OpenSCENARIO>
 	<FileHeader author="scenario-world-bridge" date="2026-10-18T00:00:00+00:00" description="Town05 ego drive (lanelet 25106 to 93796, 140 m, right at (-117, -81)), no traffic light on the way. Poses are in the map frame as Autoware and SSv2 read it (lat/lon through the TransverseMercator projector, not local_x/local_y); start z is the pcd road height (roadmap 043)" revMajor="1" revMinor="2" />
 	<ParameterDeclarations />
-	<CatalogLocations />
+	<CatalogLocations><VehicleCatalog><Directory path="$(find-pkg-share sim_vehicle_spec)/catalogs" /></VehicleCatalog></CatalogLocations>
 	<RoadNetwork>
 		<LogicFile filepath="$(env CARLA_MAPS)/Town05" />
 	</RoadNetwork>
 	<Entities>
 		<ScenarioObject name="ego">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="50" maxAcceleration="15.0" maxDeceleration="15.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="50" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="15.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="15.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="Autoware">
 					<Properties>

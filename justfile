@@ -244,9 +244,9 @@ test:
     python3 -m unittest discover -s src/swb_isaac_world/test
     # The Autoware profile's settings (autoware_sim_vehicle)
     python3 -m pytest -q src/autoware_sim_vehicle/test
-    # Every vehicle named by a CARLA blueprint declares that car's measured box and axles
-    # (roadmap 050), and the module the generators take them from
-    python3 -m pytest -q scripts/test_scenario_vehicle.py
+    # Scenario cars come from sim_vehicle_spec's catalog (roadmap 051); every other vehicle
+    # named by a CARLA blueprint declares that car's measured box and axles (roadmap 050)
+    python3 -m pytest -q scripts/test_scenario_vehicle.py scripts/test_catalog_scenarios.py
     python3 scripts/check_scenario_vehicles.py
 
 # Run CI checks: build, check (format + clippy), and tests

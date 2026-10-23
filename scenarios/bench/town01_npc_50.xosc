@@ -9,24 +9,20 @@
 <OpenSCENARIO>
 	<FileHeader author="scenario-world-bridge" date="2026-10-07T00:00:00+00:00" description="Town01 frame-budget benchmark, 50 NPC vehicles, no ego" revMajor="1" revMinor="2" />
 	<ParameterDeclarations />
-	<CatalogLocations />
+	<CatalogLocations><VehicleCatalog><Directory path="$(find-pkg-share sim_vehicle_spec)/catalogs" /></VehicleCatalog></CatalogLocations>
 	<RoadNetwork>
 		<LogicFile filepath="$(env CARLA_MAPS)/Town01" />
 	</RoadNetwork>
 	<Entities>
 		<ScenarioObject name="npc_00">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -34,18 +30,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_01">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -53,18 +45,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_02">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -72,18 +60,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_03">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -91,18 +75,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_04">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -110,18 +90,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_05">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -129,18 +105,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_06">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -148,18 +120,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_07">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -167,18 +135,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_08">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -186,18 +150,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_09">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -205,18 +165,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_10">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -224,18 +180,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_11">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -243,18 +195,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_12">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -262,18 +210,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_13">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -281,18 +225,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_14">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -300,18 +240,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_15">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -319,18 +255,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_16">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -338,18 +270,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_17">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -357,18 +285,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_18">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -376,18 +300,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_19">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -395,18 +315,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_20">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -414,18 +330,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_21">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -433,18 +345,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_22">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -452,18 +360,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_23">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -471,18 +375,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_24">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -490,18 +390,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_25">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -509,18 +405,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_26">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -528,18 +420,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_27">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -547,18 +435,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_28">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -566,18 +450,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_29">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -585,18 +465,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_30">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -604,18 +480,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_31">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -623,18 +495,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_32">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -642,18 +510,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_33">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -661,18 +525,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_34">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -680,18 +540,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_35">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -699,18 +555,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_36">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -718,18 +570,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_37">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -737,18 +585,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_38">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -756,18 +600,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_39">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -775,18 +615,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_40">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -794,18 +630,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_41">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -813,18 +645,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_42">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -832,18 +660,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_43">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -851,18 +675,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_44">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -870,18 +690,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_45">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -889,18 +705,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_46">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -908,18 +720,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_47">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -927,18 +735,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_48">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />
@@ -946,18 +750,14 @@
 			</ObjectController>
 		</ScenarioObject>
 		<ScenarioObject name="npc_49">
-			<Vehicle name="vehicle.tesla.model3" vehicleCategory="car">
-				<BoundingBox>
-					<Center x="1.415" y="0.0" z="0.744" />
-					<Dimensions width="2.163" height="1.488" length="4.792" />
-				</BoundingBox>
-				<Performance maxSpeed="20" maxAcceleration="5.0" maxDeceleration="8.0" />
-				<Axles>
-					<FrontAxle maxSteering="0.5" wheelDiameter="0.74" trackWidth="1.667" positionX="3.004" positionZ="0.37" />
-					<RearAxle maxSteering="0.0" wheelDiameter="0.74" trackWidth="1.667" positionX="0.0" positionZ="0.37" />
-				</Axles>
-				<Properties />
-			</Vehicle>
+			<CatalogReference catalogName="vehicles" entryName="tesla_model3">
+				<ParameterAssignments>
+					<ParameterAssignment parameterRef="maxSpeed" value="20" />
+					<ParameterAssignment parameterRef="maxAcceleration" value="5.0" />
+					<ParameterAssignment parameterRef="maxDeceleration" value="8.0" />
+					<ParameterAssignment parameterRef="maxSteering" value="0.5" />
+				</ParameterAssignments>
+			</CatalogReference>
 			<ObjectController>
 				<Controller name="">
 					<Properties />

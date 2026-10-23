@@ -33,7 +33,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import scenario_vehicle  # noqa: E402  scripts/, beside this file
+import catalog_scenarios  # noqa: E402  scripts/, beside this file
+import scenario_vehicle  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MAP = ROOT / "data/carla-autoware-bridge/Town01/lanelet2_map.osm"
@@ -332,7 +333,9 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     for n in args.counts:
         path = args.out / f"town01_npc_{n}.xosc"
-        path.write_text(scenario(n, start_positions(lanelets, n, usable)))
+        # The Model 3s refer to sim_vehicle_spec's catalog (roadmap 051)
+        text = scenario(n, start_positions(lanelets, n, usable))
+        path.write_text(catalog_scenarios.rewrite(text)[0])
         print(f"{path} ({n} NPCs, {len(lanelets)} candidate lanelets)")
 
 

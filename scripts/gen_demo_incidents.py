@@ -47,7 +47,8 @@ from pathlib import Path
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import scenario_vehicle  # noqa: E402  scripts/, beside this file
+import catalog_scenarios  # noqa: E402  scripts/, beside this file
+import scenario_vehicle  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SITES = ROOT / "scripts/demo_town01_sites.yaml"
@@ -569,7 +570,8 @@ def main():
     a.out.mkdir(parents=True, exist_ok=True)
     for i in a.only or sorted(FILES):
         path = a.out / FILES[i]
-        path.write_text(template(i, sites))
+        # The Model 3s refer to sim_vehicle_spec's catalog (roadmap 051)
+        path.write_text(catalog_scenarios.rewrite(template(i, sites))[0])
         print(path)
 
 

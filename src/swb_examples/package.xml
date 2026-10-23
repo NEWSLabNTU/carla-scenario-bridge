@@ -10,6 +10,8 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>swb_launch</exec_depend>
+  <!-- the vehicle catalog the scenarios refer to: $(find-pkg-share sim_vehicle_spec)/catalogs -->
+  <exec_depend>sim_vehicle_spec</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
