@@ -9,9 +9,11 @@ anywhere and the maths is unit-tested.
     defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass,
                Ground: dirt, unlabelled: grass}
     zones:
-      - id: mud_pit                    # [a-z0-9_]+: scenarios name it (swb.zone.<id>.<field>)
-        class: mud_wet
-        soil: true                     # the soil layer (S3), not only friction
+      - id: sand_pit                   # [a-z0-9_]+: scenarios name it (swb.zone.<id>.<field>)
+        class: sand
+        soil: grid                     # the soil layer (S3), not only friction: grid (or true:
+                                       # ruts, multipass) or closed_form (no memory); the class
+                                       # needs soil parameters
         polygon: [[120.0, -40.0], [160.0, -40.0], [160.0, -10.0], [120.0, -10.0]]
       - id: ford_1
         water_depth: raster/ford_1_depth.png    # or a number, m
@@ -46,6 +48,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import soil as soil_model
+
 HERE = Path(__file__).resolve().parent
 DEFAULT_CLASSES = HERE.parent / "config" / "surface_classes.yaml"
 FILE = "surfaces.yaml"
@@ -56,6 +60,9 @@ UNLABELLED = "unlabelled"
 QCODE_LABELS = {"Q34442": "Road", "Q177749": "SideWalk", "Q1392287": "RoadLine",
                 "Q186131": "Terrain", "Q36133": "Ground"}
 ZONE_ID = re.compile(r"^[a-z0-9_]+$")
+# A zone's `soil:` (047 S3, D2): the grid (ruts, multipass) or the closed-form wheel (no memory).
+SOIL_MODELS = {True: "grid", "grid": "grid", "closed_form": "closed_form", False: None,
+               None: None}
 ZONE_KEYS = {"id", "class", "wetness", "water_depth", "soil", "polygon", "scale", "origin",
              "resolution"}
 # A scenario's RoadCondition properties (047 S2): `swb.zone.<id>.<field>` sets a zone's field;
@@ -81,6 +88,7 @@ class SurfaceClass:
     wet: tuple  # factor per WETNESS level
     slip: tuple = None  # ((0, f0), (s_peak, 1), (1, f_lock)), or None: the vehicle's
     hydroplaning: bool = False
+    soil: object = None  # soil.SoilParams: the class can be a soil zone's (047 S3)
 
 
 @dataclass(frozen=True)
@@ -141,8 +149,14 @@ def parse_classes(data, where="classes"):
             wet.append(last)
         slip = _graph(c["slip"], f"{where}: class {name}: slip", problems) \
             if c.get("slip") is not None else None
+        params = None
+        if c.get("soil") is not None:
+            try:
+                params = soil_model.parse_params(c["soil"], f"{where}: class {name}: soil")
+            except soil_model.SoilError as e:
+                problems.append(str(e))
         classes[name] = SurfaceClass(name, float(c["mu"]), tuple(wet), slip,
-                                     bool(c.get("hydroplaning", False)))
+                                     bool(c.get("hydroplaning", False)), params)
     reference = data.get("reference", "asphalt")
     if reference not in classes:
         problems.append(f"{where}: reference class {reference!r} is not in the table")
@@ -252,7 +266,7 @@ class Zone:
     cls: str = None
     wetness: str = None
     water_depth: object = None  # float, Raster or None
-    soil: bool = False
+    soil: str = None  # the soil layer's model there (SOIL_MODELS), or None: friction only
     bbox: tuple = field(init=False)
 
     def __post_init__(self):
@@ -280,7 +294,8 @@ class Surface:
     wetness: str = None
     water_depth: float = None
     zone: str = None  # the top zone there, if any
-    soil: bool = False
+    soil: str = None  # the soil model of the zone that gave the class, if any
+    soil_zone: str = None  # that zone, when it has one
 
 
 @dataclass
@@ -293,7 +308,7 @@ class SurfaceMap:
     def at(self, x, y, label=None):
         """The surface at map point (x, y) over ground labelled `label` (None: unlabelled)."""
         cls = wetness = depth = top = None
-        soil = None
+        soil = soil_zone = None
         for z in reversed(self.zones):
             if not z.contains(x, y):
                 continue
@@ -303,12 +318,13 @@ class SurfaceMap:
             if depth is None and z.water_depth is not None:
                 depth = z.depth_at(x, y)
             if soil is None and z.cls is not None:
-                soil = z.soil
+                soil = z.soil or False
+                soil_zone = z.id if z.soil else None
             if cls and wetness and depth is not None:
                 break
         if cls is None:
             cls = self.defaults.get(label or UNLABELLED, self.defaults[UNLABELLED])
-        return Surface(cls, wetness, depth, top, bool(soil))
+        return Surface(cls, wetness, depth, top, soil or None, soil_zone)
 
 
 def find(map_or_file):
@@ -405,11 +421,18 @@ def parse(data, path=FILE, table=None, base=None):
             continue
         if not any(z.get(k) is not None for k in ("class", "wetness", "water_depth")):
             problems.append(f"{where}: sets none of class, wetness, water_depth")
-        if z.get("soil") and not z.get("class"):
+        model = SOIL_MODELS.get(z.get("soil", False))
+        if z.get("soil") not in SOIL_MODELS:
+            problems.append(f"{where}: soil {z.get('soil')!r} is not one of true, grid, "
+                            f"closed_form, false")
+        elif model and not z.get("class"):
             problems.append(f"{where}: soil needs the zone's own class")
+        elif model and z["class"] in table.classes and table[z["class"]].soil is None:
+            have = ", ".join(sorted(n for n, c in table.classes.items() if c.soil)) or "none"
+            problems.append(f"{where}: class {z['class']!r} has no soil parameters (soil "
+                            f"classes: {have})")
         zones.append(Zone(zid, poly, z.get("class"), z.get("wetness"),
-                          depth if isinstance(depth, (float, Raster)) else None,
-                          bool(z.get("soil", False))))
+                          depth if isinstance(depth, (float, Raster)) else None, model))
     if problems:
         raise SurfaceError("\n".join(problems))
     return SurfaceMap(str(path), table, defaults, zones)
@@ -552,14 +575,18 @@ class WheelSurfaces:
         self.mu = [None] * self.n
         self.surfaces = [None] * self.n
 
-    def update(self, i, surface: Surface, condition: RoadCondition, speed, slip, dt):
+    def update(self, i, surface: Surface, condition: RoadCondition, speed, slip, dt,
+               target=None):
         """Wheel `i` on `surface` (None: in the air, kept as it was) at forward `speed`
-        (m/s) with longitudinal `slip` after a step of `dt` s: its friction value."""
+        (m/s) with longitudinal `slip` after a step of `dt` s: its friction value. `target`,
+        relative to dry reference ground, replaces the surface's peak friction (the soil
+        layer's, in a soil zone)."""
         if surface is None:
             surface = self.surfaces[i]
             if surface is None:
                 return self.tire_friction
-        target = peak_mu(self.map.table, surface, condition, speed)
+        if target is None:
+            target = peak_mu(self.map.table, surface, condition, speed)
         if self.mu[i] is None:
             self.mu[i] = target
         else:

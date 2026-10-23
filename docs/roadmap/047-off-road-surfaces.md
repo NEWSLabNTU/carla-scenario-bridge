@@ -83,9 +83,17 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   tags (puts Autoware's map at risk, lanes only), OpenDRIVE materials (CARLA-only, lanes
   only, and CARLA's towns carry none). USD materials become the world server's generated
   output. Needs a plot of the zones over the map's top view (`just surfaces-plot <map>`).
-- [ ] **D2. Soil model implementation** (gates S3): our own SCM-style node loop in Python/warp
-  inside the world server [proposed: Chrono SCM cannot drive a PhysX raycast wheel]; or Chrono
-  as a library with its SCM terrain and a per-wheel rigid "tire".
+- [x] **D2. Soil model implementation** (gates S3). **Decided 2026-10-23 (user): our own
+  SCM-style grid in the world server (option A), with a closed-form Wong-Reece wheel beside it
+  (C)** (of four compared: A; PyChrono's `SCMTerrain` driven by a kinematic stand-in wheel per
+  PhysX wheel (B); C alone; Isaac/Newton MPM (D, rejected: experimental, no PhysX vehicle
+  coupling, ~4 s per frame)). Why: one physics engine in-process, the coupling a substep late
+  through the channels the spike proved; no new dependency in Isaac's Python; the grid is ours,
+  so the collision tiles and the lidar see exactly what the wheels felt, and every vehicle
+  writes it in a fixed order. B's risks were a contact nobody has published (a rigid Chrono
+  wheel standing in for a PhysX raycast wheel, two loads that disagree), packaging PyChrono for
+  Isaac's Python, and following Chrono's API. C is the first-pass reference A is checked
+  against and a zone's `soil: closed_form` (no memory). Chrono stays offline, for S5.
 - [x] **D3. Scenario format for zones** (gates S2). **Decided 2026-10-23 (user): the
   standard `RoadCondition`, `frictionScaleFactor` and `wetness` world-wide, per-zone state as
   its `Properties` named `swb.zone.<id>.<field>`** (option A of four compared: the
@@ -103,8 +111,11 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   command), presets alone (no sweeps; can be added later as one more property over the same
   path), a launch argument (no mid-run change, and the scenario no longer reproduces the run
   on its own).
-- [ ] **D4. Physics rate in zones** (gates S3): raise the world's physics rate while a wheel is
+- [x] **D4. Physics rate in zones** (gates S3): raise the world's physics rate while a wheel is
   in a zone, or keep 60 Hz and integrate along the contact patch; decided by S3's measurement.
+  **Answered 2026-10-23 by S3: keep 60 Hz and sweep** each wheel along its path one node
+  spacing at a time inside the step: 60 Hz then reads as 600 Hz within 0.4 % at 25 m/s
+  (`test_soil.py`), and a raised rate would multiply PhysX's cost for nothing.
 - [ ] **D5. Rut persistence across runs** (gates S4): fresh per scenario by default, with
   `swb.ruts` naming a saved set [proposed]; or always fresh.
 - [ ] **D6. Mud** (gates S4): ship an engineered mud model marked unvalidated [proposed], or
@@ -226,6 +237,24 @@ Each needs an answer before the step it gates; the design's proposal is in brack
       `apply_force_at_pos`, ruts through re-cooked 2 x 2 m tiles (budgeted per frame); zone-edge
       blend over one to two wheel diameters. Measured: Python cost per wheel per step at the
       chosen rate, re-cook cost with RTX sensors on, whether RTX lidar sees the ruts.
+  - [x] `isaac_world.soil` (pure numpy, `test_soil.py`, 21 tests): `SoilGrid` (A: 16 x 16
+        node blocks at 5 cm, float32, allocated on first contact; Bekker pressure with elastic
+        reload, so a second pass rides in the rut; Janosi shear; Lyasko slip sinkage) and
+        `wong_reece` (C). Soil parameters per class in `surface_classes.yaml` (sand, dirt =
+        sandy loam, snow_loose; mud none, D6); a zone's `soil: grid | closed_form`, refused on
+        a class without them.
+  - [x] D4 answered offline: the grid sweeps each wheel from its last position to its
+        current one, one node spacing at a time, so 60 Hz reads as 600 Hz (sinkage within
+        0.3 %, resistance within 0.4 % at 25 m/s); coarser sweeps lose 12-28 % of the
+        resistance. The physics rate stays the world's.
+  - [x] Surface layer: soil-limited friction into the wheel's table, resistance as
+        `apply_force_at_pos` at the contact for the next substep, faded in over 1.5 wheel
+        diameters from the zone edge; ruts fresh at every reset. aib's `Contact` carries the
+        wheel's load and rolling direction (aib `deaef80`).
+  - [x] On a pad (`spikes/soil_drive.py`, 2026-10-23; design doc "Soil layer on a pad").
+  - [ ] Cost: 3.7 ms per vehicle per substep in a zone (p50; p99 12.5 ms) on a host at load
+        68, ~11 ms of a 50 ms frame: the node loop goes to a compiled kernel (warp).
+  - [ ] Ruts in the collision and the render mesh (tiles), re-cook budget, RTX lidar.
 - [ ] **S4. Persistence and the second pass** (D5, D6): node blocks saved per tile, loaded per
       scenario; every vehicle reads and writes the same grid in a fixed order (determinism);
       mud model if D6 says so.

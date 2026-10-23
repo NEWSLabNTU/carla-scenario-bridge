@@ -63,9 +63,9 @@ class MapTest(unittest.TestCase):
         self.assertEqual(smap(defaults={"unlabelled": "dirt"}).at(1, 1, "Road").cls, "dirt")
 
     def test_a_zone_overrides_the_label_inside_it_only(self):
-        m = smap([{"id": "pit", "class": "mud_wet", "soil": True, "polygon": SQUARE}])
+        m = smap([{"id": "pit", "class": "sand", "soil": True, "polygon": SQUARE}])
         s = m.at(5, 5, "Road")
-        self.assertEqual((s.cls, s.zone, s.soil), ("mud_wet", "pit", True))
+        self.assertEqual((s.cls, s.zone, s.soil), ("sand", "pit", "grid"))
         self.assertEqual(m.at(11, 5, "Road"), Surface("asphalt"))
 
     def test_later_zones_lie_on_top_and_unset_fields_fall_through(self):
@@ -94,9 +94,15 @@ class MapTest(unittest.TestCase):
                                  {"id": "wet", "wetness": "soaked", "polygon": SQUARE},
                                  {"id": "soft", "soil": True, "water_depth": 0.1,
                                   "polygon": SQUARE},
-                                 {"id": "nowhere", "class": "sand"}]})
+                                 {"id": "nowhere", "class": "sand"},
+                                 {"id": "mud", "class": "mud_wet", "soil": True,
+                                  "polygon": SQUARE},
+                                 {"id": "deep", "class": "sand", "soil": "deep",
+                                  "polygon": SQUARE}]})
         for part in ("zoness", "tarmac", "'Sky'", "Bad-Id", "three or more", "used twice",
-                     "crosses itself", "sets none", "soaked", "soil needs", "needs a polygon"):
+                     "crosses itself", "sets none", "soaked", "soil needs", "needs a polygon",
+                     "class 'mud_wet' has no soil parameters (soil classes: dirt, sand",
+                     "soil 'deep' is not one of"):
             self.assertIn(part, msg)
 
 
@@ -281,9 +287,10 @@ class FakeVehicle:
     wheel_paths = ["fl", "fr", "rl", "rr"]
 
     def __init__(self, contacts):
-        self.p = SimpleNamespace(tire_friction=1.0, friction_vs_slip=VEHICLE_GRAPH)
+        self.p = SimpleNamespace(tire_friction=1.0, friction_vs_slip=VEHICLE_GRAPH,
+                                 wheel_radius=0.37, wheel_width=0.235)
         self.contacts = contacts
-        self.wheel_states = [SimpleNamespace(slip=0.0)] * 4
+        self.wheel_states = [SimpleNamespace(slip=0.0, rotation_speed=0.0)] * 4
         self.written = {}
 
     def set_wheel_friction(self, i, mu):
@@ -291,6 +298,44 @@ class FakeVehicle:
 
 
 class SurfaceLayerTest(unittest.TestCase):
+    def test_a_soil_zone_sets_friction_and_pushes_back_fading_in_from_its_edge(self):
+        stage = FakeStage({"/World/env/Road_1": ["Q34442"]})
+        forces = []
+        m = smap([{"id": "sand_pit", "class": "sand", "soil": "grid",
+                   "polygon": [[0, -5], [40, -5], [40, 5], [0, 5]]},
+                  {"id": "puddle", "water_depth": 0.004, "polygon": SQUARE}])
+        layer = surface_layer.SurfaceLayer(stage, m, apply_force=lambda *f: forces.append(f))
+        c = SimpleNamespace
+        v = FakeVehicle([])
+        speed = 5.0
+
+        def at(x):
+            v.contacts = [c(on_ground=True, position=(x, y, 0.0), shape="/World/env/Road_1/m",
+                            load=4500.0, direction=(1.0, 0.0, 0.0)) for y in (-0.8, 0.8)] * 2
+            v.wheel_states = [SimpleNamespace(slip=0.2, rotation_speed=speed / 0.8 / 0.37)] * 4
+            forces.clear()
+            layer.begin_step()
+            layer.update(v, speed, 1 / 60)
+            return layer.soil_under(v)[0]
+
+        edge = at(0.05)  # under the puddle zone too: the soil is the sand zone's
+        self.assertLess(edge[1], 0.1)
+        x = 0.05
+        while x < 20.0:
+            inside = at(x)
+            x += speed / 60
+        self.assertEqual(inside[1], 1.0)
+        self.assertEqual(len(forces), 4)
+        self.assertLess(forces[0][1][0], -500.0)  # against the travel, at the contact
+        self.assertEqual(forces[0][2][0], v.contacts[0].position[0])
+        mu = inside[0].mu(4500.0)
+        shape = surfaces.graph_at(TABLE["sand"].slip, 0.2) / surfaces.graph_at(VEHICLE_GRAPH, 0.2)
+        self.assertAlmostEqual(v.written[0], mu / TABLE["asphalt"].mu * shape, delta=0.02)
+        self.assertGreater(layer.grids["sand_pit"].depth(10.0, 0.8), 0.05)
+        layer.fresh_soil()
+        self.assertEqual(layer.grids, {})
+        self.assertIsNone(at(50.0))  # off the zone: no soil
+
     def test_each_wheel_from_its_colliders_label_and_the_zone_under_it(self):
         stage = FakeStage({"/World/env/Road_1": ["Q34442"], "/World/env/Grass": ["Q186131"],
                            "/World/env/Building": ["Q41176"]})
@@ -336,7 +381,7 @@ class RoadConditionTest(unittest.TestCase):
     """A scenario's RoadCondition on a map (047 S2)."""
 
     MAP = [{"id": "ford", "water_depth": 0.02, "polygon": SQUARE},
-           {"id": "pit", "class": "mud_wet", "soil": True,
+           {"id": "pit", "class": "sand", "soil": True,
             "polygon": [[20, 0], [30, 0], [30, 10], [20, 10]]}]
 
     def test_properties_set_zone_fields_and_leave_the_map_as_it_was(self):
@@ -357,7 +402,7 @@ class RoadConditionTest(unittest.TestCase):
             surfaces.road_condition(smap(self.MAP), -1, "soaked", {
                 "swb.zone.nowhere.class": "ice", "swb.zone.ford.colour": "red",
                 "swb.zone.ford.water_depth": "deep", "swb.zone.ford.wetness": "damp",
-                "swb.zone.ford.class": "lava", "swb.zone.pit.class": "sand",
+                "swb.zone.ford.class": "lava", "swb.zone.pit.class": "dirt",
                 "swb.ruts": "keep"})
         text = str(e.exception)
         for needle in ("wetness 'soaked'", "frictionScaleFactor -1.0",

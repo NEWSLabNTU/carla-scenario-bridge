@@ -20,7 +20,8 @@ Autoware's commands, and SSv2 reads its pose back; a pose swb sends for it is a 
 Rendering is then on every frame its sensors need, whatever the request asks.
 
 A world with a surface map (`<map>/surfaces.yaml`, roadmap 047; `surface_layer`) sets each
-ego wheel's friction every substep from the ground under it.
+ego wheel's friction every substep from the ground under it; in a soil zone the soil layer
+(`soil`) sets it and pushes back on the body.
 """
 import contextlib
 import logging
@@ -260,8 +261,14 @@ class IsaacWorld(WorldBase):
         path, origin = entry
         if not os.path.exists(path):
             return
-        self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin)
+        self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin, self._apply_force)
         log.info("surface map %s: %d zone(s)", path, len(self.surface.map.zones))
+
+    def _apply_force(self, path, force, position):
+        """A force (N) at a world point on body `path` for the next physics step (the soil's
+        resistance, 047 S3)."""
+        self.sim.apply_force_at_pos(omni.usd.get_context().get_stage_id(),
+                                    PhysicsSchemaTools.sdfPathToInt(path), force, position)
 
     def set_road_condition(self, friction_scale, wetness, properties):
         """`ROAD_CONDITION` (047 S2): the scenario's road state on the surface layer. A world
@@ -274,7 +281,7 @@ class IsaacWorld(WorldBase):
             condition, _ = surfaces.road_condition(empty, friction_scale, wetness, properties)
             if condition == surfaces.RoadCondition():
                 return
-            layer = SurfaceLayer(self.stage, empty)
+            layer = SurfaceLayer(self.stage, empty, apply_force=self._apply_force)
         layer.set_condition(friction_scale, wetness, properties)
         self.surface = layer
 
@@ -288,6 +295,7 @@ class IsaacWorld(WorldBase):
                 self.surface = None
             else:
                 self.surface.set_condition()
+                self.surface.fresh_soil()
 
     # --- The scenario's weather and time of day (047; `sky`) ------------------------------
 
@@ -960,6 +968,8 @@ class IsaacWorld(WorldBase):
             for ego in egos:
                 ego.before_substep(dt)
             self.world.step(render=render and s == substeps - 1)
+            if self.surface is not None:
+                self.surface.begin_step()
             for ego in egos:
                 ego.after_substep(self.physx, dt)
                 if self.surface is not None:

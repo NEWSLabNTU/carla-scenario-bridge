@@ -188,11 +188,45 @@ the wheels feel. Mud is an engineered model (low friction angle, cohesion for un
 strength, slip-rate softening, a clogging state); no published real-time model exists, so it
 is documented as unvalidated.
 
+### Soil layer on a pad (047 S3, 2026-10-23)
+
+`spikes/soil_drive.py`: aib's Model 3 on a flat pad labelled Road, three soil zones from
+x = 100 to 400 m (sand on the grid, dirt = sandy loam on the grid, sand closed-form), through
+`SurfaceLayer` exactly as the world server runs it (3 substeps of 1/60 s per 50 ms frame). No
+ruts in the collision yet: the soil reaches PhysX as friction and as the resistance force.
+Host newslab-server-241 at load average 68 from other users' jobs.
+
+| case | asphalt | sand (grid) | dirt (grid) | sand (closed form) |
+|---|---|---|---|---|
+| coast in at 15 m/s, no throttle, 3 s: deceleration | 0.00 m/s^2 | 1.23 | 0.56 | 3.11 |
+| ... sinkage, resistance (4 wheels), friction written | | 8.4 cm, 2305 N, 0.39 | 2.9 cm, 975 N, 0.54 | 10.9 cm, 5635 N, 0.33 |
+| hold 10 m/s for 80 m: speed, acceleration demand | 10.0, 0.00 | 9.13, 1.30 | 9.60, 0.59 | 0.07, 3.0 (stuck, 25 cm) |
+| the same line again (ruts) | | 9.70, 0.46; 834 N | | |
+| full throttle from rest, 3 s: speed, mean rear slip | 10.84, 0.11 | 1.15, 0.18 | 7.36, 0.19 | |
+| full braking from 15 m/s (ABS): stop | 14.3 m | 13.5 m | 14.7 m | |
+
+- The force channel behaves: 2305 N decelerates the car at 1.23 m/s^2, F/m within 2 %.
+- Multipass: the second pass on the same line meets 36 % of the first one's resistance and
+  sinks 2.2 cm more, not 8.6 (the grid's elastic reload: the wheel rides in its rut).
+- The closed form pushes fresh soil at every step, so its resistance is 2.4 times the grid's
+  at the same speed and the car bogs down at 10 m/s; offline, Wong-Reece's stress field puts
+  no load at the bottom of the wheel and sinks it deeper (`test_soil.py`). S5's calibration
+  against Chrono decides between them; until then the grid is the default and the closed
+  form is a check.
+- Front wheels in a zone carry the class's slip curve at zero slip (sand 0.6 of peak), which
+  also takes their lateral grip: the S1 shape applied through the one friction value.
+- Entry at 20 m/s: the resistance ramps over 12 substeps (front, then rear axle, 2.9 m apart,
+  plus the 1.11 m blend); the largest change between two substeps was 535 N of 2388 N.
+- Cost: the surface layer's update per vehicle per substep was 3.7 ms in a zone (p50, p99
+  12.5 ms; 23 us outside one). At 3 substeps a frame that is about 11 ms of 50, too much for
+  Python: the node loop moves to a compiled kernel. Grid memory: 1.1 MB for two 80 m passes
+  of four wheels in sand.
+
 ### Still to measure
 
-- **Physics rate in a zone.** At 25 m/s a wheel crosses a 5 cm cell in 2 ms; the survey asks
-  ~500 Hz in zones. aib steps 60 Hz with PhysX's own vehicle substeps inside. Measure the
-  per-step Python cost at 300-600 Hz, or integrate along the patch analytically.
+- **Physics rate in a zone.** Answered (047 D4, S3): the grid sweeps each wheel along its
+  path one node spacing at a time inside a step, so 60 Hz reads as 600 Hz within 0.4 %
+  (`test_soil.py`); the rate stays the world's.
 - **Re-cook budget.** 7-25 ms per 4 x 4 m tile, two runs on a loaded host; 2 x 2 m
   tiles and a per-frame cap need measuring against the 50 ms frame with RTX sensors on.
 - **RTX cost of a changed mesh** and whether RTX lidar sees displacement maps or only
