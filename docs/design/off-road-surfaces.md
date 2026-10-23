@@ -292,6 +292,41 @@ How it gets there (roadmap [047](../roadmap/047-off-road-surfaces.md), S2):
    level (rendering only on 0.9.16), and the weather from before is put back at the next
    `Initialize`. `swb.` properties are refused: zones are the Isaac surface layer's.
 
+### Weather and time of day on Isaac (probe, 2026-10-23)
+
+The fork sends only the `RoadCondition` so far. Before sending `Weather` and `TimeOfDay`, what
+Isaac Sim 6.1 can do with them was measured on a test pad (`spikes/weather_probe.py`: 2 m
+boxes at 10-80 m, aib's OS1 RTX lidar and an RGB camera 2 m up; four runs):
+
+| OpenSCENARIO | Isaac 6.1 | Measured |
+|---|---|---|
+| `TimeOfDay` (`dateTime`, `animation`) | the dynamic sky (`Skies/Dynamic/*.usd` on NVIDIA's content server, as the Environment menu adds it), moved by `omni.kit.environment.core`'s sun-study player from time, day, latitude and longitude; `animation` is its play mode | sun elevation 6.0 deg at 06:00, 32.9 at 09:00, 46.6 at 12:00, 6.5 at 18:00, -25.1 at 22:00; camera mean 155, 202, 209, 156, 0.8 |
+| `Weather` cloud state, `fractionalCloudCover` | the dynamic sky's `CloudCoverage`, `CumulusEnabled`, `haze` (or another sky: Cumulus, Overcast) | not measured |
+| `Weather.sun` | the sky's distant light, set directly | -- |
+| `Weather.fog` (`visualRange`) | RTX fog, `/rtx/fog/*` carb settings (distance and height based): **cameras only** | camera mean 72 to 142, contrast 83 to 63; lidar unchanged (36.6k points per scan either way) |
+| `Weather.precipitation` rain (`precipitationIntensity`, mm/h) | the RTX lidar's Mie-scattering rain model, `/app/sensors/nv/atmospherics/rainRate`: **lidar only**, rain only | points per scan 51.3k dry, 51.3k at 2.5 mm/h, 43.0k at 25, 1.2k at 100; no phantom returns near the sensor (they need the sensor material framework, off here) |
+| precipitation snow, wind | none (fog, haze and snow are "planned" in the lidar's docs) | -- |
+| rain or snow seen by a camera, a wet road's look | none built in (would be particles and material edits of our own) | -- |
+| radar | no weather model | -- |
+
+Two findings matter for using it:
+- **Rain does not stop**: with `rainRate` back at 0 after the sweep the lidar kept 36.6k points per
+  scan, 29 % under the 51.3k before any rain, in both runs that checked it. A scenario that
+  stops the rain mid-run would keep a degraded lidar; until that is understood, rain on Isaac is
+  set once per world server.
+- The dynamic sky is fetched from NVIDIA's content server at run time (`omni.client`, ~17 kB of
+  USD plus its MDL and textures): a host without internet needs a local mirror. The sun-study
+  player has no instance when headless (`get_sunstudy_player()` is None): the world server would
+  make its own, and `SimulationApp.close()` then never returned in the probe.
+- One run of four got no lidar data at all (the probe's annotator, not the weather).
+
+So Isaac covers time of day well, fog for cameras, rain for the lidar, and nothing else; CARLA's
+`WeatherParameters` cover all of it visually (none of it physically, as with wetness). A
+`Weather` and `TimeOfDay` step would extend the fork's `UpdateEnvironment` with both, the world
+protocol with a `SetEnvironment`-style request (or the existing `SetWeather` widened), Isaac
+applying the rows above and refusing what it has not (snow, a camera-visible rain), and CARLA
+mapping all of it to its weather.
+
 Autoware is not told: a real car does not know the friction either. Its ABS/TC (in aib's
 powertrain) and its planner meet the surface as a driver would.
 
