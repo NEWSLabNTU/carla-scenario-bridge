@@ -12,7 +12,7 @@
       where every unconfigured ROS process on the host lands.
 
     - publish_clock is true in every mode (roadmap 015): acb publishes CARLA's frame time
-      plus an episode epoch as /clock, and SSv2 (clock_source:=simulator) publishes none.
+      plus BASE_NS as /clock (roadmap 051; an episode change ends the stack), and SSv2 (clock_source:=simulator) publishes none.
       Exactly one /clock publisher per domain; a second makes localization log
       "Detected jump back in time. Clearing TF buffer".
 
@@ -57,7 +57,7 @@
   <!-- No longer derived from `managed` (roadmap 015): acb owns /clock in every domain and
        SSv2 runs with clock_source:=simulator, publishing none. false is an emergency off. -->
   <arg name="publish_clock" default="true"
-       description="acb publishes /clock (CARLA time plus episode epoch); false only as an emergency off" />
+       description="acb publishes /clock (CARLA time plus BASE_NS); false only as an emergency off" />
   <!-- Whether acb reports the wheel angle it measured, or echoes the command.
        Echoing (false, acb's default) leaves no actuator inside the loop MPC
        closes, while the CARLA wheel measurably lags the command by ~0.5 s.

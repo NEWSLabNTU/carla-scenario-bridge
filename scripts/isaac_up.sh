@@ -57,6 +57,15 @@ start() {
     echo "$pid"
 }
 alive() { kill -0 "$1" 2>/dev/null; }
+# Stop a stack by its process group (the play_launch `start` put in one), and wait for it.
+stop_stack() {
+    local pgid
+    pgid=$(ps -o pgid= "$1" 2>/dev/null | tr -d ' ')
+    [ -n "$pgid" ] || return 0
+    kill -TERM -"$pgid" 2>/dev/null
+    for _ in $(seq 1 30); do alive "$1" || return 0; sleep 2; done
+    kill -KILL -"$pgid" 2>/dev/null
+}
 
 # 1. The world server: ready when it answers Hello.
 if just world-health sim:=isaac > /dev/null 2>&1; then
@@ -132,11 +141,14 @@ if pid=$(stack_on_port "$web_ego"); then
         exit 1
     fi
     case "$line" in
-        *"map_path:=$map_dir "*|*"map_path:=$map_dir") ;;
-        *) say "note: the running ego stack has another map: $(grep -oE 'map_path:=[^ ]*' <<< "$line")" ;;
+        *"map_path:=$map_dir "*|*"map_path:=$map_dir") say "ego stack (pid $pid) is up" ;;
+        *)  # A stack's map is its episode's (roadmap 051): one on another map starts again.
+            say "the ego stack (pid $pid) has another map ($(grep -oE 'map_path:=[^ ]*' <<< "$line")): restarting it on $map_dir"
+            stop_stack "$pid"
+            pid="" ;;
     esac
-    say "ego stack (pid $pid) is up"
-else
+fi
+if [ -z "${pid:-}" ]; then
     pid=$(start ego ego-isaac "map_path:=$map_dir")
     deadline=$((SECONDS + ${EGO_READY_TIMEOUT:-1200}))
     until grep -q "Startup complete" "$logs/ego.console" 2>/dev/null; do

@@ -533,6 +533,13 @@ class Ladder:
                                   episode=(result.reset or {}).get("episode", ""))
             except Exception as e:  # noqa: BLE001 -- informational only
                 self.log(f"[run_suite] episode_end for {self.entity!r}: {e}")
+        if not answer.get("registered") and answer.get("supervised"):
+            # Its stack ended during the scenario: an episode change ends every vehicle stack
+            # (roadmap 051), and the supervisor brings it back on the new one.
+            result.restart = self.await_agent("the agent's stack ended (an episode change?); "
+                                              "its supervisor restarts it")
+            self.restarted = result.restart.get("status") == "OK"
+            return
         why = self.wants_restart(result)
         if why:
             result.restart = self.restart(why)
@@ -552,6 +559,30 @@ class Ladder:
         if self.since_restart >= self.every:
             return f"every {self.every} scenario(s)"
         return None
+
+    def await_agent(self, why: str) -> dict:
+        """No command: wait for the agent to register again, as after a restart."""
+        self.log(f"[run_suite] waiting for {self.entity!r}: {why}")
+        start = time.monotonic()
+        record = {"reason": why, "status": "FAILED",
+                  "message": f"the agent did not register again within "
+                             f"{self.restart_timeout:.0f} s"}
+        end = start + self.restart_timeout
+        while time.monotonic() < end:
+            try:
+                answer = self._query()
+                phase = (answer.get("state") or {}).get("phase", "")
+                if answer.get("registered") and phase not in ("", "UNAVAILABLE"):
+                    record.update(status="OK", message="")
+                    break
+            except Exception:  # noqa: BLE001 -- keep polling
+                pass
+            time.sleep(self.poll)
+        record["seconds"] = round(time.monotonic() - start, 1)
+        self.since_restart = 0
+        self.log(f"[run_suite] {self.entity!r} back: {record['status']} in "
+                 f"{record['seconds']:.0f} s" + (f": {record['message']}" if record["message"] else ""))
+        return record
 
     def restart(self, why: str) -> dict:
         self.log(f"[run_suite] restarting {self.entity!r}: {why}")

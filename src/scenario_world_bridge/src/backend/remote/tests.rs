@@ -80,6 +80,7 @@ fn honest_with(caps: &'static [wire::Capability], instance: &'static str) -> Beh
                 bodies.clear();
                 ok(Some(wire::reply::Reply::LoadWorld(wire::LoadWorldReply {
                     sim_time_ns: (time * 1e9_f64).round() as i64,
+                    episode_id: 1,
                 })))
             }
             R::Spawn(s) => {
@@ -191,6 +192,7 @@ fn honest_with(caps: &'static [wire::Capability], instance: &'static str) -> Beh
                 ok(Some(wire::reply::Reply::Step(wire::StepReply {
                     sim_time: time,
                     frame,
+                    episode_id: 1,
                     states: bodies
                         .iter()
                         .map(|(h, (p, _))| wire::EntityState {

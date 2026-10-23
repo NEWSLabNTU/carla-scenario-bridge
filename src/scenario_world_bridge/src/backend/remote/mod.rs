@@ -617,6 +617,8 @@ pub struct RemoteBackend {
     /// `UpdateFrame`s since `Initialize`.
     frame: u64,
     episode: u64,
+    /// The world server's episode (its LoadWorldReply's episode_id; roadmap 051), 0 unknown.
+    world_episode: u64,
     tick_time: Duration,
     wedged: Option<String>,
     server_lost: Option<String>,
@@ -661,6 +663,7 @@ impl RemoteBackend {
             server_frame: 0,
             frame: 0,
             episode: 0,
+            world_episode: 0,
             tick_time: Duration::ZERO,
             wedged: None,
             server_lost: None,
@@ -1393,10 +1396,23 @@ impl SimBackend for RemoteBackend {
             }),
             self.load_timeout,
         )?;
-        let start_ns = match reply.reply {
-            Some(wire::reply::Reply::LoadWorld(l)) => Some(l.sim_time_ns),
-            _ => None,
+        let (start_ns, world_episode) = match reply.reply {
+            Some(wire::reply::Reply::LoadWorld(l)) => (Some(l.sim_time_ns), l.episode_id),
+            _ => (None, 0),
         };
+        // An episode change ends every vehicle stack of the old episode (roadmap 051): their
+        // bridges exit, and the stacks come back on the new one.
+        if world_episode != 0 && self.world_episode != 0 && world_episode != self.world_episode {
+            tracing::warn!(
+                "{}'s episode changed ({} -> {world_episode}): time starts again, and every \
+                 vehicle stack of the old episode ends and comes back on this one",
+                self.sim(),
+                self.world_episode
+            );
+        }
+        if world_episode != 0 {
+            self.world_episode = world_episode;
+        }
         // The world server shows every signal green until SSv2 commands it.
         self.signal_colours = signals
             .entries

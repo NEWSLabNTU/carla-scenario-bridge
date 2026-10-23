@@ -85,7 +85,7 @@
          starts. SSv2's own nodes therefore keep running on wall time. -->
     <!-- clock_source (NEWSLabNTU fork, docs/roadmap/015-carla-as-time-and-signal-source.md):
          CARLA is the single source of time. acb owns /clock in every domain and publishes
-         CARLA's elapsed_seconds plus the episode epoch; swb reports the same time in every
+         CARLA's elapsed_seconds plus BASE_NS (roadmap 051); swb reports the same time in every
          InitializeResponse / UpdateFrameResponse (simulation_time). With simulator, SSv2
          takes its ROS time from that field (signal and entity stamps included) and
          publishes no /clock of its own (a second publisher would interleave two time bases).

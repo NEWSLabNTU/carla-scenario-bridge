@@ -233,7 +233,7 @@ test:
     # Every component's deps/ pins are this workspace's pins (roadmap 051)
     python3 scripts/check_pins.py
     # SSv2's protos in swb_world_protocol are the fork's (roadmap 051)
-    python3 -m pytest -q scripts/test_ssv2_protos.py
+    python3 -m pytest -q scripts/test_ssv2_protos.py scripts/test_sim_time.py
     # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)
     python3 -m pytest -q src/swb_launch/test
     # The agent SDK and protocol, and the relay against it (roadmap 030)

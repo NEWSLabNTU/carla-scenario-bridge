@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <!--
-	Town02, no entities: exists only to make swb load a different town, so roadmap 015
-	step 6 can be tested live. Run it between two Town01 scenarios with the ego stack up:
-	swb reloads the world in synchronous mode and bumps its episode epoch; acb sees the new
-	episode and applies the same rule from the same last frame. /clock must pause across
-	each reload and never decrease, and the next Town01 scenario's stamps must equal /clock.
-	Succeeds after 5 s of simulation time.
+	Town02, no entities: exists only to make swb load a different town, so an episode change
+	can be tested live (roadmap 051, K4). Run it between two Town01 scenarios with the ego
+	stack up: the load starts a new CARLA episode, acb_bridge exits naming it, and the stack
+	ends with it; its supervisor brings it back, and the next Town01 scenario (another load,
+	another episode) passes on a stack started in that episode. Time is nanos(elapsed) +
+	BASE_NS in each episode. Succeeds after 5 s of simulation time.
 -->
 <OpenSCENARIO>
 	<FileHeader author="scenario-world-bridge" date="2026-10-03T00:00:00+00:00" description="Town02 world load with no entities, for the episode-change test (roadmap 015 step 6)" revMajor="1" revMinor="2" />
