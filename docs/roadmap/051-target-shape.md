@@ -421,3 +421,79 @@ Checks:
   that much closer. No catalog `Performance` differs from what a scenario had (each assigns
   its own). truck_pass, four runs: SSv2's boxes meet (-2.2 m), CARLA's bodies stay ~1.0 m
   apart, as in 050's four.
+
+### K3. CARLA on the spec's physics (2026-10-24, `03e065e` on `target-shape`)
+
+CARLA's ego now runs the car the spec describes, not the blueprint's. sim_vehicle_spec
+generates `generated/<car>/carla_physics.yaml` from the spec plus its `carla.physics`
+block (the few values CARLA's model needs that the spec does not state: tire friction scale,
+drag area, body CoM, rear axle, steer limit, engine inertia and damping). The file holds the
+mass, the CoM nudge, the motor's torque curve on one gear, and per wheel the friction,
+stiffnesses and brakes. It also holds `command_lags`, the actuator delays CARLA lacks (brake
+dead time 0.08 s, brake time constant 0.06 s, motor 0.04 s), and names its `spec_hash` and a
+`physics_hash`. Python (`sim_vehicle_spec.carla_physics`) and Rust (`crates/carla_physics_spec`)
+both read it.
+
+- **Who applies it**: the CARLA world server, for a scenario's ego (ROS parameter
+  `vehicle_physics`, default the installed file; `none` turns it off). It applies the file
+  before the spawn's settling tick, reads it back after that tick (CARLA applies physics at
+  its next tick, so a read straight after the apply returns the old values) and refuses an
+  actor that differs. `SpawnBody.spec_hash` now names the spec, so the start check has all
+  three parts. acb has `carla_physics_mode`: `apply` (standalone, acb owns the hero) or
+  `verify` (under SSv2, the world server wrote it; `just ego-av` and the background AV pass
+  `verify`). A wrong blueprint is refused by name.
+- **The lags** are in acb's command path (`pedal_lag.rs`): first-order on each pedal plus the
+  brake's dead time. The filter snaps to its target within 1e-3. Without the snap, f32 decay
+  left a brake of ~1e-6 for 5.2 s after release, and CARLA held the car with it.
+- **The pedal maps** were re-measured on this physics (acb's probes, `--physics`).
+  `pedal_maps.yaml` records `measured_on: spec` and the `physics_hash`, and
+  autoware_sim_vehicle's packages were regenerated from them.
+- **vehicle_check** (autoware_sim_vehicle `autoware_sim_check`, `vehicle_check.launch.xml`):
+  it checks the vehicle-interface contract (topics, types, rates from stamps, frames, /clock,
+  /robot_description), then steps acceleration and brake and judges them against 0.35 m/s^2,
+  then sweeps the steering against the bicycle model. A step that makes no progress for 120 s
+  of wall time fails rather than hangs.
+
+Step responses (`scripts/carla_step_response.py`; Isaac through aib's runner on the same
+spec):
+
+| | CARLA blueprint (K0) | CARLA, spec physics (K3) | Isaac, spec |
+|---|---|---|---|
+| 0-100 km/h | 4.6 s | 6.35 s | 6.45 s |
+| 100-0 km/h | 49.5 m | 43.09 m | 42.9-44.1 m |
+| coast at 25 m/s | 5.58 m/s^2 | 0.20 m/s^2 | 0.276 m/s^2 |
+
+The blueprint coasted like a car in a hard brake. The spec's car coasts on drag and rolling
+resistance, as a Model 3 with regen off does. The two simulators now agree within 0.1 s and
+about 1 m.
+
+vehicle_check, CARLA (`play_log/051/k3/vc_carla4`): the contract is clean. Acceleration and
+brake steps of ±1 to +3/-4 m/s^2 track within 0.01 m/s^2, and the yaw rate is within 0.4 % of
+the bicycle model across ±0.05-0.15 steer. Isaac (`vc_isaac6`): the contract is clean,
+acceleration tracks within 0.004, and the brakes measure -0.98/-2.36/-3.70 for -1/-2.5/-4. The
+last is 0.30 short, inside the 0.35 limit: the motor's regen fades at low speed and the
+friction brakes lag. The yaw rate is within 1.1 %.
+
+Checks:
+
+- `just test` passes. `just e2e`: PASS, with the three parts naming one spec
+  (`862c2168f77e`).
+- **The suite** (`scripts/run_050_set.sh 051_k3b`, report `play_log/051/k3_report.md`,
+  against K2): the same verdicts in every scenario (truck_pass fail and the bench "missing",
+  as in K2 and 050). The numbers that move do so because of the physics:
+  - Gaps to stopped leads grow 0.23 m (i1 lead 5.29 -> 5.52, i4 broken 5.33 -> 5.56; in the
+    tour 4.74 -> 5.58 and 5.29 -> 5.58). The pedestrian darts in i2 grow 0.68-0.76 m
+    (4.80 -> 5.48). The ego now brakes through the re-measured maps on a car without the
+    blueprint's 5.6 m/s^2 of hidden coast braking, so it ends nearer where the planner puts
+    it.
+  - The short gap reproducers drive less in their fixed time (entity_bodies 13.3 -> 10.7 m,
+    motorbike_body 21.2 -> 14.6 m), because 0-100 km/h is 6.35 s now, not 4.6. In
+    motorbike_body the motorbike closes on a slower ego (min gap 0.68 -> 0.36 m), and SSv2 and
+    CARLA agree within 2 cm (they were 8 cm apart in K2).
+  - Everything else is within run-to-run noise.
+- **Found on the way**: the ego stack executes acb's own install,
+  `src/autoware_carla_bridge/install`, not this repo's. `ros2 pkg prefix acb_bridge` resolves
+  there because acb's overlay is sourced after this repo's underlays. CLAUDE.md says the
+  opposite, so K5 corrects it. A stale acb install made the first K3 suite (`051_k3`) fail
+  motorbike_body and stall starts. After acb's workspace was rebuilt, the same scenario
+  passed, and the whole set was run again as `051_k3b`.
