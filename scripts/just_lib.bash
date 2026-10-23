@@ -81,6 +81,17 @@ swb_reject_env() {
     fi
 }
 
+# swb_reject_args PROJECT ARG... -- refuse the launch arguments roadmap 051 renamed
+# (carla_control:= -> sim_control:=, vehicle_model:=acb_vehicle -> tesla_model3, ...), which
+# ROS launch would otherwise drop without a word. The list is the profile's
+# (autoware_sim_profile's check_launch_args).
+swb_reject_args() {
+    local check="$1/install/autoware_sim_profile/lib/autoware_sim_profile/check_launch_args"
+    shift
+    [ -x "$check" ] || return 0   # not built yet: the launch itself will say so
+    "$check" "$@" || exit 2
+}
+
 # swb_with_defaults OUT DEFAULT... -- ARG...
 # OUT=(each name:=value DEFAULT whose name no ARG names, then the ARGs). An argument with an
 # empty value (`relay:=`) drops the default and is itself dropped -- ROS launch rejects an

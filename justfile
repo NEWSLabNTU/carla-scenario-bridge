@@ -1050,7 +1050,7 @@ _require-carla:
 ego-av *args: _require-carla
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; swb_reject_env
+    source "{{lib}}"; swb_reject_env; swb_reject_args "{{project}}" "$@"
     overlay=""; autoware_overlay=true; container_mode=isolated; play_launch_args=""
     given=()
     for a in "$@"; do
@@ -1154,7 +1154,7 @@ ego-av *args: _require-carla
 ego-isaac *args:
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; swb_reject_env
+    source "{{lib}}"; swb_reject_env; swb_reject_args "{{project}}" "$@"
     overlay=""; autoware_overlay=true; container_mode=isolated; play_launch_args=""
     given=()
     for a in "$@"; do
@@ -1214,7 +1214,7 @@ ego-isaac *args:
 bg-av *args: _require-carla
     #!/usr/bin/env bash
     set -e
-    source "{{lib}}"; swb_reject_env
+    source "{{lib}}"; swb_reject_env; swb_reject_args "{{project}}" "$@"
     entity=bg_av_1; domain={{bg_domain}}; web_port=$((SWB_WEB_PORT + 3)); autoware_overlay=true; given=(); n=0
     for a in "$@"; do
         case "$a" in
