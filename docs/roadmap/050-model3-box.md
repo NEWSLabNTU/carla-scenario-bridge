@@ -5,7 +5,7 @@ box and axles, for the ego and for NPCs alike, and a lint must keep it that way.
 of 132 such definitions declare a box 29 cm short, 31 cm too tall and centred 3.2 cm off the
 rear axle. So SSv2 measures distances, time to collision and contacts on a car that is not
 the one Autoware drives or the one CARLA simulates. This phase runs before
-[049](049-vehicle-spec.md), whose catalog then starts from correct numbers. Design:
+[051](051-target-shape.md), whose catalog then starts from correct numbers. Design:
 [design/vehicle-side.md](../design/vehicle-side.md), "What exists" and "SSv2 uses the same
 car".
 
@@ -14,7 +14,7 @@ car".
 **Source**: user direction 2026-10-23: "I would fix the scenarios' wrong ego box", then "Go
 ego and NPCs".
 **Depends on**: nothing open. CARLA 0.9.16 for the measurement and the runs.
-**Feeds**: [049](049-vehicle-spec.md) (its first step moved here); the gap campaign
+**Feeds**: [051](051-target-shape.md) (its catalog and lint start from these numbers); the gap campaign
 (024-026), whose baselines are re-measured here once.
 
 ## Where it starts (2026-10-23)
@@ -61,7 +61,7 @@ Why it matters beyond the numbers:
   - centre z = height / 2, since SSv2's entity origin is on the ground;
   - axles from the wheel geometry, rear axle at x 0.
 
-  The three generators use it. `Performance` stays per scenario (049).
+  The three generators use it. `Performance` stays per scenario (051).
 - **The lint** (`scripts/check_scenario_vehicles.py`, run by `just test`): every `<Vehicle>`
   whose `name` is a blueprint in the table must declare that box and those axles within
   2 cm. Failures name the file, entity, field, declared and measured values.
@@ -109,7 +109,7 @@ Why it matters beyond the numbers:
 - [ ] The 20-NPC bench's frame budget is unchanged within its run-to-run spread.
 - [ ] `just test`, `just check` pass.
 
-Not in this phase: `Performance` (four sets today; 049 derives it from the spec); boxes of
+Not in this phase: `Performance` (four sets today; 051 derives it from the spec); boxes of
 NPCs declared by size rather than blueprint name (their bodies are picked to fit them,
-022); the catalog (049); Isaac runs. Isaac reads the same scenarios, so the change carries
+022); the catalog (051); Isaac runs. Isaac reads the same scenarios, so the change carries
 over, and the next Isaac run on server139 checks it.

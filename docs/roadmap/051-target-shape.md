@@ -1,0 +1,196 @@
+# Phase 051: The Target Shape, at Once
+
+Refactor the Autoware vehicle side and the simulation interface straight to the shape the
+designs end in, in one landing, with no intermediate releases and no compatibility shims.
+This replaces the stepwise plan of 048 (the vehicle layer and the profile), 049 (the
+vehicle spec), and the design's step 8 (the repository split), which this phase absorbs.
+Designs: [design/vehicle-side.md](../design/vehicle-side.md),
+[design/simulator-interface-split.md](../design/simulator-interface-split.md).
+
+**Status**: draft, 2026-10-23. Waiting on the decisions below.
+
+**Source**: user direction 2026-10-23: "now that we'll go through Autoware package and
+simulation interface refactor in phase 50 and so on, I'd like to refactor them to the
+target shape at once". Also carried over from the same day:
+
+- share packages across simulators only if future simulators are guaranteed to work with
+  them;
+- one source for vehicle dynamics, physics and sensors across Autoware, the simulators
+  and SSv2;
+- CARLA gets the spec's physics;
+- Autoware connects to CARLA and to Isaac Sim without SSv2.
+
+**Depends on**: [050](050-model3-box.md), the Model 3's box fixed and measured first.
+Doing it first keeps its before and after free of this phase's changes.
+[046](046-unified-world-interface.md), parts A and B.
+**Feeds**: [039](039-isaac-multi-autoware.md) (several egos, each naming a spec);
+[047](047-off-road-surfaces.md) (road friction on the spec's tires); any third simulator.
+
+## The target
+
+Seven repositories:
+
+| repository | holds | depends on |
+|---|---|---|
+| `autoware_sim_vehicle` (new; the vehicle layer) | vehicle specs (`vehicles/<car>.yaml`) and their generators; per-car Autoware packages (`<car>_description`, `<car>_launch`, `<car>_sensor_kit_description`, `<car>_sensor_kit_launch`, `individual_params`), generated; the Autoware profile (`autoware_sim_profile`); the I5 contract; `vehicle_check` (contract and dynamics) | Autoware only |
+| `swb_world_protocol` (new) | `swb_world.proto`; the Rust shell (`WorldServer` trait, loop, lease) and the world client; the Python shell (`World` base class, `main`); the conformance check | nothing simulator-side, nothing SSv2-side |
+| `carla_world` (new, from `src/carla_world`) | the CARLA world server; its config and blueprint tables; `carla-start` and the CARLA tooling; `up.sh`; CARLA's weather message and service | `swb_world_protocol`, the vehicle layer (spawn physics) |
+| `isaac_world` (new, from `src/isaac_world`) | the Isaac world server, the USD and vehicle tooling, `up.sh` | `swb_world_protocol`, aib |
+| `autoware_carla_bridge` (acb) | the CARLA vehicle bridge, CARLA's standalone bring-up and demo (`demo_scenario.py`, `auto_drive`), the map tools | the vehicle layer |
+| `autoware_isaac_bridge` (aib) | the Isaac vehicle library and `aib.runner` | the vehicle layer |
+| `scenario-world-bridge` (this one; the adapter and the workspace) | `swb_sim_interface` (SSv2's protocol as a package, L0); the bridge; the relay; `swb_agent` with the vehicle agent; `swb_launch` (scenario, simulation, ego); the run tooling (`sim:=<name>` finds `<name>_world`'s `up.sh`); `swb_examples` with the generated vehicle catalog; the gap oracle | `swb_world_protocol`; pins every repository above, flat |
+
+What depends on what:
+
+- **No cycles, no duplicates**: every repository above is a direct submodule of
+  scenario-world-bridge, and none has submodules of the others. A repository built on its
+  own lists what it needs in `deps.repos` (vcstool format), at pinned commits, fetched by
+  its `just setup`. A check in this repository's `just test` fails when a pin here is older
+  than a component's `deps.repos` asks for.
+- **Without SSv2**: acb or aib, plus the vehicle layer, is a complete Autoware-on-a-simulator
+  system. Neither needs swb, `swb_world_protocol` or the other bridge.
+- **Without Autoware**: a world server plus the adapter runs SSv2's NPC scenarios (the
+  benchmarks do today).
+
+## What changes, by area
+
+### Vehicle side (was 048, 049)
+
+- **The profile**: acb's `carla_simulator.launch.xml`, without the vehicle interface and
+  the agent, becomes `autoware_sim_profile/launch/autoware.launch.xml`, with the
+  arguments renamed `sim_*`.
+  - acb's `carla_simulator.launch.xml` becomes the profile plus `acb_bridge`.
+  - aib's `isaac_simulator.launch.xml` becomes the profile with nothing added.
+- **The agent**: `swb_agent`'s `autoware_agent` takes ROS parameters and the local mode.
+  swb's ego launches start it as `vehicle_agent`. `acb_pilot agent` is deleted.
+- **The spec, version 2**: aib's format, `aib.spec` and `aib.gen` move to the vehicle layer,
+  with a `carla:` section and outputs for Autoware, Isaac's rig, CARLA's physics and
+  sensors, and the SSv2 catalog. `check-generated` runs in every repository holding output.
+- **Per-car Autoware packages** replace `acb_vehicle`, `aib_vehicle` and their kits. The
+  sensing pipeline is generated from the spec's sensor list.
+- **CARLA on the spec's physics**:
+  - Whoever spawns the car applies `carla_physics.yaml`: `carla_world` with SSv2,
+    `demo_scenario.py` without it.
+  - acb_bridge reads it back on attach and refuses a mismatch.
+  - Road friction scales the spec's tire friction.
+  - The brake and motor lags CARLA's model lacks go into acb_bridge's command path.
+  - The pedal maps are re-measured and tagged with the spec's physics hash.
+- **SSv2's catalog**: the generated `catalogs/vehicles.xosc`. Every scenario refers to it,
+  and 050's lint becomes a catalog lint.
+- **Spawn check**: `SpawnReply.body` carries the wheel layout, and the bridge refuses an ego
+  more than 2 cm from the catalog.
+- **`vehicle_check`**: the contract (topics, types, rates, frames, stamps,
+  `/robot_description`) and the dynamics run (acceleration steps, braking, a steering
+  sweep), with no SSv2, on both simulators.
+
+### Simulation interface (was design step 8, and what 046 left)
+
+- **`swb_world_protocol`** leaves this repository: `proto/swb_world.proto`, the
+  `swb_core` world client and server modules, `src/swb_world_server`, and
+  `swb_world_check conformance`.
+- **`swb_sim_interface`**: SSv2's `simulation_interface` protos (today copied into
+  `proto/`) as a package, with a test that they are byte-identical to the SSv2 fork's.
+- **`carla_world` and `isaac_world`** leave for their own repositories with history
+  (`git filter-repo`), each with `<sim>_world.launch.xml`, `up.sh` (from `carla_up.sh` and
+  `isaac_up.sh`) and its config. The bridge's tree no longer contains a simulator.
+- **Weather**: `swb_interfaces/msg/Weather.msg` is CARLA's fourteen floats. It moves to
+  `carla_world` with CARLA's service. The bridge's `set_weather` and `get_weather` take the
+  protocol's generic form (a preset and named parameters).
+- **Time** (decision T): one `/clock` per domain, carrying the world server's time.
+  - `carla_world` keeps time monotonic itself. It sends each frame's time to acb on the
+    sensor-release channel acb already reads.
+  - acb stamps with that time when a world server is present. Standalone, it uses CARLA's
+    `elapsed_seconds`.
+  - `epoch_marker` and acb's epoch rule are deleted.
+- **No shims**: every renamed package, launch argument, node and entry point is gone, not
+  aliased. Old launch arguments that a wrapper used to accept are refused with a message
+  naming the new one, as `SWB_RETIRED_ENV` does for environment variables.
+
+## Decisions (for the user)
+
+1. **Repository names**: `autoware_sim_vehicle`, `swb_world_protocol`, `carla_world`,
+   `isaac_world`, all under NEWSLabNTU. [proposed: as written]
+2. **Per-car package names**: `tesla_model3_description` and the rest, as in the table.
+   [proposed: as written]
+3. **The profile package**: `autoware_sim_profile`. [proposed: as written]
+4. **Workspace**: a flat superproject (every repository a direct submodule here) plus
+   `deps.repos` for standalone builds, against nested submodules. [proposed: flat]
+5. **T, the clock**: change it in this phase, as written, or keep CARLA's epoch shape and
+   do the clock in a later phase. Doing it here puts timing that 015 and 016 settled into
+   the same landing as everything else. [proposed: in this phase, isolated as the last
+   commit series with its own checkpoint, so it can be dropped from the landing if its
+   runs fail]
+6. **`aib.ros`** (the rclpy vehicle interface and sensor publishers): it stays in aib.
+   It moves when a second Python world server needs it. [proposed: as written]
+
+## How it lands
+
+"At once" means one landing: nothing is merged to any `main` until the whole target
+passes. Inside, the work is ordered so that each change of shape is checked before the
+next one changes behaviour. That way a failure can be traced to the change that caused
+it.
+
+- **Branches**: `target-shape` in every repository involved, the new ones included. This
+  repository's branch pins the others' `target-shape` heads. At the end each repository is
+  rebased onto its `main` and fast-forwarded, submodules first, then the pins here (linear
+  history; submodule commits pushed before the pins move).
+- **Checkpoints**: each one has its runs written into this doc as it passes.
+  - **K0. Baseline**, after 050 lands:
+    - `play_launch dump` of the resolved launches: `just ego-av`, `bg-av`, `ego-isaac`,
+      acb's `just sim`, aib's `just autoware`;
+    - conformance against both world servers;
+    - `just test`, `just e2e sim:=carla`, the CARLA suite, the gap set, the 20-NPC bench;
+    - CARLA's step responses on today's physics, through a throwaway script that does what
+      `vehicle_check`'s dynamics run will do.
+  - **K1. Repositories and workspace, no change in behaviour.**
+    - The new repositories are split out with history and the profile has moved.
+    - `swb_sim_interface`, `deps.repos` and the pin check are in place.
+    - The launch dumps are identical to K0, except for install paths and renamed names.
+      A script lists any other difference.
+    - Conformance, `just test` and `just e2e sim:=carla` pass.
+  - **K2. One source of the car, CARLA's physics unchanged.**
+    - The spec v2 and its generators are in place; the per-car packages replace acb's and
+      aib's; the catalog and the spawn check are in.
+    - The generated Autoware files are identical in value to K1's.
+    - The suite's numbers are unchanged from K0, except where the catalog's `Performance`
+      differs from what a scenario had.
+  - **K3. CARLA on the spec's physics.**
+    - `carla_physics.yaml` is applied and read back; the pedal maps are re-measured; the
+      lags are in acb.
+    - `vehicle_check` runs on CARLA and on Isaac. Their step responses go into a table with
+      K0's.
+    - Every change in the suite is explained by the physics.
+  - **K4. The clock** (decision 5).
+    - The epoch marker is gone and acb stamps with the world server's time.
+    - Checks: `town02_episode_change`; a vehicle side started mid-session; a `carla_world`
+      restarted under a running ego; acb's stamps against `/clock`, bit for bit.
+  - **K5. No shims, the docs.**
+    - Old names are refused. CLAUDE.md, the user guide, the READMEs and the design docs
+      are updated.
+
+## Acceptance
+
+- [ ] **Shape**: the bridge's repository has no simulator package and no simulator crate
+  in its graph. acb and aib depend on the vehicle layer only. The pin check passes. Each
+  repository builds and tests on its own from `deps.repos`.
+- [ ] **One source**: changing one spec value without regenerating fails `check-generated`
+  in every repository holding an output, and fails the catalog lint.
+- [ ] **Spawn**: an ego more than 2 cm from the catalog is refused with both boxes in the
+  message. On CARLA, acb's physics read-back matches.
+- [ ] **The same car**: `vehicle_check`'s dynamics run passes on CARLA and on Isaac without
+  SSv2, within the spec's limits and acceptance.py's 0.35 m/s². The CARLA and Isaac table
+  is in the results, with CARLA's remaining gap named (ABS, regen).
+- [ ] **Without SSv2**: from acb's own workspace, `just sim` and `auto_drive` drive Town01
+  to arrival. From aib's, `just isaac-ego` and `just autoware` do the same.
+- [ ] **With SSv2**: `just e2e sim:=carla` and `just e2e sim:=isaac` PASS. The CARLA suite
+  and the gap set have every difference from K0 explained by K3's physics or K4's clock.
+- [ ] **A future simulator**: a fake vehicle side passes `vehicle_check`. A fake world
+  server (Python, on the shell) passes conformance. Both are built from the repositories'
+  docs alone, as the check that the contracts are enough.
+- [ ] `just test` and `just check` pass in every repository.
+
+Isaac's runs need a host that renders Town01: newslab-server139, with its `.env` moved
+from `CSB_*` to `SWB_*` first.
+
+Not in this phase: upstreaming the SSv2 patches; a second car; NPC and background-AV
+physics from specs; `aib.ros` as a shared library.

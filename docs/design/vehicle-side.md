@@ -2,8 +2,8 @@
 
 How the ego's car is described once and used by Autoware, by CARLA, by Isaac Sim and by
 SSv2's scenarios. Also how Autoware drives that car on either simulator with no scenario
-runner at all. Phases: [048](../roadmap/048-vehicle-side-profile.md) (the layer and the
-launch profile), [049](../roadmap/049-vehicle-spec.md) (the spec as the single source).
+runner at all. Phase: [051](../roadmap/051-target-shape.md), the target shape in one landing
+(048 and 049, which split it in steps, are superseded).
 Background: [simulator-interface-split.md](simulator-interface-split.md), "The vehicle
 side".
 
@@ -59,7 +59,7 @@ already are.
 swb, and swb needs it beside them. A submodule in all three would put the same packages
 into swb's workspace two or three times, and colcon refuses duplicate packages. So it is a
 submodule of swb only. acb's and aib's `just setup` fetch the commit pinned in a
-`vehicle.repos` file for their standalone workspaces (`vcs import`, or a plain clone into
+`deps.repos` file for their standalone workspaces (`vcs import`, or a plain clone into
 the git-ignored `external/`). The pin follows the same rules as a submodule pin.
 
 ## The rule for sharing
@@ -103,8 +103,8 @@ What a vehicle bridge provides on the ego's ROS domain, for any simulator:
   spec's physics, not passed through ideal.
 - **Time**: one `/clock` per domain. Every stamp above comes from it. A sensor sample
   carries the time of the frame it was taken in. With a world server, the clock is that
-  server's time. Standalone, it is the simulator's. (CARLA's episode epoch is the one
-  exception kept for now: 048, decision 3.)
+  server's time. Standalone, it is the simulator's. (CARLA's episode epoch goes: 051,
+  decision 5.)
 - **Frames**: `base_link` on the ground at the rear axle centre, x forward, z up; the
   sensor frames from the generated URDF. The bridge publishes no TF that the URDF owns.
 
@@ -209,4 +209,4 @@ from the spec.
   `_launch`. [proposed: `tesla_model3_description`, `tesla_model3_launch`,
   `tesla_model3_sensor_kit_description`, `tesla_model3_sensor_kit_launch`]
 - **V3. Fix the scenarios' box first**: decided 2026-10-23, ego and NPCs alike, as
-  [050](../roadmap/050-model3-box.md), before 049.
+  [050](../roadmap/050-model3-box.md), before 051.

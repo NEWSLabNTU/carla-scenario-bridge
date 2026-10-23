@@ -516,6 +516,11 @@ start.
 
 ## How to get there
 
+**2026-10-23**: steps 1-6 were done by [046](../roadmap/046-unified-world-interface.md).
+Steps 7 and 8, and what 046 left (L0 as a package, the protocol in its own repository, the
+clock), land together in [051](../roadmap/051-target-shape.md), the target shape in one
+landing, with [vehicle-side.md](vehicle-side.md).
+
 Package-level first, repository-level second: the first is a move inside this workspace
 that the existing tests and exit runs can prove changed nothing; the second is then a
 `git mv` with history. The CARLA path is the one with risk, so it goes last among the
