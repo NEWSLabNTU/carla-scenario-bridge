@@ -3,7 +3,7 @@
 <package format="3">
   <name>swb_interfaces</name>
   <version>0.1.0</version>
-  <description>Services scenario_world_bridge offers for configuring the CARLA world (weather, ...)</description>
+  <description>Services scenario_world_bridge offers for configuring the world (weather: a preset or parameters by the world server's names)</description>
   <maintainer email="maintainer@example.com">Maintainer</maintainer>
   <license>Apache-2.0</license>
 

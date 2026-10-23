@@ -1,20 +1,21 @@
-# Set CARLA's weather, by preset or by value. The bridge remembers it and re-applies it
-# after every map load, so it survives a scenario on another town.
+# Set the world's weather, by preset or by parameters (roadmap 051: the names are the world
+# server's -- CARLA's presets and WeatherParameters fields, listed in swb_carla_world's README).
+# The world server keeps it and applies it again after every world load.
 #
 #   ros2 service call /scenario_world_bridge/set_weather swb_interfaces/srv/SetWeather "{preset: ClearNoon}"
 #   ros2 service call /scenario_world_bridge/set_weather swb_interfaces/srv/SetWeather
-#     "{use_parameters: true, weather: {cloudiness: 30.0, sun_altitude_angle: 60.0}}"
+#     "{names: [cloudiness, sun_altitude_angle], values: [30.0, 60.0]}"
 
-# A CARLA preset name (ClearNoon, CloudySunset, HardRainNight, ...; case-insensitive).
-# Takes precedence over `weather`.
+# A preset by the world server's name for it; takes precedence over the parameters.
 string preset
-# With no preset: true applies every field of `weather`. Guards against an empty request
-# silently setting all-zero weather.
-bool use_parameters
-Weather weather
+# Parameters by name, one value each; those not named keep their current values. An empty
+# request (no preset, no names) is refused.
+string[] names
+float64[] values
 ---
 bool success
 string message
-# The weather CARLA reports after the change, and the preset it matches (empty if none).
-Weather weather
+# The weather now: the preset it matches (empty if none) and every parameter the server has.
 string preset
+string[] names
+float64[] values

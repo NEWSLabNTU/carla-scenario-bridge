@@ -217,9 +217,8 @@ fn honest_with(caps: &'static [wire::Capability], instance: &'static str) -> Beh
             | R::SetEnvironment(_)
             | R::Release(_) => ok(None),
             R::SetWeather(_) | R::GetWeather(_) => {
-                let (_, w) = crate::weather::preset("ClearNoon").unwrap();
                 ok(Some(wire::reply::Reply::Weather(wire_form::reply(
-                    &WeatherReply::ok(w, "applied"),
+                    &WeatherReply::ok(clear_noon(), "applied"),
                 ))))
             }
         })
@@ -461,7 +460,7 @@ fn what_the_server_does_not_offer_is_an_honest_failure() {
     ));
     assert!(!b.get_weather().success);
     assert!(b
-        .set_weather(crate::weather::decode_request("ClearNoon", false, [0.0; 9]).unwrap())
+        .set_weather(crate::weather::decode_request("ClearNoon", &[], &[]).unwrap())
         .message
         .contains("no weather"));
     // Unknown names fail, by name.
@@ -662,10 +661,15 @@ fn what_the_server_offers_is_asked_for() {
     assert!(b.update_entity_goal("ap", &bad).is_err());
     let reply = b.get_weather();
     assert!(reply.success, "{}", reply.message);
-    assert_eq!(
-        reply.weather,
-        crate::weather::preset("ClearNoon").map(|(_, w)| w)
-    );
+    assert_eq!(reply.weather, Some(clear_noon()));
+}
+
+/// A weather as a server reports one: the bridge passes it through unread.
+fn clear_noon() -> crate::weather::Weather {
+    crate::weather::Weather {
+        preset: "ClearNoon".into(),
+        parameters: [("cloudiness".to_string(), 5.0)].into_iter().collect(),
+    }
 }
 
 #[test]

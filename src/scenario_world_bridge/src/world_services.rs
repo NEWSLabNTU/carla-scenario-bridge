@@ -1,10 +1,13 @@
-//! The bridge's ROS node: services that configure the CARLA world (roadmap 018).
+//! The bridge's ROS node: services that configure the world (roadmaps 018, 051).
 //!
 //!   /scenario_world_bridge/set_weather  swb_interfaces/srv/SetWeather
 //!   /scenario_world_bridge/get_weather  swb_interfaces/srv/GetWeather
 //!
+//! The weather is a preset or parameters by name, passed through to the world server, whose
+//! names they are (CARLA's: its presets and `WeatherParameters` fields).
+//!
 //! The node runs its own executor on its own thread, but never touches CARLA: each request
-//! is handed to the ZMQ loop -- the thread that owns the CARLA client and ticks the world --
+//! is handed to the ZMQ loop -- the thread that owns the world client and ticks the world --
 //! as a [`WorldCommand`], applied there between SSv2 requests, and answered when done. The
 //! services are async, so a request waiting out a map load blocks nothing else.
 //!
@@ -21,16 +24,15 @@ use std::time::Duration;
 
 use futures::channel::oneshot;
 use rclrs::CreateBasicExecutor;
-use swb_interfaces::msg::Weather as WeatherMsg;
 use swb_interfaces::srv::get_weather::{GetWeather_Request, GetWeather_Response};
 use swb_interfaces::srv::set_weather::{SetWeather_Request, SetWeather_Response};
 
-use crate::weather::{self, Weather, WeatherRequest};
+use crate::weather::{self, WeatherRequest};
 
 pub const SET_WEATHER: &str = "~/set_weather";
 pub const GET_WEATHER: &str = "~/get_weather";
 
-/// A request for the CARLA-owning thread.
+/// A request for the world-owning thread.
 pub enum WorldCommand {
     SetWeather(WeatherRequest, oneshot::Sender<WeatherReply>),
     GetWeather(oneshot::Sender<WeatherReply>),
@@ -38,44 +40,16 @@ pub enum WorldCommand {
 
 pub use crate::weather::WeatherReply;
 
-/// A reply's weather as the message, and the preset it matches.
-fn msg_fields(reply: &WeatherReply) -> (WeatherMsg, String) {
+/// A reply's weather as the services' fields: the preset, the names, the values.
+fn fields(reply: &WeatherReply) -> (String, Vec<String>, Vec<f64>) {
     match &reply.weather {
         Some(w) => (
-            to_msg(w),
-            weather::matching_preset(w).unwrap_or_default().to_string(),
+            w.preset.clone(),
+            w.parameters.keys().cloned().collect(),
+            w.parameters.values().copied().collect(),
         ),
-        None => (WeatherMsg::default(), String::new()),
+        None => Default::default(),
     }
-}
-
-fn to_msg(w: &Weather) -> WeatherMsg {
-    let f = w.user_fields();
-    WeatherMsg {
-        cloudiness: f[0],
-        precipitation: f[1],
-        precipitation_deposits: f[2],
-        wind_intensity: f[3],
-        fog_density: f[4],
-        fog_distance: f[5],
-        wetness: f[6],
-        sun_azimuth_angle: f[7],
-        sun_altitude_angle: f[8],
-    }
-}
-
-fn from_msg(m: &WeatherMsg) -> [f32; 9] {
-    [
-        m.cloudiness,
-        m.precipitation,
-        m.precipitation_deposits,
-        m.wind_intensity,
-        m.fog_density,
-        m.fog_distance,
-        m.wetness,
-        m.sun_azimuth_angle,
-        m.sun_altitude_angle,
-    ]
 }
 
 /// Start the node on its own thread. Commands arrive on the returned receiver; the thread
@@ -161,56 +135,55 @@ async fn set_weather(
     tx: mpsc::Sender<WorldCommand>,
     req: SetWeather_Request,
 ) -> SetWeather_Response {
-    let reply =
-        match weather::decode_request(&req.preset, req.use_parameters, from_msg(&req.weather)) {
-            Ok(request) => ask(tx, |r| WorldCommand::SetWeather(request, r)).await,
-            Err(e) => WeatherReply::failed(e, None),
-        };
-    let (weather, preset) = msg_fields(&reply);
-    tracing::info!("{SET_WEATHER} {:?} -> {}", req.preset, reply.message);
+    let reply = match weather::decode_request(&req.preset, &req.names, &req.values) {
+        Ok(request) => ask(tx, |r| WorldCommand::SetWeather(request, r)).await,
+        Err(e) => WeatherReply::failed(e, None),
+    };
+    let (preset, names, values) = fields(&reply);
+    tracing::info!(
+        "{SET_WEATHER} {:?} {:?} -> {}",
+        req.preset,
+        req.names,
+        reply.message
+    );
     SetWeather_Response {
         success: reply.success,
         message: reply.message,
-        weather,
         preset,
+        names,
+        values,
     }
 }
 
 async fn get_weather(tx: mpsc::Sender<WorldCommand>) -> GetWeather_Response {
     let reply = ask(tx, WorldCommand::GetWeather).await;
-    let (weather, preset) = msg_fields(&reply);
+    let (preset, names, values) = fields(&reply);
     GetWeather_Response {
         success: reply.success,
         message: reply.message,
-        weather,
         preset,
+        names,
+        values,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::weather::Weather;
 
     #[test]
-    fn msg_conversion_keeps_the_nine_fields_in_order() {
-        let (_, w) = weather::preset("SoftRainSunset").unwrap();
-        let m = to_msg(&w);
-        assert_eq!(m.cloudiness, w.cloudiness);
-        assert_eq!(m.sun_altitude_angle, w.sun_altitude_angle);
-        assert_eq!(m.fog_distance, w.fog_distance);
-        assert_eq!(from_msg(&m), w.user_fields());
-    }
-
-    #[test]
-    fn reply_names_the_matching_preset() {
-        let (_, w) = weather::preset("ClearNoon").unwrap();
-        let (_, preset) = msg_fields(&WeatherReply::ok(w, ""));
+    fn a_reply_becomes_the_services_fields() {
+        let w = Weather {
+            preset: "ClearNoon".into(),
+            parameters: [("cloudiness".to_string(), 5.0), ("wetness".to_string(), 0.0)]
+                .into_iter()
+                .collect(),
+        };
+        let (preset, names, values) = fields(&WeatherReply::ok(w, ""));
         assert_eq!(preset, "ClearNoon");
-        let custom = w.with_user_fields([1.0; 9]);
-        let (m, preset) = msg_fields(&WeatherReply::ok(custom, ""));
-        assert_eq!(preset, "");
-        assert_eq!(m.wetness, 1.0);
-        let (_, preset) = msg_fields(&WeatherReply::failed("x", None));
-        assert_eq!(preset, "");
+        assert_eq!(names, ["cloudiness", "wetness"]);
+        assert_eq!(values, [5.0, 0.0]);
+        assert_eq!(fields(&WeatherReply::failed("x", None)), Default::default());
     }
 }

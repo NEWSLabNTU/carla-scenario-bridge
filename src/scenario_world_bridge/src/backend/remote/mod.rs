@@ -1316,7 +1316,7 @@ impl SimBackend for RemoteBackend {
             }
             return;
         }
-        match crate::weather::decode_request(&name, false, [0.0; 9]) {
+        match crate::weather::decode_request(&name, &[], &[]) {
             Ok(request) => {
                 let reply = self.set_weather(request);
                 tracing::info!("Weather '{name}': {}", reply.message);
