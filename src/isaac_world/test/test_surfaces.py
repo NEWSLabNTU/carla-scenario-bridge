@@ -111,6 +111,117 @@ class MapTest(unittest.TestCase):
             self.assertIn(part, msg)
 
 
+class RutsTest(unittest.TestCase):
+    """`swb.ruts` (047 D5): a saved rut set at the start, refused once the soil is driven."""
+
+    ZONES = [{"id": "pit", "class": "sand", "soil": "grid", "ground_z": 0.0,
+              "polygon": [[0, -5], [40, -5], [40, 5], [0, 5]]},
+             {"id": "flat", "class": "sand", "soil": "closed_form", "polygon": SQUARE}]
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = Path(self.dir.name) / "surfaces.yaml"
+        self.map = surfaces.parse({"zones": self.ZONES}, self.path, table=TABLE)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def layer(self):
+        made = {}
+        layer = surface_layer.SurfaceLayer(
+            FakeStage({}), self.map, make_tiles=lambda z, h, o: made.setdefault(
+                z.id, FakeTiles(z, h, o)))
+        return layer, made
+
+    def drive(self, layer, x0=5.0, x1=15.0):
+        v = FakeVehicle([])
+        x = x0
+        while x < x1:
+            v.contacts = [SimpleNamespace(on_ground=True, position=(x, y, 0.0), shape="",
+                                          load=4500.0, direction=(1.0, 0.0, 0.0))
+                          for y in (-0.8, 0.8)] * 2
+            v.wheel_states = [SimpleNamespace(slip=0.2, rotation_speed=5.0 / 0.8 / 0.37)] * 4
+            layer.begin_step()
+            layer.update(v, 5.0, 1 / 60)
+            x += 5.0 / 60
+
+    def test_a_run_saved_comes_back_as_a_named_set(self):
+        layer, _ = self.layer()
+        self.assertIsNone(layer.save_ruts(Path(self.dir.name) / "ruts" / "runs"))  # nothing yet
+        self.drive(layer)
+        depth = layer.grids["pit"].depth(10.0, 0.8)
+        self.assertGreater(depth, 0.05)
+        saved = layer.save_ruts(Path(self.dir.name) / "ruts" / "runs")
+        self.assertIsNone(layer.save_ruts(Path(self.dir.name) / "ruts" / "runs"))  # once
+        (Path(self.dir.name) / "ruts" / "worn.npz").write_bytes(saved.read_bytes())
+        self.assertEqual(surfaces.available_ruts(self.map), ["worn"])
+        again, tiles = self.layer()
+        again.set_condition(1.0, "dry", {"swb.ruts": "worn"})
+        self.assertAlmostEqual(again.grids["pit"].depth(10.0, 0.8), depth, places=6)
+        self.assertGreater(tiles["pit"].shown, 0)  # the zone's ground shows them at once
+        self.assertEqual(again.ruts, "worn")
+        self.assertEqual(again.condition.ruts, "worn")
+        # the same set again (a later RoadCondition repeating it) is fine after driving
+        self.drive(again, 20.0, 25.0)
+        again.set_condition(0.8, "moist", {"swb.ruts": "worn"})
+        self.assertEqual(again.condition.friction_scale, 0.8)
+
+    def test_another_set_after_driving_is_refused_and_changes_nothing(self):
+        (Path(self.dir.name) / "ruts").mkdir()
+        layer, _ = self.layer()
+        self.drive(layer)
+        layer.save_ruts(Path(self.dir.name) / "ruts" / "runs")
+        next(Path(self.dir.name, "ruts", "runs").glob("*.npz")).rename(
+            Path(self.dir.name, "ruts", "worn.npz"))
+        depth = layer.grids["pit"].depth(10.0, 0.8)
+        for value in ("worn", "fresh"):
+            with self.assertRaises(SurfaceError) as e:
+                layer.set_condition(0.5, "dry", {"swb.ruts": value})
+            self.assertIn("driven on since the start", str(e.exception))
+        self.assertEqual(layer.condition, RoadCondition())  # unchanged
+        self.assertEqual(layer.grids["pit"].depth(10.0, 0.8), depth)
+        # a RoadCondition without swb.ruts leaves the ruts as they are
+        layer.set_condition(0.5, "dry", {})
+        self.assertEqual(layer.grids["pit"].depth(10.0, 0.8), depth)
+        # after a fresh start (a new owner, a release) a set goes in again
+        layer.fresh_soil()
+        layer.set_condition(1.0, "dry", {"swb.ruts": "worn"})
+        self.assertAlmostEqual(layer.grids["pit"].depth(10.0, 0.8), depth, places=6)
+
+    def test_fresh_ground_before_driving(self):
+        layer, tiles = self.layer()
+        layer.set_condition(1.0, "dry", {"swb.ruts": "fresh"})
+        self.assertEqual(layer.grids, {})
+        self.assertIsNone(layer.ruts)
+
+    def test_bad_sets_are_refused(self):
+        ruts = Path(self.dir.name) / "ruts"
+        ruts.mkdir()
+        (ruts / "junk.npz").write_bytes(b"not a zip")
+        layer, _ = self.layer()
+        with self.assertRaises(SurfaceError) as e:
+            layer.set_condition(1.0, "dry", {"swb.ruts": "junk"})
+        self.assertIn("not a rut set", str(e.exception))
+        for value, needle in (("Worn Out", "not a set name"), ("gone", "no gone.npz")):
+            with self.assertRaises(SurfaceError) as e:
+                layer.set_condition(1.0, "dry", {"swb.ruts": value})
+            self.assertIn(needle, str(e.exception))
+        # a set from a map whose zone is not here
+        from isaac_world import soil
+        g = soil.SoilGrid(TABLE["sand"].soil)
+        g.begin_step()
+        g.wheel(0, 1.0, 0.0, 0.0, 4500.0, 0.37, 0.235, 5.0, 5.0, 1 / 60)
+        soil.save_ruts(ruts / "other.npz", {"elsewhere": g})
+        with self.assertRaises(SurfaceError) as e:
+            layer.set_condition(1.0, "dry", {"swb.ruts": "other"})
+        self.assertIn("zone 'elsewhere' is not a soil zone on the grid", str(e.exception))
+        # a map with no grid zone holds no ruts
+        cf = surfaces.parse({"zones": self.ZONES[1:]}, self.path, table=TABLE)
+        with self.assertRaises(SurfaceError) as e:
+            surfaces.road_condition(cf, 1.0, "dry", {"swb.ruts": "fresh"})
+        self.assertIn("no soil zone on the grid", str(e.exception))
+
+
 class WarningsTest(unittest.TestCase):
     def test_overlaps_warn_only_where_both_set_a_field(self):
         m = smap([{"id": "wet", "wetness": "moist", "polygon": SQUARE},
@@ -314,6 +425,9 @@ class FakeTiles:
     def clear(self):
         self.cleared += 1
 
+    def show(self, grid):
+        self.shown = len(grid.blocks)
+
     def remove(self):
         self.removed = True
 
@@ -444,12 +558,13 @@ class RoadConditionTest(unittest.TestCase):
                 "swb.zone.nowhere.class": "ice", "swb.zone.ford.colour": "red",
                 "swb.zone.ford.water_depth": "deep", "swb.zone.ford.wetness": "damp",
                 "swb.zone.ford.class": "lava", "swb.zone.pit.class": "dirt",
-                "swb.ruts": "keep"})
+                "swb.ruts": "keep", "swb.rut": "x"})
         text = str(e.exception)
         for needle in ("wetness 'soaked'", "frictionScaleFactor -1.0",
                        "no zone 'nowhere'", "zones: ford, pit", "no field 'colour'",
                        "water depth is metres", "'damp' is not one of",
-                       "unknown class 'lava'", "zone 'pit' is soil", "swb.ruts: unknown"):
+                       "unknown class 'lava'", "zone 'pit' is soil", "swb.ruts: no keep.npz",
+                       "swb.rut: unknown property"):
             self.assertIn(needle, text)
 
     def test_a_world_without_a_map_takes_world_wide_state_only(self):

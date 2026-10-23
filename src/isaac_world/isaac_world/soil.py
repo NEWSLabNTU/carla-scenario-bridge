@@ -424,6 +424,45 @@ class SoilGrid:
             b.handed[:] = v
 
 
+# --- Rut sets (047 D5) -------------------------------------------------------------------------
+
+RUTS_VERSION = 1
+
+
+def save_ruts(path, grids):
+    """The grids' ruts (`{zone id: SoilGrid}`) to `path` (.npz): each block's plastic sinkage,
+    and each grid's node spacing."""
+    import json
+
+    arrays = {f"{zone}:{bx}:{by}": b for zone, g in grids.items()
+              for (bx, by), b in g.save().items()}
+    meta = {"version": RUTS_VERSION, "block": BLOCK,
+            "spacing": {zone: g.h for zone, g in grids.items()}}
+    np.savez_compressed(path, __meta__=np.array(json.dumps(meta)), **arrays)
+
+
+def load_ruts(path):
+    """A saved set: `{zone id: (node spacing, {(bx, by): sinkage block})}`. SoilError if it is
+    not one."""
+    import json
+
+    try:
+        with np.load(path) as f:
+            meta = json.loads(str(f["__meta__"]))
+            out = {zone: (float(h), {}) for zone, h in meta["spacing"].items()}
+            for key in f.files:
+                if key == "__meta__":
+                    continue
+                zone, bx, by = key.rsplit(":", 2)
+                out[zone][1][(int(bx), int(by))] = f[key].astype(np.float32)
+    except (OSError, KeyError, ValueError) as e:
+        raise SoilError(f"{path}: not a rut set ({e})") from e
+    if meta.get("version") != RUTS_VERSION or meta.get("block") != BLOCK:
+        raise SoilError(f"{path}: rut set version {meta.get('version')} / block "
+                        f"{meta.get('block')}, this server reads {RUTS_VERSION} / {BLOCK}")
+    return out
+
+
 # --- The zone edge -----------------------------------------------------------------------------
 
 

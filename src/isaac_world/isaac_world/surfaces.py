@@ -74,6 +74,13 @@ ZONE_KEYS = {"id", "class", "wetness", "water_depth", "soil", "ground_z", "polyg
 PROPERTY_PREFIX = "swb."
 ZONE_PROPERTY = re.compile(r"^swb\.zone\.([^.]+)\.([^.]+)$")
 ZONE_FIELDS = {"class": "cls", "wetness": "wetness", "water_depth": "water_depth"}
+# `swb.ruts` (047 D5): the soil zones' ruts at the start, a set saved beside the map
+# (`<map>/ruts/<name>.npz`), or `fresh`. An instruction, not road state: a later
+# RoadCondition without it leaves the ground as the wheels made it.
+RUTS_PROPERTY = "swb.ruts"
+RUTS_DIR = "ruts"
+RUTS_FRESH = "fresh"
+RUTS_NAME = re.compile(r"^[a-z0-9_-]+$")
 # The map of a world with no surfaces.yaml: every label the reference class, no zones.
 NO_MAP = "(no surfaces.yaml)"
 
@@ -468,6 +475,7 @@ class RoadCondition:
 
     friction_scale: float = 1.0
     wetness: str = "dry"
+    ruts: str = None  # `swb.ruts`: a saved set's name, RUTS_FRESH, or None (as they are)
 
 
 def road_condition(surface_map, friction_scale=1.0, wetness="dry", properties=None):
@@ -486,13 +494,28 @@ def road_condition(surface_map, friction_scale=1.0, wetness="dry", properties=No
         problems.append(f"frictionScaleFactor {friction_scale} is not in [0, inf)")
     zones = {z.id: z for z in surface_map.zones}
     overrides = {}
+    ruts = None
     for name, value in sorted((properties or {}).items()):
         if not name.startswith(PROPERTY_PREFIX):
+            continue
+        if name == RUTS_PROPERTY:
+            have = available_ruts(surface_map)
+            if not any(z.soil == "grid" for z in surface_map.zones):
+                problems.append(f"{name}: {surface_map.path} has no soil zone on the grid "
+                                f"(soil: grid) to hold ruts")
+            elif value != RUTS_FRESH and not RUTS_NAME.match(str(value)):
+                problems.append(f"{name}: {value!r} is not a set name ([a-z0-9_-]+) or "
+                                f"{RUTS_FRESH!r}")
+            elif value != RUTS_FRESH and value not in have:
+                problems.append(f"{name}: no {value}.npz in {ruts_dir(surface_map)} (sets: "
+                                f"{', '.join(have) or 'none'}; {RUTS_FRESH})")
+            else:
+                ruts = value
             continue
         m = ZONE_PROPERTY.match(name)
         if not m:
             problems.append(f"{name}: unknown property (swb.zone.<id>.<field>, field one of "
-                            f"{', '.join(ZONE_FIELDS)})")
+                            f"{', '.join(ZONE_FIELDS)}; or {RUTS_PROPERTY})")
             continue
         zid, key = m.groups()
         if zid not in zones:
@@ -528,8 +551,20 @@ def road_condition(surface_map, friction_scale=1.0, wetness="dry", properties=No
         raise SurfaceError("\n".join(problems))
     changed = [dataclasses.replace(z, **overrides[z.id]) if z.id in overrides else z
                for z in surface_map.zones]
-    return (RoadCondition(friction_scale, wetness),
+    return (RoadCondition(friction_scale, wetness, ruts),
             dataclasses.replace(surface_map, zones=changed))
+
+
+def ruts_dir(surface_map):
+    """Where a map's saved rut sets are: `<map dir>/ruts/`."""
+    return Path(surface_map.path).parent / RUTS_DIR
+
+
+def available_ruts(surface_map):
+    """The names of the rut sets saved beside the map."""
+    if surface_map.path == NO_MAP:
+        return []
+    return sorted(p.stem for p in ruts_dir(surface_map).glob("*.npz"))
 
 
 def hydroplane_factor(hp: Hydroplaning, speed, depth):

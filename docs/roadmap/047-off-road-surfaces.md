@@ -116,8 +116,15 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   **Answered 2026-10-23 by S3: keep 60 Hz and sweep** each wheel along its path one node
   spacing at a time inside the step: 60 Hz then reads as 600 Hz within 0.4 % at 25 m/s
   (`test_soil.py`), and a raised rate would multiply PhysX's cost for nothing.
-- [ ] **D5. Rut persistence across runs** (gates S4): fresh per scenario by default, with
-  `swb.ruts` naming a saved set [proposed]; or always fresh.
+- [x] **D5. Rut persistence across runs** (gates S4). **Decided 2026-10-23 (user): fresh per
+  scenario by default; the scenario names a saved set with the `swb.ruts` property** (option
+  B of four compared: always fresh; B; ruts carried over between scenarios until the server
+  restarts or another map loads; a per-zone default set in `surfaces.yaml`). Why: every run
+  starts the same (reproducible, and fair for 041's entrants), a worn stage is still one
+  property in the scenario (and a parameter for sweeps), and the grid already saved and
+  loaded its blocks. Carrying over was rejected (a run's start depends on the runs before it
+  and on restarts); a map default can come later on the same file format. A set goes in only
+  before any wheel has driven on the soil; a different one later is refused.
 - [ ] **D6. Mud** (gates S4): ship an engineered mud model marked unvalidated [proposed], or
   limit zones to sand and dry soil until a validation source exists.
 
@@ -283,6 +290,22 @@ Each needs an answer before the step it gates; the design's proposal is in brack
 - [ ] **S4. Persistence and the second pass** (D5, D6): node blocks saved per tile, loaded per
       scenario; every vehicle reads and writes the same grid in a fixed order (determinism);
       mud model if D6 says so.
+  - [x] Rut sets (D5): `swb.ruts=<name>|fresh` in a scenario's RoadCondition loads
+        `<map>/ruts/<name>.npz` (every grid zone's blocks and spacing) and shows it in the
+        zones' tiles at once; refused with every problem listed for a map without a grid zone,
+        a name that is not a set (the sets listed), a file that is not one, a zone the map
+        does not have, another spacing, or a different set once the soil has been driven on.
+        A RoadCondition without it leaves the ground as it is. When a scenario ends (another
+        load, a new owner, a release) the world server saves its ruts, if any, to
+        `<map>/ruts/runs/<time>.npz`; copied to `<map>/ruts/<name>.npz` it is a set. CARLA
+        refuses the property as it refuses every `swb.*` one. Tests: `RutsTest` (4).
+  - [x] On the pad (`soil_drive.py`, `SOIL_SPIKE_ONLY=rut`): two passes saved, a pass on fresh
+        ground (as the first: 2354 N, ground 0), then the set loaded (0.17 s, its tiles
+        rebuilt) and the pass again: the car rides in the saved ruts at -10.6 cm with 591 N,
+        a third pass.
+  - [ ] Every vehicle on the same grid in a fixed order: the ego only today (NPCs are
+        kinematic); background AVs (039) when they drive on soil.
+  - [ ] Mud (D6).
 - [ ] **S5. Calibration**: Chrono CRM offline as a virtual bevameter per soil class (plate
       sinkage, shear, single-wheel drawbar pull vs slip at our wheel); cone index from the field
       when 040 can measure it.

@@ -183,6 +183,28 @@ Ruts persist as the sparse node blocks (`GetModifiedNodes`-style), keyed by tile
 run, so a scenario can start fresh or on yesterday's ruts. Every vehicle, ego or NPC, reads
 and writes the same grid in a fixed order inside the lockstep tick (determinism, 039).
 
+**Rut sets (047 D5, built).** Every scenario starts on fresh ground unless its
+RoadCondition names a saved set:
+
+```xml
+<RoadCondition frictionScaleFactor="1.0" wetness="dry">
+  <Properties>
+    <Property name="swb.ruts" value="worn"/>   <!-- or "fresh"; a parameter works: "$ruts" -->
+  </Properties>
+</RoadCondition>
+```
+
+The world server loads `<map>/ruts/worn.npz` (every grid zone's blocks of plastic sinkage and
+its spacing; `soil.save_ruts` / `load_ruts`) and rebuilds the zones' tiles at once, so the
+first wheel meets the ruts. It is an instruction, not road state: a later RoadCondition
+without it leaves the ground as the wheels made it, the same set again is fine, a different
+one (or `fresh`) after any wheel has driven on the soil is refused, since ruts swapped under a
+moving car are not physical; put it in the Init. When a scenario ends (another load, a new
+owner, a release) the server saves the ruts it made to `<map>/ruts/runs/<time>.npz` and logs
+the path; copying that file to `<map>/ruts/<name>.npz` makes it a set. On the pad, a set saved
+after two passes and loaded on fresh ground put the next pass in the ruts at -10.6 cm with a
+third pass's 591 N, in 0.17 s.
+
 The render mesh of a dirty tile is the same geometry, so RTX lidar and cameras see the ruts
 the wheels feel. Mud is an engineered model (low friction angle, cohesion for undrained
 strength, slip-rate softening, a clogging state); no published real-time model exists, so it

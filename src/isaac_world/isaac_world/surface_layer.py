@@ -57,6 +57,9 @@ class SurfaceLayer:
         self.soil_out = {}  # (vehicle path, wheel) -> (soil.WheelSoil, share) of the last step
         self.soil_xy = {}  # (vehicle path, wheel) -> its map-frame contact on soil
         self.tiles = {}  # zone id -> its own ground (make_tiles)
+        self.ruts = None  # the rut set the soil started from (`swb.ruts`), None: fresh
+        self.driven = False  # a wheel has driven on the soil since then
+        self.saved = True  # nothing driven since the last save
         if make_tiles is not None:
             for z in surface_map.zones:
                 if z.ground_z is not None:
@@ -64,10 +67,20 @@ class SurfaceLayer:
 
     def set_condition(self, friction_scale=1.0, wetness="dry", properties=None):
         """A scenario's road condition (OpenSCENARIO `RoadCondition`, 047 S2), from the next
-        step on: the whole road state, replacing the last. SurfaceError lists every problem
-        and changes nothing."""
-        self.condition, self.map = surfaces.road_condition(self.base, friction_scale, wetness,
-                                                            properties)
+        step on: the whole road state, replacing the last. `swb.ruts` (D5) puts a saved rut
+        set (or fresh ground) in the soil zones now, only while no wheel has driven on the soil
+        since the last fresh start or set: ruts swapped under a moving car are not physical.
+        SurfaceError lists every problem and changes nothing."""
+        condition, smap = surfaces.road_condition(self.base, friction_scale, wetness,
+                                                  properties)
+        if condition.ruts is not None and condition.ruts != self.ruts:
+            if self.driven:
+                raise surfaces.SurfaceError(
+                    f"{surfaces.RUTS_PROPERTY}: {condition.ruts}: the soil has been driven on "
+                    f"since {'set ' + self.ruts if self.ruts else 'the start'}; a rut set goes "
+                    f"in before (the scenario's Init)")
+            self._put_ruts(condition.ruts)
+        self.condition, self.map = condition, smap
         zones = {name: value for name, value in sorted((properties or {}).items())
                  if name.startswith(surfaces.PROPERTY_PREFIX)}
         log.info("road condition: friction scale %g, %s%s", self.condition.friction_scale,
@@ -147,6 +160,8 @@ class SurfaceLayer:
                              spin, speed, dt)
         else:
             out = soil.wong_reece(params, contact.load, r, b, spin, speed)
+        self.driven = True
+        self.saved = False
         share = soil.edge_weight(zone.polygon, x, y, SOIL_BLEND * 2 * r)
         self.soil_out[(vehicle.path, i)] = (out, share)
         self.soil_xy[(vehicle.path, i)] = (x, y)
@@ -165,8 +180,59 @@ class SurfaceLayer:
         self.grids = {}
         self.soil_out = {}
         self.soil_xy = {}
+        self.ruts, self.driven, self.saved = None, False, True
         for t in self.tiles.values():
             t.clear()
+
+    def _put_ruts(self, name):
+        """Rut set `name` (or fresh ground) in the soil zones, their tiles at once."""
+        if name == surfaces.RUTS_FRESH:
+            self.fresh_soil()
+            log.info("ruts: fresh ground")
+            return
+        path = surfaces.ruts_dir(self.base) / f"{name}.npz"
+        try:
+            saved = soil.load_ruts(path)
+        except soil.SoilError as e:
+            raise surfaces.SurfaceError(f"{surfaces.RUTS_PROPERTY}: {e}") from e
+        zones = {z.id: z for z in self.base.zones if z.soil == "grid"}
+        problems = [f"{surfaces.RUTS_PROPERTY}: {path}: zone {zid!r} is not a soil zone on the "
+                    f"grid in {self.base.path}" for zid in saved if zid not in zones]
+        problems += [f"{surfaces.RUTS_PROPERTY}: {path}: zone {zid!r} was saved at "
+                     f"{h:g} m, its grid is {SOIL_SPACING:g} m"
+                     for zid, (h, _) in saved.items() if zid in zones and h != SOIL_SPACING]
+        if problems:
+            raise surfaces.SurfaceError("\n".join(problems))
+        self.fresh_soil()
+        for zid, (h, blocks) in saved.items():
+            grid = self.grids[zid] = soil.SoilGrid(self.base.table[zones[zid].cls].soil, h)
+            grid.load(blocks)
+            if zid in self.tiles:
+                self.tiles[zid].show(grid)
+        self.ruts = name
+        deepest = {zid: max((float(a.max()) for a in b.values()), default=0.0)
+                   for zid, (_, b) in saved.items()}
+        log.info("ruts: set %s from %s (%s)", name, path, ", ".join(
+            f"{zid} {len(saved[zid][1])} block(s), {d * 100:.1f} cm deepest"
+            for zid, d in deepest.items()))
+
+    def save_ruts(self, directory):
+        """The soil's ruts to `<directory>/<time>.npz` if a wheel drove on it since the last
+        save or set: the path, or None."""
+        if self.saved or not self.grids:
+            return None
+        import time as clock
+
+        from pathlib import Path
+
+        d = Path(directory)
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{clock.strftime('%Y-%m-%d_%H-%M-%S')}.npz"
+        soil.save_ruts(path, self.grids)
+        self.saved = True
+        log.info("ruts saved: %s (started from %s); copy it to %s/<name>.npz for swb.ruts",
+                 path, self.ruts or "fresh ground", surfaces.ruts_dir(self.base))
+        return path
 
     def flush(self):
         """Once per frame, after the substeps: the grids' new ruts into their zones' ground

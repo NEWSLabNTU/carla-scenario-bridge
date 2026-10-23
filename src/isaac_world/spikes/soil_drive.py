@@ -17,6 +17,8 @@ applies it. Cases:
   brake_<lane>   full braking from 15 m/s in the zone (ABS)
   entry          the largest change of the soil's resistance between two substeps on entry
                  at 20 m/s, against the edge blend, and in steady state 10 m on
+  rut_fresh, rut_from_set  047 D5: after rut_2 its ruts are saved, then a pass on fresh
+                 ground, then the saved set loaded by `swb.ruts` and the same pass again
   rut_1, rut_2   the `sand_rut` lane: sand whose ground is the server's tiles (`ground_z`, a
                  hole in the pad), 8 m/s through it twice on one line: the rear wheels' ground
                  hit (the rut they meet), the body's height, the speed's largest drop in a
@@ -104,12 +106,12 @@ def apply_force(path, force, position):
                            PhysicsSchemaTools.sdfPathToInt(path), force, position)
 
 
-with tempfile.TemporaryDirectory() as d:
-    path = os.path.join(d, "surfaces.yaml")
-    with open(path, "w") as f:
-        json.dump(SURFACES, f)  # JSON is YAML
-    layer = SurfaceLayer(stage, surfaces.load(path), apply_force=apply_force,
-                         make_tiles=lambda z, h, o: SoilTiles(stage, z, h, o))
+MAP_DIR = tempfile.mkdtemp()  # kept: the rut sets live beside the map
+path = os.path.join(MAP_DIR, "surfaces.yaml")
+with open(path, "w") as f:
+    json.dump(SURFACES, f)  # JSON is YAML
+layer = SurfaceLayer(stage, surfaces.load(path), apply_force=apply_force,
+                     make_tiles=lambda z, h, o: SoilTiles(stage, z, h, o))
 world.reset()
 world.play()
 physx = omni.physx.get_physx_interface()
@@ -339,6 +341,18 @@ progress("rut_1")
 out["rut_1"] = rut()
 progress("rut_2")
 out["rut_2"] = rut()
+# 047 D5: the two passes' ruts saved, fresh ground, then the set loaded by `swb.ruts`.
+saved = layer.save_ruts(os.path.join(MAP_DIR, "ruts", "runs"))
+os.replace(saved, os.path.join(MAP_DIR, "ruts", "worn.npz"))
+layer.fresh_soil()
+progress("rut_fresh")
+out["rut_fresh"] = rut()
+layer.fresh_soil()
+t0 = time.perf_counter()
+layer.set_condition(1.0, "dry", {"swb.ruts": "worn"})
+out["ruts_load_s"] = round(time.perf_counter() - t0, 2)
+progress("rut_from_set")
+out["rut_from_set"] = rut()
 cost = {}
 for k, v in update_s.items():
     v = sorted(v)

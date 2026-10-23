@@ -229,6 +229,7 @@ class IsaacWorld(WorldBase):
             self.despawn(handle)
         self.ground_cache.clear()
         if self.surface is not None:
+            self._save_ruts()
             # The soil zones' own ground goes, and the world's comes back under it.
             self.surface.remove_tiles()
         plane = self.stage.GetPrimAtPath(GROUND_PLANE)
@@ -282,6 +283,18 @@ class IsaacWorld(WorldBase):
             self.world.step(render=False)
         log.info("soil zones' cut settled in %d steps, %.1f s", steps, time.perf_counter() - t)
 
+    def _save_ruts(self):
+        """The ending scenario's ruts, if a wheel made any, to `<map>/ruts/runs/<time>.npz`
+        (047 D5): a set any later scenario can start from once copied to
+        `<map>/ruts/<name>.npz` (`swb.ruts`)."""
+        layer = self.surface
+        if layer is None or layer.base.path == surfaces.NO_MAP:
+            return
+        try:
+            layer.save_ruts(surfaces.ruts_dir(layer.base) / "runs")
+        except OSError as e:  # a read-only map directory costs the save, not the run
+            log.warning("ruts not saved: %s", e)
+
     def _make_tiles(self, zone, spacing, origin):
         from .soil_tiles import SoilTiles
 
@@ -317,6 +330,7 @@ class IsaacWorld(WorldBase):
             if self.surface.base.path == surfaces.NO_MAP:
                 self.surface = None
             else:
+                self._save_ruts()
                 self.surface.set_condition()
                 self.surface.fresh_soil()
 

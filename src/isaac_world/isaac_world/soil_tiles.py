@@ -316,6 +316,15 @@ class SoilTiles:
         self.queue = waiting + self.queue
         return done
 
+    def show(self, grid):
+        """Every tile at the grid's ruts now, unbudgeted (a rut set going in)."""
+        for t in self.tiles:
+            depth = grid.heights(t[0] * self.n, t[1] * self.n, self.n)
+            if depth.max() > 0 or self.gen.get(t):
+                self._rebuild(t, depth)
+        self.queue = []
+        grid.handed_out(list(grid.blocks))
+
     def clear(self):
         """Back to flat ground (fresh soil)."""
         flat = np.zeros((2, 2), np.float32)
