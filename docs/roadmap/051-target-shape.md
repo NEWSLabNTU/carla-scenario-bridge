@@ -156,7 +156,7 @@ What depends on what:
 5. **The clock**: in this phase, as K4. [decided 2026-10-23: no epoch; an episode
    change ends every vehicle stack, which restarts on the new episode]
 6. **`aib.ros`** (the rclpy vehicle interface and sensor publishers): it stays in aib.
-   It moves when a second Python world server needs it. [proposed: as written]
+   It moves when a second Python world server needs it. [decided 2026-10-23]
 
 ## How it lands
 
