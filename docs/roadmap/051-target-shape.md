@@ -367,3 +367,57 @@ Deviations from the plan above, and why:
 - **`autoware_sim_pilot`** (acb's `auto_drive` and `capture_poses`) moved too: Autoware's API
   only, so both bridges' standalone runs drive to a goal with it.
 - Not yet done: CARLA's `Weather.msg` move (with K5's interface clean-up), the docs (K5).
+
+### K2. One source of the car (2026-10-23, `c1d59af` on `target-shape`)
+
+One spec per car, in **sim_vehicle_spec** (new, public): `vehicles/tesla_model3.yaml`
+(version 2), the library (`spec`, `emit`), and what it generates: CARLA's sensor file
+(`generated/<car>/carla_sensors.yaml`), the SSv2 vehicle catalog (`catalogs/vehicles.xosc`).
+Every output names the spec's `spec_hash`. From the same spec, **autoware_sim_vehicle**
+generates Autoware's packages per car (`tesla_model3_description`, `_launch`,
+`_sensor_kit_description`, `_sensor_kit_launch`, `individual_params`), and **aib** generates
+its Isaac rig. acb's `acb_vehicle*`, `acb_sensor_kit*`, `individual_params` and
+`vehicle_config.yaml`, and aib's spec, `aib.spec` and `aib_*` packages are gone; everything
+selects `vehicle_model:=tesla_model3`.
+
+- **The catalog (K2d)**: every scenario Model 3 (134, in 33 files) is a `CatalogReference`
+  to `tesla_model3` through `$(find-pkg-share sim_vehicle_spec)/catalogs`, assigning the
+  four values it chooses (maxSpeed, maxAcceleration, maxDeceleration, maxSteering) from what
+  it had inline (`scripts/catalog_scenarios.py`; the generators emit references). The catalog
+  declares **no defaults**: SSv2 evaluates an entry's ParameterDeclarations in the entry's own
+  scope, where they shadow the reference's assignments (found by a probe run that failed on
+  SSv2's acceleration range, 13 against the catalog's 9.8). The 050 lint is a catalog lint;
+  truck_pass's 12 m truck on the Model 3 body is exempt.
+- **The spawn check (K2e)**: `Body.wheels` (the protocol); the CARLA world server reports the
+  measured axles moved into the entity frame, Isaac's the rig's; the bridge refuses an ego
+  whose box or wheels are more than 2 cm from SSv2's declaration (the catalog's), each field
+  named with both values.
+- **The start check (K2f)**: `Body.spec_hash`, the vehicle agent's registration (from
+  `<vehicle_model>_description/config/spec_hash.yaml`, through the relay's query), and the
+  installed catalog's entry for the ego's body (read by the bridge: SSv2's `Property` message
+  is empty, so a catalog property does not reach it in the spawn). The bridge refuses an ego
+  whose parts name different specs; a part that names none is left out (CARLA's world server
+  until K3). acb, standalone, warns when its sensor file and Autoware's package disagree.
+  Seen in the e2e: `the world server (carla) none, the vehicle agent d5d4b266c7fd, the catalog
+  d5d4b266c7fd`.
+
+Checks:
+
+- **Generated values**: Autoware's files equal K1's but for the overhangs (front 0.923 ->
+  0.807, rear 0.864 -> 0.980: measured against the body instead of a centred wheel base), and
+  the Isaac rig's box centre (1.532 -> 1.416).
+- **Launch dumps** (`play_log/051/k2/launch`, against K1's): the same nodes in all nine
+  stacks; the differences are the overhangs and what derives from them (the footprint
+  offsets, the RViz body: CARLA's ego now has aib's generated box instead of acb's Lexus mesh,
+  and no camera0 links, which nothing spawned), the renamed packages and paths, and two new
+  parameters (`vehicle_model` on the agent, `autoware_spec_hash_file` on acb_bridge).
+- **Conformance**: CARLA 24 passed, Isaac 23 passed. **`just test`** passes, the pin check 8
+  dependencies, 0 mismatches. **`just e2e`**: PASS.
+- **The suite** (`scripts/run_050_set.sh 051_k2`, report `play_log/051/k2_report.md`, against
+  050's run, K0's baseline): the same verdicts (bench "missing" in both: it has no
+  verdict). The numbers are within run-to-run noise but for one systematic shift, explained:
+  the gaps to stopped leads shrink by 0.11-0.14 m (i1 lead 5.43 -> 5.29, i4 broken 5.44 ->
+  5.33): Autoware's outline is the body now (front overhang 11.6 cm shorter), so it stops
+  that much closer. No catalog `Performance` differs from what a scenario had (each assigns
+  its own). truck_pass, four runs: SSv2's boxes meet (-2.2 m), CARLA's bodies stay ~1.0 m
+  apart, as in 050's four.
