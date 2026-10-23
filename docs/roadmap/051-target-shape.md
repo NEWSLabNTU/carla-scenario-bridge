@@ -42,11 +42,21 @@ Seven repositories:
 
 What depends on what:
 
-- **No cycles, no duplicates**: every repository above is a direct submodule of
-  scenario-world-bridge, and none has submodules of the others. A repository built on its
-  own lists what it needs in `deps.repos` (vcstool format), at pinned commits, fetched by
-  its `just setup`. A check in this repository's `just test` fails when a pin here is older
-  than a component's `deps.repos` asks for.
+- **Submodules only, no cycles, no duplicate packages** (decision 4): every repository
+  above is a direct submodule of scenario-world-bridge. A repository that needs another
+  to build on its own carries it as a submodule under `deps/` (acb and aib:
+  `deps/autoware_sim_vehicle`; a world server: `deps/swb_world_protocol` and the vehicle
+  layer or aib). `deps/` holds a committed `COLCON_IGNORE`, so a colcon run over the
+  superproject's `src/` never sees a second copy; the component's own `just build` names
+  `deps/*` as base paths directly, which the marker does not block. No vcstool, no
+  `.repos` file.
+  - A check in this repository's `just test` (the pin check) fails when a component's
+    `deps/<repo>` pin is not an ancestor of, or equal to, this repository's pin of the
+    same repository: the workspace never builds a component against an older dependency
+    than the one it was tested with standalone.
+  - The superproject's `just setup` initialises its direct submodules and leaves the
+    components' `deps/` uninitialised (it has its own copies); a component's `just setup`
+    initialises its `deps/`.
 - **Without SSv2**: acb or aib, plus the vehicle layer, is a complete Autoware-on-a-simulator
   system. Neither needs swb, `swb_world_protocol` or the other bridge.
 - **Without Autoware**: a world server plus the adapter runs SSv2's NPC scenarios (the
@@ -97,11 +107,24 @@ What depends on what:
   `carla_world` with CARLA's service. The bridge's `set_weather` and `get_weather` take the
   protocol's generic form (a preset and named parameters).
 - **Time** (decision T): one `/clock` per domain, carrying the world server's time.
-  - `carla_world` keeps time monotonic itself. It sends each frame's time to acb on the
-    sensor-release channel acb already reads.
-  - acb stamps with that time when a world server is present. Standalone, it uses CARLA's
-    `elapsed_seconds`.
-  - `epoch_marker` and acb's epoch rule are deleted.
+  `sim_ns = nanos(elapsed_seconds) + epoch_ns`, as today; what changes is who decides the
+  epoch.
+  - `carla_world` alone decides it: the episode rule, `clock_store` across its restarts,
+    reconnects to a restarted CARLA. Nothing else computes an epoch.
+  - It publishes `epoch <episode_id> <epoch_ns>` on the sensor-release PUB socket acb
+    already subscribes to, at every episode change and once a second (a subscriber that
+    joins late, or loses a message to ZMQ's slow-joiner window, has it within a second).
+    Per episode, not per frame: acb keeps stamping from the `elapsed_seconds` in each
+    frame's own data, so no sample waits for a message.
+  - acb holds `/clock` and its stamps for an episode until it has that episode's epoch,
+    as it holds them for the marker today. `episode_id` is CARLA's world id, which acb
+    reads from its own snapshot, so a stale epoch is never applied to a new episode.
+  - Standalone (no `release_endpoint`), acb counts its own epoch across the reloads it
+    sees, monotonic for itself; there is no peer to agree with.
+  - Deleted: `epoch_marker` on both sides, acb's half of the episode rule and its
+    mid-session-join path, and the bit-exact agreement between two implementations.
+    `nanos()` (round half away from zero) stays in one shared place, the protocol crate.
+  - Isaac: unchanged. The Isaac world server already owns the one clock in its process.
 - **No shims**: every renamed package, launch argument, node and entry point is gone, not
   aliased. Old launch arguments that a wrapper used to accept are refused with a message
   naming the new one, as `SWB_RETIRED_ENV` does for environment variables.
@@ -109,12 +132,14 @@ What depends on what:
 ## Decisions (for the user)
 
 1. **Repository names**: `autoware_sim_vehicle`, `swb_world_protocol`, `carla_world`,
-   `isaac_world`, all under NEWSLabNTU. [proposed: as written]
+   `isaac_world`, all under NEWSLabNTU. [open: the first two are accepted;
+   `carla_world` and `isaac_world` are too general and get new names]
 2. **Per-car package names**: `tesla_model3_description` and the rest, as in the table.
-   [proposed: as written]
-3. **The profile package**: `autoware_sim_profile`. [proposed: as written]
-4. **Workspace**: a flat superproject (every repository a direct submodule here) plus
-   `deps.repos` for standalone builds, against nested submodules. [proposed: flat]
+   [decided 2026-10-23: as written]
+3. **The profile package**: `autoware_sim_profile`. [decided 2026-10-23]
+4. **Workspace**: git submodules only. [decided 2026-10-23: every repository a direct
+   submodule here; a component's own dependencies are submodules under its `deps/`,
+   ignored by colcon in the superproject; no `.repos` files]
 5. **T, the clock**: change it in this phase, as written, or keep CARLA's epoch shape and
    do the clock in a later phase. Doing it here puts timing that 015 and 016 settled into
    the same landing as everything else. [proposed: in this phase, isolated as the last
@@ -144,7 +169,7 @@ it.
       `vehicle_check`'s dynamics run will do.
   - **K1. Repositories and workspace, no change in behaviour.**
     - The new repositories are split out with history and the profile has moved.
-    - `swb_sim_interface`, `deps.repos` and the pin check are in place.
+    - `swb_sim_interface`, each component's `deps/` submodules and the pin check are in place.
     - The launch dumps are identical to K0, except for install paths and renamed names.
       A script lists any other difference.
     - Conformance, `just test` and `just e2e sim:=carla` pass.
@@ -162,8 +187,10 @@ it.
     - Every change in the suite is explained by the physics.
   - **K4. The clock** (decision 5).
     - The epoch marker is gone and acb stamps with the world server's time.
-    - Checks: `town02_episode_change`; a vehicle side started mid-session; a `carla_world`
-      restarted under a running ego; acb's stamps against `/clock`, bit for bit.
+    - Checks: `town02_episode_change`; a vehicle side started mid-session (`/clock`
+      held, then joins at the world server's time within 1 s); a `carla_world` restarted
+      under a running ego; CARLA restarted under both; acb's stamps against SSv2's time,
+      bit for bit; acb standalone through `demo_scenario.py`'s reloads.
   - **K5. No shims, the docs.**
     - Old names are refused. CLAUDE.md, the user guide, the READMEs and the design docs
       are updated.
@@ -172,7 +199,7 @@ it.
 
 - [ ] **Shape**: the bridge's repository has no simulator package and no simulator crate
   in its graph. acb and aib depend on the vehicle layer only. The pin check passes. Each
-  repository builds and tests on its own from `deps.repos`.
+  repository builds and tests on its own from a fresh clone with its `deps/` submodules.
 - [ ] **One source**: changing one spec value without regenerating fails `check-generated`
   in every repository holding an output, and fails the catalog lint.
 - [ ] **Spawn**: an ego more than 2 cm from the catalog is refused with both boxes in the

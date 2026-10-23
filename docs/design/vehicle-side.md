@@ -56,11 +56,11 @@ the vehicle layer plus one simulator package, which is what acb's and aib's stan
 already are.
 
 **Where it lives**: its own repository (decision V1). acb and aib each need it without
-swb, and swb needs it beside them. A submodule in all three would put the same packages
-into swb's workspace two or three times, and colcon refuses duplicate packages. So it is a
-submodule of swb only. acb's and aib's `just setup` fetch the commit pinned in a
-`deps.repos` file for their standalone workspaces (`vcs import`, or a plain clone into
-the git-ignored `external/`). The pin follows the same rules as a submodule pin.
+swb, and swb needs it beside them. It is a submodule of all three: acb and aib carry it
+under `deps/`, which holds a committed `COLCON_IGNORE` so swb's workspace, where it is a
+direct submodule, never builds a second copy (colcon refuses duplicate packages). A pin
+check in swb fails when acb's or aib's pin of it is not an ancestor of swb's
+(roadmap 051, decision 4). Submodules only; no `.repos` files.
 
 ## The rule for sharing
 
