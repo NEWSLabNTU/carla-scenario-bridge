@@ -364,9 +364,10 @@ offer `READS_BACK`; on CARLA outside a trace run that 60 us and the larger `Step
 What would take the rest off: one round trip a frame (`Apply`'s reply is SSv2's
 `UpdateEntityStatus` answer, needed before `UpdateFrame`, so this is a protocol change), or
 spinning instead of sleeping on both sides (a core each). Neither is worth its cost at 0.4 ms
-in 50. Proposed, not yet agreed: restate the bound as the whole frame's (processing plus
-tick, p95 within 10 %), which the new stack meets, and keep the per-request numbers here for
-the next protocol revision.
+in 50. **Bound restated (user, 2026-10-23):** the acceptance bound is the whole frame's,
+processing plus tick, p95 within 10 % of step 1's, which the new stack meets; the
+per-request numbers above stay here for the next protocol revision, which may take the
+second round trip out.
 
 **Isaac** (the world server headless with no ego, `ISAAC_KIT_ARGS`: on this host any
 rendered Town01 frame faults the GPU, Xid 31/109, `ERROR_DEVICE_LOST`, on either card):
@@ -537,7 +538,8 @@ Part A:
 - `just check` and `just test` pass; the bridge crate has no simulator dependency (test).
 - The conformance CLI passes against `carla_world` and the Isaac world server.
 - CARLA: the 20-NPC bench's gap trace identical in content to step 1's (server counters set
-  aside, as in 035); frame processing p95 not worse than step 1's by more than 10 %, and the
+  aside, as in 035); the whole frame's p95 (processing plus tick) not worse than step 1's by
+  more than 10 % (restated from processing alone on 2026-10-23, see the results), and the
   world round trip p95 recorded; `basic/` + `tutorial/`, `town01_two_av`, UC-ACC, UC-AEB
   with the same verdicts as step 1; one demo tour end to end.
 - Isaac: `town01_ego_drive` 5/5 with tracking within `acceptance.py`'s limits; 044's exit
