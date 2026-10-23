@@ -39,7 +39,7 @@ import numpy as np  # noqa: E402
 import omni.physx  # noqa: E402
 import omni.usd  # noqa: E402
 from isaacsim.core.api import World  # noqa: E402
-from pxr import Sdf, UsdGeom, UsdPhysics, Vt  # noqa: E402
+from pxr import UsdGeom, UsdPhysics, Vt  # noqa: E402
 
 N = int(os.environ.get("TILE_N", "300"))
 WARM = 30
