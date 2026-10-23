@@ -5,6 +5,10 @@ import os
 
 os.environ["ROS_DOMAIN_ID"] = "77"
 os.environ["ROS_LOCALHOST_ONLY"] = "1"
+# Under Cyclone, ROS_LOCALHOST_ONLY brings its own interface setting, and a CYCLONEDDS_URI that
+# names one too (Autoware's, which its setup exports) makes every node fail: "rmw_create_node:
+# failed to create domain".
+os.environ.pop("CYCLONEDDS_URI", None)
 
 import threading  # noqa: E402
 

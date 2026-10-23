@@ -208,6 +208,12 @@ dependency (carla 0.15.1 from crates.io in both, no git patch; roadmap 018), so 
 `cargo build`/`cargo check` and a plain `colcon build` compile the 0.9.16 API with no
 environment at all. Bump both workspaces to the same release together.
 
+- `CARLA_DIR` (CARLA's install, a host setting for `just carla-start`) is also what
+  carla-sys reads as a CARLA *source tree* to build from: with it in the environment a
+  build fails (`Unable to match '.../CARLA_0.9.16/Build/recast-c*-install'`). The cargo
+  recipes of both justfiles (`build`, `check`, `test`, acb's `package`) unset it, and just's
+  `dotenv-load` reads this repo's `.env` from acb's directory too; a bare `cargo` or `colcon
+  build` in a shell that exports it still fails.
 - `CARLA_VERSION`, when set, still **overrides** the feature (the justfile sets 0.9.16).
   A stray `CARLA_VERSION=0.10.0` in your shell therefore still builds the wrong API and
   reports correct code as "no field `position`" -- check `echo $CARLA_VERSION` before

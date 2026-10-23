@@ -142,6 +142,9 @@ build: _check-setuptools
     cd "{{project}}"
     source /opt/ros/humble/setup.bash
     source "{{autoware_setup}}"
+    # CARLA_DIR (a host setting, .env) is CARLA's install; carla-sys would take it for a
+    # CARLA source tree to build from, and the build fails.
+    unset CARLA_DIR
     export CMAKE_POLICY_VERSION_MINIMUM=3.5
     colcon build \
         --base-paths src \
@@ -204,6 +207,9 @@ check:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
+    # CARLA_DIR (a host setting, .env) is CARLA's install; carla-sys would take it for a
+    # CARLA source tree to build from, and the build fails.
+    unset CARLA_DIR
     cargo +nightly fmt --check
     cargo clippy --all-targets -- -D warnings
 
@@ -212,6 +218,9 @@ test:
     #!/usr/bin/env bash
     set -e
     source install/setup.bash
+    # CARLA_DIR (a host setting, .env) is CARLA's install; carla-sys would take it for a
+    # CARLA source tree to build from, and the build fails.
+    unset CARLA_DIR
     cargo nextest run --no-tests pass --no-fail-fast
     # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)
     python3 -m pytest -q src/swb_launch/test

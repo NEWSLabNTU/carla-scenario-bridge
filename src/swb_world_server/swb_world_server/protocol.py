@@ -22,8 +22,11 @@ def _load():
     for f in files.file:
         pool.Add(f)
     names = [m.name for f in files.file for m in f.message_type]
-    classes = {n: message_factory.GetMessageClass(pool.FindMessageTypeByName(f"swb_world.{n}"))
-               for n in names}
+    if hasattr(message_factory, "GetMessageClass"):  # protobuf >= 4.21 (Isaac's)
+        make = message_factory.GetMessageClass
+    else:  # the host's apt protobuf (3.12), for the tests outside Isaac
+        make = message_factory.MessageFactory(pool).GetPrototype
+    classes = {n: make(pool.FindMessageTypeByName(f"swb_world.{n}")) for n in names}
     enums = {e.name: {v.name: v.number
                       for v in pool.FindEnumTypeByName(f"swb_world.{e.name}").values}
              for f in files.file for e in f.enum_type}
