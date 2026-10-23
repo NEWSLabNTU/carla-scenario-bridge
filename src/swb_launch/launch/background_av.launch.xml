@@ -85,5 +85,8 @@
     <arg name="release_ack_endpoint" value="$(var release_ack_endpoint)" />
     <arg name="vehicle_name" value="$(var vehicle_name)" />
     <arg name="publish_clock" value="true" />
+    <!-- The CARLA world server applies the spec's physics to an agent vehicle at the spawn;
+         acb reads it back (roadmap 051). -->
+    <arg name="carla_physics_mode" value="verify" />
   </include>
 </launch>

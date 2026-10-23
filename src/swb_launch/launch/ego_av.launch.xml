@@ -129,6 +129,9 @@
     <arg name="control_trace_path" value="$(var control_trace_path)" />
     <arg name="accel_map_path" value="$(var accel_map_path)" />
     <arg name="brake_map_path" value="$(var brake_map_path)" />
+    <!-- The CARLA world server applies the spec's physics at the spawn; acb reads it back
+         (roadmap 051). -->
+    <arg name="carla_physics_mode" value="verify" />
   </include>
 
   <!-- The velocity-limit API SSv2's SpeedActions need (/api/autoware/set/velocity_limit,

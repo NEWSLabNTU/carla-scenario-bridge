@@ -22,6 +22,7 @@ import argparse
 import json
 import math
 import sys
+from pathlib import Path
 
 import carla
 
@@ -62,6 +63,12 @@ class Rig:
         if physics:
             apply_physics(self.car, physics)
         self.tick(20)
+        if physics:
+            try:
+                check_physics(self.car, physics)
+            except SystemExit:
+                self.car.destroy()
+                raise
 
     def tick(self, n=1):
         for _ in range(n):
@@ -91,12 +98,21 @@ class Rig:
 
 
 def apply_physics(car, path):
-    import yaml
-    spec = yaml.safe_load(open(path))
-    pc = car.get_physics_control()
-    for k, v in spec.get("vehicle", {}).items():
-        setattr(pc, k, v)
-    car.apply_physics_control(pc)
+    """sim_vehicle_spec's carla_physics.yaml, applied and read back."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src/sim_vehicle_spec"))
+    from sim_vehicle_spec import carla_physics
+
+    carla_physics.apply(car, carla_physics.load(path))
+
+
+def check_physics(car, path):
+    """After a tick: CARLA applies physics at the next one, and a read-back before it
+    returns the old."""
+    from sim_vehicle_spec import carla_physics
+
+    off = carla_physics.differences(car, carla_physics.load(path))
+    if off:
+        raise SystemExit(f"{path} did not take: {off}")
 
 
 def at(trace, t):
@@ -142,14 +158,48 @@ def brake_steps(rig):
     return out
 
 
+def to_speed(rig, target):
+    """Full throttle to `target` m/s: [(t, v, ...)], the time it took."""
+    tr, t = [], 0.0
+    while t < 30.0:
+        (row,) = rig.run(lambda t, v: carla.VehicleControl(throttle=1.0), DT)
+        t += DT
+        tr.append((round(t, 3), *row[1:]))
+        if row[1] >= target:
+            break
+    return tr
+
+
+def benchmarks(rig):
+    """What aib's Isaac steptest measures on the same car: 0-100 km/h, 100-0 km/h at full
+    brake, the coasting deceleration at about 90 km/h."""
+    rig.reset()
+    tr = to_speed(rig, 100 / 3.6)
+    launch = next((r[0] for r in tr if r[1] >= 100 / 3.6), None)
+    v0 = speed(rig.car.get_velocity())
+    p0 = rig.car.get_transform().location
+    br = rig.run(lambda t, v: carla.VehicleControl(brake=1.0), 12.0)
+    stop = next((r for r in br if r[1] < 0.05), br[-1])
+    rig.reset()
+    to_speed(rig, 25.0)
+    co = rig.run(lambda t, v: carla.VehicleControl(), 3.0)
+    coast = (co[0][1] - co[-1][1]) / (co[-1][0] - co[0][0])
+    return {"0-100 km/h s": launch, "100-0 km/h m": round(math.hypot(stop[3] - p0.x,
+                                                                     stop[4] - p0.y), 2),
+            "100-0 from m/s": round(v0, 2), "coast decel at 25 m/s": round(coast, 3)}
+
+
 def steering(rig):
     out = {}
     for st in (0.05, 0.1, 0.15):
         rig.reset()
 
         def hold5(t, v, steer=0.0):
-            th = max(0.0, min(1.0, 0.5 * (5.0 - v) + 0.25))
-            return carla.VehicleControl(throttle=th if v < 5.0 else 0.15, steer=steer)
+            # 5 m/s either way: throttle below, brake above (any car's coasting drag)
+            err = 5.0 - v
+            th = max(0.0, min(1.0, 0.4 * err + 0.15)) if err > -0.1 else 0.0
+            br = max(0.0, min(1.0, -0.3 * err)) if err < -0.2 else 0.0
+            return carla.VehicleControl(throttle=th, brake=br, steer=steer)
 
         rig.run(hold5, 4.0)
         tr = rig.run(lambda t, v: hold5(t, v, st), 2.0)
@@ -190,6 +240,7 @@ def main():
             "throttle": throttle_steps(rig),
             "brake": brake_steps(rig),
             "steering": steering(rig),
+            "benchmarks": benchmarks(rig),
         }
     finally:
         if rig is not None:
