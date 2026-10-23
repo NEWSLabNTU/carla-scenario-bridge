@@ -318,3 +318,52 @@ Logs in `play_log/051/k0/`.
   | 0.10 | 10.08 | 0.0353 |
   | 0.15 | 14.88 | 0.0527 |
 
+
+### K1. Repositories and workspace (2026-10-23, `7b5822a` on `target-shape`)
+
+New repositories, public under NEWSLabNTU, each on a `target-shape` branch, split with
+`git filter-repo` from the paths' history (pre-046 names included):
+
+| repository | from | holds |
+|---|---|---|
+| swb_world_protocol | `proto/`, `src/swb_core`, `src/swb_world_server`, `swb_world_check` | the protocol, the Rust shell and world client and shared world policy (`swb_core`), the Python shell, `swb_world_check` (a package of its own) |
+| swb_carla_world | `src/carla_world`, `scripts/measure_blueprint_boxes.py` | the CARLA world server, renamed: package, binary, node, `swb_carla_world.launch.xml`, `swb_carla_world.yaml` |
+| swb_isaac_world | `src/isaac_world`, swb_launch's Isaac launch file and wrapper | the Isaac world server as a ROS package: module `swb_isaac_world`, `swb_isaac_world.launch.xml`, `swb_isaac_world_server` |
+| autoware_sim_vehicle | acb's `acb_launch`, `acb_pilot`, component sync scripts | `autoware_sim_profile` (`launch/autoware.launch.xml`; switches `sim_*`), `autoware_sim_pilot` (`auto_drive`, `capture_poses`), the profile's tests (from acb's `launch_profile.rs`) |
+
+acb (`target-shape`) is the profile plus `acb_bridge`; aib (`target-shape`) includes the
+profile and no longer needs acb. The vehicle agent is `swb_agent`'s `vehicle_agent`, started
+by `swb_launch vehicle_agent.launch.xml`, which the ego launches and recipes hand the vehicle
+bridge as `extra_launch` (a user's own comes in as `user_launch`).
+
+Checks, all passing:
+
+- **Launch dumps**: `scripts/compare_launch_dumps.py play_log/051/k0/launch
+  play_log/051/k1/launch`: the nine stacks resolve to the same nodes (207, 208, 206, ...),
+  parameters, remappings and respawns as K0, but for install paths and the renames above
+  (`acb_agent` -> `vehicle_agent` included). A planted relay change is reported.
+- **Conformance**: CARLA world server 24 passed, Isaac world server 23 passed (headless,
+  default world, this host).
+- **`just test`**: the bridge's crates (70), the protocol's (187, in its own workspace, with
+  the gap trace read back by this repository's reader), the CARLA world server's (160, with
+  Isaac's surface table for the wet-road comparison), the Python suites, the profile's 17,
+  the SSv2 proto byte check, the scenario lint, and the pin check (5 component dependencies,
+  0 mismatches). **`just e2e`**: PASS.
+
+Deviations from the plan above, and why:
+
+- **SSv2's message protos live in swb_world_protocol**, beside `swb_world.proto`: `swb_core`'s
+  `SimBackend` seam and the shared world policy (which the CARLA world server uses whole) are
+  typed in them. No `swb_sim_interface` package; `scripts/test_ssv2_protos.py` here checks the
+  copy against the SSv2 fork byte for byte. Making the protocol repository free of SSv2 needs
+  the seam moved to the protocol's own types: a phase of its own.
+- **Components' `deps/` are initialised in this workspace too** (`git submodule update
+  --init --recursive`), COLCON_IGNOREd, and a component always builds against its own
+  `deps/` (Rust path dependencies, Python paths): it builds the same here as alone. So the
+  pin check requires a `deps/` pin to *equal* this repository's pin of the same repository,
+  not merely be an ancestor.
+- **`up.sh` stays here** as `scripts/carla_up.sh` and `scripts/isaac_up.sh`: they bring up
+  this repository's stacks (the simulation side, the ego), so they are the adapter's tooling.
+- **`autoware_sim_pilot`** (acb's `auto_drive` and `capture_poses`) moved too: Autoware's API
+  only, so both bridges' standalone runs drive to a goal with it.
+- Not yet done: CARLA's `Weather.msg` move (with K5's interface clean-up), the docs (K5).
