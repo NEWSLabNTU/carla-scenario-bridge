@@ -2,12 +2,27 @@
 
 ## Project Overview
 
-ZMQ+Protobuf adapter that makes CARLA a backend for tier4/scenario_simulator_v2 (SSv2). Implements SSv2's `simulation_interface` protocol, translating protobuf requests into CARLA API calls via carla-rust.
+The adapter that makes a simulator a backend for tier4/scenario_simulator_v2 (SSv2): SSv2's
+`simulation_interface` protocol (ZMQ + Protobuf) in, the world protocol out. Every simulator
+is a **world server** behind one protocol (`swb_world.proto`, in `swb_world_protocol`);
+CARLA's is `swb_carla_world`, Isaac Sim's `swb_isaac_world`. The bridge knows no simulator.
 
-**Design doc**: `docs/design/architecture.md`
-**Roadmap**: `docs/roadmap/`
-**Parent project**: [autoware_carla_bridge](https://github.com/NEWSLabNTU/ros_zenoh_bridge) (sensor/vehicle interface layer)
-**SSv2 protocol reference**: See `proto/` directory
+Since roadmap 051 the project is eight repositories, all NEWSLabNTU, each a direct submodule
+here (`docs/roadmap/051-target-shape.md`):
+
+| repository (`src/`) | holds |
+|---|---|
+| `sim_vehicle_spec` | the car: `vehicles/<car>.yaml` (spec v2) and what is generated from it for no autopilot in particular -- `carla_physics.yaml`, `carla_sensors.yaml`, SSv2's catalog (`catalogs/vehicles.xosc`); `spec_hash` |
+| `autoware_sim_vehicle` | the car for Autoware: per-car packages (`tesla_model3_description`, `_launch`, `_sensor_kit_*`, `individual_params`), the pedal maps, the Autoware profile (`autoware_sim_profile`), `vehicle_check` (`autoware_sim_check`) |
+| `swb_world_protocol` | `swb_world.proto` and SSv2's protos; the Rust shell (`swb_core`: world client and server, lease, `sim_time`), the Python shell (`swb_world_server`), `swb_world_check conformance` |
+| `swb_carla_world` | the CARLA world server, the only code using carla-rust; CARLA's weather presets and fields |
+| `swb_isaac_world` | the Isaac world server (Python, Isaac's venv) and its USD tooling |
+| `autoware_carla_bridge` (acb) | the CARLA vehicle bridge (`acb_bridge`), CARLA's stand-alone bring-up and demo, map tools |
+| `autoware_isaac_bridge` (aib) | the Isaac vehicle library and `aib.runner`; it generates the Isaac rig from the spec |
+| this one | the bridge, the relay, `swb_agent`, `swb_launch`, the run tooling, `swb_examples`, the gap oracle; it pins every repository above |
+
+**Design**: `docs/design/` (start at `architecture.md`, `simulator-interface-split.md`,
+`time-and-ticking.md`, `vehicle-side.md`). **Roadmap**: `docs/roadmap/`.
 
 ## Build & Run
 
@@ -15,65 +30,72 @@ ZMQ+Protobuf adapter that makes CARLA a backend for tier4/scenario_simulator_v2 
 just setup    # One-time: the user install (rustup, colcon plugin, submodules, rosdep) + dev tools
 just build    # The user's colcon build, plus --symlink-install and the dev-release profile
 just clean    # Clean artifacts
-just run      # Simulation side: bridge + agent relay (simulation.launch.xml)
+just run      # Simulation side on CARLA: world server + bridge + relay (sim:=isaac for Isaac)
 just check    # Format + clippy
-just test     # Run tests
+just test     # Run tests (with the pin check, scripts/check_pins.py)
 ```
+
+Without SSv2: acb's `just sim` / `just autoware`, aib's `just isaac-ego` / `just autoware`,
+and each one's `just vehicle-check` (the car's contract and dynamics, no Autoware).
 
 ## Key Design Decisions
 
-- **AWSIM pattern**: SSv2 puppeteers NPCs via `set_transform()`, CARLA owns ego physics
-- **Sensors**: Reject SSv2 `AttachSensor` requests (`Success=false`); CARLA sensors publish via autoware_carla_bridge
+- **AWSIM pattern**: SSv2 puppeteers NPCs via `set_transform()`, the simulator owns ego physics
+- **One car, one source**: the spec in `sim_vehicle_spec`; every output names its `spec_hash`.
+  The bridge refuses an ego whose world server, vehicle agent and catalog name different
+  specs, or whose body is more than 2 cm from the catalog's. On CARLA the world server applies
+  the spec's physics and acb_bridge verifies it (stand-alone, acb applies it)
+- **Time**: `nanos(elapsed) + BASE_NS` (1000 s) everywhere, no epoch. An episode (a CARLA
+  world) is a vehicle stack's lifetime: a world load or a CARLA restart ends every stack
+  (acb_bridge exits 3, required; `clock_guard` backs it up), and its supervisor brings it back
+- **Sensors**: Reject SSv2 `AttachSensor` requests (`Success=false`); the vehicle bridges publish them
 - **Traffic lights**: Freeze CARLA's built-in cycling, set states per SSv2 commands
-- **World config**: ROS services on the bridge (`/scenario_world_bridge/set_weather`, `/scenario_world_bridge/get_weather`,
-  `swb_interfaces`), applied on the ZMQ thread between SSv2 requests; the requested weather
-  (param `weather`, then the last set) is re-applied after every map load and reconnect
+- **World config**: ROS services on the bridge (`/scenario_world_bridge/set_weather`,
+  `get_weather`, `swb_interfaces`): a preset or parameters by name, the world server's names
+  (CARLA's in `swb_carla_world`'s README); the world server keeps the weather and re-applies
+  it after every world load and reconnect
 - **Coordinate conversion**: SSv2 uses ROS right-handed frame; CARLA uses left-handed (Y-flip)
-- **Vehicle interface**: autoware_carla_bridge handles `/vehicle/status/*` and `/control/command/*`; SSv2's `AutowareUniverse` (concealer) should be disabled
+- **Vehicle interface**: the vehicle bridges handle `/vehicle/status/*` and `/control/command/*`;
+  SSv2's `AutowareUniverse` (concealer) should be disabled
+- **No shims**: renamed arguments, variables and packages are refused by name, never aliased
+  (`SWB_RETIRED_ENV`, the profile's `check_launch_args`)
 
 ## Repository Structure
 
-Since roadmap 046 every simulator is a **world server** behind one protocol
-(`proto/swb_world.proto`), and the bridge knows no simulator
-(`docs/design/simulator-interface-split.md`, `docs/roadmap/046-unified-world-interface.md`).
-
 ```
 .
-├── src/swb_core/               # Rust library, simulator-free (no simulator crate in its graph):
-│   └── src/                    #   proto (SSv2's + the world protocol), sim (the SimBackend seam),
-│                               #   world_client / world_server (the protocol's Rust ends: lease,
-│                               #   capabilities), config, entity table, episode clock, NPC tracking,
-│                               #   gap trace, contact reports, agent link, weather, map resolver
 ├── src/scenario_world_bridge/  # The bridge (ament_cargo): SSv2's ZMQ server, coordinator,
 │   ├── src/backend/remote/     #   RemoteBackend -- its only backend, a world server over the protocol
-│   ├── src/bin/swb_world_check.rs  # probe (hello) or conformance-check any world server
 │   └── config/bridge_config.yaml   # the bridge's keys only
-├── src/carla_world/            # The CARLA world server (ament_cargo): CarlaBackend behind the
-│   ├── src/backend/carla/      #   protocol; the only code that uses carla-rust. One per CARLA
-│   ├── src/world.rs            #   (flock /tmp/swb-locks/carla-<host>-<port>.lock)
-│   └── config/carla_world.yaml #   CARLA's keys only; blueprint_boxes_<version>.yaml beside it
-├── src/swb_world_server/       # The protocol's Python server shell (lease, capabilities, World base)
-├── src/isaac_world/            # The Isaac Sim world server (Python, Isaac's venv; `just isaac-world`):
-│                               #   IsaacWorld on swb_world_server, NPCs, contacts, vehicle catalogue,
-│                               #   the surface layer (047: <map>/surfaces.yaml, per-wheel friction)
-├── src/autoware_isaac_bridge/  # aib submodule (045): the Isaac ego the world server imports
-├── src/swb_interfaces/     # rosidl: Weather.msg, SetWeather.srv, GetWeather.srv
-├── src/swb_agent/          # Agent SDK + agent protocol v1/v2 (030): swb_agent.Agent, Client, main
-├── src/scenario_agent_relay/  # the relay: concealer ADAPI <-> agents (imports swb_agent.protocol)
-├── src/swb_launch/         # simulation.launch.xml (bridge + relay), carla_simulation.launch.xml
-│                           #   (+ carla_world), isaac_simulation.launch.xml, isaac_world.launch.xml,
-│                           #   scenario, ego and background-AV launches, run_suite, gap oracle
-├── proto/                  # SSv2 protobuf definitions, and swb_world.proto (the world protocol)
-├── src/swb_examples/       # Starter scenarios (basic/, multi_av/, awf/), installed
-├── scenarios/              # Benchmark scenarios (bench/), goal-pose files
+├── src/swb_world_protocol/     # submodule: swb_world.proto, swb_core, swb_world_server, swb_world_check
+├── src/swb_carla_world/        # submodule: the CARLA world server (one per CARLA,
+│                               #   flock /tmp/swb-locks/carla-<host>-<port>.lock)
+├── src/swb_isaac_world/        # submodule: the Isaac world server (`just isaac-world`)
+├── src/sim_vehicle_spec/       # submodule: the vehicle spec and its generated outputs
+├── src/autoware_sim_vehicle/   # submodule: the car for Autoware, the profile, vehicle_check
+├── src/autoware_carla_bridge/  # submodule: acb (the CARLA vehicle bridge)
+├── src/autoware_isaac_bridge/  # submodule: aib (the Isaac vehicle library)
+├── src/scenario_simulator_v2/  # submodule: the SSv2 fork (branch managed-ego-unforked)
+├── src/swb_interfaces/         # rosidl: SetWeather.srv, GetWeather.srv (generic weather)
+├── src/swb_agent/              # Agent SDK + agent protocol v1/v2: swb_agent.Agent, Client,
+│                               #   `swb-agent supervise`, the vehicle agent
+├── src/scenario_agent_relay/   # the relay: concealer ADAPI <-> agents
+├── src/swb_launch/             # simulation launches (carla_, isaac_), scenario, ego and
+│                               #   background-AV launches, run_suite, gap oracle
+├── src/swb_examples/           # Starter scenarios (basic/, multi_av/, awf/); vehicles from the catalog
+├── scenarios/                  # Benchmark scenarios (bench/), goal-pose files
 ├── scripts/carla_up.sh, isaac_up.sh  # per-simulator bring-up (`just scenario ... sim:=`)
-├── docs/
-│   ├── design/             # Architecture, protocol, launch config docs
-│   └── roadmap/            # Phase 1-5 roadmap with task checklists
-├── Cargo.toml              # Workspace root: swb_core, scenario_world_bridge, carla_world
-├── justfile                # Build and run commands
-└── CLAUDE.md               # This file
+├── scripts/check_pins.py       # every component's deps/ pin is this workspace's pin
+├── docs/design/, docs/roadmap/
+├── Cargo.toml                  # Workspace root: scenario_world_bridge (no simulator crate in its graph)
+├── justfile
+└── CLAUDE.md
 ```
+
+Each component builds on its own against its `deps/` submodules (`git submodule update
+--init --recursive` in it, then its `just build`); `deps/` holds a `COLCON_IGNORE`, so a colcon
+run here never sees a second copy. `just test` here fails when a component's `deps/<repo>` pin
+is not the same as, or an ancestor of, this repository's pin of that repository.
 
 ## Coding Practices
 
@@ -108,7 +130,7 @@ Two checkouts share a host by moving one checkout's whole set in its `.env`: `SW
 its side and acb's), `AGENT_PORT`, `WORLD_PORT`, `EGO_ROS_DOMAIN_ID`, `SCENARIO_ROS_DOMAIN_ID`,
 `BG_ROS_DOMAIN_ID`. `ISAAC_PORT` and
 `CARLA_PORT` keep the simulators' own defaults (5590, 2000) unless those are taken too; a
-second CARLA's Traffic Manager port follows it (CARLA_PORT + 6000) unless `carla_world.yaml`
+second CARLA's Traffic Manager port follows it (CARLA_PORT + 6000) unless `swb_carla_world.yaml`
 names another. The CARLA world server's lock refuses a second one on the same CARLA, whichever
 checkout it comes from.
 
@@ -117,13 +139,24 @@ Always use `just build` instead of `colcon build` directly (ensures `--symlink-i
 
 **And rebuild both workspaces after an acb change, in this order: acb's, then this one.**
 `just ego-av` sources three overlays -- Autoware, `src/autoware_carla_bridge/install/`, then
-this repo's `install/` -- and the last one wins. Because `just build` here runs colcon with
-`--base-paths src`, it compiles the acb packages too, so the `acb_bridge` the stack actually
-executes is `install/acb_bridge/lib/acb_bridge/acb_bridge` **in this repo** (verified from
-`/proc/<pid>/cmdline`, 2026-09-25). Rebuilding only the acb workspace changes nothing the
-stack runs; rebuilding only this repo works until someone rebuilds acb and wonders why it
-had no effect. A pull that moves the acb submodule leaves the old binaries in place either
-way, and the stack keeps running them, silently.
+this repo's `install/` -- and both workspaces hold an `acb_bridge` (`just build` here runs
+colcon with `--base-paths src`, which compiles the acb packages too). Which one the stack
+executes depends on the shell acb's workspace was **built** in:
+
+- built from a clean shell (`env -i ... just build`, as below): acb's `setup.bash` chains only
+  ROS and Autoware, this repo's is sourced last and wins -- the stack runs
+  `install/acb_bridge/lib/acb_bridge/acb_bridge` **in this repo** (verified 2026-09-25 and
+  2026-10-24);
+- built from a shell that had this repo's `install/` sourced: acb's `setup.bash` records this
+  repo's install as an *underlay* and sources it first, then its own; sourcing this repo's
+  afterwards does not move it ahead (colcon prepends only paths not already there), so the
+  stack runs **acb's** copy (`src/autoware_carla_bridge/install/...`). Seen 2026-10-24: a K3
+  suite ran a stale acb that way and failed one scenario and stalled starts.
+
+So rebuild both, always, from a clean environment, and ask the overlay rather than assume:
+`ros2 pkg prefix acb_bridge` after sourcing the three, or `/proc/<pid>/cmdline` of the live
+process. A pull that moves the acb submodule leaves the old binaries in place either way, and
+the stack keeps running them, silently.
 
 Stop the ego stack before `just build` here: with it running, colcon fails at the install
 step with `Failed to copy binary: acb_bridge: Text file busy` after compiling everything.
@@ -137,8 +170,9 @@ only a threshold notices -- so nothing announces it.
 
 ```bash
 git submodule update --init --recursive
-(cd src/autoware_carla_bridge && just build)   # acb's own workspace
-just build                                      # this repo: the overlay the stack runs
+clean='env -i HOME=$HOME USER=$USER PATH=$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin TERM=dumb'
+(cd src/autoware_carla_bridge && $clean bash -c 'just build')   # acb's own workspace
+$clean bash -c 'just build'                                      # this repo
 ```
 
 Check the binary against the source when a measurement surprises you -- both copies, and
@@ -307,8 +341,13 @@ on its own when the run ends, and its log says so:
     shutting down the launch
 ```
 
-**The ego stack does not** -- nothing in it is declared required -- so `just ego-av` still
-has to be stopped deliberately, and everything below still applies to it.
+**The ego stack ends only with its episode** (roadmap 051): `acb_bridge` and `clock_guard`
+are required, so a world load or a CARLA restart ends it, and nothing else does -- otherwise
+it has to be stopped deliberately, and everything below still applies to it. **A stack
+`scripts/carla_up.sh` started is supervised** (`swb-agent supervise`, `play_log/ego.console`):
+its supervisor starts it again whenever it ends, so killing its play_launch only restarts it.
+Stop the supervisor instead (SIGTERM to the `python3 -m swb_agent supervise` above the
+play_launch: it stops its group and exits); `carla_up.sh`'s `stop_stack` does exactly that.
 
 Before a run, know what is already up:
 
@@ -321,35 +360,35 @@ ss -lpn | grep 5555        # exactly one bridge should hold the SSv2 port
 
 **The simulation side is its own long-lived launch.** `just run` (`sim:=carla`, the default)
 starts `swb_launch carla_simulation.launch.xml` under play_launch (web 8084, scenario domain
-9): the CARLA world server `carla_world`, the bridge driving it, and the agent relay (TCP 5560)
+9): the CARLA world server `swb_carla_world`, the bridge driving it, and the agent relay (TCP 5560)
 the ego's vehicle agent registers with, each `respawn="true"`. Scenario launches never include
 it, so it outlives sessions -- one bridge was once found serving scenarios 44 hours later,
 running code from two rebuilds earlier. Treat it as a tracked singleton: check its age
 against the build before trusting a measurement, and after `just build` restart it
 deliberately (stop the play_launch on 8084 by pid, then `setsid just run > log 2>&1 &`). It
 runs the *installed* binaries, so `just build` must run first. Its configs are the bridge's
-`config_file` (`bridge_config.yaml`) and the world server's `carla_world_config`
-(`carla_world.yaml`); `ros2 param get /scenario_world_bridge config_file` in domain 9 names
+`config_file` (`bridge_config.yaml`) and the world server's `swb_carla_world_config`
+(`swb_carla_world.yaml`); `ros2 param get /scenario_world_bridge config_file` in domain 9 names
 the bridge's. `just world-health` probes the world server (owner, readiness) without
 touching it.
 
 Every process here ends with its play_launch: the world servers and the bridge ask the
 kernel for SIGTERM when their parent dies (`PR_SET_PDEATHSIG`), so a play_launch killed with
-SIGKILL leaves nothing behind, and `carla_world` puts CARLA back to asynchronous on the way
+SIGKILL leaves nothing behind, and `swb_carla_world` puts CARLA back to asynchronous on the way
 out. Note that `just run`'s `play_launch` is a Python wrapper around the real binary
 (`.../play_launch/dist/.../bin/play_launch`), which is the nodes' parent: kill that one, or
 the process group. One bridge drives a world server at a time (the owner lease), and one
-`carla_world` drives a CARLA server (a `flock` on `/tmp/swb-locks/carla-<host>-<port>.lock`,
+`swb_carla_world` drives a CARLA server (a `flock` on `/tmp/swb-locks/carla-<host>-<port>.lock`,
 across checkouts); a second of either is refused.
 
 ```bash
-ps -eo pid,etimes,args --no-headers | grep -E "[c]arla_world|[c]arla_scenario_bridge|[s]cenario_agent_relay"
+ps -eo pid,etimes,args --no-headers | grep -E "[s]wb_carla_world|[s]cenario_world_bridge|[s]cenario_agent_relay"
 ss -lpn | grep -E ":5555 |:5560 |:5591 "   # bridge, relay, CARLA world server
 just world-health                           # its simulator, owner, readiness
 ```
 
 **On Isaac (roadmap 043) the world server is its own stack**: `just isaac-world`
-(swb_launch `isaac_world.launch.xml`, web 8085, `play_log/isaac/`, respawned on death), and
+(swb_isaac_world `swb_isaac_world.launch.xml`, web 8085, `play_log/isaac/`, respawned on death), and
 `just run sim:=isaac` is the bridge and the relay driving it (`isaac_simulation.launch.xml`).
 `just scenario|acceptance|e2e <xosc> sim:=isaac` starts the world server, the simulation
 side on Isaac and `just ego-isaac` when they are absent (`scripts/isaac_up.sh`; CARLA's is
@@ -372,9 +411,9 @@ hand mid-run still can. Orphans show up as `ppid == 1`:
 
 ```bash
 ps -eo pid,ppid,etimes,comm --no-headers | awk '$2==1 && ($4=="component_node" ||
-    $4=="add_two_ints_se" || $4=="zenohd" || $4=="carla_scenario_" ||
+    $4=="add_two_ints_se" || $4=="zenohd" || $4=="scenario_world_" ||
     $4=="carla_manual_co" || $4=="auto_drive" || $4=="acb_bridge" || $4=="agent" || $4=="relay" ||
-    $4=="carla_world")'
+    $4=="swb_carla_world")'
 ```
 
 A name-based list only finds what is on it. A `carla_manual_control` left over from the
@@ -425,7 +464,7 @@ A LibCarla client whose server died keeps a dead RPC connection (it never reconn
 streaming client that does reconnect, to the next server on the same port. Its light-update
 callback then blocks inside the stream for the client's whole timeout, and a synchronous
 server waits for every subscriber before the next frame: the whole server hangs (the "port
-2000 hang", `docs/design/failure-and-frame-budget.md`). The CARLA world server (`carla_world`, the
+2000 hang", `docs/design/failure-and-frame-budget.md`). The CARLA world server (`swb_carla_world`, the
 only swb process with a CARLA client since roadmap 046) exits 75 for a fresh process when its
 idle probe finds the connection dead, and its supervisor restarts it (the bridge stays); acb drops and rebuilds such clients. Any other
 long-lived client on the testbed's port needs the same, or must be restarted with CARLA.

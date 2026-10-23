@@ -7,22 +7,6 @@ members = [
 # here, built and tested in their own workspace.
 exclude = ["src/swb_world_protocol", "src/swb_carla_world"]
 
-[workspace.dependencies]
-# The feature names the CARLA this workspace talks to; carla-rust refuses to build without
-# one (CARLA_VERSION, when set, still overrides it). Must stay on the same release as
-# src/autoware_carla_bridge: both bridges talk to one CARLA server, and building them against
-# different FFI is what produced std::bad_array_new_length before.
-#
-# 0.15.0 is the first release with every fix this workspace once took from git: sensors
-# stopped before destroy_with_children destroys them (an orphaned 0.9.16 sensor stream logs
-# "Invalid session" at ~10 MB/s and eventually segfaults the server; acb docs/issues/015),
-# the carla-rust/0.9.16-3 prebuilt with worker-thread exception containment, empty FFI
-# containers that no longer abort, and the version selected by this feature. 0.15.1 moves
-# to the carla-rust/0.9.16-4 prebuilt, which backports upstream CARLA e7e076f: the
-# synchronous Traffic Manager runs Step() inline, so World::tick can no longer hang on its
-# lost wakeup (roadmap 034 step 6).
-carla = { version = "0.15.1", features = ["carla-0916"] }
-
 [profile.dev-release]
 inherits = "release"
 debug = true
