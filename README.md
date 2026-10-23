@@ -8,13 +8,15 @@ localization, planning and control, while
 [scenario_simulator_v2](https://github.com/tier4/scenario_simulator_v2) (SSv2) runs the
 scenario and gives the verdict.
 
-Every simulator is a **world server** behind one protocol (`proto/swb_world.proto`): the
-bridge speaks SSv2's protocol on one side and the world protocol on the other, and knows no
-simulator. CARLA's world server (`carla_world`, Rust) and Isaac Sim's (`isaac_world`,
-Python) are two implementations; another simulator is a third, written against the Python
-or Rust server shell and checked with `swb_world_check conformance`
-([design](docs/design/simulator-interface-split.md)). This project was
-carla-scenario-bridge (csb) until roadmap 046.
+It also runs Autoware on CARLA or Isaac Sim **without a scenario runner**: you set the scene
+up in the simulator yourself and drive. Both uses share one Autoware setup and one
+description of the car.
+
+> **Status.** This README describes the target layout of
+> [roadmap 051](docs/roadmap/051-target-shape.md). Until it lands, some parts keep their
+> old names and places: the world servers are `src/carla_world` and `src/isaac_world` in
+> this repository, the vehicle packages are acb's `acb_vehicle` and aib's `aib_vehicle`,
+> and the car is described in aib's spec only.
 
 <p align="center">
   <img src="docs/media/showreel_pedestrian.gif" alt="Autoware in CARLA stops for a crossing pedestrian, then drives on" width="640"><br>
@@ -31,23 +33,92 @@ carla-scenario-bridge (csb) until roadmap 046.
 
 ## What it does
 
-SSv2 normally tests Autoware against a lightweight simulator that hands it ground truth --
-perfect detections, exact positions -- so perception is never exercised. This project makes
-CARLA an SSv2 backend instead: the same `.xosc` scenario files, but Autoware has to *see*
-the pedestrian, the car ahead and the traffic light.
+SSv2 normally tests Autoware against a lightweight simulator that hands it ground truth:
+perfect detections and exact positions, so perception is never exercised. This project
+makes CARLA and Isaac Sim SSv2 backends instead. The `.xosc` scenario files stay the same,
+but Autoware has to *see* the pedestrian, the car ahead and the traffic light.
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="System architecture" width="820">
+  <img src="docs/figures/architecture.svg" alt="SSv2 drives the bridge and the agent relay; the bridge drives a world server for CARLA or Isaac Sim; Autoware connects to the simulator through a vehicle bridge" width="820"><br>
+  <em>A scenario run. The two teal lines are the boundaries every simulator implements.</em>
 </p>
 
-- **Simulation side** -- SSv2 runs the scenario; **scenario-world-bridge** (this project)
-  translates SSv2's requests into CARLA (spawns, motion, traffic lights, time); an **agent
-  relay** passes the scenario's goals to whatever drives the ego.
-- **Vehicle side** -- your Autoware with
-  [autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge): CARLA's
-  sensors and clock in, Autoware's control out, and a **vehicle agent** that takes goals
-  from the relay. It can run on another host and in another ROS domain.
-- **CARLA** owns physics, sensors and simulation time.
+- **Scenario side.** SSv2 runs the scenario and gives the verdict. The **bridge**
+  (`scenario_world_bridge`) translates SSv2's requests into the **world protocol**. It
+  knows no simulator. The **agent relay** passes the scenario's goals to whatever drives
+  the ego.
+- **World servers.** One per simulator: `swb_carla_world` for CARLA and `swb_isaac_world`
+  for Isaac Sim. Each loads the map, spawns and moves the scenario's vehicles and people,
+  sets the traffic lights and steps the simulation. Another simulator becomes a backend by
+  implementing the world protocol and passing `swb_world_check conformance`.
+- **Vehicle side.** Your Autoware, connected to the simulator through a **vehicle bridge**:
+  acb (`autoware_carla_bridge`) for CARLA, aib (`autoware_isaac_bridge`) for Isaac Sim.
+  The vehicle bridge publishes the simulator's sensors, the vehicle status and `/clock`,
+  and drives the car from Autoware's commands. A **vehicle agent** takes the scenario's
+  goals from the relay. The vehicle side can run on another host and in another ROS
+  domain.
+
+The vehicle bridge and Autoware meet at the **I5 contract**: the topics, frames and clock
+rule Autoware expects of any simulated car. Autoware sees the same contract from CARLA and
+from Isaac Sim, with or without SSv2.
+
+## Autoware without a scenario runner
+
+<p align="center">
+  <img src="docs/figures/standalone.svg" alt="Without SSv2: a CARLA client sets the scene, acb_bridge connects Autoware; or aib's runner connects Autoware to Isaac Sim" width="720"><br>
+  <em>No SSv2, bridge, world server or relay: only the simulator, its vehicle bridge and Autoware.</em>
+</p>
+
+- **CARLA, a scene you set up by hand.** Start CARLA and build the scene with any CARLA
+  client: spawn the ego as a Tesla Model 3 with `role_name=hero`, add traffic with CARLA's
+  `generate_traffic.py`, set the weather. Then start acb's Autoware launch with the town's
+  map. acb attaches to the hero when it appears, gives it the vehicle spec's physics, and
+  Autoware takes its initial pose and goal from RViz.
+- **Isaac Sim.** aib's runner opens a world with the ego built from the vehicle spec, and
+  Autoware connects the same way.
+
+Loading another town, or restarting the simulator, ends the Autoware stack. Start it again
+with the new town's map.
+
+## One car, described once
+
+<p align="center">
+  <img src="docs/figures/vehicle-spec.svg" alt="The vehicle spec generates the Autoware packages, the Isaac rig, CARLA's physics and sensor files and the SSv2 catalog; checks at build, spawn and drive time hold every copy to it" width="900"><br>
+  <em>Every value about the car is edited in one file. The rest is generated or measured from it.</em>
+</p>
+
+The car's dimensions, mass, tires, powertrain, steering and sensors live in one file,
+`vehicles/tesla_model3.yaml` in `autoware_sim_vehicle`. From it come:
+
+- Autoware's vehicle and sensor kit packages (`tesla_model3_description`,
+  `tesla_model3_launch`, `tesla_model3_sensor_kit_*`) and the shared launch profile
+  (`autoware_sim_profile`);
+- Isaac Sim's vehicle rig;
+- CARLA's physics (`carla_physics.yaml`) and sensors (`carla_sensors.yaml`);
+- SSv2's vehicle catalog, which every scenario's ego refers to.
+
+Three checks keep them in agreement:
+
+- **At build time**, every output is regenerated and compared with the committed one, and
+  no scenario may type its own ego box.
+- **At spawn**, the ego's measured box and wheels are compared with the catalog (2 cm), and
+  CARLA's physics are read back.
+- **While driving**, `vehicle_check` measures acceleration, braking and steering on each
+  simulator against the spec.
+
+## Repositories
+
+| Repository | What it holds |
+|---|---|
+| [scenario-world-bridge](https://github.com/NEWSLabNTU/scenario-world-bridge) (this one) | The bridge, the agent relay and vehicle agent, launch files, run tools, starter scenarios with the vehicle catalog. Holds every repository below as a git submodule. |
+| autoware_sim_vehicle | The vehicle specs, the generated Autoware packages, the launch profile, the I5 contract and `vehicle_check`. |
+| swb_world_protocol | The world protocol, its Rust and Python server shells, and the conformance check. |
+| swb_carla_world | The CARLA world server. |
+| swb_isaac_world | The Isaac Sim world server. |
+| [autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge) (acb) | The CARLA vehicle bridge, and running Autoware on CARLA without SSv2. |
+| [autoware_isaac_bridge](https://github.com/NEWSLabNTU/autoware_isaac_bridge) (aib) | The Isaac Sim vehicle library and runner. |
+
+acb and aib build on their own with only `autoware_sim_vehicle`, so neither needs SSv2.
 
 ## Supported versions
 
@@ -57,6 +128,7 @@ the pedestrian, the car ahead and the traffic light.
 | Autoware | 1.5.0 (binary packages), or your own build of the same release |
 | scenario_simulator_v2 | bundled (a fork, as a submodule) |
 | CARLA | **0.9.16 -- tested.** 0.9.14 and 0.9.15 build, untested ([Other CARLA versions](#other-carla-versions)) |
+| Isaac Sim | 6.1 (pip install, Python 3.12) |
 
 ## Prerequisites
 
@@ -104,18 +176,28 @@ Four terminals, each with Autoware's and this workspace's `setup.bash` sourced, 
 # 1. CARLA (headless)
 <CARLA_0.9.16>/CarlaUE4.sh -RenderOffScreen -nosound -carla-rpc-port=2000
 
-# 2. Simulation side: the bridge and the agent relay (long-lived)
-ROS_DOMAIN_ID=9 ros2 launch swb_launch simulation.launch.xml
+# 2. Simulation side: CARLA's world server, the bridge and the agent relay (long-lived)
+ROS_DOMAIN_ID=9 ros2 launch swb_launch carla_simulation.launch.xml
 
-# 3. Vehicle side: Autoware on CARLA, registered with the relay
-ROS_DOMAIN_ID=1 ros2 launch acb_launch carla_simulator.launch.xml \
-    map_path:=$CARLA_MAPS/Town01 vehicle_name:=hero relay:=tcp://localhost:5560
+# 3. Vehicle side: Autoware on CARLA, its vehicle agent registered with the relay
+ROS_DOMAIN_ID=1 ros2 launch swb_launch ego_av.launch.xml \
+    map_path:=$CARLA_MAPS/Town01 relay:=tcp://localhost:5560
 
 # 4. A scenario -- the launch ends with the scenario; the verdict is a JUnit file
 ROS_DOMAIN_ID=9 ros2 launch swb_launch scenario.launch.xml \
     scenario:=$(ros2 pkg prefix swb_examples)/share/swb_examples/scenarios/basic/town01_ego_drive.xosc \
     output_directory:=/tmp/swb_run
 cat /tmp/swb_run/scenario_test_runner/result.junit.xml
+```
+
+On Isaac Sim, the world server is its own long-lived launch and the simulation side is
+`isaac_simulation.launch.xml`: [User Guide §4](docs/user-guide.md#4-run).
+
+Without SSv2, Autoware on a CARLA scene you set up yourself is one launch, after CARLA
+(terminal 1) is up and your client has spawned the hero:
+
+```bash
+ROS_DOMAIN_ID=1 ros2 launch acb_launch carla_simulator.launch.xml map_path:=$CARLA_MAPS/Town01
 ```
 
 A whole directory of scenarios, with CARLA's own collision check next to SSv2's verdict:
@@ -179,18 +261,19 @@ Each CARLA release needs its own server package and map directories.
 ## For developers
 
 Building with `just`, running the tests, the repository layout, how a request flows from SSv2
-through the bridge to CARLA, and the design documents (architecture, the SSv2 protocol,
+through the bridge to a world server, and the design documents (architecture, the SSv2 protocol,
 time and ticking, launch configuration): the [Developer Guide](docs/development.md).
 The [roadmap](docs/roadmap/README.md) records what was built and why.
 
 ## Related projects
 
-- [autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge) -- the
-  vehicle side: sensors, vehicle interface and vehicle agent for Autoware on CARLA.
+- [autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge) -- Autoware on
+  CARLA: sensors and vehicle interface, with or without SSv2.
+- [autoware_isaac_bridge](https://github.com/NEWSLabNTU/autoware_isaac_bridge) -- Autoware on
+  Isaac Sim.
 - [scenario_simulator_v2](https://github.com/tier4/scenario_simulator_v2) -- Autoware's
   scenario testing framework.
 - [carla-rust](https://github.com/jerry73204/carla-rust) -- Rust bindings for CARLA's C++ API.
-- [AWSIM](https://github.com/tier4/AWSIM) -- a Unity-based SSv2 backend, the alternative to
-  CARLA.
+- [AWSIM](https://github.com/tier4/AWSIM) -- a Unity-based SSv2 backend, another alternative.
 - [play_launch](https://pypi.org/project/play-launch/) -- a `ros2 launch` drop-in with
   per-node logs and a web UI.
