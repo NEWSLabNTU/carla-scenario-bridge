@@ -497,3 +497,74 @@ Checks:
   opposite, so K5 corrects it. A stale acb install made the first K3 suite (`051_k3`) fail
   motorbike_body and stall starts. After acb's workspace was rebuilt, the same scenario
   passed, and the whole set was run again as `051_k3b`.
+
+### K4. The clock (2026-10-24, `target-shape`)
+
+Time is `nanos(elapsed) + BASE_NS` (1000 s) everywhere: swb_core's `sim_time.rs`, the Python
+world-server shell, acb's `clock.rs`, aib's `sim_time.py`. Each rounds half away from zero.
+`scripts/test_sim_time.py` (in `just test`) checks that BASE_NS and a table of rounding cases
+agree across all four. The epoch code is gone: `episode_clock`, `clock_store`, the epoch
+marker, the reload-as-pause in the CARLA world server, acb's epoch rule, and aib's
+`clock_offset`, which aib now refuses by name.
+
+- **The protocol** names the episode: `LoadWorldReply.episode_id` and
+  `StepReply.episode_id`. CARLA's is its world id. The Python shell counts world loads. The
+  conformance check now has two more checks: the time is past BASE_NS, and the same world
+  loaded again keeps its episode with time going on. The bridge warns when the episode
+  changes.
+- **An episode change ends every vehicle stack.** acb attaches to the episode it first sees.
+  On a frame or a hero of another episode, it logs the change naming both ids, flushes its
+  log writer and exits with status 3, before publishing anything of the new episode. Its
+  launch node is `on_exit="shutdown"` and is never respawned. The Autoware profile's
+  `clock_guard` (required, `sim_clock_guard:=true`) is the backstop for any simulator: it
+  ends the stack when `/clock` goes back.
+- **The stack comes back**: `carla_up.sh` runs the ego stack under `swb-agent supervise`,
+  which starts it again in the new episode. A stack on another map than the scenario's is
+  stopped through its supervisor and replaced. That replacement ends once more at the
+  scenario's load of its town, so a town change costs two stack starts (about 1 min each
+  here). `run_suite` waits for a supervised agent whose stack ended to register again.
+  `isaac_up.sh` restarts a stack on another map too.
+- **acb standalone**: `just sim` loads its town first (`scripts/carla_load_town.py`), so
+  the demo scenario finds it loaded and acb attaches to the episode that stays. Before
+  this, a town other than CARLA's would have ended the stack at once.
+- **Isaac, a deviation**: the Isaac world server's time is monotonic over its whole
+  lifetime. aib's `EgoRos` lives in that process and keeps `/clock` running across world
+  loads, so an Isaac stack is never ended by a load. A stack on another map is restarted by
+  `isaac_up.sh`. `clock_guard` covers a restarted world server, whose time starts again.
+
+Checks (`play_log/051/k4/`, CARLA 0.9.16 on newslab-118-server):
+
+1. **Through an episode change** (`check1c`, run_suite with a supervised ego): Town01
+   ego_drive, traffic_light, town02_episode_change, Town01 ego_drive, pedestrian: **5/5
+   pass**. At the Town02 load acb exited with status 3 ("CARLA's episode changed (… -> …)"),
+   the launch ended, the supervisor restarted the stack 9 s later, and run_suite waited for
+   it. The next Town01 scenario's load ended that stack too, and the scenario passed on the
+   third stack (77 s, against 51 s without the restart). No Autoware node logged a jump back
+   in time.
+2. **A Town02 scenario against a Town01 stack** (`check2b`, `just scenario`): Town01,
+   Town02, Town01: **3/3 pass**, each town change as described above. The first try
+   (`check2`), before the stack was supervised, failed both town changes. The replacement
+   stack attached to the old episode and died at the load, which is why `carla_up.sh` now
+   supervises it.
+3. **CARLA restarted under a running stack** (`check3`): acb saw the connection die and a
+   new episode, and exited before publishing anything of it. The CARLA world server exited
+   75 and was respawned, the supervisor restarted the stack, and town01_ego_drive passed.
+4. **The world server and the bridge restarted under a running stack** (`check4`,
+   `check4b`): both were killed and respawned in 6 s, and the stack did not notice.
+   town01_ego_drive passed twice. SSv2's time agrees with acb's: all 235 distinct stamps
+   of SSv2's V2I signal message (scenario domain) equal a `/clock` value acb published (ego
+   domain), bit for bit, and `/clock` never stepped back.
+5. **acb standalone** (`check5b`, acb's `just sim map:=Town02`, CARLA on Town01):
+   `carla_load_town.py` loaded Town02, the demo scenario found it loaded, and acb attached
+   to its episode and found the hero. After 120 s, a load from outside ended the stack: acb
+   exited with status 3 and logged the message, and the launch shut down.
+
+6. **`just e2e`**: PASS. CARLA was still on Town02 from check 5, so the supervised Town01
+   stack ended once at the scenario's load and came back (two starts). `just test` passes
+   too, and the pin check finds 9 dependencies, 0 mismatches.
+
+Also seen, not K4's: `pose_instability_detector` dies with "cannot store a negative time
+point in rclcpp::Time" in some stack starts (ego logs since 2026-10-22, K0's time base
+included). It is a diagnostic node, and the stack runs on without it. acb's `just sim`
+never reports "Startup complete" here: rviz2 crash-loops without a display, and play_launch
+waits on 8 perception composables. The bridge and the drive are unaffected.
