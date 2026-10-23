@@ -389,6 +389,132 @@ to 2.4, Autoware answered at its 1.0 m/s^2 limit and was back at 4.1 by the zone
 (hence 0.348 m/s^2 of tracking error); with the zone off the route, B's step time is A's.
 A clean Autoware comparison waits for a quiet host.
 
+### Every vehicle on the grid (047 S4, 2026-10-23)
+
+A zone's grid is shared. The egos run on it as before; an NPC vehicle rolls on it too, so the
+ruts the egos meet include the traffic's. An NPC does not feel the soil (SSv2 drives it), it
+only marks it: each of its four wheels rolls without slip on a quarter of its mass, its
+wheel base, tread and radius CARLA's for its body (`surface_layer.kinematic_wheels`, from the
+catalogue's physics; shares of its box where CARLA gives none). A kinematic NPC's pose comes
+from SSv2's drive; a tracked one's (044, a dynamic body driven by velocity) from PhysX, a
+frame behind, since its drive carries no pose (the first Town01 run found that: the lead
+stamped its footprint once at spawn and never again). Each frame's motion is split over the
+substeps, so the grid sweeps its wheels as continuously as an ego's; a jump of more than 5 m
+in a frame is a teleport and leaves no rut. Every substep updates the egos in handle order,
+then the NPCs in path order, so a rerun cuts the same ruts. Tests: `KinematicTest` (4).
+
+### Scenarios and exit runs on Town01 (047 S6, 2026-10-23)
+
+Two scenarios on town01_ego_drive's route (x 190.8 to 120 along y -130), each with its
+surface map in `scenarios/surfaces/` (copied to the map directory for a run):
+
+- `town01_soil.xosc` over `town01_soil.yaml`: dry sand (x 171.2-180.8), then dirt (sandy
+  loam, x 145.6-169.6), both soil zones with their own ground; a lead car SSv2 moves at
+  5 m/s on the ego's line lays its ruts first; parameter `ruts` (default `fresh`) is the
+  rut set the soil starts from.
+- `town01_mud.xosc` over `town01_mud.yaml`: 12.8 m of wet mud (x 145.6-158.4), opted in.
+
+`just acceptance <xosc> 2 sim:=isaac worlds:=Town01`, one world server, newslab-server-241,
+host load 25-175 on 24 cores from other users' jobs (a 30-hour multiprocessing job):
+
+| set | runs | MRM | longitudinal (m/s^2) | peak |
+|---|---|---|---|---|
+| A: town01_ego_drive, no surface map | 2/2 PASS | 0, 0 | 0.022, 0.019 | 4.26 m/s |
+| S: soil, lead 0.7 m beside the ego's line | 2/2 PASS | 0, 0 | 0.224, 0.214 | 4.48 |
+| S: soil, lead on the ego's line | 1/2 | 0, 1 | 0.300, 0.203 | 4.48, 4.45 |
+| R: soil from rut set `worn` (that run's ruts) | 2/2 PASS | 0, 0 | 0.115, 0.140 | 4.28, 4.32 |
+| M: mud | 2/2 PASS | 0, 0 | 0.086, 0.081 | 4.38 |
+| S after S5's fit, lead on the line | 0/2 | 1, 3 | 0.186, 0.190 | 4.44 |
+| S after the fit, ruts feathered at the edges | 1/2 | 1, 0 | 0.284, 0.206 | 4.47, 4.41 |
+
+The rows above S5's fit ran Wong's rows as published; the last two the fitted sand and dirt
+(S5, below). Every SSv2 verdict was a pass; the FAILs are acceptance's MRM count.
+
+(Before these, a first S batch lost run 1 to a 14 s step while the world server compiled the
+lead's body's materials, its first use on the host; and the lead left no ruts, the fault
+above.) What the runs show:
+
+- The soil costs Autoware tracking, not the route: its speed falls in the sand and it pulls
+  back at its limit (0.2-0.3 m/s^2 of median error against 0.02 without a map, under the
+  0.35 limit). Mud costs less than sand (0.08): the zone is shorter and sinks 3-5 cm.
+- Ruts make it easier, as on the pad: from the saved set (sand 13.6 cm deepest, dirt 3.8)
+  the error halves to 0.12-0.14.
+- The NPC's ruts: 7.5 cm in the sand and 1.9 cm in the dirt (1130 kg, no slip). Beside the
+  ego's line, both pairs stay separate; on it, the ego enters the sand 0.3 m beside them and
+  is in them within 4 m, and from there on the grid holds one pair of tracks. The one MRM
+  (0.1 s, MRM_OPERATING then back to normal) came at x 181.4, the sand's edge, at 4.0 m/s,
+  where the ego's wheels slid sideways into the lead's 6-7 cm ruts; the run passed. With the
+  fitted soil, two runs had four: at the sand's entry (x 181.3), its exit onto the road
+  (170.0) and the dirt's exit (146.2, 146.6), each 0.1-0.2 s, emergency stop on and off.
+  There the ruts, 9-10 cm deep with the lead's and the ego's passes in them, ended in a
+  vertical wall against the rigid road: a step loose soil cannot hold, met at 4 m/s. So the
+  tiles now feather the ruts out over the zone's last metre (`soil_tiles.FEATHER`; the
+  grid keeps them whole, and the soil's forces already fade in over ~1.1 m there): the next
+  two runs had no MRM at any edge. One remains, in one run of two: 0.4 s at x 176.5, in the
+  sand, where the ego was pulled 0.2 m sideways into the lead's fresh ruts (y -129.58
+  against its line's -129.37). Its cause is not known: Autoware's logs say only "EMERGENCY_STOP
+  is operated", and a /diagnostics listener on the ego's domain received nothing. Runs on
+  packed ruts (R, 2/2) or beside them (2/2) had none.
+- The world server's step time in the zones, whole stack: p50 39-85 ms, p95 95-408 ms, the
+  high ones with host load at 100-175 (every part of the step slowed, commands too).
+
+### Calibration against Chrono (047 S5, 2026-10-23)
+
+`spikes/crm_calibrate.py` runs our grid and Chrono's single-wheel test rig (pychrono 10.0
+from the projectchrono conda channel, CUDA 12.8, in its own environment on the data disk)
+on the same wheel: rigid, 0.37 m radius, 0.235 m wide, 4.5 kN, the carrier at 1 m/s, slip
+pinned at 0-0.5; the steady last 40 % of a 4 s test. Two references:
+
+- **Chrono SCM** with the class's own Bekker-Wong-Janosi row: the same model family, so it
+  checks our implementation. With a smooth cylinder its sinkage does not grow with slip
+  at all; with a tread (24 bars 2 cm deep in the contact mesh) it does, through the bars.
+- **Chrono CRM** (SPH continuum, mu(I) rheology) with the class's density, friction angle
+  and cohesion, E = 2 MPa as Chrono's CRM wheel validations use: a different model of the
+  same soil, the survey's virtual bevameter. 85 s a case at 2 cm spacing on one RTX 5090,
+  280 s at 1 cm; the two spacings agree on sinkage within 4 %.
+
+| sinkage, cm, slip 0 / 0.5 | sand | dirt (sandy loam) |
+|---|---|---|
+| grid, Wong's row as published | 7.9 / 13.5 | 2.7 / 4.4 |
+| grid, fitted (below) | 7.9 / 10.4 | 2.7 / 3.7 |
+| Chrono SCM, smooth / treaded | 8.3 / 7.9; 7.8 / 9.8 | 3.4 / 3.3; 3.2 / 4.5 |
+| Chrono CRM, smooth / treaded (1 cm: 6.6 / 9.1 treaded sand) | 5.6 / 7.8; 6.8 / 8.9 | 3.6 / 5.4; 4.9 / 6.7 |
+
+| drawbar pull, N, slip 0 / 0.1 / 0.2 / 0.3 / 0.5 | sand | dirt |
+|---|---|---|
+| grid, as published | -768 / 1185 / 1479 / 1475 / 1391 | -380 / 565 / 1301 / 1640 / 1906 |
+| grid, fitted | -768 / 950 / 1400 / 1508 / 1535 | -380 / 322 / 863 / 1415 / 1851 |
+| Chrono SCM, treaded | -953 / 876 / 1312 / 1654 / 2061 | -165 / 407 / 901 / 1221 / 1597 |
+| Chrono CRM, treaded | -529 / -318 / -188 / -96 / 89 | -339 / -57 / 111 / 224 / 385 |
+
+What it says:
+
+- **The implementation agrees with Chrono's SCM** on what both model the same way: static
+  sinkage within 1 % (sand) and 16 % (dirt), and the resistance at zero slip within 19 %
+  (sand).
+- **Slip sinkage was too strong.** Lyasko's factor as published sank our wheel 1.63-1.71
+  times deeper at 50 % slip than at none; treaded SCM and CRM, two different models, agree
+  on 1.26-1.41. So a class now carries `slip_sinkage`, the factor's power, fitted to the
+  mean of the two: sand 0.5, dirt 0.65 (sinkage ratio within 0.02-0.04 of the references
+  at every slip). Mud and snow keep 1: nothing to fit them to.
+- **Janosi K** (the shear build-up, the row's least-sourced number, "typical ranges") fitted
+  to treaded SCM's drawbar pull: x1.5, sand 0.015 m, dirt 0.0375 m. The grid's pull is now
+  within -26 % to +16 % of SCM's from 10 % to 50 % slip in both soils (was +35 % to +44 %
+  in dirt).
+- **CRM's pull is not a target.** It stays near zero to 50 % slip for a smooth, a 2 cm
+  treaded and a 1 cm-resolved treaded wheel alike: a rigid tire's markers in CRM grip the
+  soil far less than Bekker-Janosi's assumed full soil shear, and a road tire's tread is
+  below what CRM resolves. The truth for a pneumatic road tire lies between; the field
+  (040's cone index) has to say where. CRM's sinkage is used, its pull is recorded only.
+- Static sinkage against CRM: sand within 20 % (7.9 against 6.6), dirt 25-45 % shallower
+  (2.7 against 3.6-4.9). Dirt's k_phi is the next number to question when field data comes.
+
+On the pad, the fitted soil changes little at steady speed (coasting into sand 1.22 m/s^2
+against 1.23, holding 10 m/s 9.15 m/s against 9.13, the second pass 875 N against 834) and
+much where the wheels spin: a full-throttle launch in sand reaches 3.29 m/s in 3 s against
+1.15, the rear wheels digging in less; dirt 7.66 against 7.36. Entry at 20 m/s: the same
+537 N largest step.
+
 ### Still to measure
 
 - **Physics rate in a zone.** Answered (047 D4, S3): the grid sweeps each wheel along its
@@ -398,8 +524,9 @@ A clean Autoware comparison waits for a quiet host.
   with an RTX lidar rendering, 4 ms to edit and no frame-time rise.
 - **RTX cost of a changed mesh**: none visible; the lidar sees the rebuilt geometry within a
   millimetre (S3). Displacement maps were not needed.
-- **Calibration**: Chrono CRM offline as a virtual bevameter per soil class, cone-index from the
-  field; judge on trends (survey, last recommendations).
+- **Calibration**: done against Chrono SCM and CRM (S5, above); what is left is the field:
+  cone index and a drawbar test of a real road tire on sand and on dirt (040), which is
+  what settles CRM's and Bekker's disagreement on traction, and mud.
 
 ## Road condition in scenario files
 

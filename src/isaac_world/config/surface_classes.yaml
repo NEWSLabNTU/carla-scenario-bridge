@@ -15,9 +15,12 @@
 #          soft ground soaks it instead.
 #   soil   Bekker-Wong-Janosi parameters, for a soil zone of this class (047 S3,
 #          isaac_world.soil): n, k_c N/m^(n+1), k_phi N/m^(n+2), cohesion Pa, friction_angle
-#          deg, janosi_k m; elastic_k Pa/m optional. A class without them cannot be a soil
+#          deg, janosi_k m; elastic_k Pa/m and slip_sinkage (Lyasko's slip sinkage to this
+#          power, default 1) optional. A class without them cannot be a soil
 #          zone's. From Wong, Theory of Ground Vehicles (Table 2.3, the Land Locomotion Lab's
-#          measurements; Janosi K from its typical ranges).
+#          measurements; Janosi K from its typical ranges). Sand's and dirt's Janosi K and
+#          slip sinkage are fitted (047 S5, spikes/crm_calibrate.py): drawbar pull to Chrono's
+#          SCM with a treaded wheel, slip sinkage to where SCM and Chrono's CRM agree.
 #   unvalidated  why the class's soil parameters are a stand-in, not a measurement of the
 #          ground the class names (047 D6). A soil zone of such a class is refused unless the
 #          map's surfaces.yaml lists the class in `allow_unvalidated:`, and the world server
@@ -66,9 +69,10 @@ classes:
     mu: 0.68
     wet: {moist: 0.85, wetWithPuddles: 0.7, lowFlooded: 0.6, highFlooded: 0.5}
     slip: [[0.0, 0.8], [0.2, 1.0], [1.0, 0.95]]
-    # sandy loam, 15 % moisture
+    # sandy loam, 15 % moisture; janosi_k and slip_sinkage fitted in 047 S5 (as published:
+    # K 0.025, slip sinkage 1)
     soil: {n: 0.7, k_c: 5270.0, k_phi: 1515040.0, cohesion: 1720.0, friction_angle: 29.0,
-           janosi_k: 0.025}
+           janosi_k: 0.0375, slip_sinkage: 0.65}
   grass:
     mu: 0.55
     wet: {moist: 0.8, wetWithPuddles: 0.6, lowFlooded: 0.5, highFlooded: 0.45}
@@ -77,9 +81,10 @@ classes:
     mu: 0.5
     wet: {moist: 1.1, wetWithPuddles: 1.0, lowFlooded: 0.9, highFlooded: 0.8}
     slip: [[0.0, 0.6], [0.3, 1.0], [1.0, 1.0]]
-    # dry sand
+    # dry sand; janosi_k and slip_sinkage fitted in 047 S5 (Wong's row as published: K 0.01,
+    # slip sinkage 1)
     soil: {n: 1.1, k_c: 990.0, k_phi: 1528430.0, cohesion: 1040.0, friction_angle: 28.0,
-           janosi_k: 0.01}
+           janosi_k: 0.015, slip_sinkage: 0.5}
   mud_wet:
     mu: 0.3
     slip: [[0.0, 0.7], [0.25, 1.0], [1.0, 0.9]]

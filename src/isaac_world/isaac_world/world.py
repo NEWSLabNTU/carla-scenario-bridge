@@ -42,7 +42,7 @@ from . import motion as body_motion, signals as signal_table, sky as scenario_sk
 from . import vehicle_assets
 from . import walkers as walker_gait
 from .catalogue import check_ego, ego_model, load_ego
-from .surface_layer import SurfaceLayer
+from .surface_layer import SurfaceLayer, kinematic_wheels
 
 log = logging.getLogger("isaac_world")
 
@@ -193,6 +193,8 @@ class IsaacWorld(WorldBase):
         self.fresh = set()
         self.buried = []  # despawned entities' paths, deleted after the next step
         self.walking = {}  # handle -> a pedestrian's walker: its cycles, SkelAnimation, gait (044 C)
+        self.rolling = {}  # handle -> an NPC vehicle's (path, wheels, mass) on the soil (047 S4)
+        self.tracked_pose = {}  # handle -> a tracked NPC vehicle's (x, y, yaw) from PhysX
         self.walker_cycles = {}  # walker id -> its cycles, loaded once
         self.ground_cache = {}  # prim path -> whether it is ground (contacts)
         self.signal_table = []  # the map's signals, as LoadWorld gave them (044 B)
@@ -714,6 +716,10 @@ class IsaacWorld(WorldBase):
                 "physics")
             self.tracked[handle] = tuple(center)
             self.fresh.add(handle)
+        if kind == "VEHICLE":
+            physics = self.vehicle_assets.physics(asset["id"]) if asset else None
+            self.rolling[handle] = (path, kinematic_wheels(dims, center, physics),
+                                    mass or body_motion.body_mass(kind, subtype, physics))
         if kind == "EGO" or tracked:
             PhysxSchema.PhysxContactReportAPI.Apply(root.GetPrim()).CreateThresholdAttr(0.0)
             self.reporters.add(handle)
@@ -838,6 +844,10 @@ class IsaacWorld(WorldBase):
         handles, rb = view
         tf = rb.get_transforms()  # x, y, z, qx, qy, qz, qw
         vel = rb.get_velocities()  # vx, vy, vz (centre of mass), wx, wy, wz
+        # where PhysX has the tracked vehicles now: their drives carry a velocity, not a pose
+        self.tracked_pose = {h: (float(tf[i, 0]), float(tf[i, 1]), body_motion.yaw_of(
+            (float(tf[i, 6]), float(tf[i, 3]), float(tf[i, 4]), float(tf[i, 5]))))
+            for i, h in enumerate(handles) if h in self.rolling}
         moved, sped = [], []
         for i, h in enumerate(handles):
             d = drives.get(h)
@@ -897,6 +907,9 @@ class IsaacWorld(WorldBase):
                 self.surface.forget(ego.path)
         self.reporters.discard(handle)
         self.walking.pop(handle, None)
+        self.tracked_pose.pop(handle, None)
+        if self.rolling.pop(handle, None) is not None and self.surface is not None:
+            self.surface.forget(path)
         if ego is None:
             # An entity deleted where it stands stays in the RTX lidar's scene at its last
             # pose (cameras and PhysX queries do not see it): Autoware saw every despawned
@@ -988,6 +1001,19 @@ class IsaacWorld(WorldBase):
                     w["previous"] = tuple(d.pose[0])
                 self._pose_walker(handle, speed, substeps * dt)
         self._drive_tracked(drives)
+        if self.surface is not None:
+            # NPC vehicles roll on the soil over this frame's substeps (047 S4)
+            for handle in sorted(self.rolling):
+                path, wheels, mass = self.rolling[handle]
+                d = drives.get(handle)
+                if handle in self.tracked and handle in self.tracked_pose:
+                    x, y, yaw = self.tracked_pose[handle]  # a frame behind: what PhysX did
+                elif handle not in self.tracked and d is not None and d.pose is not None:
+                    (x, y, _), q = d.pose
+                    yaw = body_motion.yaw_of(q)
+                else:
+                    continue
+                self.surface.set_kinematic(path, x, y, yaw, wheels, mass)
         for handle, d in drives.items():
             if handle in self.egos and d.pose is not None:
                 self.egos[handle].teleport(d.pose, self.physx)
@@ -997,7 +1023,7 @@ class IsaacWorld(WorldBase):
                 and sim_time - self.sky_moved_at >= 1.0:
             self.sky_moved_at = sim_time  # an animated time of day: the sun moves each second
             self._apply_sky(sim_time)
-        egos = list(self.egos.values())
+        egos = [self.egos[h] for h in sorted(self.egos)]  # a fixed order on the soil (047 S4)
         t0 = time.perf_counter()
         for ego in egos:
             ego.take_commands()
@@ -1014,6 +1040,8 @@ class IsaacWorld(WorldBase):
                 ego.after_substep(self.physx, dt)
                 if self.surface is not None:
                     self.surface.update(ego.vehicle, ego.state.velocity[0], dt)
+            if self.surface is not None and self.surface.kinematic:
+                self.surface.roll_kinematic((s + 1) / substeps, dt, substeps * dt)
             self._collect_contacts(touching)
         if self.surface is not None:
             self.surface.flush()  # the soil's new ruts, for the next frame

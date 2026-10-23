@@ -20,6 +20,12 @@ over `SOIL_BLEND` wheel diameters from the zone's edge. A zone with `ground_z` h
 server's own ground (`soil_tiles`), into which `flush` puts the grid's ruts once a frame,
 where no wheel stands. The
 ruts are fresh at every `fresh_soil` (a new owner or a release).
+
+Every vehicle shares a zone's grid (047 S4). The egos run on it as above; a kinematic vehicle
+(an NPC SSv2 moves by pose) rolls on it without slip, its pose interpolated over the frame's
+substeps (`set_kinematic`, `roll_kinematic`), so its ruts are the egos' ground; it feels
+nothing back. Each substep updates the egos in handle order, then the kinematic vehicles in
+path order, so two runs of a scenario cut the same ruts.
 """
 import logging
 import math
@@ -34,6 +40,26 @@ QCODE_ATTR = "semantics:labels:wikidata_qcode"
 SOIL_BLEND = 1.5
 # Node spacing of a soil zone's grid, m.
 SOIL_SPACING = 0.05
+# A kinematic vehicle's wheels where its catalogue entry gives none (047 S4): wheel base and
+# tread as shares of its box, CARLA's mid-size car's radius and a 0.2 m tire.
+KINEMATIC_BASE, KINEMATIC_TREAD = 0.6, 0.85
+KINEMATIC_RADIUS, KINEMATIC_WIDTH = 0.33, 0.2
+KINEMATIC_JUMP = 5.0  # m in one frame: a teleport (100 m/s at 20 Hz)
+G = 9.81
+
+
+def kinematic_wheels(dims, center, physics=None):
+    """A kinematic vehicle's wheels: ([(x, y) in the body frame, x forward], radius, width).
+    CARLA's wheel base, tread and radius (`physics`, the catalogue's entry) when it gives them,
+    else shares of the box `dims` (length, width, height); centred on the box's `center`."""
+    physics = physics or {}
+    base = physics.get("wheel_base") or KINEMATIC_BASE * dims[0]
+    tread = physics.get("wheel_tread") or KINEMATIC_TREAD * dims[1]
+    radii = [w.get("radius") for w in physics.get("wheels") or [] if w.get("radius")]
+    radius = sum(radii) / len(radii) if radii else KINEMATIC_RADIUS
+    cx, cy = center[0], center[1]
+    return ([(cx + sx * base / 2, cy + sy * tread / 2) for sx in (1, -1) for sy in (1, -1)],
+            float(radius), KINEMATIC_WIDTH)
 
 
 class SurfaceLayer:
@@ -57,6 +83,8 @@ class SurfaceLayer:
         self.soil_out = {}  # (vehicle path, wheel) -> (soil.WheelSoil, share) of the last step
         self.soil_xy = {}  # (vehicle path, wheel) -> its map-frame contact on soil
         self.tiles = {}  # zone id -> its own ground (make_tiles)
+        # vehicle path -> [previous (x, y, yaw), this frame's, wheels, radius, width, load]
+        self.kinematic = {}
         self.ruts = None  # the rut set the soil started from (`swb.ruts`), None: fresh
         self.driven = False  # a wheel has driven on the soil since then
         self.saved = True  # nothing driven since the last save
@@ -171,6 +199,51 @@ class SurfaceLayer:
         soil_mu = self.condition.friction_scale * out.mu(contact.load) / table[table.reference].mu
         return share * soil_mu + (1 - share) * surfaces.peak_mu(table, s, self.condition, speed)
 
+    def set_kinematic(self, path, x, y, yaw, wheels, mass):
+        """Once a frame, before its substeps: kinematic vehicle `path` (world frame, yaw from
+        +x) moves to this pose over the frame; `wheels` from `kinematic_wheels`, `mass` kg."""
+        k = self.kinematic.get(path)
+        prev = k[1] if k is not None else (x, y, yaw)
+        if math.hypot(x - prev[0], y - prev[1]) > KINEMATIC_JUMP:
+            prev = (x, y, yaw)  # a teleport, not a drive
+        offsets, radius, width = wheels
+        self.kinematic[path] = [prev, (x, y, yaw), offsets, radius, width,
+                                mass * G / len(offsets)]
+
+    def roll_kinematic(self, fraction, dt, frame_dt):
+        """After a substep of `dt`, the egos' updates done: every kinematic vehicle at
+        `fraction` of its way through the frame of `frame_dt` rolls its wheels in the grid
+        zones under them."""
+        ox, oy, _ = self.origin
+        for path in sorted(self.kinematic):
+            (x0, y0, a0), (x1, y1, a1), offsets, radius, width, load = self.kinematic[path]
+            da = math.remainder(a1 - a0, math.tau)
+            x, y, yaw = x0 + (x1 - x0) * fraction, y0 + (y1 - y0) * fraction, a0 + da * fraction
+            c, s = math.cos(yaw), math.sin(yaw)
+            speed = ((x1 - x0) * c + (y1 - y0) * s) / frame_dt
+            for i, (bx, by) in enumerate(offsets):
+                wx, wy = x + bx * c - by * s + ox, y + bx * s + by * c + oy
+                key = (path, i)
+                sf = self.map.at(wx, wy)
+                zone = next((z for z in self.map.zones if z.id == sf.soil_zone), None) \
+                    if sf.soil == "grid" else None
+                if zone is None:
+                    self.soil_xy.pop(key, None)
+                    continue
+                grid = self.grids.get(zone.id)
+                if grid is None:
+                    grid = self.grids[zone.id] = soil.SoilGrid(self.map.table[sf.cls].soil,
+                                                               SOIL_SPACING)
+                    grid.begin_step()
+                    log.info("soil zone %s (%s): grid at %g m", zone.id, sf.cls, SOIL_SPACING)
+                grid.wheel(key, wx, wy, yaw if speed >= 0 else yaw + math.pi, load, radius,
+                           width, abs(speed), abs(speed), dt)
+                self.soil_xy[key] = (wx, wy)
+                self.driven = True
+                self.saved = False
+            if fraction >= 1.0:  # the frame done: without a new pose it stands here
+                self.kinematic[path][0] = (x1, y1, a1)
+
     def soil_under(self, vehicle):
         """Each wheel's (soil.WheelSoil, share) of the last step, None off soil."""
         return [self.soil_out.get((vehicle.path, i)) for i in range(len(vehicle.wheel_paths))]
@@ -266,6 +339,7 @@ class SurfaceLayer:
 
     def forget(self, vehicle_path):
         self.wheels.pop(vehicle_path, None)
+        self.kinematic.pop(vehicle_path, None)
         self.soil_out = {k: v for k, v in self.soil_out.items() if k[0] != vehicle_path}
         self.soil_xy = {k: v for k, v in self.soil_xy.items() if k[0] != vehicle_path}
 

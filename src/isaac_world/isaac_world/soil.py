@@ -65,6 +65,7 @@ class SoilParams:
     friction_angle: float
     janosi_k: float
     elastic_k: float = ELASTIC_K
+    slip_sinkage: float = 1.0  # Lyasko's slip sinkage to this power (S5's fit; 1: as published)
 
     def k(self, width):
         return self.k_c / width + self.k_phi
@@ -76,13 +77,13 @@ def parse_params(d, where="soil"):
     keys = ("n", "k_c", "k_phi", "cohesion", "friction_angle", "janosi_k")
     if not isinstance(d, dict):
         raise SoilError(f"{where}: not a mapping of {', '.join(keys)}")
-    unknown = set(d) - set(keys) - {"elastic_k"}
+    unknown = set(d) - set(keys) - {"elastic_k", "slip_sinkage"}
     if unknown:
         problems.append(f"{where}: unknown key(s) {sorted(unknown)}")
     vals = {}
-    for k in (*keys, "elastic_k"):
+    for k in (*keys, "elastic_k", "slip_sinkage"):
         if k not in d:
-            if k != "elastic_k":
+            if k not in ("elastic_k", "slip_sinkage"):
                 problems.append(f"{where}: needs {k}")
             continue
         v = d[k]
@@ -115,10 +116,11 @@ class WheelSoil:
         return self.traction_limit / load if load > 0 else 0.0
 
 
-def slip_factor(slip):
-    """Lyasko's slip sinkage: static sinkage times this at longitudinal slip `slip`."""
+def slip_factor(slip, strength=1.0):
+    """Lyasko's slip sinkage: static sinkage times this at longitudinal slip `slip`, to the
+    power `strength` (a class's `slip_sinkage`, 047 S5)."""
     i = min(abs(slip), 0.95)
-    return (1.0 + i) / (1.0 - 0.5 * i)
+    return ((1.0 + i) / (1.0 - 0.5 * i)) ** strength
 
 
 def slip_ratio(spin_speed, speed):
@@ -163,7 +165,7 @@ def wong_reece(p: SoilParams, load, radius, width, spin_speed=0.0, speed=0.0):
         return WheelSoil(0.0, 0.0, 0.0, 0.0, 0.0)
     sign = -1.0 if speed < 0 or (speed == 0 and spin_speed < 0) else 1.0
     v, u = sign * speed, sign * spin_speed
-    k = p.k(width) / slip_factor(slip_ratio(u, v)) ** p.n
+    k = p.k(width) / slip_factor(slip_ratio(u, v), p.slip_sinkage) ** p.n
     lo, hi = 0.0, math.acos(1.0 - min(MAX_SINKAGE, radius) / radius)
     if _wr_forces(p, k, radius, width, hi, u - v, v)[0] < load:
         lo = hi
@@ -293,7 +295,8 @@ class SoilGrid:
         res = thrust = limit = carried = 0.0
         zb = 0.0
         if self.warp is not None:
-            k = self.p.k(width) / slip_factor(slip_ratio(spin_speed, speed)) ** self.p.n
+            k = self.p.k(width) / slip_factor(slip_ratio(spin_speed, speed),
+                                                  self.p.slip_sinkage) ** self.p.n
             zb, res, thrust, limit, carried = (float(v) for v in self.warp.sweep(
                 sink, shear, touched, path, ox, oy, h, c, s, half_len, width, radius, load, k,
                 self.p, (spin_speed - speed) * sub_dt, self.step_id,
@@ -331,7 +334,7 @@ class SoilGrid:
         # the rim's height above the wheel bottom at each node
         rim = radius - np.sqrt(np.maximum(radius * radius - dx * dx, 0.0))
         area = h * h
-        k = p.k(width) / slip_factor(slip_ratio(spin_speed, speed)) ** p.n
+        k = p.k(width) / slip_factor(slip_ratio(spin_speed, speed), p.slip_sinkage) ** p.n
 
         def carried(zb):  # load carried for each candidate bottom (rows), N
             d = np.maximum(zb[:, None] - rim - sp, 0.0)
@@ -475,6 +478,18 @@ def edge_distance(polygon, x, y):
                 / np.maximum((ab * ab).sum(axis=1), 1e-12), 0.0, 1.0)
     px, py = a[:, 0] + t * ab[:, 0], a[:, 1] + t * ab[:, 1]
     return float(np.sqrt((px - x) ** 2 + (py - y) ** 2).min())
+
+
+def edge_weights(polygon, xs, ys, blend):
+    """`edge_weight` over a grid: len(xs) x len(ys), x first (a tile's vertices)."""
+    a = np.asarray(polygon, dtype=np.float64)
+    ab = np.roll(a, -1, axis=0) - a
+    gx, gy = np.meshgrid(np.asarray(xs, np.float64), np.asarray(ys, np.float64), indexing="ij")
+    best = np.full(gx.shape, np.inf)
+    for (ax, ay), (dx, dy) in zip(a, ab):
+        t = np.clip(((gx - ax) * dx + (gy - ay) * dy) / max(dx * dx + dy * dy, 1e-12), 0.0, 1.0)
+        best = np.minimum(best, np.hypot(ax + t * dx - gx, ay + t * dy - gy))
+    return np.ones(gx.shape) if blend <= 0 else np.minimum(1.0, best / blend)
 
 
 def edge_weight(polygon, x, y, blend):

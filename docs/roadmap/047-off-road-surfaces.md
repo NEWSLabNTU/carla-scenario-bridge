@@ -243,7 +243,7 @@ Each needs an answer before the step it gates; the design's proposal is in brack
       minutes before the real one, `isaac_up.sh` timed out at 120 s and the next run started a
       second simulation side whose bridge fought the first for the world server. Both bring-up
       scripts now count the wrapper as the stack, and Isaac's bridge wait is 300 s.
-- [ ] **S3. Soil layer in one zone** (D2, D4): SCM-style per-wheel model on a sparse tiled grid,
+- [x] **S3. Soil layer in one zone** (D2, D4): SCM-style per-wheel model on a sparse tiled grid,
       allocated on first contact; traction cap through the wheel's table, resistance through
       `apply_force_at_pos`, ruts through re-cooked 2 x 2 m tiles (budgeted per frame); zone-edge
       blend over one to two wheel diameters. Measured: Python cost per wheel per step at the
@@ -287,11 +287,12 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         pass rides in the rut, frame time with the car outside the zone 2.91 ms against 3.07
         without the zone. Only faces in the ground band are cut (not a bridge's sides or a
         guardrail's uprights), an emptied mesh is hidden, the cut settles before an ego.
-  - [ ] Autoware on Town01 with the zone (design doc, "A zone on a CARLA town"): the soil
+  - [x] Autoware on Town01 with the zone (design doc, "A zone on a CARLA town"; done by S6 on
+        a quieter host, 2026-10-23): the soil
         worked (in C the ego slowed 4.1 -> 2.4 m/s in the dirt, Autoware pulled it back at
         its 1.0 m/s^2 limit), but every set failed on MRM flapping, the no-map baseline
         too, on a host at load 30-130 from other jobs. Rerun on a quiet host.
-- [ ] **S4. Persistence and the second pass** (D5, D6): node blocks saved per tile, loaded per
+- [x] **S4. Persistence and the second pass** (D5, D6): node blocks saved per tile, loaded per
       scenario; every vehicle reads and writes the same grid in a fixed order (determinism);
       mud (D6: B).
   - [x] Rut sets (D5): `swb.ruts=<name>|fresh` in a scenario's RoadCondition loads
@@ -307,18 +308,42 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         ground (as the first: 2354 N, ground 0), then the set loaded (0.17 s, its tiles
         rebuilt) and the pass again: the car rides in the saved ruts at -10.6 cm with 591 N,
         a third pass.
-  - [ ] Every vehicle on the same grid in a fixed order: the ego only today (NPCs are
-        kinematic); background AVs (039) when they drive on soil.
+  - [x] Every vehicle on the same grid in a fixed order (2026-10-23): NPC vehicles roll on the
+        zones' grids without slip on a quarter of their mass each (CARLA's wheel base, tread
+        and radius for the body), kinematic ones from SSv2's pose, tracked ones from PhysX's,
+        a frame's motion split over its substeps, a jump over 5 m a teleport; each substep
+        the egos in handle order, then the NPCs in path order. NPCs mark the soil, they do
+        not feel it. `KinematicTest` (4); on Town01 a lead car's ruts (7.5 cm in sand) are
+        the ego's ground (S6).
   - [x] Mud (D6: B): `mud_wet` has Wong's clayey soil at 55 % moisture and `unvalidated:` (the
         reason); a soil zone on it is refused unless surfaces.yaml lists the class in
         `allow_unvalidated:`, and the world server and `just surfaces-check` warn at every
         load. Tests: `UnvalidatedTest` (3), a mud trend test in `test_soil.py`. On the pad:
         friction 0.17, 3.4 cm, 1.2 kN at 10 m/s, the second pass 351 N; the Model 3 cannot
         pull away from rest (dug in to 5.7 cm); ABS stops from 15 m/s in 30.8 m.
-- [ ] **S5. Calibration**: Chrono CRM offline as a virtual bevameter per soil class (plate
-      sinkage, shear, single-wheel drawbar pull vs slip at our wheel); cone index from the field
-      when 040 can measure it.
-- [ ] **S6. Scenarios and exit runs** (below).
+- [x] **S5. Calibration** (2026-10-23; design doc "Calibration against Chrono"):
+      `spikes/crm_calibrate.py`, our grid against Chrono's single-wheel rig on our wheel at
+      4.5 kN, slip 0-0.5, on Chrono SCM (same parameters: the implementation check) and CRM
+      (the class's density, friction angle, cohesion: the virtual bevameter; pychrono 10 with
+      CUDA). Static sinkage matches SCM within 1-16 %; Lyasko's slip sinkage was too strong
+      (x1.7 at 50 % slip where SCM-treaded and CRM agree on x1.26-1.41), so a class carries
+      `slip_sinkage` (sand 0.5, dirt 0.65), and Janosi K is fitted to SCM-treaded pull
+      (x1.5): pull within -26..+16 % of SCM at 10-50 % slip. CRM's pull stays near zero for
+      any wheel tried (a rigid tire's interface, not resolution: 1 cm agrees with 2 cm), so it
+      is recorded, not fitted. Cone index and a real tire's drawbar test wait for the field
+      (040); mud and snow have no reference.
+- [x] **S6. Scenarios and exit runs** (2026-10-23; design doc "Scenarios and exit runs on
+      Town01"): `scenarios/surfaces/town01_soil.xosc` (sand then dirt, a lead car laying ruts
+      first, parameter `ruts`) and `town01_mud.xosc`, each with its surface map. Two runs a
+      set on Isaac with Autoware, one world server: baseline 2/2 (0 MRM, 0.02 m/s^2), soil
+      2/2 with the lead beside the ego's line (0.21-0.22), 1/2 with it on the line (one
+      0.1 s MRM where the ego slid into its ruts at the sand's edge; 0.20-0.30), from a
+      saved rut set 2/2 (0.12-0.14), mud 2/2 (0.08). After S5's fit the edges drew four short
+      MRMs in two runs, where 9-10 cm ruts met the rigid road in a wall; the tiles now
+      feather the ruts out over a zone's last metre (`soil_tiles.FEATHER`), and the next two
+      runs had none at an edge, one 0.4 s MRM mid-sand in one of them, cause unknown (the ego
+      pulled 0.2 m sideways into the lead's fresh ruts). This also closes S3's open
+      Autoware run.
 
 ## Acceptance
 
@@ -329,14 +354,16 @@ Each needs an answer before the step it gates; the design's proposal is in brack
 - [x] Scenario path: a `RoadCondition` in the Init and one in the Story change the ego's
   measured friction on Isaac, and CARLA's weather wetness; a zone property on CARLA is refused
   in the reply, not ignored.
-- [ ] Soil layer: in a sand zone, sinkage grows with slip and load, a second pass sinks less,
+- [x] Soil layer: in a sand zone, sinkage grows with slip and load, a second pass sinks less,
   lateral grip falls, motion resistance outgrows thrust as sinkage deepens (the survey's
   trends, within ±30 % of the calibrated model); zone entry at speed shows no force step
   larger than the blend allows; the frame budget holds with one ego in the zone.
   *2026-10-23: the trends hold (`test_soil.py`, the pad); entry at 20 m/s: largest step
   537 N against the blend's ~340 N for two wheels plus the steady ripple of 198 N; the
-  frame budget holds on the pad (~4 ms soil, ~2 ms rebuilds of 50). Open: "within ±30 % of
-  the calibrated model" waits for S5.*
+  frame budget holds on the pad (~4 ms soil, ~2 ms rebuilds of 50). S5: against the
+  calibrated reference (Chrono SCM with a treaded wheel, slip sinkage where SCM and CRM
+  agree) the fitted grid's sinkage is within 1 % (sand) and 16 % (dirt) at zero slip and its
+  slip-sinkage ratio within 3 %; its drawbar pull within -26..+16 % at 10-50 % slip.*
 - [x] Map size: a full CARLA town with one zone runs at the same frame time as without it
   when the ego is outside the zone. *2026-10-23, Town01: 2.88 / 2.91 ms p50 with the zone
   against 2.74 / 3.07 without (`spikes/soil_town.py`, physics only); with the whole stack

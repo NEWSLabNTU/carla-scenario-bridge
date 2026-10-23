@@ -36,6 +36,12 @@ log = logging.getLogger("isaac_world")
 ROOT = "/World/soil"
 TILE_BLOCKS = 2
 COLLISION_STEP = 2  # collision vertices every this many grid nodes
+# The ruts the tiles show thin to nothing over this much of the zone's edge, m (047 S6): the
+# soft layer feathers out against the rigid ground beside it, as the soil's forces fade in over
+# 1.5 wheel diameters (~1.1 m), instead of ending in a rut-deep wall loose soil cannot hold
+# (on Town01 a car leaving a 10 cm rut onto the road there drew Autoware's emergency stop).
+# The grid keeps the whole ruts.
+FEATHER = 1.0
 # Sand-coloured, so a camera tells the zone from the road.
 COLOR = Gf.Vec3f(0.76, 0.66, 0.48)
 
@@ -201,6 +207,7 @@ class SoilTiles:
         self.gen = {}  # (tx, ty) -> collision rebuilds so far (the prim's name)
         self.full = set()  # tiles whose render mesh is at full resolution
         self.queue = []  # tiles waiting for a rebuild, oldest first
+        self.feathers = {}  # (tx, ty) -> its vertices' share of the ruts (FEATHER)
         self.faces = {n: _faces(n) for n in (1, self.n, self.n // COLLISION_STEP)}
         x0, x1, y0, y1 = zone.bbox
         side = self.n * spacing
@@ -275,8 +282,19 @@ class SoilTiles:
         UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
 
+    def _feather(self, t):
+        """Tile `t`'s vertices' share of the grid's ruts ((n+1)^2): `FEATHER` at the edge."""
+        w = self.feathers.get(t)
+        if w is None:
+            side = self.n * self.h
+            w = self.feathers[t] = soil.edge_weights(
+                self.zone.polygon, t[0] * side + np.linspace(0.0, side, self.n + 1),
+                t[1] * side + np.linspace(0.0, side, self.n + 1), FEATHER).astype(np.float32)
+        return w
+
     def _rebuild(self, t, depth):
         """Tile `t` at the grid's `depth` ((n+1)^2): render in place, collision anew."""
+        depth = depth * self._feather(t)
         self._render(t, depth, self.n)
         old = self._collision_path(t)
         self.gen[t] = self.gen.get(t, 0) + 1

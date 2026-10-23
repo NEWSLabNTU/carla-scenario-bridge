@@ -1,0 +1,12 @@
+# Roadmap 047 S6: town01_mud.xosc's ground. town01_ego_drive's route crosses 12.8 m of wet
+# mud, a soil zone on the grid with its own ground. Mud's soil parameters are a stand-in (a
+# wet clay row, 047 D6), so the map opts in by name. Copy to
+# data/carla-autoware-bridge/Town01/surfaces.yaml.
+allow_unvalidated: [mud_wet]
+defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass, Ground: dirt}
+zones:
+  - id: mud_road
+    class: mud_wet
+    soil: grid
+    ground_z: 0.0
+    polygon: [[145.6, -134.4], [158.4, -134.4], [158.4, -128.0], [145.6, -128.0]]

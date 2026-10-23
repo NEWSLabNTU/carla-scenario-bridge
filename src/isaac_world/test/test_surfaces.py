@@ -460,6 +460,73 @@ class FakeTiles:
         self.removed = True
 
 
+class KinematicTest(unittest.TestCase):
+    """047 S4: an NPC SSv2 moves by pose leaves ruts in the grid the egos drive on."""
+
+    ZONE = {"id": "pit", "class": "sand", "soil": "grid",
+            "polygon": [[0, -5], [60, -5], [60, 5], [0, 5]]}
+
+    def drive(self, layer, path, x0, x1, y=0.0, frames=40, substeps=3):
+        wheels = surface_layer.kinematic_wheels((4.5, 1.8, 1.5), (0.0, 0.0, 0.7))
+        for f in range(frames + 1):
+            layer.set_kinematic(path, x0 + (x1 - x0) * f / frames, y, 0.0, wheels, 1500.0)
+            for s in range(substeps):
+                layer.begin_step()
+                layer.roll_kinematic((s + 1) / substeps, 0.05 / substeps, 0.05)
+
+    def test_wheels_from_carlas_geometry_or_the_box(self):
+        offsets, r, b = surface_layer.kinematic_wheels((5.0, 2.0, 1.5), (0.1, 0.0, 0.7))
+        self.assertEqual(offsets[0], (0.1 + 1.5, 0.85))
+        self.assertEqual((r, b), (0.33, 0.2))
+        offsets, r, _ = surface_layer.kinematic_wheels(
+            (5.0, 2.0, 1.5), (0.0, 0.0, 0.7),
+            {"wheel_base": 2.9, "wheel_tread": 1.6, "wheels": [{"radius": 0.36}] * 4})
+        self.assertEqual(offsets[3], (-1.45, -0.8))
+        self.assertEqual(r, 0.36)
+
+    def test_an_npc_leaves_a_continuous_rut_on_both_tracks(self):
+        layer = surface_layer.SurfaceLayer(FakeStage({}), smap([self.ZONE]))
+        self.drive(layer, "/World/entities/npc", 5.0, 35.0)  # 15 m/s
+        g = layer.grids["pit"]
+        depths = [g.depth(x, y) for x in np.arange(12.0, 28.0, 0.05) for y in (0.765, -0.765)]
+        self.assertGreater(min(depths), 0.01)  # no gaps between the frames' poses
+        self.assertEqual(g.depth(20.0, 0.0), 0.0)  # between the tracks
+        self.assertTrue(layer.driven)
+        self.assertFalse(layer.saved)
+
+    def test_the_order_is_fixed_and_a_teleport_leaves_no_rut(self):
+        def run(names):
+            layer = surface_layer.SurfaceLayer(FakeStage({}), smap([self.ZONE]))
+            for n in names:
+                layer.set_kinematic(n, 0.0, 0.0, 0.0, surface_layer.kinematic_wheels(
+                    (4.5, 1.8, 1.5), (0.0, 0.0, 0.7)), 1500.0)
+            for f in range(30):
+                for n in names:
+                    layer.set_kinematic(n, 5.0 + f * 0.5, 0.0, 0.0, surface_layer.kinematic_wheels(
+                        (4.5, 1.8, 1.5), (0.0, 0.0, 0.7)), 1500.0)
+                layer.begin_step()
+                layer.roll_kinematic(1.0, 0.05, 0.05)
+            return layer.grids["pit"].save()
+        a, b = run(["/a", "/b"]), run(["/b", "/a"])
+        self.assertEqual(sorted(a), sorted(b))
+        for k in a:
+            np.testing.assert_array_equal(a[k], b[k])
+        layer = surface_layer.SurfaceLayer(FakeStage({}), smap([self.ZONE]))
+        self.drive(layer, "/n", 10.0, 10.0, frames=1)
+        self.drive(layer, "/n", 40.0, 40.0, frames=1)  # 30 m in a frame
+        self.assertEqual(layer.grids["pit"].depth(25.0, 0.765), 0.0)
+
+    def test_off_the_soil_and_forgotten(self):
+        layer = surface_layer.SurfaceLayer(FakeStage({}), smap([self.ZONE]))
+        self.drive(layer, "/n", 70.0, 80.0, frames=4)
+        self.assertEqual(layer.grids, {})
+        self.assertEqual(layer.soil_xy, {})
+        self.drive(layer, "/n", 10.0, 11.0, frames=4)
+        self.assertEqual(len(layer.soil_xy), 4)
+        layer.forget("/n")
+        self.assertEqual((layer.kinematic, layer.soil_xy), ({}, {}))
+
+
 class SurfaceLayerTest(unittest.TestCase):
     def test_a_zone_with_its_own_ground_gets_the_ruts_once_a_frame(self):
         made = {}

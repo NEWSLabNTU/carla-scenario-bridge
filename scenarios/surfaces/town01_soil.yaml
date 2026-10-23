@@ -1,0 +1,16 @@
+# Roadmap 047 S6: town01_soil.xosc's ground. town01_ego_drive's route (x 190.8 -> 120 along
+# y -130, heading -x) crosses dry sand, then dirt (sandy loam), each a soil zone on the grid
+# with its own ground: whole 1.6 m tiles, the town cut out from under them at load, the ruts
+# in the collision and the lidar. Copy to data/carla-autoware-bridge/Town01/surfaces.yaml.
+defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass, Ground: dirt}
+zones:
+  - id: sand_road
+    class: sand
+    soil: grid
+    ground_z: 0.0
+    polygon: [[171.2, -134.4], [180.8, -134.4], [180.8, -128.0], [171.2, -128.0]]
+  - id: dirt_road
+    class: dirt
+    soil: grid
+    ground_z: 0.0
+    polygon: [[145.6, -134.4], [169.6, -134.4], [169.6, -128.0], [145.6, -128.0]]

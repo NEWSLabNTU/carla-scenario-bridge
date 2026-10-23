@@ -43,6 +43,8 @@ class ParamsTest(unittest.TestCase):
         self.assertIsNotNone(TABLE["mud_wet"].unvalidated)
         self.assertIsNone(TABLE["sand"].unvalidated)
         self.assertIsNone(TABLE["asphalt"].soil)
+        # 047 S5's fit; mud and snow keep Lyasko's factor as published
+        self.assertEqual((SAND.slip_sinkage, LOAM.slip_sinkage, MUD.slip_sinkage), (0.5, 0.65, 1.0))
 
     def test_mud_grips_least_and_sinks_like_loam(self):
         """Wet clay: cohesive with a low friction angle, so the soil-limited friction is
@@ -104,6 +106,19 @@ class ClosedFormTest(unittest.TestCase):
         self.assertEqual(wr(SAND, load=0.0).sinkage, 0.0)
 
 
+class FeatherTest(unittest.TestCase):
+    def test_edge_weights_match_the_pointwise_weight_and_feather_the_edge(self):
+        poly = [[0.0, 0.0], [10.0, 0.0], [10.0, 4.0], [0.0, 4.0]]
+        xs, ys = np.linspace(0.0, 1.6, 33), np.linspace(1.0, 2.6, 33)
+        w = soil.edge_weights(poly, xs, ys, 1.0)
+        self.assertEqual(w.shape, (33, 33))
+        for i, j in ((0, 0), (5, 7), (20, 32), (32, 16)):
+            self.assertAlmostEqual(w[i, j], soil.edge_weight(poly, xs[i], ys[j], 1.0))
+        self.assertEqual(w[0, 10], 0.0)  # on the edge
+        self.assertAlmostEqual(w[10, 20], 0.5)  # 0.5 m in
+        self.assertEqual(w[32, 20], 1.0)  # 1.6 m in
+
+
 class GridTest(unittest.TestCase):
     """A, the sparse grid."""
 
@@ -112,7 +127,9 @@ class GridTest(unittest.TestCase):
         self.assertEqual(z, sorted(z))
         z = [drive(SoilGrid(SAND), slip=i)["sinkage"] for i in (0.0, 0.2, 0.5)]
         self.assertEqual(z, sorted(z))
-        self.assertLess(z[0] * 1.3, z[2])
+        # 047 S5: Chrono's SCM (treaded wheel) and CRM sink 1.26-1.41 times deeper at 50 %
+        # slip than at none; Lyasko's factor as published gave 1.7
+        self.assertTrue(1.2 < z[2] / z[0] < 1.45, z[2] / z[0])
 
     def test_the_rut_stays_and_a_second_pass_sinks_less_and_rolls_easier(self):
         for p in (SAND, LOAM):
