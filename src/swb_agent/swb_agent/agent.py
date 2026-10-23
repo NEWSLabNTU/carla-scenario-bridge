@@ -59,6 +59,9 @@ class Agent:
     initial_phase = P.IDLE
     #: Name sent at registration (informational); the class name when empty.
     name = ""
+    #: The vehicle spec the autopilot's vehicle files were generated from (sim_vehicle_spec's
+    #: spec_hash), sent at registration when set (roadmap 051); empty: unknown.
+    spec_hash = ""
 
     def __init__(self, config=None):
         self.config = dict(config or {})

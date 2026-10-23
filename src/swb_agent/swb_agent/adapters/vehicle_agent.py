@@ -20,6 +20,10 @@ ROS parameters:
     timeout (float, default 600.0): local mode's budget, from start to arrival
     agent_config (str, default ""): a YAML/JSON file of AutowareAgent settings (its
         DEFAULTS: converge_timeout, ready_timeout, scan_wait, ...)
+    vehicle_model (str, default "", or "none"): Autoware's vehicle model (`<name>_description`); its
+        `config/spec_hash.yaml` (autoware_sim_vehicle, roadmap 051) is the spec_hash the
+        agent registers with, which the scenario bridge compares with the world's and the
+        catalog's. Empty, or a package without the file: none is sent.
 
 Usage:
     ros2 run swb_agent vehicle_agent --ros-args -p relay:=tcp://localhost:5560 -p entity:=ego \\
@@ -50,6 +54,7 @@ class AgentNode(Node):
         self.declare_parameter("goal_poses_file", "")
         self.declare_parameter("timeout", 600.0)
         self.declare_parameter("agent_config", "")
+        self.declare_parameter("vehicle_model", "")
         self.relay = self.get_parameter("relay").value
         self.entity = self.get_parameter("entity").value
         self.goal_file = self.get_parameter("goal_poses_file").value
@@ -58,6 +63,26 @@ class AgentNode(Node):
         config = swb_agent.load_config(path) if path else {}
         config["entity"] = self.entity
         self.agent = AutowareAgent(config, port=AutowarePort(self))
+        self.agent.spec_hash = spec_hash_of(self.get_parameter("vehicle_model").value,
+                                            self.get_logger())
+
+
+def spec_hash_of(vehicle_model, log):
+    """The spec_hash in `<vehicle_model>_description/config/spec_hash.yaml`, "" when there is
+    none (a vehicle description not generated from a sim_vehicle_spec spec)."""
+    if vehicle_model in ("", "none"):
+        return ""
+    from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
+
+    try:
+        share = get_package_share_directory(f"{vehicle_model}_description")
+        with open(f"{share}/config/spec_hash.yaml") as f:
+            value = str((yaml.safe_load(f) or {}).get("spec_hash") or "")
+    except (PackageNotFoundError, OSError) as e:
+        log.warning(f"no spec_hash for vehicle model {vehicle_model!r}: {e}")
+        return ""
+    log.info(f"vehicle model {vehicle_model}: spec_hash {value[:12]}")
+    return value
 
 
 def run_relay(node, stop):

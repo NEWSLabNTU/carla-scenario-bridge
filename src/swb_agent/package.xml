@@ -12,6 +12,7 @@
   <license>Apache-2.0</license>
 
   <!-- Only swb_agent.ros and ros_adapter use ROS; the SDK core is standard library. -->
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
 

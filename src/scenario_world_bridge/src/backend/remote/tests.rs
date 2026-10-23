@@ -266,6 +266,8 @@ fn backend_with(endpoint: &str, motion: NpcMotion) -> RemoteBackend {
     config.world.endpoint = endpoint.to_string();
     config.world.request_timeout_seconds = 1;
     config.contact_report_dir = Some(contact_report::OFF.to_string());
+    // No relay: an ego spawn asks its agent's spec_hash, and must not reach a live relay.
+    config.agent_relay = "tcp://127.0.0.1:9".into();
     let shutdown = AtomicBool::new(false);
     connect(config, &shutdown).unwrap().expect("connected")
 }

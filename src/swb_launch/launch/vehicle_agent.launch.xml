@@ -16,6 +16,7 @@
   <arg name="entity" default="ego" description="the scenario entity this vehicle is"/>
   <arg name="goal_poses_file" default="" description="local goal(s) when there is no relay; empty = none"/>
   <arg name="agent_config" default="" description="YAML/JSON of the agent's settings (swb_agent AutowareAgent DEFAULTS: converge_timeout, ready_timeout, scan_wait, ...); empty = defaults"/>
+  <arg name="vehicle_model" default="none" description="Autoware's vehicle model (the profile's): its description's spec_hash.yaml is the spec the agent registers with; none = no spec_hash (not empty: rcl refuses an empty parameter)"/>
   <arg name="user_launch" default="" description="a launch file of your own to start beside this vehicle side; empty = none"/>
 
   <!-- Two node blocks rather than one with optional params: an empty string parameter is
@@ -25,6 +26,7 @@
     <param name="relay" value="$(var relay)"/>
     <param name="entity" value="$(var entity)"/>
     <param name="agent_config" value="$(var agent_config)"/>
+    <param name="vehicle_model" value="$(var vehicle_model)"/>
   </node>
   <node pkg="swb_agent" exec="vehicle_agent" name="vehicle_agent" output="screen"
         if="$(eval '&quot;$(var relay)&quot; == &quot;&quot; and &quot;$(var goal_poses_file)&quot; != &quot;&quot;')">

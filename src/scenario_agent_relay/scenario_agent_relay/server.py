@@ -22,8 +22,9 @@ class AgentSession:
     """One registered agent connection."""
 
     def __init__(self, server, sock, address, entity, agent, capabilities,
-                 version=P.VERSION):
+                 version=P.VERSION, spec_hash=""):
         self.server = server
+        self.spec_hash = spec_hash  # the vehicle spec of the agent's autopilot (roadmap 051)
         self.version = version  # the protocol version its register carried
         self.sock = sock
         self.address = address
@@ -384,7 +385,7 @@ class AgentServer:
                                        registered=True,
                                        reset=(self.last_reset(entity)
                                               if commander.version >= 2 else None),
-                                       supervised=supervised))
+                                       supervised=supervised, spec_hash=session.spec_hash))
         elif kind == P.COMMAND_FOR:
             # Its own thread: a slow agent must not hold up the commander's other requests.
             threading.Thread(target=self._command_for, args=(commander, message),
@@ -422,7 +423,8 @@ class AgentServer:
     def _register(self, sock, address, message):
         entity = message["entity"]
         session = AgentSession(self, sock, address, entity, message.get("agent", ""),
-                               message.get("capabilities", []), message["v"])
+                               message.get("capabilities", []), message["v"],
+                               message.get("spec_hash", ""))
         with self._lock:
             previous = self._sessions.get(entity)
             self._sessions[entity] = session
@@ -435,7 +437,8 @@ class AgentServer:
         session.send(P.registered(entity))
         self.log.info(f"entity {entity!r}: agent {session.agent or '?'} registered from "
                       f"{address[0]}:{address[1]}, protocol v{session.version} (capabilities: "
-                      f"{', '.join(session.capabilities) or 'none'})")
+                      f"{', '.join(session.capabilities) or 'none'}; spec_hash "
+                      f"{session.spec_hash[:12] or 'none'})")
         self.on_presence(entity, True)
         return session
 

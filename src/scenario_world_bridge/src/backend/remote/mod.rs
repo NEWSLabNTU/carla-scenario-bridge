@@ -33,7 +33,7 @@
 //! reply marked fatal, wedges the bridge: SSv2 gets the error, the bridge drains and exits 75,
 //! and its supervisor starts a fresh one (034).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -63,6 +63,7 @@ use crate::weather::{wire_form, WeatherReply, WeatherRequest};
 use swb_core::world_client::{self, CallError, Client};
 
 mod signals;
+mod spec_check;
 mod tracking;
 use signals::SignalTable;
 use tracking::{Drive, Tracked};
@@ -627,6 +628,8 @@ pub struct RemoteBackend {
     ego_run: Option<EgoRun>,
     /// The agent relay connection for `agent` entities, started at the first such spawn.
     agent_link: Option<AgentLink>,
+    /// The installed vehicle catalog's `{model3d: spec_hash}`, read at the first ego spawn.
+    catalog_hashes: Option<HashMap<String, String>>,
     /// The drives the last `Apply` carried, by handle, for the tests.
     #[cfg(test)]
     sent: BTreeMap<u32, wire::EntityPose>,
@@ -665,6 +668,7 @@ impl RemoteBackend {
             unanswered_since: None,
             ego_run: None,
             agent_link: None,
+            catalog_hashes: None,
             #[cfg(test)]
             sent: BTreeMap::new(),
         }
@@ -736,6 +740,73 @@ impl RemoteBackend {
         let relay = self.config.agent_relay().to_string();
         self.agent_link
             .get_or_insert_with(|| AgentLink::start(&relay))
+    }
+
+    /// Take back an ego that is not this scenario's car and say why (roadmap 051).
+    fn refuse_ego(&mut self, name: &str, handle: u32, why: String) -> BackendError {
+        if let Err(e) = self.call(
+            &format!("Despawn '{name}'"),
+            wire::request::Request::Despawn(wire::Despawn { handle }),
+            self.request_timeout,
+        ) {
+            tracing::warn!("Despawning the refused ego '{name}' failed: {e:?}");
+        }
+        BackendError::Failed(format!("Spawn '{name}': {why}"))
+    }
+
+    /// The spec_hash start check (roadmap 051, `spec_check`): the world server's body, the
+    /// ego's vehicle agent and the installed catalog's entry for its body must name one spec.
+    fn check_ego_spec(
+        &mut self,
+        name: &str,
+        handle: u32,
+        asset_key: &str,
+        body: &wire::Body,
+    ) -> Result<(), BackendError> {
+        let catalog = self
+            .catalog_hashes
+            .get_or_insert_with(|| {
+                let Some(path) = spec_check::installed_catalog() else {
+                    tracing::warn!(
+                        "No vehicle catalog installed (sim_vehicle_spec): the ego's \
+                                    spec is not checked against it"
+                    );
+                    return HashMap::new();
+                };
+                std::fs::read_to_string(&path)
+                    .map(|text| spec_check::catalog_hashes(&text))
+                    .unwrap_or_else(|e| {
+                        tracing::warn!("Reading the vehicle catalog {}: {e}", path.display());
+                        HashMap::new()
+                    })
+            })
+            .get(asset_key)
+            .cloned();
+        let agent = match self.agent_link().agent_spec_hash(name) {
+            Ok(hash) => hash,
+            Err(e) => {
+                tracing::warn!("The ego's vehicle agent's spec_hash: {e:#}");
+                None
+            }
+        };
+        let world = format!("the world server ({})", self.sim());
+        let parts = [
+            (world.as_str(), Some(body.spec_hash.as_str())),
+            ("the vehicle agent", agent.as_deref()),
+            ("the catalog", catalog.as_deref()),
+        ];
+        if let Some(why) = spec_check::disagreement(&parts) {
+            return Err(self.refuse_ego(
+                name,
+                handle,
+                format!(
+                    "the ego's parts were built from different vehicle specs ({why}): rebuild \
+                     and restart the stale one (sim_vehicle_spec, roadmap 051)"
+                ),
+            ));
+        }
+        tracing::info!("Ego '{name}' spec_hash: {}", spec_check::summary(&parts));
+        Ok(())
     }
 
     /// End the ego's run: write its contact report (021), if reports are on.
@@ -1675,22 +1746,21 @@ impl SimBackend for RemoteBackend {
             };
             let off = ego_body_mismatches(center, dims, wheels, &body);
             if !off.is_empty() {
-                // Not an ego of this scenario: take the body back before refusing.
-                if let Err(e) = self.call(
-                    &format!("Despawn '{name}'"),
-                    wire::request::Request::Despawn(wire::Despawn { handle }),
-                    self.request_timeout,
-                ) {
-                    tracing::warn!("Despawning the refused ego '{name}' failed: {e:?}");
-                }
-                return Err(BackendError::Failed(format!(
-                    "Spawn '{name}': the ego's body on {} ({}) is not the car SSv2 declared \
-                     (the vehicle catalog's), more than {EGO_BODY_TOLERANCE} m off: {}",
-                    self.sim(),
-                    body.model,
-                    off.join("; ")
-                )));
+                return Err(self.refuse_ego(
+                    &name,
+                    handle,
+                    format!(
+                        "the ego's body on {} ({}) is not the car SSv2 declared (the vehicle \
+                         catalog's), more than {EGO_BODY_TOLERANCE} m off: {}",
+                        self.sim(),
+                        body.model,
+                        off.join("; ")
+                    ),
+                ));
             }
+        }
+        if entity_type == EntityType::Ego {
+            self.check_ego_spec(&name, handle, &req.asset_key, &body)?;
         }
         let sim_id = if body.sim_id != 0 {
             body.sim_id

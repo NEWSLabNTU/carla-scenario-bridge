@@ -128,7 +128,8 @@ class Client:
         sock.settimeout(0.5)
         self._sock = sock
         name = self.agent.name or type(self.agent).__name__
-        self._send(P.register(self.entity, self.agent.capabilities(), name))
+        self._send(P.register(self.entity, self.agent.capabilities(), name,
+                              getattr(self.agent, "spec_hash", "")))
         reader = P.LineReader()
         last_received = time.monotonic()
         while not self._stop.is_set():

@@ -10,13 +10,13 @@ from scenario_agent_relay.server import AgentServer
 
 class FakeAgent:
     def __init__(self, port, entity="ego", register=True, version=P.VERSION,
-                 capabilities=P.REQUIRED_COMMANDS):
+                 capabilities=P.REQUIRED_COMMANDS, spec_hash=""):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=5)
         self.reader = P.LineReader()
         self.pending = []
         self.version = version
         if register:
-            self.send(P.register(entity, capabilities, "fake"))
+            self.send(P.register(entity, capabilities, "fake", spec_hash))
             assert self.recv()["type"] == P.REGISTERED
 
     def send(self, message):
@@ -178,6 +178,20 @@ def test_commander_query_without_and_with_an_agent(server):
     message = commander.recv()
     assert message["status"] == P.OK and message["state"]["phase"] == P.IDLE
     assert message["registered"] is True
+    agent.close()
+    commander.close()
+
+
+def test_a_query_reports_the_agents_spec_hash(server):
+    # Roadmap 051: the bridge compares it with the world's and the catalog's.
+    commander = FakeCommander(server.port)
+    agent = FakeAgent(server.port, entity="ego", spec_hash="d5d4b266")
+    commander.send(P.query(1, "ego"))
+    assert commander.recv()["spec_hash"] == "d5d4b266"
+    agent.close()
+    agent = FakeAgent(server.port, entity="ego2")
+    commander.send(P.query(2, "ego2"))
+    assert "spec_hash" not in commander.recv()
     agent.close()
     commander.close()
 

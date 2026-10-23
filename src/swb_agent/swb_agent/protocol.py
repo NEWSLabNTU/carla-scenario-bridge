@@ -190,6 +190,8 @@ def validate(message: dict) -> None:
         caps = message.get("capabilities", [])
         if not isinstance(caps, list) or not all(isinstance(c, str) for c in caps):
             raise ProtocolError("register: capabilities is a list of command names")
+        if not isinstance(message.get("spec_hash", ""), str):
+            raise ProtocolError("register: spec_hash is a string")
     elif kind == REGISTERED:
         _require(message, "entity", str)
     elif kind == ERROR:
@@ -294,9 +296,15 @@ def _validate_args(command, args):
 
 # -- constructors -----------------------------------------------------------------------
 
-def register(entity, capabilities=(), agent=""):
-    return {"type": REGISTER, "entity": entity, "agent": agent,
-            "capabilities": list(capabilities)}
+def register(entity, capabilities=(), agent="", spec_hash=""):
+    """An agent's registration. `spec_hash`: the vehicle spec its autopilot's vehicle files
+    were generated from (sim_vehicle_spec, roadmap 051); sent only when known, and read by
+    the scenario bridge, which refuses an ego whose parts disagree."""
+    message = {"type": REGISTER, "entity": entity, "agent": agent,
+               "capabilities": list(capabilities)}
+    if spec_hash:
+        message["spec_hash"] = spec_hash
+    return message
 
 
 def register_commander(agent=""):
@@ -333,8 +341,10 @@ def command(command_id, name, **args):
 
 
 def reply(command_id, status=OK, message="", state=None, registered=None, reset=None,
-          supervised=None):
+          supervised=None, spec_hash=None):
     body = {"type": REPLY, "id": command_id, "status": status, "message": message}
+    if spec_hash:
+        body["spec_hash"] = spec_hash
     if registered is not None:
         body["registered"] = registered
     if reset is not None:

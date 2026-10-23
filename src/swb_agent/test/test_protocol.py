@@ -136,3 +136,12 @@ def test_a_commander_registers_without_an_entity():
 def test_an_agent_register_without_a_role_is_still_valid():
     # Agents written before commanders existed send no role.
     P.decode(b'{"v": 1, "type": "register", "entity": "ego", "capabilities": []}')
+
+
+def test_register_carries_a_spec_hash_only_when_known():
+    assert "spec_hash" not in P.register("ego", P.REQUIRED_COMMANDS, "a")
+    m = P.register("ego", P.REQUIRED_COMMANDS, "a", "d5d4")
+    assert P.decode(P.encode(m))["spec_hash"] == "d5d4"
+    bad = dict(m, spec_hash=7)
+    with pytest.raises(P.ProtocolError, match="spec_hash"):
+        P.validate(bad)
