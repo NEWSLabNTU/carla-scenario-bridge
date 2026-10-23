@@ -103,7 +103,7 @@ class IsaacWorld(WorldBase):
     """The world protocol's `World` on Isaac Sim (roadmap 046: `swb_world_server`)."""
 
     simulator_name = "isaac"
-    capabilities = ("SIGNALS", "TRACKED_MOTION", "CONTACTS")
+    capabilities = ("SIGNALS", "TRACKED_MOTION", "CONTACTS", "ROAD_CONDITION")
     # The bridge splits SSv2's step into PhysX steps of at most Isaac's default 60 Hz.
     max_physics_dt = 1 / 60
 
@@ -253,6 +253,30 @@ class IsaacWorld(WorldBase):
             return
         self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin)
         log.info("surface map %s: %d zone(s)", path, len(self.surface.map.zones))
+
+    def set_road_condition(self, friction_scale, wetness, properties):
+        """`ROAD_CONDITION` (047 S2): the scenario's road state on the surface layer. A world
+        with no surface map gets one for a condition that changes something: every label
+        the reference class, no zones (so a zone property is refused)."""
+        layer = self.surface
+        if layer is None:
+            empty = surfaces.parse({}, surfaces.NO_MAP)
+            # Checked even when nothing changes, so a zone property is refused alike.
+            condition, _ = surfaces.road_condition(empty, friction_scale, wetness, properties)
+            if condition == surfaces.RoadCondition():
+                return
+            layer = SurfaceLayer(self.stage, empty)
+        layer.set_condition(friction_scale, wetness, properties)
+        self.surface = layer
+
+    def reset(self, handles):
+        """A new owner, or a release: the entities go, the road goes back to the map's."""
+        super().reset(handles)
+        if self.surface is not None:
+            if self.surface.base.path == surfaces.NO_MAP:
+                self.surface = None
+            else:
+                self.surface.set_condition()
 
     # --- Traffic signals (roadmap 044 B) --------------------------------------------------
 

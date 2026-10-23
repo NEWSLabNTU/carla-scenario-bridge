@@ -8,6 +8,7 @@
 mod backend;
 pub mod collision_monitor;
 pub mod resolved_signals;
+pub mod road_condition;
 pub mod traffic_light_mapper;
 pub mod version;
 mod weather;

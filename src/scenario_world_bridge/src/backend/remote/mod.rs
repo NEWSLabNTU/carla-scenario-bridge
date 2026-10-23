@@ -42,7 +42,7 @@ use serde::Deserialize;
 
 use crate::agent_link::{self, AgentLink, AgentPose, Command as AgentCommand};
 use crate::backend::{
-    BackendError, Driver, EntityKind, EntityStatus, Episode, Goal, Sensor, SimBackend,
+    BackendError, Driver, EntityKind, EntityStatus, Environment, Episode, Goal, Sensor, SimBackend,
     SpawnRequest, StatusBatch, StatusOutcome,
 };
 use crate::body_clearance::{self, BodyBox};
@@ -1979,6 +1979,45 @@ impl SimBackend for RemoteBackend {
             self.request_timeout,
         )
         .map_err(|e| BackendError::Failed(format!("UpdateEntityGoal for '{name}': {e}")))?;
+        Ok(())
+    }
+
+    fn update_environment(&mut self, environment: &Environment) -> Result<(), BackendError> {
+        let Some(rc) = &environment.road_condition else {
+            return Ok(());
+        };
+        if !self.offers(wire::Capability::RoadCondition) {
+            // The default road changes nothing, whatever the simulator.
+            if rc.is_default() {
+                return Ok(());
+            }
+            return Err(unsupported(
+                "RoadCondition",
+                wire::Capability::RoadCondition,
+                self.sim(),
+            ));
+        }
+        let properties = rc
+            .swb_properties()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        tracing::info!(
+            "RoadCondition: friction scale {}, {}, {:?}",
+            rc.friction_scale_factor,
+            rc.wetness,
+            properties
+        );
+        self.call(
+            "SetRoadCondition",
+            wire::request::Request::SetRoadCondition(wire::SetRoadCondition {
+                road_condition: Some(wire::RoadCondition {
+                    friction_scale_factor: rc.friction_scale_factor,
+                    wetness: rc.wetness.clone(),
+                    properties,
+                }),
+            }),
+            self.request_timeout,
+        )?;
         Ok(())
     }
 

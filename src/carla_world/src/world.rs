@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use crate::backend::carla::{self, CarlaBackend};
 use crate::backend::{
-    BackendError, Driver, EntityKind, EntityStatus, Episode, Goal, SimBackend, SpawnRequest,
-    StatusBatch,
+    BackendError, Driver, EntityKind, EntityStatus, Environment, Episode, Goal, RoadCondition,
+    SimBackend, SpawnRequest, StatusBatch,
 };
 use crate::config::{BridgeConfig, NpcMotion};
 use crate::coordinate_conversion::euler_to_quaternion;
@@ -256,6 +256,7 @@ impl World for CarlaWorld {
             C::ReadsBack,
             C::Weather,
             C::Contacts,
+            C::RoadCondition,
         ]
     }
 
@@ -595,6 +596,19 @@ impl World for CarlaWorld {
         };
         let backend = self.backend()?;
         let result = backend.update_entity_goal(&name, &goal);
+        result.map_err(|e| refusal(e, backend))
+    }
+
+    fn set_road_condition(&mut self, req: &wire::RoadCondition) -> WorldResult<()> {
+        let env = Environment {
+            road_condition: Some(RoadCondition {
+                friction_scale_factor: req.friction_scale_factor,
+                wetness: req.wetness.clone(),
+                properties: req.properties.clone().into_iter().collect(),
+            }),
+        };
+        let backend = self.backend()?;
+        let result = backend.update_environment(&env);
         result.map_err(|e| refusal(e, backend))
     }
 

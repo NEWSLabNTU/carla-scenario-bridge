@@ -9,8 +9,8 @@
 use std::time::Duration;
 
 use crate::backend::{
-    BackendError, Driver, EntityKind, EntityStatus, Episode, Goal, Sensor, SimBackend,
-    SpawnRequest, StatusBatch,
+    BackendError, Driver, EntityKind, EntityStatus, Environment, Episode, Goal, RoadCondition,
+    Sensor, SimBackend, SpawnRequest, StatusBatch,
 };
 use crate::proto::simulation_api_schema::{self as api, Result as ProtoResult};
 use crate::proto::traffic_simulator_msgs::entity_subtype::Enum as EntitySubtype;
@@ -190,6 +190,18 @@ impl Coordinator {
         }
     }
 
+    /// `UpdateEnvironment`, sent by the SSv2 fork for OpenSCENARIO's `EnvironmentAction`
+    /// (roadmap 047): today its road condition.
+    pub fn update_environment(
+        &mut self,
+        req: api::UpdateEnvironmentRequest,
+    ) -> api::UpdateEnvironmentResponse {
+        let outcome = environment_of(req).and_then(|env| self.backend.update_environment(&env));
+        api::UpdateEnvironmentResponse {
+            result: Some(reply(outcome)),
+        }
+    }
+
     pub fn update_traffic_lights(
         &mut self,
         req: api::UpdateTrafficLightsRequest,
@@ -291,6 +303,45 @@ impl Coordinator {
     pub fn shutdown(&mut self) {
         self.backend.shutdown();
     }
+}
+
+/// OpenSCENARIO's wetness levels, driest first.
+pub const WETNESS: [&str; 5] = [
+    "dry",
+    "moist",
+    "wetWithPuddles",
+    "lowFlooded",
+    "highFlooded",
+];
+
+fn environment_of(req: api::UpdateEnvironmentRequest) -> Result<Environment, BackendError> {
+    let Some(rc) = req.road_condition else {
+        return Ok(Environment::default());
+    };
+    let wetness = if rc.wetness.is_empty() {
+        "dry".to_string()
+    } else {
+        rc.wetness
+    };
+    if !WETNESS.contains(&wetness.as_str()) {
+        return Err(BackendError::Failed(format!(
+            "RoadCondition: wetness {wetness:?} is not one of {}",
+            WETNESS.join(", ")
+        )));
+    }
+    let f = rc.friction_scale_factor;
+    if !(f.is_finite() && f >= 0.0) {
+        return Err(BackendError::Failed(format!(
+            "RoadCondition: frictionScaleFactor {f} is not in [0, inf)"
+        )));
+    }
+    Ok(Environment {
+        road_condition: Some(RoadCondition {
+            friction_scale_factor: f,
+            wetness,
+            properties: rc.properties.into_iter().collect(),
+        }),
+    })
 }
 
 fn ok() -> ProtoResult {
@@ -564,5 +615,69 @@ mod tests {
             panic!("no goal");
         };
         assert_eq!(goal.target_speed, Some(7.0));
+    }
+
+    fn road(f: f64, wetness: &str, props: &[(&str, &str)]) -> api::UpdateEnvironmentRequest {
+        api::UpdateEnvironmentRequest {
+            road_condition: Some(api::RoadCondition {
+                friction_scale_factor: f,
+                wetness: wetness.into(),
+                properties: props
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            }),
+        }
+    }
+
+    #[test]
+    fn the_road_condition_reaches_the_backend() {
+        let fake = FakeBackend::default();
+        let mut c = coordinator(&fake);
+        let r = c.update_environment(road(
+            0.7,
+            "wetWithPuddles",
+            &[("swb.zone.ford.water_depth", "0.1"), ("other.tool", "x")],
+        ));
+        assert!(r.result.unwrap().success);
+        let Call::UpdateEnvironment(env) = fake.last_call() else {
+            panic!("no environment");
+        };
+        let rc = env.road_condition.unwrap();
+        assert_eq!(rc.friction_scale_factor, 0.7);
+        assert_eq!(rc.wetness, "wetWithPuddles");
+        assert_eq!(rc.properties.len(), 2);
+        assert_eq!(rc.swb_properties().count(), 1);
+        assert!(!rc.is_default());
+        // No wetness is dry; an environment without a road condition changes none.
+        c.update_environment(road(1.0, "", &[("other.tool", "x")]));
+        let Call::UpdateEnvironment(env) = fake.last_call() else {
+            panic!("no environment");
+        };
+        assert!(env.road_condition.unwrap().is_default());
+        c.update_environment(api::UpdateEnvironmentRequest::default());
+        assert_eq!(
+            fake.last_call(),
+            Call::UpdateEnvironment(Environment::default())
+        );
+    }
+
+    #[test]
+    fn a_road_condition_ssv2_could_not_send_is_refused() {
+        let fake = FakeBackend::default();
+        let mut c = coordinator(&fake);
+        for (req, needle) in [
+            (road(1.0, "soaked", &[]), "wetness \"soaked\""),
+            (road(-0.5, "dry", &[]), "frictionScaleFactor -0.5"),
+            (road(f64::NAN, "dry", &[]), "frictionScaleFactor NaN"),
+        ] {
+            let result = c.update_environment(req).result.unwrap();
+            assert!(
+                !result.success && result.description.contains(needle),
+                "{}",
+                result.description
+            );
+        }
+        assert!(fake.calls().is_empty());
     }
 }

@@ -289,6 +289,17 @@ class WorldServer:
     def _get_weather(self, _req):
         raise RequestError("weather is not offered by this server")
 
+    def _set_road_condition(self, req):
+        if not self.offers("ROAD_CONDITION"):
+            raise RequestError("road conditions are not offered by this server")
+        rc = req.road_condition
+        try:
+            self.world.set_road_condition(rc.friction_scale_factor, rc.wetness or "dry",
+                                          dict(rc.properties))
+        except ValueError as e:
+            raise RequestError(f"RoadCondition refused:\n{e}") from e
+        return pb.Reply(ok=True)
+
     def _shutdown(self, _req):
         self.stopped = True
         return pb.Reply(ok=True)

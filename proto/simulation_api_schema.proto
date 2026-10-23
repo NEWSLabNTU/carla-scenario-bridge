@@ -391,6 +391,35 @@ message UpdateEntityGoalResponse {
 }
 
 /**
+ * A road condition (OpenSCENARIO RoadCondition): the whole road state from now on, replacing
+ * the last one sent.
+ *  - friction_scale_factor: scales every surface's friction, world-wide.
+ *  - wetness: dry, moist, wetWithPuddles, lowFlooded or highFlooded.
+ *  - properties: the RoadCondition's Properties by name, for the simulator to interpret; a
+ *    simulator ignores names it does not know and refuses values it cannot apply.
+ **/
+message RoadCondition {
+  double friction_scale_factor = 1;
+  string wetness = 2;
+  map<string, string> properties = 3;
+}
+
+/**
+ * Requests changing the environment (OpenSCENARIO EnvironmentAction). An unset condition is
+ * unchanged.
+ **/
+message UpdateEnvironmentRequest {
+  RoadCondition road_condition = 1;
+}
+
+/**
+ * Response of updating the environment.
+ **/
+message UpdateEnvironmentResponse {
+  Result result = 1; // Result of [UpdateEnvironmentRequest](#UpdateEnvironmentRequest)
+}
+
+/**
  * Universal message for Request
  **/
 message SimulationRequest {
@@ -410,6 +439,7 @@ message SimulationRequest {
     UpdateStepTimeRequest update_step_time = 14;
     AttachImuSensorRequest attach_imu_sensor = 15;
     UpdateEntityGoalRequest update_entity_goal = 16;
+    UpdateEnvironmentRequest update_environment = 17;
   }
 }
 
@@ -434,5 +464,6 @@ message SimulationResponse {
     UpdateStepTimeResponse update_step_time = 14;
     AttachImuSensorResponse attach_imu_sensor = 15;
     UpdateEntityGoalResponse update_entity_goal = 16;
+    UpdateEnvironmentResponse update_environment = 17;
   }
 }

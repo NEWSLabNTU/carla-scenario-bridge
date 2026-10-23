@@ -33,6 +33,7 @@ const ISAAC_LIKE: &[wire::Capability] = &[
     wire::Capability::Signals,
     wire::Capability::TrackedMotion,
     wire::Capability::Contacts,
+    wire::Capability::RoadCondition,
 ];
 
 const CARLA_LIKE: &[wire::Capability] = &[
@@ -43,6 +44,7 @@ const CARLA_LIKE: &[wire::Capability] = &[
     wire::Capability::AgentVehicles,
     wire::Capability::Weather,
     wire::Capability::Contacts,
+    wire::Capability::RoadCondition,
 ];
 
 /// A server that behaves as the real ones do, as far as the backend can tell, with
@@ -207,6 +209,7 @@ fn honest_with(caps: &'static [wire::Capability], instance: &'static str) -> Beh
             | R::SetStepTime(_)
             | R::Shutdown(_)
             | R::SetSignals(_)
+            | R::SetRoadCondition(_)
             | R::Release(_) => ok(None),
             R::SetWeather(_) | R::GetWeather(_) => {
                 let (_, w) = crate::weather::preset("ClearNoon").unwrap();
@@ -474,6 +477,78 @@ fn what_the_server_does_not_offer_is_an_honest_failure() {
     b.spawn(&vehicle("ego", Driver::Ego, 0.0)).unwrap();
     let e = b.spawn(&vehicle("ego2", Driver::Ego, 5.0)).unwrap_err();
     assert!(e.to_string().contains("ego 'ego' already exists"), "{e}");
+}
+
+fn road(f: f64, wetness: &str, props: &[(&str, &str)]) -> Environment {
+    Environment {
+        road_condition: Some(crate::backend::RoadCondition {
+            friction_scale_factor: f,
+            wetness: wetness.into(),
+            properties: props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }),
+    }
+}
+
+#[test]
+fn the_road_condition_goes_to_a_server_offering_it() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let mut inner = honest();
+    let mut b = backend(&server(Box::new(move |req| {
+        if let Some(wire::request::Request::SetRoadCondition(r)) = &req.request {
+            let rc = r.road_condition.clone().unwrap();
+            let unknown = rc.properties.contains_key("swb.zone.nowhere.class");
+            log.lock().unwrap().push(rc);
+            if unknown {
+                return Some(refused("zone 'nowhere' is not in the map", false));
+            }
+        }
+        inner(req)
+    })));
+    b.initialize(&episode()).unwrap();
+    let env = road(
+        0.8,
+        "lowFlooded",
+        &[("swb.zone.ford.water_depth", "0.12"), ("esmini.thing", "1")],
+    );
+    assert_eq!(b.update_environment(&env), Ok(()));
+    // Only our properties go to the server.
+    let sent = seen.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(sent.friction_scale_factor, 0.8);
+    assert_eq!(sent.wetness, "lowFlooded");
+    assert_eq!(sent.properties.len(), 1);
+    assert_eq!(sent.properties["swb.zone.ford.water_depth"], "0.12");
+    // The server's refusal is SSv2's, word for word.
+    let e = b
+        .update_environment(&road(1.0, "dry", &[("swb.zone.nowhere.class", "ice")]))
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("zone 'nowhere' is not in the map"),
+        "{e}"
+    );
+    // An environment without a road condition sends nothing.
+    let n = seen.lock().unwrap().len();
+    assert_eq!(b.update_environment(&Environment::default()), Ok(()));
+    assert_eq!(seen.lock().unwrap().len(), n);
+}
+
+#[test]
+fn a_road_condition_needs_the_capability_unless_it_changes_nothing() {
+    const PLAIN: &[wire::Capability] = &[wire::Capability::TrackedMotion];
+    let mut b = backend(&server(honest_with(PLAIN, "one")));
+    b.initialize(&episode()).unwrap();
+    assert_eq!(
+        b.update_environment(&road(1.0, "dry", &[("other.tool", "x")])),
+        Ok(())
+    );
+    let e = b.update_environment(&road(0.5, "dry", &[])).unwrap_err();
+    assert!(
+        e.to_string().contains("does not offer ROAD_CONDITION"),
+        "{e}"
+    );
 }
 
 #[test]

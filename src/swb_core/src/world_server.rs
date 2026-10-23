@@ -92,6 +92,13 @@ pub trait World {
     fn get_weather(&mut self) -> WorldResult<wire::WeatherReply> {
         Err(Refusal::new("weather is not offered by this server"))
     }
+    /// `ROAD_CONDITION`: the whole road state from now on; refuse what cannot be applied,
+    /// every problem listed, and then change nothing.
+    fn set_road_condition(&mut self, _request: &wire::RoadCondition) -> WorldResult<()> {
+        Err(Refusal::new(
+            "road conditions are not offered by this server",
+        ))
+    }
     /// A new owner: every entity of the last one goes (`handles`); the world stays.
     fn reset(&mut self, handles: &[u32]) -> WorldResult<()> {
         for h in handles {
@@ -365,6 +372,7 @@ impl<W: World> Shell<W> {
             Q::SetWeather(_) => "set_weather",
             Q::GetWeather(_) => "get_weather",
             Q::Release(_) => "release",
+            Q::SetRoadCondition(_) => "set_road_condition",
         };
         self.check_owner(what, client)?;
         self.last_world_request = Instant::now();
@@ -464,6 +472,12 @@ impl<W: World> Shell<W> {
             Q::GetWeather(_) => {
                 self.need(wire::Capability::Weather, "weather is")?;
                 ok(Some(R::Weather(self.world.get_weather()?)))
+            }
+            Q::SetRoadCondition(req) => {
+                self.need(wire::Capability::RoadCondition, "road conditions are")?;
+                self.world
+                    .set_road_condition(&req.road_condition.unwrap_or_default())?;
+                ok(None)
             }
             Q::Release(_) => {
                 let handles: Vec<u32> = self.entities.keys().copied().collect();

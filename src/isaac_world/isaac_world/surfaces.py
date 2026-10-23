@@ -37,6 +37,7 @@ reference ground (asphalt) that is the rig's own tire_friction.
     python -m isaac_world.surfaces plot <map dir | surfaces.yaml> [-o out.png]
 """
 import argparse
+import dataclasses
 import math
 import re
 import sys
@@ -57,6 +58,13 @@ QCODE_LABELS = {"Q34442": "Road", "Q177749": "SideWalk", "Q1392287": "RoadLine",
 ZONE_ID = re.compile(r"^[a-z0-9_]+$")
 ZONE_KEYS = {"id", "class", "wetness", "water_depth", "soil", "polygon", "scale", "origin",
              "resolution"}
+# A scenario's RoadCondition properties (047 S2): `swb.zone.<id>.<field>` sets a zone's field;
+# names outside `swb.` belong to other tools.
+PROPERTY_PREFIX = "swb."
+ZONE_PROPERTY = re.compile(r"^swb\.zone\.([^.]+)\.([^.]+)$")
+ZONE_FIELDS = {"class": "cls", "wetness": "wetness", "water_depth": "water_depth"}
+# The map of a world with no surfaces.yaml: every label the reference class, no zones.
+NO_MAP = "(no surfaces.yaml)"
 
 
 class SurfaceError(ValueError):
@@ -425,6 +433,68 @@ class RoadCondition:
 
     friction_scale: float = 1.0
     wetness: str = "dry"
+
+
+def road_condition(surface_map, friction_scale=1.0, wetness="dry", properties=None):
+    """A scenario's road condition on `surface_map`: `(RoadCondition, the map with the zone
+    fields the properties set)`. The whole road state: zones it does not name are as the map
+    has them. SurfaceError lists every problem; then nothing applies."""
+    problems = []
+    wetness = wetness or "dry"
+    if wetness not in WETNESS:
+        problems.append(f"wetness {wetness!r} is not one of {', '.join(WETNESS)}")
+    try:
+        friction_scale = float(friction_scale)
+    except (TypeError, ValueError):
+        friction_scale = float("nan")
+    if not (math.isfinite(friction_scale) and friction_scale >= 0):
+        problems.append(f"frictionScaleFactor {friction_scale} is not in [0, inf)")
+    zones = {z.id: z for z in surface_map.zones}
+    overrides = {}
+    for name, value in sorted((properties or {}).items()):
+        if not name.startswith(PROPERTY_PREFIX):
+            continue
+        m = ZONE_PROPERTY.match(name)
+        if not m:
+            problems.append(f"{name}: unknown property (swb.zone.<id>.<field>, field one of "
+                            f"{', '.join(ZONE_FIELDS)})")
+            continue
+        zid, key = m.groups()
+        if zid not in zones:
+            have = ", ".join(sorted(zones)) or "none"
+            problems.append(f"{name}: no zone {zid!r} in {surface_map.path} (zones: {have})")
+            continue
+        if key not in ZONE_FIELDS:
+            problems.append(f"{name}: a zone has no field {key!r} (one of "
+                            f"{', '.join(ZONE_FIELDS)})")
+            continue
+        if key == "class":
+            if value not in surface_map.table.classes:
+                problems.append(f"{name}: unknown class {value!r} (the table has "
+                                f"{', '.join(sorted(surface_map.table.classes))})")
+                continue
+            if zones[zid].soil:
+                problems.append(f"{name}: zone {zid!r} is soil; its class is its soil's")
+                continue
+        elif key == "wetness":
+            if value not in WETNESS:
+                problems.append(f"{name}: {value!r} is not one of {', '.join(WETNESS)}")
+                continue
+        else:
+            try:
+                value = float(value)
+            except ValueError:
+                value = float("nan")
+            if not (math.isfinite(value) and value >= 0):
+                problems.append(f"{name}: water depth is metres >= 0, not {value}")
+                continue
+        overrides.setdefault(zid, {})[ZONE_FIELDS[key]] = value
+    if problems:
+        raise SurfaceError("\n".join(problems))
+    changed = [dataclasses.replace(z, **overrides[z.id]) if z.id in overrides else z
+               for z in surface_map.zones]
+    return (RoadCondition(friction_scale, wetness),
+            dataclasses.replace(surface_map, zones=changed))
 
 
 def hydroplane_factor(hp: Hydroplaning, speed, depth):

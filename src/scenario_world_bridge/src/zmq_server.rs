@@ -252,6 +252,9 @@ impl ZmqServer {
             simulation_request::Request::UpdateEntityGoal(req) => {
                 handle!(update_entity_goal, UpdateEntityGoal, req)
             }
+            simulation_request::Request::UpdateEnvironment(req) => {
+                handle!(update_environment, UpdateEnvironment, req)
+            }
         };
         let handler = started.elapsed();
 
@@ -554,6 +557,11 @@ fn encode_error_response(variant: Option<u32>, description: &str) -> Vec<u8> {
                 result: Some(result),
             })
         }
+        Some(17) => {
+            simulation_response::Response::UpdateEnvironment(api::UpdateEnvironmentResponse {
+                result: Some(result),
+            })
+        }
         // Field 1 is Initialize, and it is also the documented fallback for None and for
         // any field number this build does not know.
         _ => simulation_response::Response::Initialize(api::InitializeResponse {
@@ -681,6 +689,12 @@ mod tests {
             )),
             Some(16)
         );
+        assert_eq!(
+            variant_of(simulation_request::Request::UpdateEnvironment(
+                api::UpdateEnvironmentRequest::default()
+            )),
+            Some(17)
+        );
     }
 
     #[test]
@@ -726,7 +740,7 @@ mod tests {
     /// Every variant must produce a failure carrying the description, whichever one it is.
     #[test]
     fn every_known_variant_round_trips_as_a_failure() {
-        for field in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16] {
+        for field in [1u32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17] {
             let bytes = encode_error_response(Some(field), "why");
             let decoded = SimulationResponse::decode(bytes.as_slice())
                 .unwrap_or_else(|e| panic!("field {field} failed to decode: {e}"));
@@ -750,6 +764,7 @@ mod tests {
                 simulation_response::Response::UpdateStepTime(r) => r.result,
                 simulation_response::Response::AttachImuSensor(r) => r.result,
                 simulation_response::Response::UpdateEntityGoal(r) => r.result,
+                simulation_response::Response::UpdateEnvironment(r) => r.result,
             };
 
             let result = result.unwrap_or_else(|| panic!("field {field} produced no result"));

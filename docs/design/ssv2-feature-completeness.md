@@ -64,7 +64,7 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
 | Pedestrian | partial | pose per frame | `walker.pedestrian.0001`, physics on, `WalkerControl` toward SSv2's pose (default, 023; walk cycle animates); kinematic under `npc_motion: kinematic` | `WalkerControl`, `set_bones`, AI controller |
 | MiscObject | partial | `asset_key`, bbox | `static.prop.streetbarrier` default (C:102) | `static.prop.*` |
 | TrafficSignalStateAction / Controller | 1.3 | UpdateTrafficLights | partial (§1) | `TrafficLight::set_state`, freeze |
-| Environment / Weather / Fog / Sun / TimeOfDay / RoadCondition | listed "1.3", **parse-only no-op** (`environment_action.cpp` `start()`/`run()` are `LINE()`) | **no slot** | – | `World::set_weather`, `tire_friction` |
+| Environment / Weather / Fog / Sun / TimeOfDay / RoadCondition | listed "1.3"; parse-only no-op upstream. Fork (047 S2): `RoadCondition` sent as `UpdateEnvironment`; weather and time of day still not | `UpdateEnvironment` (fork, oneof 17) | world-wide friction and wetness on both simulators, zones on Isaac (`off-road-surfaces.md`) | `World::set_weather`, `tire_friction` |
 | LightStateAction / VehicleLight | unimplemented | no | – | `Vehicle::set_light_state` |
 | AnimationAction / Appearance / Visibility | unimplemented | no | – | walker bones |
 | Override*Action, ActivateController | unimplemented | no | n/a (ego is Autoware) | `apply_control` |
@@ -157,7 +157,7 @@ Ordered by effect on scenario verdicts, then by cost.
 | 12 | `/control/control_mode_request` absent | manual-override tests impossible | small service in acb | XS |
 | 13 | `npc_logic_started`, MANUAL overwrite, second ego, unknown entity | protocol strictness | reject/handle per stock semantics | XS each |
 | 14 | Arrows, flashing, `relation_ids` | protected-turn scenarios wrong | CARLA has no arrow bulbs; document; publish full state on the V2X path from #1 | – |
-| 15 | Weather / TimeOfDay / RoadCondition | no slot in protocol; SSv2 itself no-ops | bridge-side `<Environment>` parse from `.xosc` or config key, applied at Initialize | S, opt-in |
+| 15 | Weather / TimeOfDay | no slot in protocol; SSv2 itself no-ops (RoadCondition: done in the fork, 047 S2) | extend the fork's `UpdateEnvironment` with them | S, opt-in |
 | 16 | Traffic-light freeze hole | lights may resume cycling | set long phase times as backup | XS |
 
 Items 4, 6, 10, 12, 13, 16 are small enough to batch into one hardening entry. Items 1–3 each

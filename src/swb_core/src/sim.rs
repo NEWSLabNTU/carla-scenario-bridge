@@ -17,6 +17,7 @@
 //! advances the world by one step. A backend that steps over a socket therefore makes one
 //! round trip per request, never one per entity.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::proto::geometry_msgs::Pose;
@@ -153,6 +154,54 @@ pub struct Goal {
     pub target_speed: Option<f64>,
 }
 
+/// OpenSCENARIO's `RoadCondition` (roadmap 047), from SSv2's `UpdateEnvironment`: the whole
+/// road state from now on, replacing the last one. `Initialize` goes back to the default.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoadCondition {
+    /// Scales every surface's friction, world-wide.
+    pub friction_scale_factor: f64,
+    /// `dry`, `moist`, `wetWithPuddles`, `lowFlooded` or `highFlooded`.
+    pub wetness: String,
+    /// The `Properties`, by name: `swb.*` are ours (`swb.zone.<id>.<field>`), the rest
+    /// belong to other tools and are ignored.
+    pub properties: BTreeMap<String, String>,
+}
+
+impl Default for RoadCondition {
+    fn default() -> Self {
+        Self {
+            friction_scale_factor: 1.0,
+            wetness: "dry".into(),
+            properties: BTreeMap::new(),
+        }
+    }
+}
+
+impl RoadCondition {
+    /// Our properties (`swb.*`): what a simulator must apply or refuse.
+    pub fn swb_properties(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.properties
+            .iter()
+            .filter(|(name, _)| name.starts_with(SWB_PROPERTY_PREFIX))
+    }
+
+    /// Whether it changes nothing from the default: any simulator can take it.
+    pub fn is_default(&self) -> bool {
+        self.friction_scale_factor == 1.0
+            && (self.wetness.is_empty() || self.wetness == "dry")
+            && self.swb_properties().next().is_none()
+    }
+}
+
+/// The prefix of the `RoadCondition` properties swb interprets.
+pub const SWB_PROPERTY_PREFIX: &str = "swb.";
+
+/// SSv2's `UpdateEnvironment` (OpenSCENARIO `EnvironmentAction`): `None` is unchanged.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Environment {
+    pub road_condition: Option<RoadCondition>,
+}
+
 /// The sensors SSv2 can ask a simulator to attach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sensor {
@@ -192,6 +241,9 @@ pub trait SimBackend {
 
     /// `UpdateEntityGoal`.
     fn update_entity_goal(&mut self, name: &str, goal: &Goal) -> Result<(), BackendError>;
+
+    /// `UpdateEnvironment`.
+    fn update_environment(&mut self, environment: &Environment) -> Result<(), BackendError>;
 
     /// `UpdateTrafficLights`: every signal's state, by Lanelet2 id.
     fn update_traffic_lights(&mut self, signals: &[TrafficSignal]) -> Result<(), BackendError>;

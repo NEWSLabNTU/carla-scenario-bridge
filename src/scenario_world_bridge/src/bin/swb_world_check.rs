@@ -690,6 +690,45 @@ fn conformance(endpoint: &str, map: Option<String>) -> ExitCode {
     } else {
         r.skip("weather", "no WEATHER");
     }
+    if has(wire::Capability::RoadCondition) {
+        let road = |f: f64, wetness: &str, props: &[(&str, &str)]| {
+            Q::SetRoadCondition(wire::SetRoadCondition {
+                road_condition: Some(wire::RoadCondition {
+                    friction_scale_factor: f,
+                    wetness: wetness.into(),
+                    properties: props
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                }),
+            })
+        };
+        r.check(
+            "a world-wide road condition is taken (ROAD_CONDITION)",
+            call(&mut c, road(0.7, "wetWithPuddles", &[]), TIMEOUT * 5).map(|_| String::new()),
+        );
+        r.check(
+            "a zone the map does not have is refused, by name (ROAD_CONDITION)",
+            match call(
+                &mut c,
+                road(
+                    1.0,
+                    "dry",
+                    &[("swb.zone.swb_check_no_such_zone.class", "ice")],
+                ),
+                TIMEOUT * 5,
+            ) {
+                Err(e) if e.contains("swb_check_no_such_zone") => Ok(String::new()),
+                other => Err(format!("answered {other:?}")),
+            },
+        );
+        r.check(
+            "the default road condition is taken (ROAD_CONDITION)",
+            call(&mut c, road(1.0, "dry", &[]), TIMEOUT * 5).map(|_| String::new()),
+        );
+    } else {
+        r.skip("road condition", "no ROAD_CONDITION");
+    }
     if has(wire::Capability::Autopilot) {
         r.skip("autopilot", "needs a road; the scenario suite checks it");
     }

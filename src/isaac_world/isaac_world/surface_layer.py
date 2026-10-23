@@ -25,12 +25,24 @@ QCODE_ATTR = "semantics:labels:wikidata_qcode"
 class SurfaceLayer:
     def __init__(self, stage, surface_map, map_origin=(0.0, 0.0, 0.0)):
         self.stage = stage
+        self.base = surface_map  # the map as loaded; `map` is it under the road condition
         self.map = surface_map
         self.origin = tuple(float(c) for c in map_origin)  # the world frame's origin in the map's
         self.condition = surfaces.RoadCondition()
         self.labels = {}  # collider path -> SimReady ground label, or None
         self.wheels = {}  # vehicle path -> surfaces.WheelSurfaces
         self.logged = {}  # (vehicle path, wheel) -> the surface last logged
+
+    def set_condition(self, friction_scale=1.0, wetness="dry", properties=None):
+        """A scenario's road condition (OpenSCENARIO `RoadCondition`, 047 S2), from the next
+        step on: the whole road state, replacing the last. SurfaceError lists every problem
+        and changes nothing."""
+        self.condition, self.map = surfaces.road_condition(self.base, friction_scale, wetness,
+                                                            properties)
+        zones = {name: value for name, value in sorted((properties or {}).items())
+                 if name.startswith(surfaces.PROPERTY_PREFIX)}
+        log.info("road condition: friction scale %g, %s%s", self.condition.friction_scale,
+                 self.condition.wetness, "".join(f", {k}={v}" for k, v in zones.items()))
 
     def label(self, path):
         """The ground label of the collider at `path`: the first Q-code found on it or up its

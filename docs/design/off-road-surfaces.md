@@ -89,7 +89,7 @@ soil model must return to the wheel has a working channel.
   ~0.85, wet 0.5-0.7, gravel ~0.6, dry earth ~0.68, packed snow 0.2, ice 0.1; calibrate,
   do not copy). PhysX already does the per-wheel lookup, so mu-split (one side in a puddle)
   costs nothing.
-- **Each wheel has its own table** (aib, `<vehicle>/tireFriction/<wheel>`, no ground
+- **Each wheel has its own table** (aib, `/World/vehicleTireFriction/<vehicle>/<wheel>`, no ground
   materials: its `defaultFrictionValue` is the wheel's friction on anything), and the world
   server writes it after every physics step for the next:
   `mu = tire_friction * friction_scale * mu_class * wet_class(wetness) * f_hydroplane(v, depth) / mu_reference`.
@@ -225,52 +225,72 @@ OpenSCENARIO 1.x has a road condition, but for the whole world:
 `wetness` is `dry | moist | wetWithPuddles | lowFlooded | highFlooded` (1.2+; highFlooded is
 "water depth > 5 cm"). There are no zones; `Properties` is free-form name/value.
 
-### What reaches the simulator today: nothing
+### Until 047 S2, nothing reached the simulator
 
-SSv2 parses `Environment`, `Weather` and `RoadCondition`
+SSv2 parsed `Environment`, `Weather` and `RoadCondition`
 (`openscenario_interpreter/syntax/road_condition.hpp`: `friction_scale_factor`, `wetness`,
-`properties`), but `EnvironmentAction::start()` and `run()` are `LINE()` no-ops, and
-`simulation_api_schema.proto` has no message for it
-([ssv2-feature-completeness.md](ssv2-feature-completeness.md), section 2: "parse-only no-op",
-"no slot"). swb's weather comes only from its ROS services (`/scenario_world_bridge/set_weather`).
+`properties`), but `EnvironmentAction::start()` and `run()` were `LINE()` no-ops, and
+`simulation_api_schema.proto` had no message for it
+([ssv2-feature-completeness.md](ssv2-feature-completeness.md), section 2). A `RoadCondition`
+without `wetness` was even refused as a missing required attribute, although the schema makes
+it optional.
 
-### Proposal: the map says where, the scenario says what state
+### The map says where, the scenario says what state (D3, decided 2026-10-23)
 
-- **Where** (static, per map): `<map>/surfaces.yaml` (D1, above); both world servers read
-  it, the CARLA one turning zones into friction trigger boxes.
+- **Where** (static, per map): `<map>/surfaces.yaml` (D1, above).
 - **What state** (per scenario, can change mid-run): the standard `RoadCondition`.
-  `frictionScaleFactor` and `wetness` apply world-wide (wetness maps to a water depth and a
-  friction factor per class); per-zone state rides in `Properties`, named by the map's zone
-  ids, so the file stays schema-valid and any other tool ignores what it does not know:
+  `frictionScaleFactor` and `wetness` apply world-wide; per-zone state rides in its
+  `Properties`, named by the map's zone ids, so the file stays schema-valid and any other
+  tool ignores what it does not know:
 
   ```xml
-  <RoadCondition frictionScaleFactor="1.0" wetness="moist">
-    <Properties>
-      <Property name="swb.zone.ford_1.water_depth_m" value="0.12"/>
-      <Property name="swb.zone.mud_pit.soil" value="mud_wet"/>
-      <Property name="swb.ruts" value="fresh"/>   <!-- or: keep, or a saved rut set -->
-    </Properties>
-  </RoadCondition>
+  <GlobalAction>
+    <EnvironmentAction>
+      <Environment name="ford_rises">
+        <RoadCondition frictionScaleFactor="1.0" wetness="moist">
+          <Properties>
+            <Property name="swb.zone.ford_1.water_depth" value="$ford_depth"/>
+            <Property name="swb.zone.track.class" value="gravel"/>
+          </Properties>
+        </RoadCondition>
+      </Environment>
+    </EnvironmentAction>
+  </GlobalAction>
   ```
 
-  An `EnvironmentAction` in the Init sets the start state; one in the Story (on a time or
-  distance trigger) changes it, which is how a scenario makes rain start or a ford rise.
+  `swb.zone.<id>.<field>` sets one field of a zone, as `surfaces.yaml` names it: `class` (a
+  class of the table; not on a `soil` zone), `wetness` (an OpenSCENARIO level) or
+  `water_depth` (metres; replaces a raster with one depth). Values may be parameters, so a
+  distribution can sweep them. An `EnvironmentAction` in the Init sets the start state; one in
+  the Story (on a time or distance trigger) changes it. A `RoadCondition` is the whole road
+  state: it replaces the last one, and a zone it does not name is as the map has it. Each
+  `Initialize` (the world server's `LoadWorld`), a new owner and a release go back to the
+  default: friction scale 1, dry, the map's zones.
 
-What that needs, in order (roadmap [047](../roadmap/047-off-road-surfaces.md), step S2, after
-[046](../roadmap/046-unified-world-interface.md)'s world protocol v4, which every simulator
-speaks):
+How it gets there (roadmap [047](../roadmap/047-off-road-surfaces.md), S2):
 
-1. **SSv2 fork** (`managed-ego-unforked`, ours): `EnvironmentAction::start()` sends the
-   environment to the simulator through a new `simulation_api_schema` request (an
-   `UpdateEnvironmentRequest` with the road condition and its properties; weather and time of
-   day can ride along later). Pushed to the fork before the pin moves (CLAUDE.md).
-2. **Bridge**: the proto copy, the coordinator handling it, and a world-protocol request
-   for it with a `ROAD_CONDITION` capability; the fake backend and the conformance check
-   cover it.
-3. **Isaac world server**: applies it to the surface layer (friction tables) and the zones.
-4. **CARLA world server**: what CARLA can do: `wetness` to the weather's wetness and puddles
-   (camera only in CARLA 0.9.16), `frictionScaleFactor` to the vehicles' tire friction or
-   friction trigger boxes; zones refused in the reply.
+1. **SSv2 fork** (`managed-ego-unforked`): `EnvironmentAction` ends immediately and its
+   `start()` sends the `RoadCondition`, when the `Environment` has one, as
+   `UpdateEnvironmentRequest` (oneof 17: friction scale, wetness, every property as a
+   string); `API::updateEnvironment` throws on a refusal, so the scenario fails with the
+   simulator's text. A missing `wetness` reads as dry. The fork knows nothing of `swb.`.
+   `MultiServer` (simple_sensor_simulator) acknowledges it. Weather and time of day are not
+   sent yet.
+2. **Bridge**: checks the wetness and the scale, drops properties outside `swb.` and sends
+   the rest as `SetRoadCondition` (world protocol, request 14) to a server declaring
+   `CAPABILITY_ROAD_CONDITION`; to one without, it refuses any condition but the default.
+   No protocol bump: only a server declaring the capability is sent it.
+3. **Isaac world server**: `surfaces.road_condition` checks every `swb.` property against the
+   loaded map and the class table, lists every problem and then changes nothing; otherwise
+   the surface layer takes the condition and the overridden zones from the next step. A
+   world with no `surfaces.yaml` gets a map of label defaults for a condition that changes
+   something, so a zone property is refused there ("zones: none").
+4. **CARLA world server**: one friction per wheel and no road model, so every vehicle's tire
+   friction (`WheelPhysicsControl::tire_friction`, its own value read at the first change)
+   becomes its own times `frictionScaleFactor` times asphalt's wet factor (the class table's
+   numbers, checked by a test); the weather's `wetness` and `precipitation_deposits` show the
+   level (rendering only on 0.9.16), and the weather from before is put back at the next
+   `Initialize`. `swb.` properties are refused: zones are the Isaac surface layer's.
 
 Autoware is not told: a real car does not know the friction either. Its ABS/TC (in aib's
 powertrain) and its planner meet the surface as a driver would.

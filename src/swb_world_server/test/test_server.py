@@ -211,7 +211,8 @@ class ServerTest(unittest.TestCase):
         self.assertFalse(r.ok)
         self.assertIn("other than the ego", r.error)
         for request in ({"set_goal": pb.SetGoal(handle=1)},
-                        {"set_weather": pb.SetWeather()}, {"get_weather": pb.GetWeather()}):
+                        {"set_weather": pb.SetWeather()}, {"get_weather": pb.GetWeather()},
+                        {"set_road_condition": pb.SetRoadCondition()}):
             r = call(self.server, **request)
             self.assertFalse(r.ok)
             self.assertIn("not offered", r.error)
@@ -226,6 +227,33 @@ class ServerTest(unittest.TestCase):
         # No SIGNALS: the map's signals are not handed to the world.
         call(bare, load_world=pb.LoadWorld(signals=[pb.Signal(way_id=1, opendrive_id="1")]))
         self.assertEqual(self.world.signals, [])
+
+    def test_the_road_condition_reaches_the_world_and_its_refusal_the_bridge(self):
+        conditions = []
+
+        def set_road_condition(friction_scale, wetness, properties):
+            if "swb.zone.nowhere.class" in properties:
+                raise ValueError("swb.zone.nowhere.class: no zone 'nowhere'")
+            conditions.append((friction_scale, wetness, properties))
+
+        self.world.capabilities = ("ROAD_CONDITION",)
+        self.world.set_road_condition = set_road_condition
+        server = WorldServer(self.world, clock=self.clock)
+        hello(server)
+        rc = pb.RoadCondition(friction_scale_factor=0.5, wetness="lowFlooded")
+        rc.properties["swb.zone.ford.water_depth"] = "0.12"
+        r = call(server, set_road_condition=pb.SetRoadCondition(road_condition=rc))
+        self.assertTrue(r.ok, r.error)
+        self.assertEqual(conditions, [(0.5, "lowFlooded", {"swb.zone.ford.water_depth": "0.12"})])
+        # No wetness is dry.
+        call(server, set_road_condition=pb.SetRoadCondition(
+            road_condition=pb.RoadCondition(friction_scale_factor=1.0)))
+        self.assertEqual(conditions[-1], (1.0, "dry", {}))
+        rc = pb.RoadCondition(friction_scale_factor=1.0)
+        rc.properties["swb.zone.nowhere.class"] = "ice"
+        r = call(server, set_road_condition=pb.SetRoadCondition(road_condition=rc))
+        self.assertFalse(r.ok)
+        self.assertIn("RoadCondition refused:\nswb.zone.nowhere.class: no zone", r.error)
 
     def test_signals_come_with_the_world_and_take_colours(self):
         hello(self.server)

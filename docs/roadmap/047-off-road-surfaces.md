@@ -86,9 +86,23 @@ Each needs an answer before the step it gates; the design's proposal is in brack
 - [ ] **D2. Soil model implementation** (gates S3): our own SCM-style node loop in Python/warp
   inside the world server [proposed: Chrono SCM cannot drive a PhysX raycast wheel]; or Chrono
   as a library with its SCM terrain and a per-wheel rigid "tire".
-- [ ] **D3. Scenario format for zones** (gates S2): standard `RoadCondition` for world-wide
-  `frictionScaleFactor` and `wetness`, per-zone state as `Properties` named
-  `swb.zone.<id>.<field>` [proposed]; or a `CustomCommandAction`.
+- [x] **D3. Scenario format for zones** (gates S2). **Decided 2026-10-23 (user): the
+  standard `RoadCondition`, `frictionScaleFactor` and `wetness` world-wide, per-zone state as
+  its `Properties` named `swb.zone.<id>.<field>`** (option A of four compared: the
+  properties, a `CustomCommandAction` built-in, one property naming a preset in
+  `surfaces.yaml`, a launch argument outside the scenario). Why: the SSv2 fork only forwards
+  OpenSCENARIO's `Environment` as name/value pairs and knows nothing of swb, so the change
+  could go upstream (it fills the interpreter's empty `EnvironmentAction`); the file stays
+  schema-valid and other tools ignore the properties; parameters (`$depth`) work in property
+  values, so a distribution can sweep a ford's depth; a story event changes the state
+  mid-run. A `RoadCondition` is the whole road state: it replaces the last one, and zones it
+  does not name are as the map has them. The world server checks each `swb.` property
+  against the loaded map and refuses an unknown zone, field or value with every problem
+  listed, and SSv2 fails the scenario with that text. Rejected: a `CustomCommandAction`
+  (swb-specific code in the fork, a free-form string, and a mistyped command runs as a shell
+  command), presets alone (no sweeps; can be added later as one more property over the same
+  path), a launch argument (no mid-run change, and the scenario no longer reproduces the run
+  on its own).
 - [ ] **D4. Physics rate in zones** (gates S3): raise the world's physics rate while a wheel is
   in a zone, or keep 60 Hz and integrate along the contact patch; decided by S3's measurement.
 - [ ] **D5. Rut persistence across runs** (gates S4): fresh per scenario by default, with
@@ -106,7 +120,7 @@ Each needs an answer before the step it gates; the design's proposal is in brack
       falling); `mu_eff = mu_class(wetness) * f_hydroplane(v, depth)` written per wheel per
       step, blended over a contact patch at class edges. Measured: per-wheel write cost; the
       ABS/TC scenario set below on one town.
-  - [x] A table per wheel in aib (`<vehicle>/tireFriction/<wheel>`, no ground materials;
+  - [x] A table per wheel in aib (`/World/vehicleTireFriction/<vehicle>/<wheel>`, no ground materials;
         `Vehicle.set_wheel_friction`, `Vehicle.contacts`: each wheel's hit point and collider).
         Checked first in Isaac (2026-10-23): a table's `defaultFrictionValue` edit takes the
         next step, 0.05 ms a write; a tire's `frictionVsSlipGraph` edit is refused once the
@@ -144,13 +158,42 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         Surface maps of the runs: `scenarios/surfaces/town01_{dry,route}.yaml`, copied to
         `<map>/surfaces.yaml` for a run (maps stay in git-ignored `data/`). A surfaces.yaml
         added or changed while the world server runs counts from the next `LoadWorld`.
-- [ ] **S2. Road condition from the scenario** (after 046's protocol v4, D3): SSv2 fork
-      (`managed-ego-unforked`) sends `EnvironmentAction`'s environment through a new
-      `simulation_api_schema` request (pushed to the fork before the pin moves); the bridge
-      forwards it as a world-protocol request with a `ROAD_CONDITION` capability; the Isaac
-      server applies it to S1; the CARLA server maps `wetness` to weather wetness and puddles
-      (camera only in 0.9.16) and `frictionScaleFactor` to tire friction, and refuses zones in
-      its reply. Fake backend and conformance check cover it.
+- [x] **S2. Road condition from the scenario** (D3; design doc "The map says where, the
+      scenario says what state"). Done 2026-10-23:
+  - [x] SSv2 fork (`managed-ego-unforked`): `EnvironmentAction` sends its `RoadCondition` as
+        `UpdateEnvironment` (oneof 17), throws on a refusal; a missing `wetness` is dry, and an
+        `Environment` without `TimeOfDay` or `Weather` is no longer refused (neither type
+        could be default-constructed: `Environment requires class TimeOfDay as element`).
+        The runner now logs the preprocessor's refusal, which it had dropped: the first runs
+        ended in a second with no word of why.
+  - [x] Bridge: `UpdateEnvironment` to `SetRoadCondition` (world protocol request 14,
+        `CAPABILITY_ROAD_CONDITION`, no version bump), `swb.` properties only; the default
+        condition passes on a server without the capability. Fake backend, remote-backend
+        tests, `swb_world_check` (three checks).
+  - [x] Isaac: `surfaces.road_condition` (every problem listed), `SurfaceLayer.set_condition`,
+        back to the map at `LoadWorld`, a new owner and `Release`; a world with no surface
+        map takes the world-wide state.
+  - [x] CARLA: tire friction x `frictionScaleFactor` x asphalt's wet factor on every vehicle
+        (own value kept, reapplied at spawn), the weather's `wetness`/`precipitation_deposits`
+        for the level and the old weather back at `Initialize`; `swb.` properties refused.
+  - [x] Measured 2026-10-23 (`scenarios/surfaces/town01_{wet,zones}.xosc`: town01_ego_drive
+        with an Init condition and a Story one at 20 s):
+        - conformance: Isaac 22/22, CARLA 23/23, the road checks included.
+        - Isaac, over `town01_route.yaml`: zones PASS; the Init property took the puddle from
+          the map's 6 mm to 3 mm (left wheels 0.715, right 0.837), and at 20 s `ice_at_goal`
+          became `snow_packed` under the wheels. Wet PASS; asphalt 0.810 while moist at scale
+          0.9 (0.9 x 0.9), lower after `wetWithPuddles`, and the puddle back at the map's 6 mm
+          (a condition is the whole road state).
+        - CARLA: wet PASS (second run; the first ended with Autoware still PLANNING on a
+          freshly started ego stack), tire friction x0.810 then x0.675, wetness 40 then 80
+          with deposits 40. Zones refused, SSv2's verdict carrying the world server's text:
+          "the CARLA world server has no surface map: zones and other swb properties are the
+          Isaac world server's (refused: swb.zone.puddle_left.water_depth)".
+  - [x] S1 fix found on the way (aib `e91e8bc`, aib `docs/issues/001`): the per-wheel tables
+        sat under the vehicle, and PhysX refuses to remove a friction table while playing, so
+        every ego despawn logged one error per wheel and leaked the tables. They now live at
+        `/World/vehicleTireFriction/<vehicle>/<wheel>` and stay: two conformance runs and a
+        zones run afterwards without the error, the per-wheel friction as before.
 - [ ] **S3. Soil layer in one zone** (D2, D4): SCM-style per-wheel model on a sparse tiled grid,
       allocated on first contact; traction cap through the wheel's table, resistance through
       `apply_force_at_pos`, ruts through re-cooked 2 x 2 m tiles (budgeted per frame); zone-edge
@@ -170,7 +213,7 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   ABS holds it), gravel braking (ABS no shorter than locked), an ice patch, and speed rising
   toward hydroplaning each behave in the expected direction, with numbers recorded; 0 MRM on
   the dry baseline (`town01_ego_drive` unchanged within 045's spread).
-- [ ] Scenario path: a `RoadCondition` in the Init and one in the Story change the ego's
+- [x] Scenario path: a `RoadCondition` in the Init and one in the Story change the ego's
   measured friction on Isaac, and CARLA's weather wetness; a zone property on CARLA is refused
   in the reply, not ignored.
 - [ ] Soil layer: in a sand zone, sinkage grows with slip and load, a second pass sinks less,

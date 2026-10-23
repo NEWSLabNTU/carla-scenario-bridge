@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use crate::proto::simulation_api_schema::TrafficSignal;
 use crate::sim::{
-    BackendError, EntityStatus, Episode, Goal, Sensor, SimBackend, SpawnRequest, StatusBatch,
-    StatusOutcome,
+    BackendError, EntityStatus, Environment, Episode, Goal, Sensor, SimBackend, SpawnRequest,
+    StatusBatch, StatusOutcome,
 };
 use crate::weather::WeatherReply;
 use crate::weather::WeatherRequest;
@@ -32,6 +32,7 @@ pub enum Call {
     Despawn(String),
     UpdateEntityStatus(StatusBatch),
     UpdateEntityGoal(String, Goal),
+    UpdateEnvironment(Environment),
     UpdateTrafficLights(usize),
     AttachSensor(Sensor),
 }
@@ -141,6 +142,10 @@ impl SimBackend for FakeBackend {
 
     fn update_entity_goal(&mut self, name: &str, goal: &Goal) -> Result<(), BackendError> {
         self.record(Call::UpdateEntityGoal(name.to_string(), goal.clone()))
+    }
+
+    fn update_environment(&mut self, environment: &Environment) -> Result<(), BackendError> {
+        self.record(Call::UpdateEnvironment(environment.clone()))
     }
 
     fn update_traffic_lights(&mut self, signals: &[TrafficSignal]) -> Result<(), BackendError> {

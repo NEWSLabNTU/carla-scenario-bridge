@@ -31,7 +31,8 @@
 // misread; `Hello` refuses a mismatch with both versions. 2 (044): tracked bodies, contacts per
 // reporting side. 3: traffic signals. 4 (046): the unified interface -- capabilities, the
 // owner lease, `Apply`, `SetStepTime`, `SetGoal`, the weather, `Release`, the rich spawn and
-// read-back a server that moves its own bodies needs.
+// read-back a server that moves its own bodies needs. (047's `SetRoadCondition` needs no bump:
+// the bridge sends it only to a server declaring `CAPABILITY_ROAD_CONDITION`.)
 
 syntax = "proto3";
 
@@ -89,6 +90,8 @@ enum Capability {
   CAPABILITY_WEATHER = 7;
   // `StepReply.contacts`.
   CAPABILITY_CONTACTS = 8;
+  // `SetRoadCondition` (047): OpenSCENARIO's road condition, world-wide and per zone.
+  CAPABILITY_ROAD_CONDITION = 9;
 }
 
 // Who sends a request: what the owner lease is checked against.
@@ -438,6 +441,24 @@ message WeatherReply {
   Weather weather = 3;
 }
 
+// SSv2's `UpdateEnvironment` road condition (OpenSCENARIO `RoadCondition`, roadmap 047): the
+// whole road state from now on, replacing the last one. `LoadWorld` and `Release` go back to
+// the default (friction scale 1, dry, no properties): the map's own surfaces.
+message RoadCondition {
+  // Scales every surface's friction, world-wide.
+  double friction_scale_factor = 1;
+  // dry, moist, wetWithPuddles, lowFlooded or highFlooded; empty: dry.
+  string wetness = 2;
+  // Only the `swb.` properties (the bridge drops the rest): `swb.zone.<id>.<field>` sets a
+  // field of a zone of the map's `surfaces.yaml`. A server refuses, with every problem listed,
+  // a property it does not know or cannot apply, and then changes nothing.
+  map<string, string> properties = 3;
+}
+
+message SetRoadCondition {
+  RoadCondition road_condition = 1;
+}
+
 // The owner leaves: the server undoes what it did for it (entities destroyed, the simulator's
 // settings restored) and has no owner after. The world stays loaded.
 message Release {}
@@ -459,6 +480,7 @@ message Request {
     SetWeather set_weather = 11;
     GetWeather get_weather = 12;
     Release release = 13;
+    SetRoadCondition set_road_condition = 14;
   }
   // The sender (every request, `Hello` included).
   ClientId client = 100;

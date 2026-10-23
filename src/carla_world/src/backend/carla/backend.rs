@@ -20,6 +20,12 @@ use crate::gap_trace::{self, GapTrace};
 use crate::map_resolver::{lanelet_map_file, load_map_origin, town_from_map_path};
 use crate::tick_watchdog::{HangHook, WatchError, Watchdog};
 
+/// The default road: friction as the vehicles have it, dry.
+const DRY_ROAD: AppliedRoad = AppliedRoad {
+    friction_factor: 1.0,
+    look: (0.0, 0.0),
+};
+
 /// Minimum spawn height when the ground cannot be probed.
 const FALLBACK_SPAWN_Z: f32 = 0.5;
 
@@ -423,9 +429,10 @@ fn fallback_spawn_height(commanded_z: f32) -> f32 {
 }
 
 use super::collision_monitor::CollisionMonitor;
+use super::road_condition::{self, Applied as AppliedRoad};
 use crate::actor_census;
 use crate::backend::{
-    BackendError, Driver, EntityKind, EntityStatus, Episode, Goal, Sensor, SimBackend,
+    BackendError, Driver, EntityKind, EntityStatus, Environment, Episode, Goal, Sensor, SimBackend,
     SpawnRequest, StatusBatch, StatusOutcome,
 };
 use crate::contact_report::ReportGeometry;
@@ -1154,6 +1161,16 @@ pub struct CarlaBackend {
     /// `/scenario_world_bridge/set_weather` -- with a label for logs. Re-applied after every map load and
     /// reconnect, because CARLA resets it with the world. `None`: leave CARLA's.
     requested_weather: Option<(String, Weather)>,
+    /// The scenario's road condition (roadmap 047, `UpdateEnvironment`) as CARLA applies it:
+    /// a factor on every vehicle's tire friction and the road's wet look. Back to the
+    /// default at `Initialize`.
+    road: AppliedRoad,
+    /// Each vehicle's own tire friction per wheel, by actor id, read before the road first
+    /// scaled it.
+    own_friction: HashMap<u32, Vec<f32>>,
+    /// The weather before the road changed its look, put back at `Initialize`; a
+    /// `set_weather` in between replaces it.
+    weather_before_road: Option<Weather>,
     /// Measured blueprint boxes for this CARLA version (roadmap 022); `None` spawns as
     /// before: the kind's default, no size check.
     blueprint_boxes: Option<BoxTable>,
@@ -1319,6 +1336,9 @@ impl CarlaBackend {
             agent_vehicles: HashSet::new(),
             agent_ledger,
             requested_weather,
+            road: DRY_ROAD,
+            own_friction: HashMap::new(),
+            weather_before_road: None,
             blueprint_boxes,
             warned_stale_boxes: HashSet::new(),
             gap_trace,
@@ -1483,6 +1503,8 @@ impl CarlaBackend {
             },
         };
         self.requested_weather = Some((label.clone(), w));
+        // The user's weather replaces the road's look too.
+        self.weather_before_road = None;
         if let Err(e) = self.world.set_weather(&super::weather::to_carla(w)) {
             return WeatherReply::failed(
                 format!("set weather {label}: {e}; kept, and applied on the next connect"),
@@ -1496,6 +1518,94 @@ impl CarlaBackend {
                 format!("weather {label} applied; kept across map loads"),
             ),
             Err(e) => WeatherReply::failed(format!("applied {label}, but {e}"), None),
+        }
+    }
+
+    /// `UpdateEnvironment` (roadmap 047): the road condition, as far as CARLA has one
+    /// (`road_condition`). Refused whole, with every problem, before anything changes.
+    pub fn update_environment(&mut self, env: &Environment) -> Result<(), BackendError> {
+        let Some(rc) = &env.road_condition else {
+            return Ok(());
+        };
+        let road = road_condition::applied(rc)
+            .or_else(|e| failed(format!("RoadCondition refused:\n{e}")))?;
+        if road.look != self.road.look {
+            let now = self
+                .weather()
+                .or_else(|e| failed(format!("RoadCondition: {e:#}")))?;
+            let before = *self.weather_before_road.get_or_insert(now);
+            let look = if road.look == DRY_ROAD.look {
+                before
+            } else {
+                road_condition::with_look(before, road.look)
+            };
+            if let Err(e) = self.world.set_weather(&super::weather::to_carla(look)) {
+                return failed(format!("RoadCondition: set the wet look: {e}"));
+            }
+        }
+        self.road = road;
+        let mut problems = Vec::new();
+        for name in self.entities.names().collect::<Vec<_>>() {
+            if let Err(e) = self.apply_road_friction(&name) {
+                problems.push(format!("'{name}': {e:#}"));
+            }
+        }
+        tracing::info!(
+            "RoadCondition: friction scale {}, {}: tire friction x{:.3}, wetness {} deposits {}",
+            rc.friction_scale_factor,
+            rc.wetness,
+            road.friction_factor,
+            road.look.0,
+            road.look.1
+        );
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            failed(format!(
+                "RoadCondition: tire friction not set on {}",
+                problems.join("; ")
+            ))
+        }
+    }
+
+    /// A vehicle's tire friction: its own times the road's factor. Not a vehicle: nothing.
+    fn apply_road_friction(&mut self, name: &str) -> Result<()> {
+        let Some(entity) = self.entities.get(name) else {
+            return Ok(());
+        };
+        if !matches!(entity.entity_type, EntityType::Ego | EntityType::Vehicle) {
+            return Ok(());
+        }
+        let id = entity.carla_actor_id;
+        let Some(actor) = self.world.actor(id).wrap_err("find the actor")? else {
+            return Ok(());
+        };
+        let carla::client::ActorKind::Vehicle(vehicle) = actor.into_kinds() else {
+            return Ok(());
+        };
+        let mut control = vehicle.physics_control().wrap_err("read its physics")?;
+        let own = self
+            .own_friction
+            .entry(id)
+            .or_insert_with(|| control.wheels.iter().map(|w| w.tire_friction).collect());
+        for (wheel, own) in control.wheels.iter_mut().zip(own.iter()) {
+            wheel.tire_friction = own * self.road.friction_factor as f32;
+        }
+        vehicle
+            .apply_physics_control(&control)
+            .wrap_err("apply its physics")?;
+        Ok(())
+    }
+
+    /// `Initialize`: the default road; the vehicles it scaled are gone, the weather goes
+    /// back to what it was before the road's look.
+    fn reset_road(&mut self) {
+        self.road = DRY_ROAD;
+        self.own_friction.clear();
+        if let Some(w) = self.weather_before_road.take() {
+            if let Err(e) = self.world.set_weather(&super::weather::to_carla(w)) {
+                tracing::warn!("Could not put the weather back after the road's look: {e}");
+            }
         }
     }
 
@@ -2020,6 +2130,7 @@ impl CarlaBackend {
             self.trace_emit_staged(None);
         }
         self.destroy_all_spawned();
+        self.reset_road();
         self.gap_trace.shutdown(Duration::from_secs(5));
         if let Some(mut link) = self.agent_link.take() {
             link.shutdown();
@@ -3253,6 +3364,7 @@ impl CarlaBackend {
         }
         self.entities.clear();
         self.commanded_lights.clear();
+        self.reset_road();
         // The previous run's simulator-driven vehicles are gone, so is the Traffic Manager:
         // a scenario without one ticks with no TM in this process (034 step 1). The next
         // `simulator_autopilot` spawn starts a new one, seeded as configured, so
@@ -4332,6 +4444,13 @@ impl CarlaBackend {
             kind,
             role_name.as_deref(),
         )?;
+        if self.road.friction_factor != 1.0 {
+            if let Err(e) = self.apply_road_friction(&name) {
+                return failed(format!(
+                    "Spawned '{name}' but cannot give it the road's friction: {e:#}"
+                ));
+            }
+        }
         if kind == SpawnKind::AutopilotNpc {
             if let Err(e) = self.track_autopilot_vehicle(&name) {
                 return failed(format!(
@@ -6278,6 +6397,10 @@ impl SimBackend for CarlaBackend {
 
     fn get_weather(&mut self) -> WeatherReply {
         CarlaBackend::get_weather(self)
+    }
+
+    fn update_environment(&mut self, environment: &Environment) -> Result<(), BackendError> {
+        CarlaBackend::update_environment(self, environment)
     }
 
     fn set_weather(&mut self, request: WeatherRequest) -> WeatherReply {

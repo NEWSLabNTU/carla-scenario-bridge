@@ -330,3 +330,66 @@ class SurfaceLayerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RoadConditionTest(unittest.TestCase):
+    """A scenario's RoadCondition on a map (047 S2)."""
+
+    MAP = [{"id": "ford", "water_depth": 0.02, "polygon": SQUARE},
+           {"id": "pit", "class": "mud_wet", "soil": True,
+            "polygon": [[20, 0], [30, 0], [30, 10], [20, 10]]}]
+
+    def test_properties_set_zone_fields_and_leave_the_map_as_it_was(self):
+        m = smap(self.MAP)
+        cond, changed = surfaces.road_condition(
+            m, 0.8, "moist", {"swb.zone.ford.water_depth": "0.12",
+                              "swb.zone.ford.class": "gravel", "esmini.anything": "x"})
+        self.assertEqual(cond, RoadCondition(0.8, "moist"))
+        self.assertEqual(changed.at(5, 5, "Road"), Surface("gravel", None, 0.12, "ford"))
+        # The map itself is untouched: the next condition starts from it.
+        self.assertEqual(m.at(5, 5, "Road"), Surface("asphalt", None, 0.02, "ford"))
+        cond, again = surfaces.road_condition(m)
+        self.assertEqual(cond, RoadCondition())
+        self.assertEqual(again.at(5, 5, "Road").water_depth, 0.02)
+
+    def test_every_problem_is_listed(self):
+        with self.assertRaises(SurfaceError) as e:
+            surfaces.road_condition(smap(self.MAP), -1, "soaked", {
+                "swb.zone.nowhere.class": "ice", "swb.zone.ford.colour": "red",
+                "swb.zone.ford.water_depth": "deep", "swb.zone.ford.wetness": "damp",
+                "swb.zone.ford.class": "lava", "swb.zone.pit.class": "sand",
+                "swb.ruts": "keep"})
+        text = str(e.exception)
+        for needle in ("wetness 'soaked'", "frictionScaleFactor -1.0",
+                       "no zone 'nowhere'", "zones: ford, pit", "no field 'colour'",
+                       "water depth is metres", "'damp' is not one of",
+                       "unknown class 'lava'", "zone 'pit' is soil", "swb.ruts: unknown"):
+            self.assertIn(needle, text)
+
+    def test_a_world_without_a_map_takes_world_wide_state_only(self):
+        empty = surfaces.parse({}, surfaces.NO_MAP)
+        cond, _ = surfaces.road_condition(empty, 0.5, "lowFlooded")
+        self.assertEqual(cond, RoadCondition(0.5, "lowFlooded"))
+        with self.assertRaises(SurfaceError) as e:
+            surfaces.road_condition(empty, 1.0, "dry", {"swb.zone.ford.water_depth": "0.1"})
+        self.assertIn("in (no surfaces.yaml) (zones: none)", str(e.exception))
+
+    def test_the_layer_applies_it_from_the_next_update(self):
+        stage = FakeStage({"/World/env/Road_1": ["Q34442"]})
+        layer = surface_layer.SurfaceLayer(stage, smap(self.MAP))
+        c = SimpleNamespace
+        on_road = [c(on_ground=True, position=(50.0, 0.0, 0.0), shape="/World/env/Road_1/m")] * 4
+        v = FakeVehicle(on_road)
+        layer.update(v, 10.0, 1 / 60)
+        self.assertAlmostEqual(v.written[0], 1.0)
+        layer.set_condition(0.5, "wetWithPuddles")
+        layer.reset(v.path)
+        layer.update(v, 10.0, 1 / 60)
+        self.assertAlmostEqual(v.written[0], 0.5 * TABLE["asphalt"].wet[2])
+        with self.assertRaises(SurfaceError):
+            layer.set_condition(1.0, "dry", {"swb.zone.ford.class": "lava"})
+        self.assertEqual(layer.condition, RoadCondition(0.5, "wetWithPuddles"))  # unchanged
+        layer.set_condition()
+        layer.reset(v.path)
+        layer.update(v, 10.0, 1 / 60)
+        self.assertAlmostEqual(v.written[0], 1.0)

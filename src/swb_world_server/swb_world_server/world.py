@@ -78,6 +78,13 @@ class World:
         ``GREEN``, from the next step on."""
         raise NotImplementedError("this simulator has no traffic signals")
 
+    def set_road_condition(self, friction_scale, wetness, properties):
+        """`ROAD_CONDITION`: OpenSCENARIO's road condition, the whole road state from the next
+        step on (`wetness` one of OpenSCENARIO's levels; `properties` the `swb.` ones,
+        name to string). Raise ValueError, listing every problem, for what cannot be
+        applied, and change nothing then. `load` and `reset` go back to the default."""
+        raise NotImplementedError("this simulator has no road condition")
+
     def reset(self, handles):
         """A new owner, or the old one released the world: every entity goes. The world
         stays loaded."""
