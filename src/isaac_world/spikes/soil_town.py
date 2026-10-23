@@ -91,6 +91,8 @@ def frame():
     t0 = time.perf_counter()
     for _ in range(SUB):
         veh.apply(cmd, dt, state)
+        if layer is not None:
+            layer.place([veh], dt)
         world.step(render=False)
         veh.sample(physx, dt, state)
         if layer is not None:

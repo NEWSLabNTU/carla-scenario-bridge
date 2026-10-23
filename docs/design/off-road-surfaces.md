@@ -332,6 +332,25 @@ cooking); and a tile waits for every wheel to be 3 m away, one rebuild a pass. T
 the pad: 44 rebuilds and ~3 MB a pass, against 88 and 23-36 MB; the second pass rides in its
 ruts at -9.3 cm, the lidar still reads them 9.36 cm deep.
 
+**Since issue 001's second fix (2026-10-23) no collision is cooked after load.** The egos are
+the only bodies that feel the ruts, and each meets the ground through one suspension ray per
+wheel, so the zone's collision is a flat box at `ground_z` that those rays do not hit (a
+collision group filtering aib's `groundQuery`; tracked NPCs stand on it), and under each ego
+wheel a thin box, a plate, placed before every substep where the wheel will be after it, its
+top the least-squares plane of the shown ruts over the tire's footprint (`SoilTiles.place`,
+`surface_layer.wheel_points`). A tile rebuild is now its render mesh and the heights the
+plates read. The footprint matters because the grid's rut is a box with vertical walls: the
+10 cm collision mesh made each wall a slope a wheel slid into from beside the rut, and a plate
+at the single ray point let a tire overlapping a rut by 9 cm ignore it; over the footprint a
+tire half over a rut sits half in it, tilted toward it. Pad, same passes as above: the second
+pass rides at -7.8 cm (rear wheels) / -8.1 (body), 7.67 m/s, largest drop in a frame 0.02 m/s;
+ten more passes on shifting lines, 331 rebuilds, grew the process by 0.9 MB in all, against
+2.5-6.7 MB a pass with the cooked tiles. The fit costs 26 us a wheel. A plate stays up until
+its wheel is half a plate clear of the tiles' box (flat past the tiles): parked any sooner,
+a ray landing a few cm from the prediction found the box's hole, a substep in the air per
+axle at a zone's exit, which on Town01 was two emergency stops (issue 002). Town01 with
+Autoware, the lead on the ego's line: 4/4 PASS, 0 MRM, 0.19-0.28 m/s^2.
+
 ### A zone on a CARLA town: the town's ground cut out (047 S3, 2026-10-23)
 
 At load (after the world is referenced), each soil zone with `ground_z` cuts its tiles' box
@@ -454,7 +473,9 @@ above.) What the runs show:
   sand, where the ego was pulled 0.2 m sideways into the lead's fresh ruts (y -129.58
   against its line's -129.37). Its cause is not known: Autoware's logs say only "EMERGENCY_STOP
   is operated", and a /diagnostics listener on the ego's domain received nothing. Runs on
-  packed ruts (R, 2/2) or beside them (2/2) had none.
+  packed ruts (R, 2/2) or beside them (2/2) had none. Seven reruns of the same set later
+  that evening had none either; the acceptance bag now records the diagnostic graph for the
+  next one ([issue 002](../issues/002-mid-sand-mrm.md)).
 - The world server's step time in the zones, whole stack: p50 39-85 ms, p95 95-408 ms, the
   high ones with host load at 100-175 (every part of the step slowed, commands too).
 

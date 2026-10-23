@@ -18,8 +18,9 @@ the class's in the wheel's table, and the soil's resistance pushes back on the b
 contact, for the next substep (`apply_force`, the host's `apply_force_at_pos`). Both fade in
 over `SOIL_BLEND` wheel diameters from the zone's edge. A zone with `ground_z` has the
 server's own ground (`soil_tiles`), into which `flush` puts the grid's ruts once a frame,
-where no wheel stands. The
-ruts are fresh at every `fresh_soil` (a new owner or a release).
+where no wheel stands; before every substep `place` puts a plate on those ruts under each ego
+wheel, where its suspension ray will land (docs/issues/001: a cooked collision mesh per
+rebuild was never freed). The ruts are fresh at every `fresh_soil` (a new owner or a release).
 
 Every vehicle shares a zone's grid (047 S4). The egos run on it as above; a kinematic vehicle
 (an NPC SSv2 moves by pose) rolls on it without slip, its pose interpolated over the frame's
@@ -160,6 +161,19 @@ class SurfaceLayer:
                          f" {s.wetness}" if s.wetness else "",
                          "" if s.water_depth is None else f" water {s.water_depth * 1000:.1f} mm",
                          f" (zone {s.zone})" if s.zone else "", mu)
+
+    def place(self, vehicles, dt):
+        """Before a substep: the plates of the zones with their own ground under each aib
+        vehicle's wheels, where they will be after `dt` (`wheel_points`)."""
+        if not self.tiles:
+            return
+        wheels = {}
+        ox, oy, _ = self.origin
+        for v in vehicles:
+            for i, (x, y, hx, hy) in enumerate(wheel_points(v, dt)):
+                wheels[(v.path, i)] = (x + ox, y + oy, hx, hy, v.p.wheel_width)
+        for tiles in self.tiles.values():
+            tiles.place(wheels)
 
     def begin_step(self):
         """Once per physics step, before the vehicles' updates."""
@@ -342,6 +356,29 @@ class SurfaceLayer:
         self.kinematic.pop(vehicle_path, None)
         self.soil_out = {k: v for k, v in self.soil_out.items() if k[0] != vehicle_path}
         self.soil_xy = {k: v for k, v in self.soil_xy.items() if k[0] != vehicle_path}
+
+
+def wheel_points(vehicle, dt):
+    """Where aib `vehicle`'s wheels (aib.isaac.vehicle.WHEELS: front left, front right, rear
+    left, rear right) will meet the ground after a step of `dt`, world frame (x, y): its body
+    pose after the last substep moved on at its velocity, or its pose as set (a spawn, a
+    teleport) before the first; with the body's heading (x, y, heading x, heading y)."""
+    if vehicle.last is not None:
+        (px, py, _), (w, qx, qy, qz), (vx, vy, _) = vehicle.last
+    else:
+        t, q = vehicle.translate.Get(), vehicle.orient.Get()
+        px, py = t[0], t[1]
+        w, (qx, qy, qz) = q.GetReal(), q.GetImaginary()
+        vx = vy = 0.0
+    # body x and y axes in the world, from the quaternion
+    ax = (1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy + w * qz))
+    ay = (2 * (qx * qy - w * qz), 1 - 2 * (qx * qx + qz * qz))
+    half, base = vehicle.p.wheel_tread / 2, vehicle.p.wheel_base
+    cx, cy = px + vx * dt, py + vy * dt
+    norm = math.hypot(*ax) or 1.0
+    hx, hy = ax[0] / norm, ax[1] / norm
+    return [(cx + ax[0] * lx + ay[0] * ly, cy + ax[1] * lx + ay[1] * ly, hx, hy)
+            for lx, ly in ((base, half), (base, -half), (0.0, half), (0.0, -half))]
 
 
 def register(world_files):

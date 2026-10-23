@@ -1,32 +1,35 @@
-"""A soil zone's own ground on Isaac (047 S3): the ruts of its grid (`soil.SoilGrid`) in the
-collision and the render mesh, so every wheel and the lidar meet what the wheels made. Needs
-pxr (import after `SimulationApp`).
+"""A soil zone's own ground on Isaac (047 S3): the ruts of its grid (`soil.SoilGrid`) under the
+egos' wheels and in the render mesh, so every ego wheel and the lidar meet what the wheels
+made. Needs pxr and aib (import after `SimulationApp`).
 
 A zone with `ground_z` is covered by square tiles of `TILE_BLOCKS` x `TILE_BLOCKS` grid blocks
-(1.6 m at 5 cm) at that height over its bounding box, made at load as flat two-triangle quads:
-the map must have no ground collider inside that box (a wheel's suspension ray takes the
-highest hit): `cut_stage` cuts a town's out at load (`ground_cut`, the geometry). Each tile
-is two meshes:
+(1.6 m at 5 cm) at that height over its bounding box: the map must have no ground collider
+inside that box (a wheel's suspension ray takes the first hit): `cut_stage` cuts a town's out
+at load (`ground_cut`, the geometry). The ruts go to three places, none of which PhysX cooks
+again (docs/issues/001: it keeps every mesh it cooks, ~64 KB a 10 cm tile, freed by nothing):
 
-  render     at the grid's resolution (33 x 33 vertices), no collision, one prim whose points
-             are written in place: what cameras and the RTX lidar see
-  collision  every `COLLISION_STEP`-th node (17 x 17 at 10 cm), invisible. PhysX cooks a mesh
-             once and does not see its points change (047 spike), so a rebuild is a new prim,
-             made before the old one is removed: the wheel never stands on nothing
+  render     a mesh per tile at the grid's resolution (33 x 33 vertices), no collision, its
+             points written in place: what cameras and the RTX lidar see
+  flat       one box per zone, its top at `ground_z` over the tiles' box, in a collision group
+             the vehicles' suspension rays do not hit: what every other body stands on (a
+             tracked NPC, a dropped object), without ruts
+  plates     a thin box under each ego wheel in the box (`place`, before every substep): the
+             plane fitted to the ruts over the tire's footprint where the wheel will be after
+             the substep, so a tire half over a rut sits half in it, tilted toward it (the pull
+             of a rut). What the wheel's single suspension ray meets; a box is never cooked,
+             so moving it keeps nothing
 
-A tile whose blocks the wheels moved more than `soil.DIRTY` is rebuilt once no wheel on soil
-is within `margin` of it (3 m: a car's axles both gone, so one rebuild a pass, not one per
-axle; rebuilding under a wheel shook the car to a stop). At most `budget` tiles a frame, oldest
-first; the rest wait, while the soil's forces carry on from the grid.
-
-Memory (docs/issues/001): PhysX keeps every mesh it has cooked, released or not, about 465 KB
-for a 5 cm tile and 64 KB for a 10 cm one (`spikes/tile_memory.py`); the render mesh's edits
-keep none. Hence the coarser collision and one rebuild a pass.
+A tile whose blocks the wheels moved more than `soil.DIRTY` is rebuilt (its render mesh and the
+heights the plates read, `shown`) once no wheel on soil is within `margin` of it (3 m: a car's
+axles both gone, so one rebuild a pass, not one per axle; ruts appearing under a wheel shook
+the car to a stop). At most `budget` tiles a frame, oldest first; the rest wait, while the
+soil's forces carry on from the grid.
 """
 import logging
 import time
 
 import numpy as np
+from aib.isaac.vehicle import GROUPS as AIB_GROUPS
 from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, Vt
 
 from . import ground_cut, soil
@@ -35,7 +38,18 @@ log = logging.getLogger("isaac_world")
 
 ROOT = "/World/soil"
 TILE_BLOCKS = 2
-COLLISION_STEP = 2  # collision vertices every this many grid nodes
+# A wheel's plate, m: wide enough for a substep's travel either way (0.33 m at 20 m/s and 60 Hz)
+# with its tilt fitted where the ray will land; thin, so it is never a step of its own.
+PLATE = 0.8
+PLATE_THICK = 0.02
+PARK_Z = -1000.0  # a plate no wheel needs: far below everything
+# The footprint a plate is fitted over: across the tire's width, and this far along it, m.
+FOOTPRINT_ACROSS = (-0.5, -0.25, 0.0, 0.25, 0.5)  # shares of the width
+FOOTPRINT_ALONG = (-0.08, 0.0, 0.08)
+FOOTPRINT = tuple(g.ravel() for g in np.meshgrid(FOOTPRINT_ALONG, FOOTPRINT_ACROSS,
+                                                 indexing="ij"))  # (along m, across share)
+# The vehicles' suspension rays query as this group (aib.isaac.vehicle.ensure_vehicle_scene).
+GROUND_QUERY = f"{AIB_GROUPS}/groundQuery"
 # The ruts the tiles show thin to nothing over this much of the zone's edge, m (047 S6): the
 # soft layer feathers out against the rigid ground beside it, as the soil's forces fade in over
 # 1.5 wheel diameters (~1.1 m), instead of ending in a rut-deep wall loose soil cannot hold
@@ -204,11 +218,13 @@ class SoilTiles:
         self.origin = origin
         self.budget = budget
         self.root = f"{ROOT}/{zone.id}"
-        self.gen = {}  # (tx, ty) -> collision rebuilds so far (the prim's name)
+        self.gen = {}  # (tx, ty) -> rebuilds so far
+        self.shown = {}  # (tx, ty) -> the ruts its render mesh and the plates show, (n+1)^2 m
+        self.plates = {}  # wheel key -> (translate, orient, parked)
         self.full = set()  # tiles whose render mesh is at full resolution
         self.queue = []  # tiles waiting for a rebuild, oldest first
         self.feathers = {}  # (tx, ty) -> its vertices' share of the ruts (FEATHER)
-        self.faces = {n: _faces(n) for n in (1, self.n, self.n // COLLISION_STEP)}
+        self.faces = {n: _faces(n) for n in (1, self.n)}
         x0, x1, y0, y1 = zone.bbox
         side = self.n * spacing
         # 145.6 / 1.6 is 90.99999...: a polygon on whole tiles must not gain a row of them
@@ -235,7 +251,7 @@ class SoilTiles:
         flat = np.zeros((2, 2), np.float32)
         for t in self.tiles:
             self._render(t, flat, 1)
-            self._collision(t, flat, 1)
+        self._flat_ground()
         log.info("soil zone %s: %d tiles of %.1f m at z %.2f", zone.id, len(self.tiles), side,
                  zone.ground_z)
 
@@ -269,18 +285,106 @@ class SoilTiles:
                 self.full.discard(t)
         mesh.CreatePointsAttr().Set(self._points(t, depth, n))
 
-    def _collision_path(self, t):
-        return f"{self.root}/c{self._name(t)}_{self.gen.get(t, 0)}"
+    def _flat_ground(self):
+        """The zone's ground for everything but the suspension rays: a box over the tiles."""
+        group = UsdPhysics.CollisionGroup.Define(self.stage, f"{self.root}/flatGroup")
+        group.CreateFilteredGroupsRel().AddTarget(GROUND_QUERY)
+        x0, x1, y0, y1 = self.box
+        cube = UsdGeom.Cube.Define(self.stage, f"{self.root}/flat")
+        cube.CreateSizeAttr(1.0)
+        cube.MakeInvisible()
+        xf = UsdGeom.XformCommonAPI(cube.GetPrim())
+        xf.SetTranslate(Gf.Vec3d((x0 + x1) / 2, (y0 + y1) / 2, self.zone.ground_z - 0.5))
+        xf.SetScale(Gf.Vec3f(x1 - x0, y1 - y0, 1.0))
+        UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+        group.GetCollidersCollectionAPI().CreateIncludesRel().AddTarget(cube.GetPath())
 
-    def _collision(self, t, depth, n):
-        mesh = UsdGeom.Mesh.Define(self.stage, self._collision_path(t))
-        mesh.CreatePointsAttr(self._points(t, depth, n))
-        idx, cnt = self.faces[n]
-        mesh.CreateFaceVertexIndicesAttr(idx)
-        mesh.CreateFaceVertexCountsAttr(cnt)
-        mesh.MakeInvisible()
-        UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
-        UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
+    def _plate(self, key):
+        p = self.plates.get(key)
+        if p is None:
+            name = "_".join(str(k) for k in key).strip("/").replace("/", "_").replace("-", "m")
+            cube = UsdGeom.Cube.Define(self.stage, f"{self.root}/plates/{name}")
+            cube.CreateSizeAttr(1.0)
+            cube.MakeInvisible()
+            prim = cube.GetPrim()
+            translate = cube.AddTranslateOp(precision=UsdGeom.XformOp.PrecisionDouble)
+            orient = cube.AddOrientOp()
+            cube.AddScaleOp().Set(Gf.Vec3f(PLATE, PLATE, PLATE_THICK))
+            translate.Set(Gf.Vec3d(0.0, 0.0, PARK_Z))
+            UsdPhysics.CollisionAPI.Apply(prim)
+            p = self.plates[key] = [translate, orient, True]
+        return p
+
+    def depths(self, xs, ys):
+        """The ruts shown at map-frame points (arrays), m below `ground_z`, bilinear; NaN off
+        the tiles."""
+        side = self.n * self.h
+        tx, ty = np.floor(xs / side).astype(int), np.floor(ys / side).astype(int)
+        out = np.full(len(xs), np.nan)
+        for t in set(zip(tx.tolist(), ty.tolist())):
+            if t not in self.tiles_set:
+                continue
+            m = (tx == t[0]) & (ty == t[1])
+            depth = self.shown.get(t)
+            if depth is None:
+                out[m] = 0.0
+                continue
+            u, v = xs[m] / self.h - t[0] * self.n, ys[m] / self.h - t[1] * self.n
+            i = np.minimum(u.astype(int), self.n - 1)
+            j = np.minimum(v.astype(int), self.n - 1)
+            fu, fv = u - i, v - j
+            out[m] = (depth[i, j] * (1 - fu) * (1 - fv) + depth[i + 1, j] * fu * (1 - fv)
+                      + depth[i, j + 1] * (1 - fu) * fv + depth[i + 1, j + 1] * fu * fv)
+        return out
+
+    def footprint(self, x, y, hx, hy, width):
+        """The plane of the ruts under a tire `width` m wide at map-frame (x, y) heading
+        (hx, hy): (z at the centre, dz/dx, dz/dy), stage-frame z; None if its centre is more
+        than half a plate outside the tiles' box. Points off the tiles count as flat ground:
+        a wheel leaving the zone keeps its plate until it is clear of the box, or its ray,
+        landing a few cm from where the plate's centre was predicted, finds the box's hole
+        and nothing in it (a substep in the air per axle at the exit, 1.1 cm of heave, and
+        NDT at its iteration limit on Town01: issue 002). The footprint is a grid symmetric
+        about its centre, so the least-squares plane is the mean and two independent
+        slopes."""
+        ox, oy, _ = self.origin
+        x0, x1, y0, y1 = self.box
+        m = PLATE / 2
+        if not (x0 + ox - m <= x <= x1 + ox + m and y0 + oy - m <= y <= y1 + oy + m):
+            return None
+        a, c = FOOTPRINT[0], FOOTPRINT[1] * width
+        z = np.nan_to_num(-self.depths(x + hx * a - hy * c, y + hy * a + hx * c))
+        along = float(a @ z / (a @ a))
+        across = float(c @ z / (c @ c))
+        return (self.zone.ground_z + float(z.mean()), along * hx - across * hy,
+                along * hy + across * hx)
+
+    def place(self, wheels):
+        """Before a substep: each wheel's plate under where it will be (`wheels`: key ->
+        map-frame (x, y, heading x, heading y, tire width)), a wheel off the tiles' plate
+        parked."""
+        ox, oy, _ = self.origin
+        for key, (x, y, hx, hy, width) in wheels.items():
+            g = self.footprint(x, y, hx, hy, width)
+            if g is None and key not in self.plates:
+                continue
+            p = self._plate(key)
+            if g is None:
+                if not p[2]:
+                    p[0].Set(Gf.Vec3d(0.0, 0.0, PARK_Z))
+                    p[2] = True
+                continue
+            z, gx, gy = g
+            n = Gf.Vec3d(-gx, -gy, 1.0).GetNormalized()
+            centre = Gf.Vec3d(x - ox, y - oy, z) - n * (PLATE_THICK / 2)
+            p[0].Set(centre)
+            p[1].Set(Gf.Quatf(Gf.Rotation(Gf.Vec3d(0, 0, 1), n).GetQuat()))
+            p[2] = False
+        for key in set(self.plates) - set(wheels):  # a vehicle gone
+            p = self.plates[key]
+            if not p[2]:
+                p[0].Set(Gf.Vec3d(0.0, 0.0, PARK_Z))
+                p[2] = True
 
     def _feather(self, t):
         """Tile `t`'s vertices' share of the grid's ruts ((n+1)^2): `FEATHER` at the edge."""
@@ -293,13 +397,11 @@ class SoilTiles:
         return w
 
     def _rebuild(self, t, depth):
-        """Tile `t` at the grid's `depth` ((n+1)^2): render in place, collision anew."""
+        """Tile `t` at the grid's `depth` ((n+1)^2): its render mesh and the plates' heights."""
         depth = depth * self._feather(t)
         self._render(t, depth, self.n)
-        old = self._collision_path(t)
+        self.shown[t] = depth
         self.gen[t] = self.gen.get(t, 0) + 1
-        self._collision(t, depth[::COLLISION_STEP, ::COLLISION_STEP], self.n // COLLISION_STEP)
-        self.stage.RemovePrim(old)
 
     def update(self, grid, wheels=(), margin=3.0):
         """Queue the tiles over the grid's dirty blocks, rebuild up to `budget` of them that no
@@ -338,7 +440,7 @@ class SoilTiles:
         """Every tile at the grid's ruts now, unbudgeted (a rut set going in)."""
         for t in self.tiles:
             depth = grid.heights(t[0] * self.n, t[1] * self.n, self.n)
-            if depth.max() > 0 or self.gen.get(t):
+            if depth.max() > 0 or t in self.shown:
                 self._rebuild(t, depth)
         self.queue = []
         grid.handed_out(list(grid.blocks))
@@ -346,17 +448,15 @@ class SoilTiles:
     def clear(self):
         """Back to flat ground (fresh soil)."""
         flat = np.zeros((2, 2), np.float32)
-        for t in self.tiles:
-            if self.gen.get(t):
-                self._render(t, flat, 1)
-                old = self._collision_path(t)
-                self.gen[t] += 1
-                self._collision(t, flat, 1)
-                self.stage.RemovePrim(old)
+        for t in list(self.shown):
+            self._render(t, flat, 1)
+            self.gen[t] += 1
+        self.shown = {}
         self.queue = []
 
     def remove(self):
         """The tiles off the stage and the map's ground back under them."""
         self.stage.RemovePrim(self.root)
+        self.plates = {}
         uncut(self.cut)
         self.cut = {}

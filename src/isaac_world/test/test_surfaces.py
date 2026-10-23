@@ -1,4 +1,5 @@
 """The surface layer's map, model and Isaac glue (roadmap 047 S1); no Isaac needed."""
+import math
 import sys
 import tempfile
 import unittest
@@ -453,11 +454,39 @@ class FakeTiles:
     def clear(self):
         self.cleared += 1
 
+    def place(self, wheels):
+        self.placed = dict(wheels)
+
     def show(self, grid):
         self.shown = len(grid.blocks)
 
     def remove(self):
         self.removed = True
+
+
+class WheelPointsTest(unittest.TestCase):
+    """Issue 001: each ego wheel's plate goes where its suspension ray will land."""
+
+    def vehicle(self, last):
+        return SimpleNamespace(last=last, p=SimpleNamespace(wheel_base=3.0, wheel_tread=1.6))
+
+    def test_yawed_and_moving(self):
+        c, s = math.cos(math.pi / 4), math.sin(math.pi / 4)  # yaw 90 deg: body x is world +y
+        v = self.vehicle(((1.0, 2.0, 0.0), (c, 0.0, 0.0, s), (0.0, 4.0, 0.0)))
+        pts = surface_layer.wheel_points(v, 0.25)
+        want = [(0.2, 6.0), (1.8, 6.0), (0.2, 3.0), (1.8, 3.0)]
+        for (x, y, hx, hy), (wx, wy) in zip(pts, want):
+            self.assertAlmostEqual(x, wx)
+            self.assertAlmostEqual(y, wy)
+            self.assertAlmostEqual(hx, 0.0)
+            self.assertAlmostEqual(hy, 1.0)
+
+    def test_before_the_first_substep_the_pose_as_set(self):
+        q = SimpleNamespace(GetReal=lambda: 1.0, GetImaginary=lambda: (0.0, 0.0, 0.0))
+        v = self.vehicle(None)
+        v.translate = SimpleNamespace(Get=lambda: (5.0, 0.0, 0.0))
+        v.orient = SimpleNamespace(Get=lambda: q)
+        self.assertEqual(surface_layer.wheel_points(v, 1.0)[3], (5.0, -0.8, 1.0, 0.0))
 
 
 class KinematicTest(unittest.TestCase):
@@ -545,6 +574,13 @@ class SurfaceLayerTest(unittest.TestCase):
         self.assertEqual(made["pit"].wheels, [(10.0, 0.0)] * 4)  # kept off the wheels' tiles
         layer.fresh_soil()
         self.assertEqual(made["pit"].cleared, 1)
+        v.last = ((10.0, 0.0, 0.3), (1.0, 0.0, 0.0, 0.0), (6.0, 0.0, 0.0))
+        v.p.wheel_base, v.p.wheel_tread = 2.9, 1.6
+        layer.place([v], 0.5)  # the plates go where the wheels will be, map frame
+        w = 0.235
+        self.assertEqual(made["pit"].placed, {
+            (v.path, 0): (15.9, 0.8, 1.0, 0.0, w), (v.path, 1): (15.9, -0.8, 1.0, 0.0, w),
+            (v.path, 2): (13.0, 0.8, 1.0, 0.0, w), (v.path, 3): (13.0, -0.8, 1.0, 0.0, w)})
         layer.remove_tiles()
         self.assertTrue(made["pit"].removed)
 

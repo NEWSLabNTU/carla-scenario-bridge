@@ -26,6 +26,7 @@ applies it. Cases:
                  hit (the rut they meet), the body's height, the speed's largest drop in a
                  frame (a tile swap must not stop the car), tiles rebuilt, rebuild cost
   cost           the surface layer's update per vehicle per substep, in and out of a zone
+  endurance      SOIL_SPIKE_PASSES=N more passes on shifting lines: memory per pass (issue 001)
 """
 import json
 import math
@@ -123,6 +124,9 @@ physx = omni.physx.get_physx_interface()
 state = State()
 cmd = Command(received=True, gear=GEAR_DRIVE)
 update_s = {"in": [], "out": []}
+place_s = []  # per substep: the wheels' plates (issue 001)
+air = []  # (x, wheel) of every substep a wheel had no ground under it
+heave = []  # (x, body z) per substep
 step_forces = []  # per substep: total resistance applied
 flush_s = []  # per frame with a rebuild: the flush's time
 rebuilt = [0]
@@ -131,8 +135,15 @@ rebuilt = [0]
 def frame():
     for _ in range(SUB):
         veh.apply(cmd, dt, state)
+        t0 = time.perf_counter()
+        layer.place([veh], dt)
+        place_s.append(time.perf_counter() - t0)
         world.step(render=False)
         veh.sample(physx, dt, state)
+        if veh.contacts:
+            air.extend((round(state.position[0], 2), i)
+                       for i, c in enumerate(veh.contacts) if not c.on_ground)
+            heave.append((state.position[0], state.position[2]))
         forces.clear()
         layer.begin_step()
         t0 = time.perf_counter()
@@ -306,6 +317,24 @@ def rut(line_y=0.3):
                 130.0, LANES["sand_rut"] + line_y + rig.vehicle.wheel_tread / 2) * 100, 2)}
 
 
+def edges(line_y=0.3, speed=5.0):
+    """Issue 001/002: through the sand_rut zone's entry (x 99.2) and exit (160) at `speed` on
+    the rutted line: every substep a wheel had no ground, and the body's largest vertical jump
+    between substeps near each edge."""
+    veh.teleport(((80.0, LANES["sand_rut"] + line_y, 0.05), (1.0, 0.0, 0.0, 0.0)), physx)
+    layer.reset(veh.path)
+    air.clear()
+    heave.clear()
+    reach(speed, 175.0)
+    def jump(x0):
+        h = [(x, z) for x, z in heave if abs(x - x0) < 5.0]
+        return round(max(abs(b[1] - a[1]) for a, b in zip(h, h[1:])) * 100, 2) if len(h) > 1 \
+            else None
+    return {"airborne_substeps": len(air), "airborne_at": air[:12],
+            "jump_cm_entry": jump(99.2), "jump_cm_exit": jump(160.0),
+            "jump_cm_mid": jump(130.0)}
+
+
 def progress(name):
     rss = int(open("/proc/self/statm").read().split()[1]) * 4096 / 1e9
     print(f"SPIKE-PROGRESS {name} rss {rss:.1f} GB t {time.perf_counter() - T0:.0f} s", flush=True)
@@ -362,12 +391,27 @@ layer.set_condition(1.0, "dry", {"swb.ruts": "worn"})
 out["ruts_load_s"] = round(time.perf_counter() - t0, 2)
 progress("rut_from_set")
 out["rut_from_set"] = rut()
+progress("edges")
+out["edges"] = edges()
+# docs/issues/001: N more passes, each on another line so every rebuild is a new shape (what
+# grew a cooked collision without bound); the server's memory pass by pass.
+endurance = []
+for k in range(int(os.environ.get("SOIL_SPIKE_PASSES", "0"))):
+    progress(f"endurance_{k}")
+    r = rut(line_y=0.3 + 0.15 * ((k % 9) - 4))
+    endurance.append({"rebuilt": r["tiles_rebuilt"], "rss_mb": r["rss_growth_mb"],
+                      "rear_hit_z_cm": r["rear_hit_z_cm"]})
+if endurance:
+    out["endurance"] = endurance
 cost = {}
 for k, v in update_s.items():
     v = sorted(v)
     if v:
         cost[k] = {"p50_us": round(v[len(v) // 2] * 1e6, 1),
                    "p99_us": round(v[int(len(v) * 0.99)] * 1e6, 1), "n": len(v)}
+v = sorted(place_s)
+cost["place"] = {"p50_us": round(v[len(v) // 2] * 1e6, 1),
+                 "p99_us": round(v[int(len(v) * 0.99)] * 1e6, 1), "n": len(v)}
 out["cost"] = cost
 print("SPIKE-RESULT " + json.dumps(out), flush=True)
 os._exit(0)

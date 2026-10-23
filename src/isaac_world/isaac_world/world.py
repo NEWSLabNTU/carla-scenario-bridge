@@ -649,6 +649,8 @@ class IsaacWorld(WorldBase):
             t = time.perf_counter()
             def warm_step():
                 ego.before_substep(self.dt)  # no command yet: the hold brake
+                if self.surface is not None:
+                    self.surface.place([ego.vehicle], self.dt)
                 self.world.step(render=True)
                 ego.after_substep(self.physx, self.dt)
 
@@ -1033,6 +1035,8 @@ class IsaacWorld(WorldBase):
         for s in range(substeps):
             for ego in egos:
                 ego.before_substep(dt)
+            if self.surface is not None:
+                self.surface.place([ego.vehicle for ego in egos], dt)
             self.world.step(render=render and s == substeps - 1)
             if self.surface is not None:
                 self.surface.begin_step()

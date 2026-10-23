@@ -35,6 +35,12 @@ sys.path.insert(0, str(PROJECT / "src/autoware_carla_bridge/scripts"))
 import acceptance  # noqa: E402  (acb's harness: limits, dead_nodes)
 import tracking_probe  # noqa: E402
 
+# Recorded beside the scored topics, never scored: what to read when a run has an MRM.
+# mrm_handler acts on the availability; the graph says which diagnostic made it false
+# (issue 002: an MRM whose only log line was "EMERGENCY_STOP is operated").
+DIAGNOSIS = ["/system/operation_mode/availability", "/diagnostics_graph/struct",
+             "/diagnostics_graph/status", "/diagnostics"]
+
 
 def junit_verdict(path):
     if not path.exists():
@@ -52,11 +58,11 @@ def start_bag(out, domain, discovery):
     env = dict(os.environ, ROS_DOMAIN_ID=str(domain))
     log = open(out / "bag.log", "w")
     proc = subprocess.Popen(["ros2", "bag", "record", "-o", str(out / "bag"),
-                             *tracking_probe.TOPICS],
+                             *tracking_probe.TOPICS, *DIAGNOSIS],
                             stdout=log, stderr=subprocess.STDOUT, env=env,
                             start_new_session=True)
     deadline = time.time() + discovery
-    want = len(tracking_probe.TOPICS)
+    want = len(tracking_probe.TOPICS) + len(DIAGNOSIS)
     while time.time() < deadline:
         n = (out / "bag.log").read_text(errors="replace").count("Subscribed to topic")
         if n >= want:

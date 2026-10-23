@@ -1,7 +1,8 @@
 # 001: Each soil tile rebuild leaves its cooked collision in the Isaac world server
 
-**Severity**: medium, now low. **Status**: mitigated (12x less); the cause is PhysX's and
-stays. **Found**: 2026-10-23, roadmap 047 S3.
+**Severity**: medium, then low. **Status**: fixed 2026-10-23 (no collision mesh is cooked
+after load; the cause, PhysX keeping every cooked mesh, stays). **Found**: 2026-10-23, roadmap
+047 S3.
 
 ## What is wrong
 
@@ -70,9 +71,73 @@ Pad, two passes of 35 m at 8 m/s: 44 rebuilds and 3.7 / 2.9 MB a pass, against 8
 before, ~100 MB per km per pass in a tile zone. The second pass still rides in its ruts
 (-9.3 cm).
 
+## Fix 2: no cooked collision at all (2026-10-23)
+
+The first fix left the memory kept, twelve times slower: a long event on one zone (many cars,
+many passes) still grew the server by ~100 MB per km of tracks rebuilt. Of the ways left (rut
+heights quantised so shapes repeat, an NVIDIA API to drop cooked meshes, a collision that
+needs no cooking), the third works with what Isaac has. The only bodies that must feel the
+ruts are the egos, and an ego meets the ground through one suspension ray per wheel (aib's
+vehicle, `raycast`). So `soil_tiles` now gives a zone three things, none cooked after load:
+
+- **render**: unchanged, a mesh per tile at the grid's 5 cm, points written in place.
+- **flat**: one box per zone, its top at `ground_z` over the tiles' box, in a collision group
+  that filters aib's `groundQuery`: tracked NPCs and anything dropped stand on it; the egos'
+  rays go through it.
+- **plates**: a thin box (0.8 x 0.8 x 0.02 m) per ego wheel, placed before every substep
+  (`SurfaceLayer.place`, `soil_tiles.SoilTiles.place`) where the wheel will be after it
+  (`surface_layer.wheel_points`: body pose plus velocity times the step), its top the
+  least-squares plane of the ruts over the tire's footprint (5 points across its width, 3
+  along). A box is never cooked; moving a static one keeps nothing.
+
+The heights the plates read are the tiles' `shown` arrays, refreshed when a tile is rebuilt,
+under the same rule as before (once no wheel on soil is within 3 m): a wheel's own pass is the
+grid's forces' to carry, its rut felt from the next pass on.
+
+Why a footprint and not the point under the wheel: the grid's rut is a box, 0.25 m wide with
+vertical walls (one pass of the Model 3's wheel, 8 m/s). The old 10 cm collision mesh made each
+wall a 10 cm slope, so a wheel whose ray landed just beside a rut slid into it. A plate at the
+single ray point did the opposite: a tire overlapping a rut by 9 cm (shifted lines in the
+endurance passes below) stayed on the untouched ground beside it. Over the footprint, a tire
+half over a rut sits half in it, tilted toward it (`test_soil_tiles.py`), and on the pad the
+car settles into ruts it overlaps.
+
+Pad (`spikes/soil_drive.py`, `SOIL_SPIKE_ONLY=rut`, new `SOIL_SPIKE_PASSES`: more passes,
+each 0.15 m beside the last, so every rebuild is a new shape), the same seeds on both builds:
+
+| build | 2nd pass: rear wheels / body | endurance passes | rebuilds | RSS growth |
+|---|---|---|---|---|
+| cooked 10 cm tiles (HEAD) | -9.0 cm | 20 | 827 | 105 MB, 2.5-6.7 a pass (one 18.5) |
+| plates, footprint fit | -7.8 / -8.1 cm | 10 | 331 | 0.9 MB, 0.0-0.2 a pass |
+| plates, footprint fit | | 20 | 537 | 52 MB: 51.5 on the first, 0.0-0.5 after |
+| plates, point under the wheel | -9.2 / -8.9 cm | 20 | 903 | 18.8 MB (one 13.9) |
+
+One run of the point-under-the-wheel build also grew 574 and 1057 MB on two passes and nothing
+on the other seventeen; a second run with the same seeds did not. Such one-off jumps appear on
+both builds and are not per rebuild (the next passes add nothing): an allocator's, not a mesh's.
+Second-pass speed 7.67 m/s, largest drop in a frame 0.02 m/s (0.25 with the first cooked
+tiles). Cost: the fit 26 us a wheel (100 us a substep for four, p50), the plates' USD writes
+included up to 1.2 ms at p99 on a host at load 70-130; a tile rebuild is now its render mesh
+only (0.6-1 ms a frame).
+
+A plate stays up until its wheel is half a plate (0.4 m) clear of the tiles' box, flat at
+`ground_z` past the tiles. The first version parked it as soon as the wheel's predicted
+centre left the box, and the ray, landing a few cm from the prediction, found the box's hole
+(the town's ground cut out, the flat box filtered): one substep in the air per axle at the
+pad's zone exit and 1.1 cm of heave (0.01 cm after the fix, 0 substeps in the air). On Town01
+that was two emergency stops at the dirt zone's exit (issue 002: NDT at its iteration limit).
+
+Town01 with Autoware (`town01_soil.xosc`, lead on the ego's line, `play_log/acceptance/
+2026-10-23_22-35-55`): 4/4 PASS, 0 MRM, longitudinal 0.19-0.28 m/s^2 (the cooked tiles:
+0.19-0.29). The world server grew ~150 MB a run, as it did with the cooked tiles (~130 MB a
+run, 18.23 to 19.26 GB over eight): that growth is the world's reload each scenario, not the
+ruts ([issue 003](003-world-reload-memory.md)).
+
+What the plates do not carry: ruts under a tracked NPC (it stands on the flat box; it never
+felt the soil either) and the chassis meeting rut ridges (aib keeps the chassis at least
+0.05 m above the wheel bottom; the deepest ruts seen are 17 cm, against a chassis 0.42 m up).
+
 ## Still open
 
-The memory is still kept, only twelve times slower. A long event on one zone (many cars,
-many passes) grows the server by ~100 MB per km of tracks rebuilt. Ways left: quantise rut
-heights so shapes repeat (cache hits), a NVIDIA fix or API to drop cooked meshes, or a
-collision representation that needs no cooking.
+Nothing for this issue. PhysX still keeps every mesh it cooks; anything that cooks meshes
+at run time (a future deformable obstacle) meets the same wall.

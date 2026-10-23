@@ -370,3 +370,22 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   and Autoware, 43.9-44.4 ms against 43.2-54.8 (set B against A; a loaded host).*
 - [x] Lidar sees the ruts the wheels feel (rut depth in the point cloud within one grid cell).
   *2026-10-23 (`spikes/soil_lidar.py`): 9.36 cm in the point cloud, 9.43 cm in the grid.*
+
+## Left after 047 (2026-10-23)
+
+Every step and acceptance item above is done. What stays open is tracked elsewhere:
+
+- [Issue 002](../issues/002-mid-sand-mrm.md): emergency stops on `town01_soil`. The trigger
+  is known: one NDT scan at its iteration limit is a WARN, and in Autoware 1.5's graph that
+  makes autonomous unavailable. Two came from the first plates leaving a wheel without ground
+  at a zone's exit (fixed); what makes a lone scan hit the limit elsewhere is open.
+- [Issue 001](../issues/001-soil-tile-rebuild-memory.md), fixed: the cooked collision tiles are
+  gone (a flat box per zone and a plate under each ego wheel, nothing cooked after load).
+- [Issue 003](../issues/003-world-reload-memory.md): the world server grows ~130-150 MB with
+  every scenario's world load, with or without the plates.
+- Calibration against the ground itself: cone index and a drawbar test of a real road tire on
+  sand and on dirt, which is what settles CRM's and Bekker's disagreement on traction (design
+  doc, "Still to measure"). Waits for the field (040).
+- Mud runs on Wong's clay row unchecked against the book (`unvalidated:`, D6), opted into per
+  map; snow has no soil row and no reference at all.
+
