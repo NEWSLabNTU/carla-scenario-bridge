@@ -697,7 +697,11 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
      `IsaacWorld`: incident 6's cyclist box (1.66 x 0.6 x 1.62 m, bicycle, TRACKED) wears
      `vehicle.diamondback.century` with its rider seated, not instanceable, and tracks 4 m/s
      over 150 frames (error p95 0.016 m, step p50 2.0 ms with a render every third frame),
-     then despawns cleanly. Owed: one `town01_i6_cyclist_inside` run when the GPU is free.
+     then despawns cleanly.
+   - **Incident 6 on Isaac with the seated rider (2026-10-23): PASS.** SSv2 PASS, judge PASS
+     (the ego stood 1.4 s and yielded, no contact, cyclist 0.17 m at the closest), gap oracle
+     G1-G3 0, G4 agree, 1071 frames; the ego stack as the tour runs it, the world server
+     sharing the GPU with other work (`/mnt/wd/aeon/csb-044/runs/w-i6-1`).
 3. **`walker.pedestrian.NNNN` -> blueprint** (step 6 found it unreadable from the editor:
    WalkerFactory builds it in its Blueprint graph, so `csb_isaac.walkers.pick` chose by the
    id's number). **Read from the package instead (2026-10-22).** The graph compiles each
