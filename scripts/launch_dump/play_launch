@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# play_launch shim for scripts/dump_launches.sh: `play_launch launch [--opt value ...] <pkg>
+# <file> [args]` becomes `play_launch dump -o "$LAUNCH_DUMP_OUT" launch <pkg> <file> [args]`,
+# so a recipe's exact launch (its environment, defaults and arguments) is resolved without
+# spawning anything. Any other subcommand goes to the real play_launch.
+real=$(type -ap play_launch | grep -v "$(dirname "$(readlink -f "$0")")" | head -1)
+if [ "${1:-}" != launch ]; then exec "$real" "$@"; fi
+shift
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --*=*) shift ;;
+        --*|-c) shift 2 ;;
+        *) break ;;
+    esac
+done
+exec "$real" dump -o "${LAUNCH_DUMP_OUT:?}" launch "$@"

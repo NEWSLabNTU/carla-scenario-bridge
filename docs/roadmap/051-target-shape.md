@@ -7,7 +7,7 @@ vehicle spec), and the design's step 8 (the repository split), which this phase 
 Designs: [design/vehicle-side.md](../design/vehicle-side.md),
 [design/simulator-interface-split.md](../design/simulator-interface-split.md).
 
-**Status**: planned, 2026-10-23. Decisions 1-6 are taken; starts after 050.
+**Status**: in progress, 2026-10-23. K0 done (below, "Progress").
 
 **Source**: user direction 2026-10-23: "now that we'll go through Autoware package and
 simulation interface refactor in phase 50 and so on, I'd like to refactor them to the
@@ -276,3 +276,45 @@ from `CSB_*` to `SWB_*` first.
 
 Not in this phase: upstreaming the SSv2 patches; a second car; NPC and background-AV
 physics from specs; `aib.ros` as a shared library.
+
+## Progress
+
+### K0. Baseline (2026-10-23, `69b7a99`, newslab-118-server)
+
+Logs in `play_log/051/k0/`.
+
+- **Launch dumps**: `scripts/dump_launches.sh play_log/051/k0/launch` resolves nine stacks
+  without starting them (a `play_launch` shim turns each recipe's `play_launch launch` into
+  `play_launch dump`): `ego-av`, `bg-av`, `ego-isaac`, `run` (CARLA), `run sim:=isaac`,
+  `isaac-world`, acb's `sim` and `autoware`, aib's `autoware` (aib's workspace built here for
+  it; it needs `ACB_SETUP` and a `map_path`). All nine resolve.
+- **Conformance**: the CARLA world server alone on CARLA 2010 with Town01, 24 passed, 0
+  failed (autopilot skipped: needs a road). The Isaac world server headless with no ego and
+  its default world, **on this host** (driver 615; no Town01 render), 23 passed, 0 failed.
+- **`just test`** passes (418 Rust, the Python suites, the scenario lint over 35 files after
+  047's two new scenarios were given the measured box, `69b7a99`). **`just e2e`** on CARLA:
+  PASS.
+- **The suite, the gap set, the 20-NPC bench**: 050's after-run (`play_log/050/after/`,
+  report `play_log/050/report.md`) is the baseline; the only commit between it and K0 (047
+  S4-S6) touches Isaac and two new surface scenarios, nothing on the CARLA path.
+- **CARLA's step responses** (`scripts/carla_step_response.py`, direct CARLA controls on the
+  blueprint's own physics, synchronous 0.05 s x 16 substeps; two runs identical to 0.001):
+
+  | throttle | v at 1 / 2 / 4 / 8 s, m/s | peak accel, m/s2 |
+  |---|---|---|
+  | 0.3 | 0.0 / 2.79 / 4.42 / 5.74 | 8.46 (a lurch after a 1 s dead start) |
+  | 0.6 | 3.06 / 6.18 / 10.79 / 15.91 | 4.02 |
+  | 1.0 | 5.40 / 12.04 / 24.52 / 44.24 | 6.94 |
+
+  | brake from 10.4 m/s | stop time, s | distance, m | mean decel, m/s2 |
+  |---|---|---|---|
+  | 0.3 | 4.0 | 18.83 | 2.60 |
+  | 0.6 | 2.9 | 14.90 | 3.59 |
+  | 1.0 | 2.2 | 11.94 | 4.73 |
+
+  | steer at 5 m/s | yaw rate, deg/s | curvature, 1/m |
+  |---|---|---|
+  | 0.05 | 5.21 | 0.0182 |
+  | 0.10 | 10.08 | 0.0353 |
+  | 0.15 | 14.88 | 0.0527 |
+
