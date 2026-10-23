@@ -230,6 +230,8 @@ test:
     # surface classes
     (cd src/swb_carla_world && SWB_ISAAC_SURFACE_CLASSES="$OLDPWD/src/isaac_world/config/surface_classes.yaml" \
         cargo nextest run --no-tests pass --no-fail-fast)
+    # Every component's deps/ pins are this workspace's pins (roadmap 051)
+    python3 scripts/check_pins.py
     # SSv2's protos in swb_world_protocol are the fork's (roadmap 051)
     python3 -m pytest -q scripts/test_ssv2_protos.py
     # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)
