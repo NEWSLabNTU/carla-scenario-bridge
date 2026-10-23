@@ -102,24 +102,33 @@ with the new town's map.
 ## One car, described once
 
 <p align="center">
-  <img src="docs/figures/vehicle-spec.svg" alt="The vehicle spec generates the Autoware packages, the Isaac rig, CARLA's physics and sensor files and the SSv2 catalog; checks at build, spawn and drive time hold every copy to it" width="900"><br>
+  <img src="docs/figures/vehicle-spec.svg" alt="The vehicle spec in sim_vehicle_spec generates the Isaac rig, CARLA's physics and sensor files and the SSv2 catalog; autoware_sim_vehicle generates Autoware's packages from it; checks at build, start, spawn and drive time hold every output to it" width="900"><br>
   <em>Every value about the car is edited in one file. The rest is generated or measured from it.</em>
 </p>
 
 The car's dimensions, mass, tires, powertrain, steering and sensors live in one file,
-`vehicles/tesla_model3.yaml` in `autoware_sim_vehicle`. From it come:
+`vehicles/tesla_model3.yaml` in `sim_vehicle_spec`. That repository knows no autopilot. It
+generates what describes the car to the simulators and to SSv2:
 
-- Autoware's vehicle and sensor kit packages (`tesla_model3_description`,
-  `tesla_model3_launch`, `tesla_model3_sensor_kit_*`) and the shared launch profile
-  (`autoware_sim_profile`);
 - Isaac Sim's vehicle rig;
 - CARLA's physics (`carla_physics.yaml`) and sensors (`carla_sensors.yaml`);
 - SSv2's vehicle catalog, which every scenario's ego refers to.
 
-Three checks keep them in agreement:
+`autoware_sim_vehicle` generates what describes the same car to Autoware: the vehicle and
+sensor kit packages (`tesla_model3_description`, `tesla_model3_launch`,
+`tesla_model3_sensor_kit_*`), next to the shared launch profile (`autoware_sim_profile`)
+and the pedal maps measured on CARLA. Each file lives in one repository only, and
+everything else reads the installed copy. Another autopilot would get its own repository
+beside Autoware's, generated from the same spec.
+
+Four checks keep them in agreement:
 
 - **At build time**, every output is regenerated and compared with the committed one, and
   no scenario may type its own ego box.
+- **At start**, every part of a run reports the fingerprint (`spec_hash`) of the spec its
+  files came from: the world server, the vehicle bridge, the vehicle agent and the
+  catalog. A run whose parts were built from different specs is refused before the
+  scenario starts.
 - **At spawn**, the ego's measured box and wheels are compared with the catalog (2 cm), and
   CARLA's physics are read back.
 - **While driving**, `vehicle_check` measures acceleration, braking and steering on each
@@ -130,14 +139,16 @@ Three checks keep them in agreement:
 | Repository | What it holds |
 |---|---|
 | [scenario-world-bridge](https://github.com/NEWSLabNTU/scenario-world-bridge) (this one) | The bridge, the agent relay and vehicle agent, launch files, run tools, starter scenarios with the vehicle catalog. Holds every repository below as a git submodule. |
-| autoware_sim_vehicle | The vehicle specs, the generated Autoware packages, the launch profile, the I5 contract and `vehicle_check`. |
+| sim_vehicle_spec | The vehicle specs, their generators, and the generated simulator files and SSv2 catalog. No autopilot. |
+| autoware_sim_vehicle | The generated Autoware packages, the pedal maps, the launch profile, the I5 contract and `vehicle_check`. |
 | swb_world_protocol | The world protocol, its Rust and Python server shells, and the conformance check. |
 | swb_carla_world | The CARLA world server. |
 | swb_isaac_world | The Isaac Sim world server. |
 | [autoware_carla_bridge](https://github.com/NEWSLabNTU/autoware_carla_bridge) (acb) | The CARLA vehicle bridge, and running Autoware on CARLA without SSv2. |
 | [autoware_isaac_bridge](https://github.com/NEWSLabNTU/autoware_isaac_bridge) (aib) | The Isaac Sim vehicle library and runner. |
 
-acb and aib build on their own with only `autoware_sim_vehicle`, so neither needs SSv2.
+acb and aib build on their own with only the two vehicle repositories, so neither needs
+SSv2. The world servers need `sim_vehicle_spec` but not Autoware.
 
 ## Supported versions
 

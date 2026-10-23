@@ -56,20 +56,35 @@ change does (time-and-ticking, "Episodes and vehicle stacks").
                 │ uses
   acb (CARLA vehicle bridge)    aib (Isaac vehicle library)           one per simulator
                 │ both use
-  vehicle layer: spec + generators, generated Autoware packages,
-                 the Autoware launch profile, the I5 contract and its check   no SSv2, no simulator
+  autoware_sim_vehicle: generated Autoware packages, pedal maps,
+                 the Autoware launch profile, the I5 contract and its check   Autoware's view
+                │ uses
+  sim_vehicle_spec: specs, generator library, simulator outputs,
+                 SSv2 catalog, spec_hash                       no autopilot, no SSv2, no simulator code
 ```
 
-**The vehicle layer** knows Autoware and the vehicle, and no simulator and no SSv2. acb and
-aib depend on it. Neither depends on swb. swb depends on all three. A run without SSv2 is
-the vehicle layer plus one simulator package, which is what acb's and aib's standalone runs
-already are.
+**The vehicle layer** is two repositories. `sim_vehicle_spec` describes the car to anyone:
+the spec, the generator library, and the outputs no autopilot owns (CARLA's physics and
+sensors, Isaac's rig, SSv2's catalog). `autoware_sim_vehicle` describes it to Autoware:
+the per-car packages, the pedal maps, the profile, the I5 contract and `vehicle_check`.
+Neither knows a simulator's API or SSv2. acb and aib depend on both; the world servers
+depend on `sim_vehicle_spec` only. Neither acb nor aib depends on swb. A run without SSv2
+is the vehicle layer plus one simulator package, which is what acb's and aib's standalone
+runs already are.
 
-**Where it lives**: its own repository (decision V1). acb and aib each need it without
-swb, and swb needs it beside them. It is a submodule of all three: acb and aib carry it
-under `deps/`, which holds a committed `COLCON_IGNORE` so swb's workspace, where it is a
+**Another autopilot** gets its own `<autopilot>_sim_vehicle` beside Autoware's, generated
+from the same spec with the same library. Nothing in `sim_vehicle_spec` changes for it,
+and it takes goals through the relay like any agent. If it cannot read the I5 contract's
+Autoware messages, it needs its own vehicle bridge.
+
+**No copies**: each output lives in exactly one of these repositories, and consumers read
+the installed files. Scenarios reach the catalog through `$(find-pkg-share …)`.
+
+**Where it lives**: two repositories of their own (decision V1). acb and aib each need
+them without swb, and swb needs them beside them. They are submodules of all three: acb
+and aib carry them under `deps/`, which holds a committed `COLCON_IGNORE` so swb's workspace, where it is a
 direct submodule, never builds a second copy (colcon refuses duplicate packages). A pin
-check in swb fails when acb's or aib's pin of it is not an ancestor of swb's
+check in swb fails when acb's or aib's pin of either is not an ancestor of swb's
 (roadmap 051, decision 4). Submodules only; no `.repos` files.
 
 ## The rule for sharing
@@ -120,7 +135,8 @@ What a vehicle bridge provides on the ego's ROS domain, for any simulator:
 - **Frames**: `base_link` on the ground at the rear axle centre, x forward, z up; the
   sensor frames from the generated URDF. The bridge publishes no TF that the URDF owns.
 
-**`vehicle_check`** (in the vehicle layer, no SSv2) runs against a live vehicle side:
+**`vehicle_check`** (in `autoware_sim_vehicle`, no SSv2; it drives through the I5
+contract, so it is Autoware's) runs against a live vehicle side:
 
 - topics, types, rates, frames and stamps;
 - `/robot_description` against the spec;
@@ -134,7 +150,7 @@ packages rest on.
 ## The spec as the single source
 
 aib's spec format (`docs/spec-format.md`, `spec_version: 1`) grows into version 2 and
-moves to the vehicle layer, with `vehicles/<name>.yaml` per car:
+moves to `sim_vehicle_spec`, with `vehicles/<name>.yaml` per car:
 
 - **shared sections**: `geometry`, `mirror`, `inertia`, `wheels`, `tires`, `brakes`,
   `powertrain`, `resistance`, `steering`, `suspension`, `sensor_kit`, `sensors` (mount,
@@ -145,14 +161,17 @@ moves to the vehicle layer, with `vehicles/<name>.yaml` per car:
 
 What is generated from it, and who checks it:
 
-| output | for | stale check |
-|---|---|---|
-| Autoware's per-vehicle packages | Autoware | `check-generated` (byte compare) |
-| `isaac` rig | aib | same |
-| `carla_physics.yaml`: every `VehiclePhysicsControl` field CARLA 0.9.16 takes | acb, carla_world | same |
-| `carla_sensors.yaml`: today's `vehicle_config.yaml` | acb_bridge | same |
-| SSv2 catalog `catalogs/vehicles.xosc`: `BoundingBox`, `Axles`, `Performance` | scenarios | same, plus a lint: no inline ego `<Vehicle>` in any `.xosc` |
-| pedal maps (`accel_map.csv`, `brake_map.csv`) for CARLA | acb_bridge | measured, not generated: a calibration run on CARLA with the spec's physics writes them with the spec's physics hash; `check-generated` fails when the hash no longer matches |
+| output | lives in | for | stale check |
+|---|---|---|---|
+| `isaac` rig | `sim_vehicle_spec` | aib | `check-generated` (byte compare) |
+| `carla_physics.yaml`: every `VehiclePhysicsControl` field CARLA 0.9.16 takes | `sim_vehicle_spec` | acb, swb_carla_world | same |
+| `carla_sensors.yaml`: today's `vehicle_config.yaml` | `sim_vehicle_spec` | acb_bridge | same |
+| SSv2 catalog `catalogs/vehicles.xosc`: `BoundingBox`, `Axles`, `Performance` | `sim_vehicle_spec` | scenarios | same, plus a lint: no inline ego `<Vehicle>` in any `.xosc` |
+| Autoware's per-vehicle packages | `autoware_sim_vehicle` | Autoware | same |
+| pedal maps (`accel_map.csv`, `brake_map.csv`) for CARLA | `autoware_sim_vehicle` | Autoware, acb_bridge | measured, not generated: a calibration run on CARLA with the spec's physics writes them with the spec's physics hash; `check-generated` fails when the hash no longer matches |
+
+Every generated output also carries `spec_hash`, the SHA-256 of the spec in canonical form
+(parsed, keys sorted, numbers in one format), checked at start ("Consistency, end to end").
 
 ### CARLA gets the spec's physics
 
@@ -214,15 +233,22 @@ from the spec.
    generated or measured against the spec's hash.
 2. **Build time**: `check-generated` in every repository that holds output, and the `.xosc`
    lint.
-3. **Spawn time**: SSv2's box against the world server's measurement; CARLA's physics
+3. **Start time**: `spec_hash`. Every output carries the SHA-256 of the canonical spec it
+   came from; the world server (`SpawnReply`), the vehicle bridge (on attach), the vehicle
+   agent (when it registers) and the catalog report what they loaded, and the bridge
+   refuses to start the ego on a difference. This catches a process running an old
+   install, which the build checks cannot see.
+4. **Spawn time**: SSv2's box against the world server's measurement; CARLA's physics
    against the file, read back by acb_bridge.
-4. **Behaviour**: `vehicle_check`'s dynamics run on each simulator, without SSv2; its
+5. **Behaviour**: `vehicle_check`'s dynamics run on each simulator, without SSv2; its
    numbers go in the phase's results.
 
 ## Decisions (for the user)
 
-- **V1. Repository** for the vehicle layer, and its name. [proposed: a new NEWSLabNTU
-  repository `autoware_sim_vehicle`, a submodule of swb, fetched by acb's and aib's setup]
+- **V1. Repository** for the vehicle layer, and its name. [decided 2026-10-23: two
+  NEWSLabNTU repositories, `sim_vehicle_spec` (autopilot-neutral) and
+  `autoware_sim_vehicle` (Autoware's), submodules of swb and under acb's and aib's
+  `deps/`]
 - **V2. Package names per car.** Autoware needs `<vehicle_model>_description` and
   `_launch`. [proposed: `tesla_model3_description`, `tesla_model3_launch`,
   `tesla_model3_sensor_kit_description`, `tesla_model3_sensor_kit_launch`]
