@@ -226,6 +226,10 @@ test:
     # back with this repository's reader
     (cd src/swb_world_protocol && SWB_GAP_TRACE_READER_DIR="$OLDPWD/src/swb_launch/scripts" \
         cargo nextest run --no-tests pass --no-fail-fast)
+    # The CARLA world server's crate, in its workspace; its wet-road test compares with Isaac's
+    # surface classes
+    (cd src/swb_carla_world && SWB_ISAAC_SURFACE_CLASSES="$OLDPWD/src/isaac_world/config/surface_classes.yaml" \
+        cargo nextest run --no-tests pass --no-fail-fast)
     # SSv2's protos in swb_world_protocol are the fork's (roadmap 051)
     python3 -m pytest -q scripts/test_ssv2_protos.py
     # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)

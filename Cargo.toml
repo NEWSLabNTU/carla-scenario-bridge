@@ -2,11 +2,10 @@
 resolver = "2"
 members = [
     "src/scenario_world_bridge",
-    "src/carla_world",
 ]
 # Submodules with workspaces of their own (roadmap 051): their crates are path dependencies
 # here, built and tested in their own workspace.
-exclude = ["src/swb_world_protocol"]
+exclude = ["src/swb_world_protocol", "src/swb_carla_world"]
 
 [workspace.dependencies]
 # The feature names the CARLA this workspace talks to; carla-rust refuses to build without

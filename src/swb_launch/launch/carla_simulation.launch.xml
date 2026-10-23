@@ -17,7 +17,7 @@
   <arg name="carla_host" default=""/>
   <arg name="carla_port" default=""/>
   <arg name="world_port" default="5591" description="the CARLA world server's port on 127.0.0.1"/>
-  <arg name="carla_world_config" default="$(find-pkg-share carla_world)/config/carla_world.yaml"/>
+  <arg name="swb_carla_world_config" default="$(find-pkg-share swb_carla_world)/config/swb_carla_world.yaml"/>
   <arg name="config_file" default="$(find-pkg-share scenario_world_bridge)/config/bridge_config.yaml"/>
   <arg name="ssv2_port" default=""/>
   <arg name="entity" default="ego"/>
@@ -31,9 +31,9 @@
   <!-- Scoped: a launch argument an include sets (config_file) would otherwise leak into the
        next one. -->
   <group>
-  <include file="$(find-pkg-share carla_world)/launch/carla_world.launch.xml">
+  <include file="$(find-pkg-share swb_carla_world)/launch/swb_carla_world.launch.xml">
     <arg name="port" value="$(var world_port)"/>
-    <arg name="config_file" value="$(var carla_world_config)"/>
+    <arg name="config_file" value="$(var swb_carla_world_config)"/>
     <arg name="carla_host" value="$(var carla_host)"/>
     <arg name="carla_port" value="$(var carla_port)"/>
     <arg name="ssv2_port" value="$(var ssv2_port)"/>

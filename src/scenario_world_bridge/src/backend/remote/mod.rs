@@ -3,7 +3,7 @@
 //!
 //! Every simulator is a world server: a process that owns the simulator and serves the world
 //! protocol on a ZMQ REP socket (the Isaac Sim one, `src/isaac_world`; the CARLA one,
-//! `src/carla_world`). This backend is the bridge's half, REQ to that REP, two round trips
+//! `swb_carla_world`, a submodule). This backend is the bridge's half, REQ to that REP, two round trips
 //! per SSv2 frame as SSv2 sends them: `UpdateEntityStatus` becomes `Apply` (every entity's
 //! drive for the coming step; the server answers with what it moves itself), `UpdateFrame`
 //! becomes `Step` (the world advances; the server answers with every entity's state after it

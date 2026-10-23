@@ -2,7 +2,7 @@
 """A CARLA blueprint's box and axles as an OpenSCENARIO `<Vehicle>` declares them (roadmap 050).
 
 SSv2's vehicle origin is the rear axle on the ground; CARLA's actor origin is wherever the
-blueprint put it. The measured table (`src/carla_world/config/blueprint_boxes_<version>.yaml`,
+blueprint put it. The measured table (`src/swb_carla_world/swb_carla_world/config/blueprint_boxes_<version>.yaml`,
 written by `scripts/measure_blueprint_boxes.py`) has both the box (centre from the actor
 origin) and the axles (x from the actor origin), so:
 
@@ -31,7 +31,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-TABLE = ROOT / "src/carla_world/config/blueprint_boxes_0.9.16.yaml"
+TABLE = ROOT / "src/swb_carla_world/swb_carla_world/config/blueprint_boxes_0.9.16.yaml"
 
 
 def fmt(v):
