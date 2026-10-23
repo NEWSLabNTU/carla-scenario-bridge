@@ -39,6 +39,16 @@ Without SSv2 today:
 Both work. The design must keep them working, and must not make acb or aib depend on
 anything that carries SSv2.
 
+**The manual scene** is the use case this protects: Autoware driving in CARLA with no
+scenario runner, the scene set up by hand in the simulator. CARLA runs as the user leaves
+it (asynchronous, or ticked by their own client); the user spawns the ego -- the spec's
+blueprint with `role_name=hero` -- from any CARLA client or `demo_scenario.py`, adds traffic
+with CARLA's own tools (`generate_traffic.py`, the Traffic Manager), and leaves CARLA's
+lights cycling. acb's `just autoware map:=<town>` attaches to the hero whenever it appears,
+makes it the spec's car (below), and Autoware takes a pose and a goal from RViz or
+`auto_drive`. Nothing of swb runs. Loading another town ends the stack, as any episode
+change does (time-and-ticking, "Episodes and vehicle stacks").
+
 ## Layers
 
 ```
@@ -161,15 +171,21 @@ and build-up, motor lag) is either realised in acb_bridge's command path (the la
 `steer_time_constant` is today) or listed in the file as `not_realised`. The dynamics run in
 `vehicle_check` measures what remains.
 
-**One writer**. Whoever spawns the vehicle applies `carla_physics.yaml` once, right after
-the spawn:
+**One writer per mode.** In a manual scene the ego can come from any client, which
+knows nothing of the spec, so the writer cannot be the spawner:
 
-- with SSv2, `carla_world`;
-- standalone, `demo_scenario.py`.
+- with a world server (SSv2), the world server applies `carla_physics.yaml` right after
+  the spawn, and acb_bridge (`carla_physics:=verify`, set by swb's ego launch) reads
+  `physics_control` back on attach and refuses to drive a vehicle whose physics differ
+  from the file beyond float tolerance, naming the fields;
+- without one (acb's own launches, `carla_physics:=apply`, the default), acb_bridge
+  applies the file on attach, before its first command, then reads it back the same way.
+  `demo_scenario.py` only spawns.
 
-Both only load the generated file and copy fields, with no mapping logic of their own.
-acb_bridge reads `physics_control` back on attach and refuses to drive a vehicle whose
-physics differ from the file beyond float tolerance, naming the fields. carla_world's road
+Either way acb first checks the hero's blueprint against the spec's `carla.blueprint` and
+refuses another car with both names in the message: a scene that spawned the wrong model
+fails at attach, not in the dynamics. Both writers only load the generated file and copy
+fields, with no mapping logic of their own. carla_world's road
 friction (047) scales the friction it reads after that write. Today it caches the
 vehicle's "own" friction at its first scaling. It must take the spec's value instead, so
 the two can never race.

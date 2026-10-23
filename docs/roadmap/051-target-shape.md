@@ -58,7 +58,9 @@ What depends on what:
     components' `deps/` uninitialised (it has its own copies); a component's `just setup`
     initialises its `deps/`.
 - **Without SSv2**: acb or aib, plus the vehicle layer, is a complete Autoware-on-a-simulator
-  system. Neither needs swb, `swb_world_protocol` or the other bridge.
+  system. Neither needs swb, `swb_world_protocol` or the other bridge. On CARLA this
+  includes the manual scene: no scenario runner, the scene set up by hand in CARLA, acb
+  attaching to whatever `hero` appears ([vehicle-side](../design/vehicle-side.md)).
 - **Without Autoware**: a world server plus the adapter runs SSv2's NPC scenarios (the
   benchmarks do today).
 
@@ -79,9 +81,13 @@ What depends on what:
 - **Per-car Autoware packages** replace `acb_vehicle`, `aib_vehicle` and their kits. The
   sensing pipeline is generated from the spec's sensor list.
 - **CARLA on the spec's physics**:
-  - Whoever spawns the car applies `carla_physics.yaml`: `swb_carla_world` with SSv2,
-    `demo_scenario.py` without it.
-  - acb_bridge reads it back on attach and refuses a mismatch.
+  - One writer per mode: with SSv2, `swb_carla_world` applies `carla_physics.yaml` after
+    the spawn and acb_bridge verifies it (`carla_physics:=verify`); without a world
+    server, acb_bridge applies it on attach (`carla_physics:=apply`, its launches'
+    default), so a hero spawned by any client becomes the spec's car. `demo_scenario.py`
+    only spawns.
+  - acb_bridge refuses a hero whose blueprint is not the spec's, and reads the physics
+    back on attach and refuses a mismatch, in both modes.
   - Road friction scales the spec's tire friction.
   - The brake and motor lags CARLA's model lacks go into acb_bridge's command path.
   - The pedal maps are re-measured and tagged with the spec's physics hash.
@@ -228,6 +234,11 @@ it.
   is in the results, with CARLA's remaining gap named (ABS, regen).
 - [ ] **Without SSv2**: from acb's own workspace, `just sim` and `auto_drive` drive Town01
   to arrival. From aib's, `just isaac-ego` and `just autoware` do the same.
+- [ ] **The manual scene**: CARLA asynchronous with no swb process; a Model 3 spawned as
+  `hero` from a plain CARLA Python client; traffic from CARLA's `generate_traffic.py`;
+  acb's `just autoware map:=Town01`. acb applies and verifies the spec's physics, Autoware
+  localizes, takes a goal from RViz and arrives, stopping at CARLA's own cycling lights.
+  A hero of another blueprint is refused with both names.
 - [ ] **With SSv2**: `just e2e sim:=carla` and `just e2e sim:=isaac` PASS. The CARLA suite
   and the gap set have every difference from K0 explained by K3's physics or K4's clock.
 - [ ] **A future simulator**: a fake vehicle side passes `vehicle_check`. A fake world
