@@ -254,6 +254,8 @@ class IsaacWorld(WorldBase):
 
     def _load_surfaces(self, usd):
         """The world's surface map, read again at every load (an edit needs no restart)."""
+        if self.surface is not None:
+            self.surface.remove_tiles()
         self.surface = None
         entry = self.surface_maps.get(usd)
         if entry is None:
@@ -261,8 +263,14 @@ class IsaacWorld(WorldBase):
         path, origin = entry
         if not os.path.exists(path):
             return
-        self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin, self._apply_force)
+        self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin, self._apply_force,
+                                    self._make_tiles)
         log.info("surface map %s: %d zone(s)", path, len(self.surface.map.zones))
+
+    def _make_tiles(self, zone, spacing, origin):
+        from .soil_tiles import SoilTiles
+
+        return SoilTiles(self.stage, zone, spacing, origin)
 
     def _apply_force(self, path, force, position):
         """A force (N) at a world point on body `path` for the next physics step (the soil's
@@ -975,6 +983,8 @@ class IsaacWorld(WorldBase):
                 if self.surface is not None:
                     self.surface.update(ego.vehicle, ego.state.velocity[0], dt)
             self._collect_contacts(touching)
+        if self.surface is not None:
+            self.surface.flush()  # the soil's new ruts, for the next frame
         if self.fresh:  # simulated once: PhysX has them now
             self.fresh.clear()
             self.tracked_view = None

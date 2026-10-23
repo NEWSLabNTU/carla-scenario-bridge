@@ -14,6 +14,10 @@ anywhere and the maths is unit-tested.
         soil: grid                     # the soil layer (S3), not only friction: grid (or true:
                                        # ruts, multipass) or closed_form (no memory); the class
                                        # needs soil parameters
+        ground_z: 0.0                  # optional, with soil: grid: the zone's ground is the
+                                       # server's own tiles at this height (world frame), so the
+                                       # ruts are in the collision; the map must have no ground
+                                       # collider inside the polygon's bounding box
         polygon: [[120.0, -40.0], [160.0, -40.0], [160.0, -10.0], [120.0, -10.0]]
       - id: ford_1
         water_depth: raster/ford_1_depth.png    # or a number, m
@@ -63,8 +67,8 @@ ZONE_ID = re.compile(r"^[a-z0-9_]+$")
 # A zone's `soil:` (047 S3, D2): the grid (ruts, multipass) or the closed-form wheel (no memory).
 SOIL_MODELS = {True: "grid", "grid": "grid", "closed_form": "closed_form", False: None,
                None: None}
-ZONE_KEYS = {"id", "class", "wetness", "water_depth", "soil", "polygon", "scale", "origin",
-             "resolution"}
+ZONE_KEYS = {"id", "class", "wetness", "water_depth", "soil", "ground_z", "polygon", "scale",
+             "origin", "resolution"}
 # A scenario's RoadCondition properties (047 S2): `swb.zone.<id>.<field>` sets a zone's field;
 # names outside `swb.` belong to other tools.
 PROPERTY_PREFIX = "swb."
@@ -267,6 +271,7 @@ class Zone:
     wetness: str = None
     water_depth: object = None  # float, Raster or None
     soil: str = None  # the soil layer's model there (SOIL_MODELS), or None: friction only
+    ground_z: float = None  # the server's own ground here at this height (ruts), or None
     bbox: tuple = field(init=False)
 
     def __post_init__(self):
@@ -431,8 +436,15 @@ def parse(data, path=FILE, table=None, base=None):
             have = ", ".join(sorted(n for n, c in table.classes.items() if c.soil)) or "none"
             problems.append(f"{where}: class {z['class']!r} has no soil parameters (soil "
                             f"classes: {have})")
+        ground_z = z.get("ground_z")
+        if ground_z is not None:
+            if not isinstance(ground_z, (int, float)) or not math.isfinite(ground_z):
+                problems.append(f"{where}: ground_z is a height in metres, not {ground_z!r}")
+            elif model != "grid":
+                problems.append(f"{where}: ground_z (the ruts' ground) needs soil: grid")
         zones.append(Zone(zid, poly, z.get("class"), z.get("wetness"),
-                          depth if isinstance(depth, (float, Raster)) else None, model))
+                          depth if isinstance(depth, (float, Raster)) else None, model,
+                          float(ground_z) if isinstance(ground_z, (int, float)) else None))
     if problems:
         raise SurfaceError("\n".join(problems))
     return SurfaceMap(str(path), table, defaults, zones)

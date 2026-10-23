@@ -158,6 +158,20 @@ class GridTest(unittest.TestCase):
         self.assertGreater(max(float(v.max()) for v in dirty.values()), 0.05)
         self.assertEqual(g.dirty(), {})
 
+    def test_tile_heights_span_blocks_and_share_edges(self):
+        g = SoilGrid(SAND)
+        drive(g, length=3.0, y=0.4)
+        n = 32  # a 1.6 m tile
+        left, right = g.heights(0, 0, n), g.heights(n, 0, n)
+        self.assertEqual(left.shape, (n + 1, n + 1))
+        np.testing.assert_array_equal(left[n, :], right[0, :])
+        self.assertAlmostEqual(float(left[20, 8]), g.depth(20 * 0.05, 8 * 0.05), places=6)
+        self.assertEqual(float(g.heights(0, 64, n).max()), 0.0)
+        keys = g.dirty_blocks()
+        self.assertTrue(keys)
+        g.handed_out(keys[:1])
+        self.assertEqual(len(g.dirty_blocks()), len(keys) - 1)
+
     def test_a_teleport_is_not_swept(self):
         g = SoilGrid(SAND)
         g.begin_step()
@@ -185,8 +199,48 @@ class GridTest(unittest.TestCase):
         g = SoilGrid(SAND)
         g.begin_step()
         out = g.wheel(0, 0.0, 0.0, 0.0, 2e6, R, B, 0.0, 0.0, 1 / 60)
-        self.assertEqual(out.sinkage, soil.MAX_SINKAGE)
+        self.assertAlmostEqual(out.sinkage, soil.MAX_SINKAGE, places=6)
         self.assertLess(out.load, 2e6)
+
+
+try:
+    from isaac_world import soil_warp  # noqa: F401 -- Isaac's Python has warp
+    HAVE_WARP = True
+except ImportError:
+    HAVE_WARP = False
+
+
+@unittest.skipUnless(HAVE_WARP, "warp: run under Isaac's Python")
+class WarpTest(unittest.TestCase):
+    """The compiled sweep is the numpy one: float32 against float64, and the wheel bottom by
+    bisection against interpolated candidates (nodes within 0.2 mm, measured)."""
+
+    def test_the_kernels_agree(self):
+        for p in (SAND, LOAM):
+            for slip, speed in ((0.2, 5.0), (0.1, 25.0), (-0.3, 8.0)):
+                a, b = SoilGrid(p, kernel="numpy"), SoilGrid(p, kernel="warp")
+                ra = drive(a, slip=slip, speed=speed, length=8.0)
+                rb = drive(b, slip=slip, speed=speed, length=8.0)
+                for f in ra:
+                    self.assertAlmostEqual(rb[f] / ra[f], 1.0, delta=2e-3, msg=(f, slip, speed))
+                self.assertEqual(set(a.blocks), set(b.blocks))
+                for k in a.blocks:
+                    np.testing.assert_allclose(a.blocks[k].sinkage, b.blocks[k].sinkage,
+                                               atol=5e-4)
+
+    def test_compiled_is_fast(self):
+        import time
+        g = SoilGrid(SAND, kernel="warp")
+        drive(g, speed=25.0, length=2.0)  # compiled and warm
+        t0 = time.perf_counter()
+        n = 0
+        x = 2.0
+        while x < 20.0:
+            g.begin_step()
+            g.wheel(0, x, 0.013, 0.0, 4500.0, R, B, 27.7, 25.0, 1 / 60)
+            x += 25.0 / 60
+            n += 1
+        self.assertLess((time.perf_counter() - t0) / n, 400e-6)  # 141 us measured, loaded host
 
 
 class EdgeTest(unittest.TestCase):

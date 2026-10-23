@@ -16,8 +16,10 @@ In a soil zone (047 S3, `soil: grid | closed_form`) each wheel also runs the soi
 (`isaac_world.soil`) on the load PhysX's suspension reports: the soil-limited friction replaces
 the class's in the wheel's table, and the soil's resistance pushes back on the body at the
 contact, for the next substep (`apply_force`, the host's `apply_force_at_pos`). Both fade in
-over `SOIL_BLEND` wheel diameters from the zone's edge. The grid's ruts are fresh at every
-`fresh_soil` (a new owner or a release).
+over `SOIL_BLEND` wheel diameters from the zone's edge. A zone with `ground_z` has the
+server's own ground (`soil_tiles`), into which `flush` puts the grid's ruts once a frame,
+where no wheel stands. The
+ruts are fresh at every `fresh_soil` (a new owner or a release).
 """
 import logging
 import math
@@ -35,9 +37,13 @@ SOIL_SPACING = 0.05
 
 
 class SurfaceLayer:
-    def __init__(self, stage, surface_map, map_origin=(0.0, 0.0, 0.0), apply_force=None):
+    def __init__(self, stage, surface_map, map_origin=(0.0, 0.0, 0.0), apply_force=None,
+                 make_tiles=None):
         """`apply_force(body path, force, position)`, world frame, N and m: a force on a body
-        for the next physics step (the soil's resistance); None: the soil sets friction only."""
+        for the next physics step (the soil's resistance); None: the soil sets friction only.
+        `make_tiles(zone, spacing, origin)`: the ground of a zone with `ground_z`, an object with
+        `update(grid)`, `clear()` and `remove()` (`soil_tiles.SoilTiles`); None: no ruts in
+        the collision."""
         self.stage = stage
         self.base = surface_map  # the map as loaded; `map` is it under the road condition
         self.map = surface_map
@@ -49,6 +55,12 @@ class SurfaceLayer:
         self.apply_force = apply_force
         self.grids = {}  # soil zone id -> soil.SoilGrid, made when a wheel first enters
         self.soil_out = {}  # (vehicle path, wheel) -> (soil.WheelSoil, share) of the last step
+        self.soil_xy = {}  # (vehicle path, wheel) -> its map-frame contact on soil
+        self.tiles = {}  # zone id -> its own ground (make_tiles)
+        if make_tiles is not None:
+            for z in surface_map.zones:
+                if z.ground_z is not None:
+                    self.tiles[z.id] = make_tiles(z, SOIL_SPACING, self.origin)
 
     def set_condition(self, friction_scale=1.0, wetness="dry", properties=None):
         """A scenario's road condition (OpenSCENARIO `RoadCondition`, 047 S2), from the next
@@ -96,6 +108,7 @@ class SurfaceLayer:
                 target = self._soil(vehicle, i, c, w, s, speed, dt)
             else:
                 self.soil_out.pop((vehicle.path, i), None)
+                self.soil_xy.pop((vehicle.path, i), None)
             mu = ws.update(i, s, self.condition, speed, w.slip, dt, target)
             vehicle.set_wheel_friction(i, mu)
             if s is not None and self.logged.get((vehicle.path, i)) != s:
@@ -136,6 +149,7 @@ class SurfaceLayer:
             out = soil.wong_reece(params, contact.load, r, b, spin, speed)
         share = soil.edge_weight(zone.polygon, x, y, SOIL_BLEND * 2 * r)
         self.soil_out[(vehicle.path, i)] = (out, share)
+        self.soil_xy[(vehicle.path, i)] = (x, y)
         if self.apply_force is not None and out.resistance > 0 and share > 0:
             f = -out.resistance * share * (1.0 if speed >= 0 else -1.0)
             self.apply_force(vehicle.path, (f * dx, f * dy, f * dz), contact.position)
@@ -150,6 +164,28 @@ class SurfaceLayer:
         """Every soil zone back to untouched ground (no ruts)."""
         self.grids = {}
         self.soil_out = {}
+        self.soil_xy = {}
+        for t in self.tiles.values():
+            t.clear()
+
+    def flush(self):
+        """Once per frame, after the substeps: the grids' new ruts into their zones' ground
+        (budgeted); {zone id: tiles rebuilt}."""
+        out = {}
+        wheels = list(self.soil_xy.values())
+        for zid, tiles in self.tiles.items():
+            grid = self.grids.get(zid)
+            if grid is not None:
+                done = tiles.update(grid, wheels)
+                if done:
+                    out[zid] = done
+        return out
+
+    def remove_tiles(self):
+        """The zones' own ground off the stage (another world is loading)."""
+        for t in self.tiles.values():
+            t.remove()
+        self.tiles = {}
 
     def surfaces_under(self, vehicle):
         """The surface each wheel last stood on (None in the air), for logs and probes."""
@@ -165,6 +201,7 @@ class SurfaceLayer:
     def forget(self, vehicle_path):
         self.wheels.pop(vehicle_path, None)
         self.soil_out = {k: v for k, v in self.soil_out.items() if k[0] != vehicle_path}
+        self.soil_xy = {k: v for k, v in self.soil_xy.items() if k[0] != vehicle_path}
 
 
 def register(world_files):

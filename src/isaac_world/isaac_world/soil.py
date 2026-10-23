@@ -212,9 +212,19 @@ class SoilGrid:
     spacing (at most MAX_SWEEP), and averages the forces over the sweep (D4: the patch is
     integrated along the path, the physics rate stays the world's)."""
 
-    def __init__(self, params: SoilParams, spacing=0.05):
+    def __init__(self, params: SoilParams, spacing=0.05, kernel="auto"):
+        """`kernel`: "numpy", "warp" (`soil_warp`, compiled: the world server's), or "auto":
+        warp where it imports."""
         self.p = params
         self.h = float(spacing)
+        self.warp = None
+        if kernel in ("warp", "auto"):
+            try:
+                from . import soil_warp
+                self.warp = soil_warp
+            except ImportError:
+                if kernel == "warp":
+                    raise
         self.blocks = {}  # (bx, by) -> _Block
         self.step_id = 0
         self.last = {}  # wheel key -> (x, y, step_id) of its last call
@@ -282,11 +292,18 @@ class SoilGrid:
         sub_dt = dt / len(path)
         res = thrust = limit = carried = 0.0
         zb = 0.0
-        for px, py in path:
-            zb, r_, t_, l_, f_ = self._patch(px, py, c, s, half_len, load, radius, width,
-                                             spin_speed, speed, sub_dt, ox, oy, sink, shear,
-                                             touched)
-            res, thrust, limit, carried = res + r_, thrust + t_, limit + l_, carried + f_
+        if self.warp is not None:
+            k = self.p.k(width) / slip_factor(slip_ratio(spin_speed, speed)) ** self.p.n
+            zb, res, thrust, limit, carried = (float(v) for v in self.warp.sweep(
+                sink, shear, touched, path, ox, oy, h, c, s, half_len, width, radius, load, k,
+                self.p, (spin_speed - speed) * sub_dt, self.step_id,
+                1.0 if speed >= 0 else -1.0, MAX_SINKAGE))
+        else:
+            for px, py in path:
+                zb, r_, t_, l_, f_ = self._patch(px, py, c, s, half_len, load, radius, width,
+                                                 spin_speed, speed, sub_dt, ox, oy, sink,
+                                                 shear, touched)
+                res, thrust, limit, carried = res + r_, thrust + t_, limit + l_, carried + f_
         if commit:
             for b, sl in blocks:
                 b.sinkage[:], b.shear[:], b.touched[:] = sink[sl], shear[sl], touched[sl]
@@ -352,6 +369,33 @@ class SoilGrid:
         touched[gi, gj] = np.where(contact, self.step_id, touched[gi, gj])
         return (zb, resistance, float(tau.sum() * area), float(tau_max.sum() * area),
                 float(sigma.sum() * area))
+
+    def heights(self, ix0, iy0, n):
+        """Rut depths (m, >= 0) at nodes [ix0, ix0 + n] x [iy0, iy0 + n], (n + 1) x (n + 1),
+        x first: a tile's vertices, its edges shared with its neighbours'."""
+        out = np.zeros((n + 1, n + 1), np.float32)
+        for bx in range(ix0 // BLOCK, (ix0 + n) // BLOCK + 1):
+            for by in range(iy0 // BLOCK, (iy0 + n) // BLOCK + 1):
+                b = self.blocks.get((bx, by))
+                if b is None:
+                    continue
+                x0, y0 = max(ix0, bx * BLOCK), max(iy0, by * BLOCK)
+                x1, y1 = min(ix0 + n, bx * BLOCK + BLOCK - 1), min(iy0 + n, by * BLOCK + BLOCK - 1)
+                lx, ly = bx * BLOCK, by * BLOCK
+                out[x0 - ix0:x1 - ix0 + 1, y0 - iy0:y1 - iy0 + 1] = \
+                    b.sinkage[x0 - lx:x1 - lx + 1, y0 - ly:y1 - ly + 1]
+        return out
+
+    def dirty_blocks(self):
+        """Blocks whose ruts moved more than DIRTY since they were last handed out."""
+        return [k for k, b in self.blocks.items() if np.abs(b.sinkage - b.handed).max() > DIRTY]
+
+    def handed_out(self, keys):
+        """These blocks' ruts are in the collision now."""
+        for k in keys:
+            b = self.blocks.get(k)
+            if b is not None:
+                b.handed[:] = b.sinkage
 
     def dirty(self, take=True):
         """Blocks whose ruts moved more than DIRTY since last handed out: {(bx, by): sinkage

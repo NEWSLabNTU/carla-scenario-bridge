@@ -16,10 +16,13 @@ applies it. Cases:
   launch_<lane>  full throttle from rest in the zone for 3 s (traction control)
   brake_<lane>   full braking from 15 m/s in the zone (ABS)
   entry          the largest change of the soil's resistance between two substeps on entry
-                 at 20 m/s, against the edge blend
+                 at 20 m/s, against the edge blend, and in steady state 10 m on
+  rut_1, rut_2   the `sand_rut` lane: sand whose ground is the server's tiles (`ground_z`, a
+                 hole in the pad), 8 m/s through it twice on one line: the rear wheels' ground
+                 hit (the rut they meet), the body's height, the speed's largest drop in a
+                 frame (a tile swap must not stop the car), tiles rebuilt, rebuild cost
   cost           the surface layer's update per vehicle per substep, in and out of a zone
 """
-import dataclasses
 import json
 import math
 import os
@@ -40,13 +43,15 @@ from pxr import Gf, PhysicsSchemaTools, Sdf, UsdGeom, UsdPhysics  # noqa: E402
 from aib.control import GEAR_DRIVE, Command, State  # noqa: E402
 from aib.isaac.vehicle import Vehicle, ensure_vehicle_scene  # noqa: E402
 from aib.rig import EgoConfig  # noqa: E402
-from isaac_world import surfaces  # noqa: E402
+from isaac_world import soil as soil_model, surfaces  # noqa: E402
+from isaac_world.soil_tiles import SoilTiles  # noqa: E402
 from isaac_world.surface_layer import QCODE_ATTR, SurfaceLayer  # noqa: E402
 
 FRAME, SUB = 0.05, 3
 dt = FRAME / SUB
 ZONE_X0, ZONE_X1 = 100.0, 400.0
-LANES = {"asphalt": 0.0, "sand": 10.0, "dirt": 20.0, "sand_cf": 30.0}
+LANES = {"asphalt": 0.0, "sand": 10.0, "dirt": 20.0, "sand_cf": 30.0, "sand_rut": 40.0}
+RUT_X1 = 160.0
 
 
 def band(y0, y1):
@@ -59,18 +64,25 @@ SURFACES = {
         {"id": "sand", "class": "sand", "soil": "grid", "polygon": band(6, 14)},
         {"id": "dirt", "class": "dirt", "soil": "grid", "polygon": band(16, 24)},
         {"id": "sand_cf", "class": "sand", "soil": "closed_form", "polygon": band(26, 34)},
+        {"id": "sand_rut", "class": "sand", "soil": "grid", "ground_z": 0.0,
+         "polygon": [[ZONE_X0, 36], [RUT_X1, 36], [RUT_X1, 44], [ZONE_X0, 44]]},
     ],
 }
 
 world = World(stage_units_in_meters=1.0, physics_dt=dt, rendering_dt=dt)
 stage = omni.usd.get_context().get_stage()
-mesh = UsdGeom.Mesh.Define(stage, "/World/env/Road_pad/mesh")
-mesh.CreatePointsAttr([Gf.Vec3f(-100, -40, 0), Gf.Vec3f(500, -40, 0), Gf.Vec3f(500, 60, 0),
-                       Gf.Vec3f(-100, 60, 0)])
-mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
-mesh.CreateFaceVertexCountsAttr([4])
-UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
-UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
+# The pad, less the sand_rut zone's box (its ground is the soil tiles); the zone's box is
+# whole tiles of 1.6 m: x 99.2..160.0, y 35.2..44.8.
+for name, (x0, x1, y0, y1) in {"main": (-100, 500, -40, 35.2), "top": (-100, 500, 44.8, 60),
+                               "west": (-100, 99.2, 35.2, 44.8),
+                               "east": (160.0, 500, 35.2, 44.8)}.items():
+    mesh = UsdGeom.Mesh.Define(stage, f"/World/env/Road_pad/{name}")
+    mesh.CreatePointsAttr([Gf.Vec3f(x0, y0, 0), Gf.Vec3f(x1, y0, 0), Gf.Vec3f(x1, y1, 0),
+                           Gf.Vec3f(x0, y1, 0)])
+    mesh.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+    mesh.CreateFaceVertexCountsAttr([4])
+    UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
+    UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr("none")
 stage.GetPrimAtPath("/World/env/Road_pad").CreateAttribute(
     QCODE_ATTR, Sdf.ValueTypeNames.TokenArray).Set(["Q34442"])
 if not any(pr.IsA(UsdPhysics.Scene) for pr in stage.Traverse()):
@@ -96,7 +108,8 @@ with tempfile.TemporaryDirectory() as d:
     path = os.path.join(d, "surfaces.yaml")
     with open(path, "w") as f:
         json.dump(SURFACES, f)  # JSON is YAML
-    layer = SurfaceLayer(stage, surfaces.load(path), apply_force=apply_force)
+    layer = SurfaceLayer(stage, surfaces.load(path), apply_force=apply_force,
+                         make_tiles=lambda z, h, o: SoilTiles(stage, z, h, o))
 world.reset()
 world.play()
 physx = omni.physx.get_physx_interface()
@@ -104,6 +117,8 @@ state = State()
 cmd = Command(received=True, gear=GEAR_DRIVE)
 update_s = {"in": [], "out": []}
 step_forces = []  # per substep: total resistance applied
+flush_s = []  # per frame with a rebuild: the flush's time
+rebuilt = [0]
 
 
 def frame():
@@ -119,6 +134,11 @@ def frame():
         soil = any(layer.soil_under(veh))
         update_s["in" if soil else "out"].append(el)
         step_forces.append(sum(forces))
+    t0 = time.perf_counter()
+    done = layer.flush()
+    if done:
+        flush_s.append(time.perf_counter() - t0)
+        rebuilt[0] += sum(len(v) for v in done.values())
 
 
 def soil_now():
@@ -217,29 +237,108 @@ def entry():
     while state.position[0] < ZONE_X0 + 10.0:
         cmd.velocity, cmd.acceleration = 20.0, 0.0
         frame()
-    f = step_forces
+    entry_forces = list(step_forces)
+    step_forces.clear()
+    while state.position[0] < ZONE_X0 + 20.0:
+        cmd.velocity, cmd.acceleration = 20.0, 0.0
+        frame()
+    steady = [abs(b - a) for a, b in zip(step_forces, step_forces[1:])]
+    f = entry_forces
     jumps = [abs(b - a) for a, b in zip(f, f[1:])]
     return {"max_total_n": round(max(f), 0), "max_step_change_n": round(max(jumps), 0),
+            "steady_max_step_change_n": round(max(steady), 0),
+            "steady_mean_n": round(sum(step_forces) / len(step_forces), 0),
             "substeps_to_full": next((i for i, v in enumerate(f) if v > 0.9 * max(f)), None)
             - next((i for i, v in enumerate(f) if v > 0), 0),
             "blend_m": round(1.5 * 2 * rig.vehicle.wheel_radius, 2)}
 
 
+def rut(line_y=0.3):
+    """8 m/s through the sand_rut lane on one line."""
+    veh.teleport(((60.0, LANES["sand_rut"] + line_y, 0.05), (1.0, 0.0, 0.0, 0.0)), physx)
+    layer.reset(veh.path)
+    for _ in range(20):
+        cmd.velocity, cmd.acceleration = 0.0, 0.0
+        frame()
+    print(f"SPIKE-PROGRESS rut start pos {[round(c, 2) for c in state.position]}", flush=True)
+    reach(8.0, ZONE_X0 + 10.0)
+    print(f"SPIKE-PROGRESS rut reached pos {[round(c, 2) for c in state.position]}", flush=True)
+    n0, f0 = rebuilt[0], len(flush_s)
+    rss0 = int(open("/proc/self/statm").read().split()[1]) * 4096
+    hits, bodies, vs, res = [], [], [], []
+    n_frames = 0
+    while state.position[0] < RUT_X1 - 15.0 and n_frames < 600:
+        n_frames += 1
+        if n_frames % 40 == 0:
+            print(f"SPIKE-PROGRESS rut frame {n_frames} pos {[round(c, 2) for c in state.position]}"
+                  f" v {state.velocity[0]:.2f} on_ground "
+                  f"{[c.on_ground for c in veh.contacts] if veh.contacts else None}", flush=True)
+        cmd.velocity = 8.0
+        cmd.acceleration = max(-3.0, min(3.0, 1.5 * (8.0 - state.velocity[0])))
+        frame()
+        if veh.contacts:
+            hits.append(sum(c.position[2] for c in veh.contacts[2:]) / 2)
+        bodies.append(state.position[2])
+        vs.append(state.velocity[0])
+        s = soil_now()
+        if s:
+            res.append(s["res_n"])
+    drops = [a - b for a, b in zip(vs, vs[1:])]
+    fl = sorted(flush_s[f0:])
+    late = len(hits) // 2
+    return {"v_mean": round(sum(vs) / len(vs), 2), "largest_drop_per_frame": round(max(drops), 3),
+            "rear_hit_z_cm": round(sum(hits[late:]) / len(hits[late:]) * 100, 2),
+            "body_z_cm": round(sum(bodies[late:]) / len(bodies[late:]) * 100, 2),
+            "res_n": round(sum(res) / max(len(res), 1), 0),
+            "tiles_rebuilt": rebuilt[0] - n0,
+            "rss_growth_mb": round((int(open("/proc/self/statm").read().split()[1]) * 4096 - rss0)
+                                   / 1e6, 1),
+            "flush_ms": {"p50": round(fl[len(fl) // 2] * 1e3, 1) if fl else None,
+                         "max": round(fl[-1] * 1e3, 1) if fl else None, "frames": len(fl)},
+            "rut_cm_at_130": round(layer.grids["sand_rut"].depth(
+                130.0, LANES["sand_rut"] + line_y + rig.vehicle.wheel_tread / 2) * 100, 2)}
+
+
+def progress(name):
+    rss = int(open("/proc/self/statm").read().split()[1]) * 4096 / 1e9
+    print(f"SPIKE-PROGRESS {name} rss {rss:.1f} GB t {time.perf_counter() - T0:.0f} s", flush=True)
+
+
+T0 = time.perf_counter()
 out = {}
-for lane in ("asphalt", "sand", "dirt", "sand_cf"):
+out["kernel"] = "warp" if soil_model.SoilGrid(surfaces.load_classes()["sand"].soil).warp \
+    else "numpy"
+ONLY = os.environ.get("SOIL_SPIKE_ONLY")  # e.g. "rut": just those cases
+for lane in ("asphalt", "sand", "dirt", "sand_cf") if not ONLY else ():
+    progress(f"coast_{lane}")
     out[f"coast_{lane}"] = coast(lane)
 layer.fresh_soil()
-for lane in ("asphalt", "sand", "dirt", "sand_cf"):
+for lane in ("asphalt", "sand", "dirt") if not ONLY else ():
+    progress(f"hold_{lane}")
     out[f"hold_{lane}"] = hold(lane)
-out["hold_sand_2"] = hold("sand")
+if not ONLY:
+    progress("hold_sand_2")
+    out["hold_sand_2"] = hold("sand")
 layer.fresh_soil()
-for lane in ("asphalt", "sand", "dirt"):
+for lane in ("asphalt", "sand", "dirt") if not ONLY else ():
+    progress(f"launch_{lane}")
     out[f"launch_{lane}"] = launch(lane)
 layer.fresh_soil()
-for lane in ("asphalt", "sand", "dirt"):
+for lane in ("asphalt", "sand", "dirt") if not ONLY else ():
+    progress(f"brake_{lane}")
     out[f"brake_{lane}"] = brake(lane)
 layer.fresh_soil()
-out["entry"] = entry()
+if not ONLY:
+    progress("entry")
+    out["entry"] = entry()
+layer.fresh_soil()
+out["pad_body_z_cm"] = None
+start("asphalt", 0.0)
+out["pad_body_z_cm"] = round(state.position[2] * 100, 2)
+progress("rut_1")
+out["rut_1"] = rut()
+progress("rut_2")
+out["rut_2"] = rut()
 cost = {}
 for k, v in update_s.items():
     v = sorted(v)

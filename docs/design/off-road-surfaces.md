@@ -217,20 +217,64 @@ Host newslab-server-241 at load average 68 from other users' jobs.
   also takes their lateral grip: the S1 shape applied through the one friction value.
 - Entry at 20 m/s: the resistance ramps over 12 substeps (front, then rear axle, 2.9 m apart,
   plus the 1.11 m blend); the largest change between two substeps was 535 N of 2388 N.
-- Cost: the surface layer's update per vehicle per substep was 3.7 ms in a zone (p50, p99
-  12.5 ms; 23 us outside one). At 3 substeps a frame that is about 11 ms of 50, too much for
-  Python: the node loop moves to a compiled kernel. Grid memory: 1.1 MB for two 80 m passes
-  of four wheels in sand.
+- Cost: the surface layer's update per vehicle per substep was 3.7 ms in a zone with the
+  numpy sweep (p50, p99 12.5 ms; 23 us outside one), about 11 ms of a 50 ms frame. The sweep
+  is now one warp kernel on the CPU (`soil_warp`; a single thread per wheel, the nodes in
+  compiled loops, the wheel bottom by bisection): 141 us per wheel per step at 25 m/s offline,
+  1.29 ms per vehicle per substep in a zone on the pad (p99 6.3 ms), ~4 ms of a frame. The
+  numbers above are the same with either kernel. Grid memory: 1.1 MB for two 80 m passes of
+  four wheels in sand.
+- Entry at 20 m/s, again with steady state: the largest change between substeps was 537 N on
+  entry and 198 N in steady sand 10 m on (mean 2210 N). The blend lets a wheel's ~550 N in
+  over 3.3 substeps, ~170 N a substep, both front wheels at once ~340 N, plus the ripple.
+
+### Ruts in the collision and the lidar (047 S3, 2026-10-23)
+
+A soil zone that sets `ground_z` gets the server's own ground (`soil_tiles.SoilTiles`): 1.6 m
+tiles (two grid blocks, 32 cells at 5 cm) over the zone's bounding box at that height, flat
+two-triangle quads at load. The map must have no ground collider inside the box: a wheel's
+suspension ray takes the highest hit, so the ruts must be the top surface. Once a frame
+(`SurfaceLayer.flush`) the tiles over blocks whose ruts moved more than 5 mm are rebuilt at
+full resolution from the grid's nodes (edges shared with the neighbours), at most 4 a frame,
+oldest first. PhysX does not see a cooked mesh's points change, so a rebuild is a new prim,
+defined before the old one goes.
+
+A tile is rebuilt only once no wheel on soil stands within 0.5 m of it. The first version
+rebuilt tiles under the wheels: every frame the ground under a slow wheel dropped by the
+sinkage the grid had just added, the car shook to a crawl, the slipping wheels dug (Lyasko),
+and it sat on its belly 22 cm down after 10 m of sand, 676 rebuilds later. With the wait, a
+wheel's own pass is the grid's forces' to carry, and its rut is felt from the next pass on,
+by it, by the axle behind it and by every other vehicle.
+
+Pad, `soil_drive.py` `sand_rut` lane (60 m of tiles in a hole in the pad), 8 m/s, one line:
+
+| | speed | rear wheels' ground | body | resistance | tiles rebuilt | rebuild time a frame |
+|---|---|---|---|---|---|---|
+| first pass | 7.13 m/s | -7.1 cm (in the front wheels' ruts) | -6.8 cm | 2360 N | 88 | 2.0 ms p50, 4.6 max |
+| second pass | 7.58 m/s | -9.9 cm (in its own) | -9.9 cm | 879 N | 88 | 2.1 ms p50, 4.9 max |
+
+Rut depth in the grid at x = 130 m: 9.2 cm after the first pass, 11.2 cm after the second. The
+largest speed drop in a frame on the second pass was 0.25 m/s, dropping into the ruts at the
+zone's start. Memory: ~0.3 MB stays per rebuild (docs/issues/001).
+
+RTX lidar (`spikes/soil_lidar.py`: two tracks driven into the grid, the tiles rebuilt, aib's
+OS1 2 m up): the ground between the tracks read -3.63 cm (the same as flat ground before,
+a constant offset), the tracks -12.98 cm, so 9.36 cm deep against the grid's 9.43. Four tiles
+rebuilt while the lidar rendered: 3.7-4.9 ms to edit, frames 22-23 ms against 28.5 ms
+without a rebuild (no cost the noise shows).
+
+On a CARLA town the zone's box has to be cut out of the town's ground first (an asset step;
+not done), so the acceptance's "map size" run is still to come.
 
 ### Still to measure
 
 - **Physics rate in a zone.** Answered (047 D4, S3): the grid sweeps each wheel along its
   path one node spacing at a time inside a step, so 60 Hz reads as 600 Hz within 0.4 %
   (`test_soil.py`); the rate stays the world's.
-- **Re-cook budget.** 7-25 ms per 4 x 4 m tile, two runs on a loaded host; 2 x 2 m
-  tiles and a per-frame cap need measuring against the 50 ms frame with RTX sensors on.
-- **RTX cost of a changed mesh** and whether RTX lidar sees displacement maps or only
-  geometry.
+- **Re-cook budget.** Measured (S3): 1.6 m tiles, 4 a frame, 2 ms a frame on the pad; four
+  with an RTX lidar rendering, 4 ms to edit and no frame-time rise.
+- **RTX cost of a changed mesh**: none visible; the lidar sees the rebuilt geometry within a
+  millimetre (S3). Displacement maps were not needed.
 - **Calibration**: Chrono CRM offline as a virtual bevameter per soil class, cone-index from the
   field; judge on trends (survey, last recommendations).
 

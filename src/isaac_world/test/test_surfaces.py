@@ -98,11 +98,16 @@ class MapTest(unittest.TestCase):
                                  {"id": "mud", "class": "mud_wet", "soil": True,
                                   "polygon": SQUARE},
                                  {"id": "deep", "class": "sand", "soil": "deep",
+                                  "polygon": SQUARE},
+                                 {"id": "cf", "class": "sand", "soil": "closed_form",
+                                  "ground_z": 0.0, "polygon": SQUARE},
+                                 {"id": "gz", "class": "sand", "soil": True, "ground_z": "low",
                                   "polygon": SQUARE}]})
         for part in ("zoness", "tarmac", "'Sky'", "Bad-Id", "three or more", "used twice",
                      "crosses itself", "sets none", "soaked", "soil needs", "needs a polygon",
                      "class 'mud_wet' has no soil parameters (soil classes: dirt, sand",
-                     "soil 'deep' is not one of"):
+                     "soil 'deep' is not one of", "ground_z (the ruts' ground) needs soil: grid",
+                     "ground_z is a height in metres, not 'low'"):
             self.assertIn(part, msg)
 
 
@@ -297,7 +302,43 @@ class FakeVehicle:
         self.written[i] = mu
 
 
+class FakeTiles:
+    def __init__(self, zone, spacing, origin):
+        self.zone, self.updates, self.cleared, self.removed = zone, [], 0, False
+
+    def update(self, grid, wheels=()):
+        self.wheels = list(wheels)
+        self.updates.append(len(grid.dirty_blocks()))
+        return ["t"] if self.updates[-1] else []
+
+    def clear(self):
+        self.cleared += 1
+
+    def remove(self):
+        self.removed = True
+
+
 class SurfaceLayerTest(unittest.TestCase):
+    def test_a_zone_with_its_own_ground_gets_the_ruts_once_a_frame(self):
+        made = {}
+        m = smap([{"id": "pit", "class": "sand", "soil": "grid", "ground_z": 0.0,
+                   "polygon": [[0, -5], [40, -5], [40, 5], [0, 5]]},
+                  {"id": "flat", "class": "sand", "soil": "grid", "polygon": SQUARE}])
+        layer = surface_layer.SurfaceLayer(
+            FakeStage({}), m, make_tiles=lambda z, h, o: made.setdefault(z.id, FakeTiles(z, h, o)))
+        self.assertEqual(list(made), ["pit"])
+        self.assertEqual(layer.flush(), {})  # no grid yet
+        v = FakeVehicle([SimpleNamespace(on_ground=True, position=(10.0, 0.0, 0.0), shape="",
+                                         load=4500.0, direction=(1.0, 0.0, 0.0))] * 4)
+        layer.begin_step()
+        layer.update(v, 0.0, 1 / 60)
+        self.assertEqual(layer.flush(), {"pit": ["t"]})
+        self.assertEqual(made["pit"].wheels, [(10.0, 0.0)] * 4)  # kept off the wheels' tiles
+        layer.fresh_soil()
+        self.assertEqual(made["pit"].cleared, 1)
+        layer.remove_tiles()
+        self.assertTrue(made["pit"].removed)
+
     def test_a_soil_zone_sets_friction_and_pushes_back_fading_in_from_its_edge(self):
         stage = FakeStage({"/World/env/Road_1": ["Q34442"]})
         forces = []

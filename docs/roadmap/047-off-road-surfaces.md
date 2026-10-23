@@ -252,9 +252,22 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         diameters from the zone edge; ruts fresh at every reset. aib's `Contact` carries the
         wheel's load and rolling direction (aib `deaef80`).
   - [x] On a pad (`spikes/soil_drive.py`, 2026-10-23; design doc "Soil layer on a pad").
-  - [ ] Cost: 3.7 ms per vehicle per substep in a zone (p50; p99 12.5 ms) on a host at load
-        68, ~11 ms of a 50 ms frame: the node loop goes to a compiled kernel (warp).
-  - [ ] Ruts in the collision and the render mesh (tiles), re-cook budget, RTX lidar.
+  - [x] Cost: 3.7 ms per vehicle per substep in a zone with numpy (p50; p99 12.5 ms, host at
+        load 68). The sweep is now one warp kernel on the CPU (`soil_warp`, the world
+        server's; numpy stays for hosts without warp, `test_soil.py` checks they agree within
+        0.2 mm): 141 us per wheel per step at 25 m/s, 1.29 ms per vehicle per substep in a zone
+        on the pad (p50; p99 6.3 ms), ~4 ms of a 50 ms frame.
+  - [x] Ruts in the collision and the render mesh: a zone with `ground_z` is the server's own
+        1.6 m tiles (`soil_tiles`; the map has no collider in the zone's box), a rutted tile
+        rebuilt as a new prim once no wheel stands on it, 4 a frame. Pad: the rear wheels ride
+        in the front wheels' ruts (ground -7.1 cm), the second pass in its own (-9.9 cm, 37 %
+        of the resistance); rebuilds 2.0 ms a frame (p50, max 6.4). Rebuilding under a wheel
+        shook the car to a stop at 22 cm: hence the wait.
+  - [x] RTX lidar sees the ruts (`spikes/soil_lidar.py`): 9.36 cm deep against the grid's
+        9.43; four tiles rebuilt with the lidar rendering: 4 ms to edit, no frame-time rise.
+  - [ ] Memory: ~0.3 MB a tile rebuild stays (docs/issues/001), ~1 GB per km in a tile zone.
+  - [ ] On a CARLA town: a zone needs the town's ground cut out of its box (an asset step),
+        then the acceptance's "map size" run.
 - [ ] **S4. Persistence and the second pass** (D5, D6): node blocks saved per tile, loaded per
       scenario; every vehicle reads and writes the same grid in a fixed order (determinism);
       mud model if D6 says so.
@@ -276,6 +289,11 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   lateral grip falls, motion resistance outgrows thrust as sinkage deepens (the survey's
   trends, within ±30 % of the calibrated model); zone entry at speed shows no force step
   larger than the blend allows; the frame budget holds with one ego in the zone.
+  *2026-10-23: the trends hold (`test_soil.py`, the pad); entry at 20 m/s: largest step
+  537 N against the blend's ~340 N for two wheels plus the steady ripple of 198 N; the
+  frame budget holds on the pad (~4 ms soil, ~2 ms rebuilds of 50). Open: "within ±30 % of
+  the calibrated model" waits for S5.*
 - [ ] Map size: a full CARLA town with one zone runs at the same frame time as without it
   when the ego is outside the zone.
-- [ ] Lidar sees the ruts the wheels feel (rut depth in the point cloud within one grid cell).
+- [x] Lidar sees the ruts the wheels feel (rut depth in the point cloud within one grid cell).
+  *2026-10-23 (`spikes/soil_lidar.py`): 9.36 cm in the point cloud, 9.43 cm in the grid.*
