@@ -20,7 +20,7 @@ side".
 
 | what | Autoware reads | CARLA | Isaac Sim | SSv2 |
 |---|---|---|---|---|
-| geometry | acb `vehicle_info` hand-written from a CARLA measurement; aib's generated from its spec | the blueprint's body and `physics_control` | aib spec | 132 inline `<Vehicle>` copies in 33 `.xosc` files; 130 declare 4.5 x 2.1 x 1.8 m with a 3.1 m wheelbase against the car's 4.792 x 2.163 x 1.488 m and 3.005 m |
+| geometry | acb `vehicle_info` hand-written from a CARLA measurement; aib's generated from its spec | the blueprint's body and `physics_control` | aib spec | 132 inline `vehicle.tesla.model3` definitions (27 ego, 105 NPC) in 33 `.xosc` files; 128 declare 4.5 x 2.1 x 1.8 m with a 3.1 m wheelbase against the car's 4.792 x 2.163 x 1.488 m and 3.005 m (fixed by 050) |
 | dynamics | none (planning limits only) | the blueprint's own physics, plus acb's pedal maps measured on it | aib spec (Model 3 RWD: motor, regen, ABS, traction control, brake lag) | `Performance`, four different sets |
 | sensors | acb: URDF and calibration (13 sensors, 4 used); aib: generated | acb `vehicle_config.yaml`, keyed by URDF link | aib spec | none |
 | sensing launch | five files per kit, identical in acb and aib except comments and package names | | | |
@@ -208,6 +208,5 @@ from the spec.
 - **V2. Package names per car.** Autoware needs `<vehicle_model>_description` and
   `_launch`. [proposed: `tesla_model3_description`, `tesla_model3_launch`,
   `tesla_model3_sensor_kit_description`, `tesla_model3_sensor_kit_launch`]
-- **V3. Fix the scenarios' ego box first**, before the spec moves. It changes every SSv2
-  distance and collision measurement slightly. [proposed: yes, as 049's first step, with a
-  before and after of the suite]
+- **V3. Fix the scenarios' box first**: decided 2026-10-23, ego and NPCs alike, as
+  [050](../roadmap/050-model3-box.md), before 049.
