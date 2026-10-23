@@ -7,7 +7,7 @@ vehicle spec), and the design's step 8 (the repository split), which this phase 
 Designs: [design/vehicle-side.md](../design/vehicle-side.md),
 [design/simulator-interface-split.md](../design/simulator-interface-split.md).
 
-**Status**: draft, 2026-10-23. Waiting on the decisions below.
+**Status**: planned, 2026-10-23. Decisions 1-6 are taken; starts after 050.
 
 **Source**: user direction 2026-10-23: "now that we'll go through Autoware package and
 simulation interface refactor in phase 50 and so on, I'd like to refactor them to the
