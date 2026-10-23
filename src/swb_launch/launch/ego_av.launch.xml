@@ -46,8 +46,8 @@
   <arg name="sensor_model" default="acb_sensor_kit" />
   <arg name="launch_rviz" default="false" />
 
-  <!-- Who routes and engages this ego (roadmap 017): the vehicle agent (acb_pilot agent),
-       started by the profile. With `relay` it takes the scenario's goals from the
+  <!-- Who routes and engages this ego (roadmap 017): the vehicle agent (swb_agent's
+       vehicle_agent, vehicle_agent.launch.xml, started as the profile's extra_launch). With `relay` it takes the scenario's goals from the
        scenario's agent relay, so this stack may run in any ROS domain; without one it can
        drive to a local `goal_poses_file`. The managed/unmanaged split of phases 012-013
        (SSv2's concealer calling this stack's ADAPI directly, same domain) is retired. -->
@@ -95,6 +95,9 @@
        runs fusion-only and the camera that only fed it is not spawned. false brings both back. -->
   <arg name="traffic_light_fusion_only" default="true" description="signals from acb only; no traffic light camera"/>
   <include file="$(find-pkg-share acb_launch)/launch/carla_simulator.launch.xml">
+    <!-- The vehicle agent (roadmap 051): swb_agent's vehicle_agent beside the profile, which
+         reads relay, entity and goal_poses_file below. -->
+    <arg name="extra_launch" value="$(find-pkg-share swb_launch)/launch/vehicle_agent.launch.xml" />
     <arg name="traffic_light_fusion_only" value="$(var traffic_light_fusion_only)" />
     <arg name="map_path" value="$(var map_path)" />
     <arg name="vehicle_model" value="$(var vehicle_model)" />

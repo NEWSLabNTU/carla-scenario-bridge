@@ -5,12 +5,14 @@
 [submodule "src/autoware_carla_bridge"]
 	path = src/autoware_carla_bridge
 	url = https://github.com/NEWSLabNTU/autoware_carla_bridge.git
+	branch = target-shape
 [submodule "src/color_names"]
 	path = src/color_names
 	url = https://github.com/OUXT-Polaris/color_names.git
 [submodule "src/autoware_isaac_bridge"]
 	path = src/autoware_isaac_bridge
 	url = https://github.com/NEWSLabNTU/autoware_isaac_bridge.git
+	branch = target-shape
 [submodule "src/swb_world_protocol"]
 	path = src/swb_world_protocol
 	url = https://github.com/NEWSLabNTU/swb_world_protocol.git
@@ -22,4 +24,8 @@
 [submodule "src/swb_isaac_world"]
 	path = src/swb_isaac_world
 	url = https://github.com/NEWSLabNTU/swb_isaac_world.git
+	branch = target-shape
+[submodule "src/autoware_sim_vehicle"]
+	path = src/autoware_sim_vehicle
+	url = https://github.com/NEWSLabNTU/autoware_sim_vehicle.git
 	branch = target-shape

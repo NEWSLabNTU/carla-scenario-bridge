@@ -242,6 +242,8 @@ test:
     # world's pure modules
     python3 -m unittest discover -s src/swb_world_protocol/swb_world_server/test
     python3 -m unittest discover -s src/swb_isaac_world/test
+    # The Autoware profile's settings (autoware_sim_vehicle)
+    python3 -m pytest -q src/autoware_sim_vehicle/test
     # Every vehicle named by a CARLA blueprint declares that car's measured box and axles
     # (roadmap 050), and the module the generators take them from
     python3 -m pytest -q scripts/test_scenario_vehicle.py
@@ -1061,6 +1063,9 @@ ego-av *args: _require-carla
             # The bridge spells "off" as `none`: an empty map path means that.
             accel_map_path:=|brake_map_path:=|traffic_light_map_path:=) given+=("${a}none") ;;
             relay:=none) given+=("relay:=") ;;
+            # The profile includes one extra_launch, the vehicle agent; a file of the
+            # user's own is included by the agent's launch (roadmap 051).
+            extra_launch:=*) given+=("user_launch:=${a#*:=}") ;;
             *:=*) given+=("$a") ;;
             *) [ ${#given[@]} = 0 ] || { echo "ego-av: '$a' is not name:=value" >&2; exit 2; }
                given+=("map_path:=$a") ;;
@@ -1110,6 +1115,7 @@ ego-av *args: _require-carla
         release_notify_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 1))" \
         release_ack_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 2))" \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false seed_localization_on_attach:=false \
+        extra_launch:="$(ros2 pkg prefix swb_launch)/share/swb_launch/launch/vehicle_agent.launch.xml" \
         -- "${given[@]}"
     log_dir=$(swb_log_dir "{{project}}" ego)
     #
@@ -1156,6 +1162,9 @@ ego-isaac *args:
             container_mode:=?*) container_mode="${a#*:=}" ;;
             play_launch_args:=*) play_launch_args="${a#*:=}" ;;
             relay:=none) given+=("relay:=") ;;
+            # The profile includes one extra_launch, the vehicle agent; a file of the
+            # user's own is included by the agent's launch (roadmap 051).
+            extra_launch:=*) given+=("user_launch:=${a#*:=}") ;;
             *:=*) given+=("$a") ;;
             *) echo "ego-isaac: '$a' is not name:=value" >&2; exit 2 ;;
         esac
@@ -1174,6 +1183,7 @@ ego-isaac *args:
     swb_with_defaults launch_args \
         map_path:="{{maps_dir}}/{{default_map}}" \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false \
+        extra_launch:="$(ros2 pkg prefix swb_launch)/share/swb_launch/launch/vehicle_agent.launch.xml" \
         -- "${given[@]}"
     log_dir=$(swb_log_dir "{{project}}" ego)
     exec play_launch launch --web-addr 0.0.0.0:$((SWB_WEB_PORT + 2)) \

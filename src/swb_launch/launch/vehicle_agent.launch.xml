@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The vehicle agent beside a vehicle side (roadmaps 017, 051): swb_agent's vehicle_agent
+     takes goals from the scenario's agent relay and drives Autoware's API locally, so the
+     scenario needs no access to this ROS domain. With no relay and a goal_poses_file it drives
+     to that goal instead.
+
+     It is passed to a vehicle bridge's launch (acb_launch carla_simulator.launch.xml, aib_launch
+     isaac_simulator.launch.xml) as extra_launch, which the Autoware profile includes with
+     map_path and use_sim_time; relay, entity, goal_poses_file and agent_config are read from
+     the command line (launch arguments are global). The profile includes one extra_launch, so a
+     launch file of the user's own comes in as user_launch and is included here. -->
+<launch>
+  <arg name="map_path" default=""/>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="relay" default="" description="tcp://host:port of the scenario's agent relay; empty = no relay"/>
+  <arg name="entity" default="ego" description="the scenario entity this vehicle is"/>
+  <arg name="goal_poses_file" default="" description="local goal(s) when there is no relay; empty = none"/>
+  <arg name="agent_config" default="" description="YAML/JSON of the agent's settings (swb_agent AutowareAgent DEFAULTS: converge_timeout, ready_timeout, scan_wait, ...); empty = defaults"/>
+  <arg name="user_launch" default="" description="a launch file of your own to start beside this vehicle side; empty = none"/>
+
+  <!-- Two node blocks rather than one with optional params: an empty string parameter is
+       written as "-p name:=", which rcl rejects. -->
+  <node pkg="swb_agent" exec="vehicle_agent" name="vehicle_agent" output="screen" respawn="true"
+        if="$(eval '&quot;$(var relay)&quot; != &quot;&quot;')">
+    <param name="relay" value="$(var relay)"/>
+    <param name="entity" value="$(var entity)"/>
+    <param name="agent_config" value="$(var agent_config)"/>
+  </node>
+  <node pkg="swb_agent" exec="vehicle_agent" name="vehicle_agent" output="screen"
+        if="$(eval '&quot;$(var relay)&quot; == &quot;&quot; and &quot;$(var goal_poses_file)&quot; != &quot;&quot;')">
+    <param name="goal_poses_file" value="$(var goal_poses_file)"/>
+    <param name="agent_config" value="$(var agent_config)"/>
+  </node>
+
+  <group if="$(eval '&quot;$(var user_launch)&quot; != &quot;&quot;')">
+    <include file="$(var user_launch)">
+      <arg name="map_path" value="$(var map_path)"/>
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+    </include>
+  </group>
+</launch>

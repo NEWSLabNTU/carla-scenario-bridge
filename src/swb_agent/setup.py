@@ -22,6 +22,7 @@ setup(
             'swb-agent = swb_agent.cli:main',
             'ros_adapter = swb_agent.ros_adapter:main',
             'autoware_agent = swb_agent.adapters.autoware_ros:main',
+            'vehicle_agent = swb_agent.adapters.vehicle_agent:main',
             'carla_basic = swb_agent.adapters.carla_basic:main',
         ],
     },

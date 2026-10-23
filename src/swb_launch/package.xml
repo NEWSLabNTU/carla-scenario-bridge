@@ -13,7 +13,7 @@
   <exec_depend>scenario_agent_relay</exec_depend>
   <exec_depend>acb_bridge</exec_depend>
   <exec_depend>acb_launch</exec_depend>
-  <exec_depend>acb_pilot</exec_depend>
+  <exec_depend>swb_agent</exec_depend>
   <exec_depend>scenario_test_runner</exec_depend>
   <!-- chase_view (demo camera window); it also needs the CARLA Python API: pip install carla==0.9.16 -->
   <exec_depend>python3-pygame</exec_depend>
