@@ -176,9 +176,12 @@ mod tests {
     fn a_reply_becomes_the_services_fields() {
         let w = Weather {
             preset: "ClearNoon".into(),
-            parameters: [("cloudiness".to_string(), 5.0), ("wetness".to_string(), 0.0)]
-                .into_iter()
-                .collect(),
+            parameters: [
+                ("cloudiness".to_string(), 5.0),
+                ("wetness".to_string(), 0.0),
+            ]
+            .into_iter()
+            .collect(),
         };
         let (preset, names, values) = fields(&WeatherReply::ok(w, ""));
         assert_eq!(preset, "ClearNoon");

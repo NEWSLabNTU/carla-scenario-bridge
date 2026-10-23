@@ -216,11 +216,9 @@ fn honest_with(caps: &'static [wire::Capability], instance: &'static str) -> Beh
             | R::SetRoadCondition(_)
             | R::SetEnvironment(_)
             | R::Release(_) => ok(None),
-            R::SetWeather(_) | R::GetWeather(_) => {
-                ok(Some(wire::reply::Reply::Weather(wire_form::reply(
-                    &WeatherReply::ok(clear_noon(), "applied"),
-                ))))
-            }
+            R::SetWeather(_) | R::GetWeather(_) => ok(Some(wire::reply::Reply::Weather(
+                wire_form::reply(&WeatherReply::ok(clear_noon(), "applied")),
+            ))),
         })
     })
 }
