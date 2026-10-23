@@ -11,3 +11,7 @@
 [submodule "src/autoware_isaac_bridge"]
 	path = src/autoware_isaac_bridge
 	url = https://github.com/NEWSLabNTU/autoware_isaac_bridge.git
+[submodule "src/swb_world_protocol"]
+	path = src/swb_world_protocol
+	url = https://github.com/NEWSLabNTU/swb_world_protocol.git
+	branch = target-shape

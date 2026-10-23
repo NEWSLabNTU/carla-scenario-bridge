@@ -9,18 +9,13 @@ description = "The scenario bridge: SSv2 on one side, a world server over the wo
 name = "scenario_world_bridge"
 path = "src/main.rs"
 
-# Probe or check a world server (roadmap 046).
-[[bin]]
-name = "swb_world_check"
-path = "src/bin/swb_world_check.rs"
-
 [package.metadata.ros]
 install_to_share = ["config", "launch"]
 
 [dependencies]
 # The simulator-free core: SSv2's protocol, the world protocol, the policy (roadmap 046). No
 # simulator's client library anywhere in this package's dependency graph.
-swb_core = { path = "../swb_core" }
+swb_core = { path = "../swb_world_protocol/swb_core" }
 
 # ZMQ
 zmq = "0.10"

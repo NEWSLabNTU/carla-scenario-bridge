@@ -222,13 +222,19 @@ test:
     # CARLA source tree to build from, and the build fails.
     unset CARLA_DIR
     cargo nextest run --no-tests pass --no-fail-fast
+    # The world protocol's crates, in their own workspace; its gap trace test reads the trace
+    # back with this repository's reader
+    (cd src/swb_world_protocol && SWB_GAP_TRACE_READER_DIR="$OLDPWD/src/swb_launch/scripts" \
+        cargo nextest run --no-tests pass --no-fail-fast)
+    # SSv2's protos in swb_world_protocol are the fork's (roadmap 051)
+    python3 -m pytest -q scripts/test_ssv2_protos.py
     # run_suite's discovery and JUnit aggregation (stdlib only, no ROS graph needed)
     python3 -m pytest -q src/swb_launch/test
     # The agent SDK and protocol, and the relay against it (roadmap 030)
     python3 -m pytest -q src/swb_agent/test src/scenario_agent_relay/test
     # The world server shell, on a fake world (roadmaps 037, 046; protobuf only), and the Isaac
     # world's pure modules
-    python3 -m unittest discover -s src/swb_world_server/test
+    python3 -m unittest discover -s src/swb_world_protocol/swb_world_server/test
     python3 -m unittest discover -s src/isaac_world/test
     # Every vehicle named by a CARLA blueprint declares that car's measured box and axles
     # (roadmap 050), and the module the generators take them from
@@ -716,7 +722,7 @@ world-health *args:
     done
     case "$sim" in carla) port={{world_port}} ;; isaac) port={{isaac_port}} ;;
         *) echo "world-health: sim '$sim' is not carla or isaac" >&2; exit 2 ;; esac
-    exec "{{project}}/install/scenario_world_bridge/lib/scenario_world_bridge/swb_world_check" \
+    exec "{{project}}/install/swb_world_check/lib/swb_world_check/swb_world_check" \
         hello "tcp://127.0.0.1:$port" --wait "$wait"
 
 # The Isaac world server's health (`just world-health sim:=isaac`).
@@ -743,7 +749,7 @@ world-check *args:
     done
     case "$sim" in carla) port={{world_port}} ;; isaac) port={{isaac_port}} ;;
         *) echo "world-check: sim '$sim' is not carla or isaac" >&2; exit 2 ;; esac
-    exec "{{project}}/install/scenario_world_bridge/lib/scenario_world_bridge/swb_world_check" \
+    exec "{{project}}/install/swb_world_check/lib/swb_world_check/swb_world_check" \
         conformance "tcp://127.0.0.1:$port" --map "$map"
 
 

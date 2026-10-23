@@ -11,6 +11,6 @@ _swb_aib="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../autoware_isaac_bridge/src/a
 # shellcheck source=/dev/null
 source "$_swb_aib/scripts/isaac_env.sh"
 # The world protocol's server shell (roadmap 046), beside this package.
-_swb_shell="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../swb_world_server" && pwd)"
+_swb_shell="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../swb_world_protocol/swb_world_server" && pwd)"
 export PYTHONPATH="$_swb_shell:$_swb_aib:$PYTHONPATH"
 unset _swb_aib _swb_shell
