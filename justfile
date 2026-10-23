@@ -1107,10 +1107,13 @@ ego-av *args: _require-carla
     # as well would race it). acb publishes signal state from CARLA's lights (roadmap 015)
     # from the table swb writes beside the Lanelet2 map at every Initialize, which the
     # launch file's traffic_light_map_path default (<map_path>/carla/traffic_lights.yaml)
-    # finds. A ROS launch argument cannot carry an empty value, so an empty one given here
-    # drops the default and is not passed (swb_with_defaults).
+    # finds. The CARLA world server puts the spec's physics on the ego at the spawn, so acb
+    # only reads it back (carla_physics_mode:=verify; roadmap 051). A ROS launch argument
+    # cannot carry an empty value, so an empty one given here drops the default and is not
+    # passed (swb_with_defaults).
     swb_with_defaults launch_args \
         map_path:="{{maps_dir}}/{{default_map}}" vehicle_name:=hero carla_port:={{carla_port}} \
+        carla_physics_mode:=verify \
         release_notify_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 1))" \
         release_ack_endpoint:="tcp://127.0.0.1:$(({{ssv2_port}} + 2))" \
         relay:="tcp://localhost:{{agent_port}}" rviz:=false seed_localization_on_attach:=false \
