@@ -228,11 +228,14 @@ class IsaacWorld(WorldBase):
         for handle in list(self.entities):
             self.despawn(handle)
         self.ground_cache.clear()
-        self._load_surfaces(usd)
+        if self.surface is not None:
+            # The soil zones' own ground goes, and the world's comes back under it.
+            self.surface.remove_tiles()
         plane = self.stage.GetPrimAtPath(GROUND_PLANE)
         if usd and usd == self.loaded_usd and self.stage.GetPrimAtPath(ENVIRONMENT):
             # The same world (preloaded, or the last episode's): keep it, shaders and all.
             self.ground = list(ground_paths)
+            self._load_surfaces(usd)
             return
         if self.stage.GetPrimAtPath(ENVIRONMENT):
             self.stage.RemovePrim(ENVIRONMENT)
@@ -251,11 +254,11 @@ class IsaacWorld(WorldBase):
         own = bool(env) and any(p.HasAPI(UsdLux.LightAPI) for p in Usd.PrimRange(env))
         for path in (SUN, SKY):
             self.stage.GetPrimAtPath(path).SetActive(not own)
+        # After the world is in: a soil zone with its own ground cuts the world's out.
+        self._load_surfaces(usd)
 
     def _load_surfaces(self, usd):
         """The world's surface map, read again at every load (an edit needs no restart)."""
-        if self.surface is not None:
-            self.surface.remove_tiles()
         self.surface = None
         entry = self.surface_maps.get(usd)
         if entry is None:
@@ -266,11 +269,23 @@ class IsaacWorld(WorldBase):
         self.surface = SurfaceLayer(self.stage, surfaces.load(path), origin, self._apply_force,
                                     self._make_tiles)
         log.info("surface map %s: %d zone(s)", path, len(self.surface.map.zones))
+        if self.surface.tiles:
+            self._settle_cut()
+
+    def _settle_cut(self, steps=10):
+        """A few physics steps of their own for a soil zone's cut (collision switched off on
+        the town's meshes, new collision copies): handed to PhysX in the same step as a new
+        ego, the ego was not in the physics scene (preload's warm-up ego:
+        `get_rigidbody_transformation` without a position; the server respawned 33 times)."""
+        t = time.perf_counter()
+        for _ in range(steps):
+            self.world.step(render=False)
+        log.info("soil zones' cut settled in %d steps, %.1f s", steps, time.perf_counter() - t)
 
     def _make_tiles(self, zone, spacing, origin):
         from .soil_tiles import SoilTiles
 
-        return SoilTiles(self.stage, zone, spacing, origin)
+        return SoilTiles(self.stage, zone, spacing, origin, cut_root=ENVIRONMENT)
 
     def _apply_force(self, path, force, position):
         """A force (N) at a world point on body `path` for the next physics step (the soil's

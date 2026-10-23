@@ -1,6 +1,7 @@
-# 001: Each soil tile rebuild leaves ~0.3 MB in the Isaac world server
+# 001: Each soil tile rebuild leaves its cooked collision in the Isaac world server
 
-**Severity**: medium. **Status**: open. **Found**: 2026-10-23, roadmap 047 S3.
+**Severity**: medium, now low. **Status**: mitigated (12x less); the cause is PhysX's and
+stays. **Found**: 2026-10-23, roadmap 047 S3.
 
 ## What is wrong
 
@@ -32,16 +33,46 @@ Before the fix that waits for wheels to leave a tile (047 S3), tiles under a stu
 rebuilt every frame (676 in one pass) and RSS grew ~15 MB/s, to 17 GB in ten minutes. The
 soil grid itself does not grow (`SoilGrid.wheel` 5500 times, numpy and warp: 0.0 MB).
 
-## Suspects and next steps
+## Where the memory goes (`spikes/tile_memory.py`)
 
-- PhysX's cooked-mesh data (or the UJITSO cooking cache) for removed prims is kept.
-  Isaac 6.1 exposes no local mesh-cache size setting (only `/physics/cooking/ujitso*`).
-- Try: reuse two prims per tile and toggle which one collides (`CollisionAPI` removed on the
-  other) instead of making a new path each time; a stable set of paths may let PhysX free or
-  reuse the cooked data. The spike's "toggle collision" variant re-cooked in 25 / 7 ms but
-  needs a step between remove and apply, so the tile would be absent for one step unless the
-  two prims overlap during the swap.
-- Try: `omni.physx` `release_physics_objects` or a cooking-service purge after a batch of
-  removals, if one exists in 110.3.
-- Measure per rebuild with a longer pass (200+ rebuilds) to tell a cache with a ceiling from
-  a leak.
+One tile rebuilt 300-1500 times per variant, a physics step after each, a downward ray
+checking the new shape took:
+
+| variant | KB kept per rebuild | ray sees the new shape |
+|---|---|---|
+| new prim, new path (soil_tiles before), shapes repeating | 8.6 | all |
+| new prim, new path, every shape new (as in a drive) | 382 | all |
+| same path, removed and defined again, every shape new | 465 | all |
+| the same, without CollisionAPI (render and USD only) | 3.3 | n/a |
+| legacy cooking (`/physics/cooking/ujitsoCollisionCooking` false) | 215 | all |
+| `release_local_mesh_cache()` after each rebuild | 216 (and ~9 ms) | all |
+| private `release_runtime_mesh_cache()` after each | 289 | all |
+| points edited in place: collision toggled, approximation re-set, or a second prim's collision swapped in | 0 | never re-cooked |
+| `add_prim_to_cooking_refresh_set` | | refused: its binding wants an SdfPath from another pxr build |
+| 10 cm collision tile (17 x 17), every shape new | 64 | all |
+| the same, cache released after each | 45 (and ~9 ms) | all |
+
+So PhysX keeps the cooked data of every distinct mesh it has cooked, prim removed or not,
+in proportion to the triangles, linearly over 1500 rebuilds (no ceiling seen), and nothing
+reachable from Python frees it or re-cooks a mesh in place. Repeated shapes hit the cache
+(the first spike's 8.6 KB was that).
+
+## Fix (047 S3)
+
+- The collision tile is 10 cm (17 x 17 vertices, 512 triangles); the render tile stays at
+  the grid's 5 cm, one prim whose points are written in place (no cooking, no memory kept),
+  so cameras and the lidar keep the full detail (the lidar still reads the rut 9.36 cm deep
+  against the grid's 9.43).
+- A tile is rebuilt once no wheel is within 3 m: one rebuild per tile per pass, not one per
+  axle.
+
+Pad, two passes of 35 m at 8 m/s: 44 rebuilds and 3.7 / 2.9 MB a pass, against 88 and 23-36 MB
+before, ~100 MB per km per pass in a tile zone. The second pass still rides in its ruts
+(-9.3 cm).
+
+## Still open
+
+The memory is still kept, only twelve times slower. A long event on one zone (many cars,
+many passes) grows the server by ~100 MB per km of tracks rebuilt. Ways left: quantise rut
+heights so shapes repeat (cache hits), a NVIDIA fix or API to drop cooked meshes, or a
+collision representation that needs no cooking.

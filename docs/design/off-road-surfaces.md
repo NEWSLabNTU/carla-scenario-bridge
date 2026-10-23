@@ -263,8 +263,70 @@ a constant offset), the tracks -12.98 cm, so 9.36 cm deep against the grid's 9.4
 rebuilt while the lidar rendered: 3.7-4.9 ms to edit, frames 22-23 ms against 28.5 ms
 without a rebuild (no cost the noise shows).
 
-On a CARLA town the zone's box has to be cut out of the town's ground first (an asset step;
-not done), so the acceptance's "map size" run is still to come.
+Memory per rebuild (docs/issues/001, `spikes/tile_memory.py`): PhysX keeps the cooked data
+of every distinct mesh it has cooked, released or not, ~465 KB for a 5 cm tile; nothing
+reachable from Python frees it or re-cooks a mesh in place. So the collision tile is 10 cm
+(64 KB a rebuild) and the render tile, the grid's 5 cm, is one prim edited in place (no
+cooking); and a tile waits for every wheel to be 3 m away, one rebuild a pass. Two passes on
+the pad: 44 rebuilds and ~3 MB a pass, against 88 and 23-36 MB; the second pass rides in its
+ruts at -9.3 cm, the lidar still reads them 9.36 cm deep.
+
+### A zone on a CARLA town: the town's ground cut out (047 S3, 2026-10-23)
+
+At load (after the world is referenced), each soil zone with `ground_z` cuts its tiles' box
+out of every mesh under `/World/env` that reaches into it between 0.8 m below and 0.05 m above
+the zone's ground (`soil_tiles.cut_stage`, geometry in `ground_cut`): faces inside go, faces
+across the edge are split into the convex pieces outside, UVs and other primvars interpolated,
+material subsets remapped. The cut geometry is written over the prim in the in-memory stage,
+so cameras and the lidar see the town with a hole the soil tiles fill. PhysX does not re-cook
+an edited mesh, so a colliding prim's collision is switched off and its cut collision is a new
+invisible mesh under the zone, carrying the prim's SimReady label (the surface layer's
+classes still resolve). Loading another world, or the same one again, clears every opinion
+the cut wrote: the town is whole again. A zone is then only lines in `surfaces.yaml`; no
+asset step.
+
+Town01 (`spikes/soil_town.py`), dirt zone x 145.6-169.6, y -134.4..-128.0 on
+town01_ego_drive's road: 14 meshes cut in 0.8 s -- eight road tiles, four lane markings, the
+crosswalk and the 101 866-face landscape under all of them; street lights over the zone left
+alone.
+
+| | result |
+|---|---|
+| rays inside the zone | soil tiles at z 0 (lane, crosswalk, edge) |
+| rays just outside | the cut road's collision copies at z 0 |
+| frame time, car outside, no zone / with the zone | 3.07 / 2.91 ms p50 (3 substeps, no rendering) |
+| frame time in the zone | 6.7 / 6.2 ms p50, p95 14.6 / 17.4 ms (two passes, 8 m/s) |
+| pass 1 / pass 2 | 7.65 / 7.90 m/s; resistance 1054 / 279 N; rear wheels on the ground at 0 / -2.6 cm (in the rut) |
+| rut in the grid | 2.6 cm, then 2.9 cm (sandy loam) |
+| after the zone is removed | rays hit Town01's own road again |
+
+Only faces lying wholly between 0.8 m below and 0.05 m above the zone's ground are cut: the
+first version cut whole meshes whose box reached the band, and a zone on Town01's east road
+took 87 faces off a bridge and 304 off a guardrail's uprights. A mesh the cut empties (two
+lane markings) is hidden with its collision off rather than left faceless ("does not have
+indices", a PhysX error). And the cut's stage edits get ten physics steps of their own
+before anything else: handed to PhysX in the same step as preload's warm-up ego, the ego
+was not in the physics scene and the server respawned 33 times.
+
+With Autoware (`just acceptance town01_ego_drive.xosc 2 sim:=isaac worlds:=Town01`,
+2026-10-23, host load 30-130 on 24 cores from other users' jobs; three sets on one world
+server: A no surface map, B the zone off the route on the east road, C the zone across the
+route, `scenarios/surfaces/town01_soil_{off,route}.yaml`):
+
+| set | SSv2 verdicts | MRM entries | longitudinal | step p50 / p95 |
+|---|---|---|---|---|
+| A (two batches) | 4/4 pass | 83, (none: never drove); 74, 67 | 0.084-0.118 | 43-55 / 82-392 ms |
+| B | 2/2 pass | 70, 75 | 0.101-0.112 | 43.9-44.4 / 82-91 ms |
+| C | 1 pass, 1 never reported in 900 s | 42 | 0.348 | 59.6 / 176 ms |
+
+Every set fails acceptance, the baseline too: the MRM state flaps (emergency stop on and
+off every second or two) from the start of each run, before any zone, and one run in A and
+one in C never drove: Autoware starved of CPU (the simulation ran at about 0.2 x real time).
+S1's runs on the same scenario had 0 MRM and 0.007-0.018 m/s^2. So these runs show only the
+plumbing and what the soil does: in C the ego entered the dirt at 4.1 m/s, the soil took it
+to 2.4, Autoware answered at its 1.0 m/s^2 limit and was back at 4.1 by the zone's exit
+(hence 0.348 m/s^2 of tracking error); with the zone off the route, B's step time is A's.
+A clean Autoware comparison waits for a quiet host.
 
 ### Still to measure
 

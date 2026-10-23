@@ -1,0 +1,12 @@
+# Roadmap 047 S3 town runs, set C: a dirt (sandy loam) soil zone with its own ground across
+# town01_ego_drive's route (x 190.8 -> 120 along y -130, heading -x). The zone is whole 1.6 m
+# soil tiles; the world server cuts Town01's road, markings, crosswalk and landscape out from
+# under it at load and drives the soil layer's ruts into its tiles.
+# Copy to data/carla-autoware-bridge/Town01/surfaces.yaml.
+defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass, Ground: dirt}
+zones:
+  - id: dirt_road
+    class: dirt
+    soil: grid
+    ground_z: 0.0
+    polygon: [[145.6, -134.4], [169.6, -134.4], [169.6, -128.0], [145.6, -128.0]]

@@ -265,9 +265,21 @@ Each needs an answer before the step it gates; the design's proposal is in brack
         shook the car to a stop at 22 cm: hence the wait.
   - [x] RTX lidar sees the ruts (`spikes/soil_lidar.py`): 9.36 cm deep against the grid's
         9.43; four tiles rebuilt with the lidar rendering: 4 ms to edit, no frame-time rise.
-  - [ ] Memory: ~0.3 MB a tile rebuild stays (docs/issues/001), ~1 GB per km in a tile zone.
-  - [ ] On a CARLA town: a zone needs the town's ground cut out of its box (an asset step),
-        then the acceptance's "map size" run.
+  - [x] Memory (docs/issues/001): PhysX keeps every distinct mesh it cooks (~465 KB a 5 cm
+        tile; no API frees it or re-cooks in place). Collision tiles at 10 cm (64 KB), render
+        tiles at 5 cm edited in place, one rebuild per tile per pass: ~3 MB a pass on the pad
+        against 23-36, ~100 MB per km of tracks. Mitigated, not gone.
+  - [x] On a CARLA town, no asset step: at load a zone with `ground_z` cuts its box out of the
+        town's meshes (`ground_cut`, `soil_tiles.cut_stage`; faces split at the edge, UVs and
+        subsets carried), collision from new labelled copies; another load undoes it.
+        Town01 (`spikes/soil_town.py`): 14 meshes in 0.8 s, rays meet the tiles, the second
+        pass rides in the rut, frame time with the car outside the zone 2.91 ms against 3.07
+        without the zone. Only faces in the ground band are cut (not a bridge's sides or a
+        guardrail's uprights), an emptied mesh is hidden, the cut settles before an ego.
+  - [ ] Autoware on Town01 with the zone (design doc, "A zone on a CARLA town"): the soil
+        worked (in C the ego slowed 4.1 -> 2.4 m/s in the dirt, Autoware pulled it back at
+        its 1.0 m/s^2 limit), but every set failed on MRM flapping, the no-map baseline
+        too, on a host at load 30-130 from other jobs. Rerun on a quiet host.
 - [ ] **S4. Persistence and the second pass** (D5, D6): node blocks saved per tile, loaded per
       scenario; every vehicle reads and writes the same grid in a fixed order (determinism);
       mud model if D6 says so.
@@ -293,7 +305,9 @@ Each needs an answer before the step it gates; the design's proposal is in brack
   537 N against the blend's ~340 N for two wheels plus the steady ripple of 198 N; the
   frame budget holds on the pad (~4 ms soil, ~2 ms rebuilds of 50). Open: "within ±30 % of
   the calibrated model" waits for S5.*
-- [ ] Map size: a full CARLA town with one zone runs at the same frame time as without it
-  when the ego is outside the zone.
+- [x] Map size: a full CARLA town with one zone runs at the same frame time as without it
+  when the ego is outside the zone. *2026-10-23, Town01: 2.88 / 2.91 ms p50 with the zone
+  against 2.74 / 3.07 without (`spikes/soil_town.py`, physics only); with the whole stack
+  and Autoware, 43.9-44.4 ms against 43.2-54.8 (set B against A; a loaded host).*
 - [x] Lidar sees the ruts the wheels feel (rut depth in the point cloud within one grid cell).
   *2026-10-23 (`spikes/soil_lidar.py`): 9.36 cm in the point cloud, 9.43 cm in the grid.*

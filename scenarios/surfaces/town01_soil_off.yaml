@@ -1,0 +1,12 @@
+# Roadmap 047 S3 town runs, set B: the same dirt soil zone with its own ground, but on
+# Town01's east road (lanelet 13397, x ~396, y -160..-136), off town01_ego_drive's route: the
+# acceptance's "a full town with one zone runs at the same frame time as without it when the
+# ego is outside the zone".
+# Copy to data/carla-autoware-bridge/Town01/surfaces.yaml.
+defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass, Ground: dirt}
+zones:
+  - id: dirt_east
+    class: dirt
+    soil: grid
+    ground_z: 0.0
+    polygon: [[393.6, -160.0], [398.4, -160.0], [398.4, -136.0], [393.6, -136.0]]
