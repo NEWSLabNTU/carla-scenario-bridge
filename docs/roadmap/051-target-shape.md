@@ -106,25 +106,34 @@ What depends on what:
 - **Weather**: `swb_interfaces/msg/Weather.msg` is CARLA's fourteen floats. It moves to
   `swb_carla_world` with CARLA's service. The bridge's `set_weather` and `get_weather` take the
   protocol's generic form (a preset and named parameters).
-- **Time** (decision T): one `/clock` per domain, carrying the world server's time.
-  `sim_ns = nanos(elapsed_seconds) + epoch_ns`, as today; what changes is who decides the
-  epoch.
-  - `swb_carla_world` alone decides it: the episode rule, `clock_store` across its restarts,
-    reconnects to a restarted CARLA. Nothing else computes an epoch.
-  - It publishes `epoch <episode_id> <epoch_ns>` on the sensor-release PUB socket acb
-    already subscribes to, at every episode change and once a second (a subscriber that
-    joins late, or loses a message to ZMQ's slow-joiner window, has it within a second).
-    Per episode, not per frame: acb keeps stamping from the `elapsed_seconds` in each
-    frame's own data, so no sample waits for a message.
-  - acb holds `/clock` and its stamps for an episode until it has that episode's epoch,
-    as it holds them for the marker today. `episode_id` is CARLA's world id, which acb
-    reads from its own snapshot, so a stale epoch is never applied to a new episode.
-  - Standalone (no `release_endpoint`), acb counts its own epoch across the reloads it
-    sees, monotonic for itself; there is no peer to agree with.
-  - Deleted: `epoch_marker` on both sides, acb's half of the episode rule and its
-    mid-session-join path, and the bit-exact agreement between two implementations.
-    `nanos()` (round half away from zero) stays in one shared place, the protocol crate.
-  - Isaac: unchanged. The Isaac world server already owns the one clock in its process.
+- **Time** (decision 5): an episode is a vehicle stack's lifetime. The design is in
+  [time-and-ticking](../design/time-and-ticking.md), "Episodes and vehicle stacks".
+  - `sim_ns = nanos(elapsed_seconds) + BASE_NS`. `BASE_NS` is one constant
+    (1000 s) in `swb_world_protocol`, beside `nanos()`. It keeps ROS time far from 0,
+    which ROS reads as "no clock yet", and from the small values that make
+    `now() - duration` negative. Any process computes the time from the frame it holds;
+    nothing is shared, stored or sent.
+  - An episode change (a world load, a CARLA restart) ends every vehicle stack.
+    acb exits when the CARLA episode it attached to is gone (a new world id, or a
+    reconnect), before it publishes a frame of the new episode, so Autoware never sees
+    time go back. `acb_bridge` is declared `on_exit="shutdown"` in its launch and never
+    respawned, so its exit ends the whole stack. aib does the same on the Isaac world
+    server's episode id.
+  - The stack comes back through what roadmap 030 built: `swb-agent supervise` restarts
+    a group whose agent exited, and `run_suite`'s restart ladder counts an episode change
+    as a reason to restart. A restarted stack takes the new episode's map: the ego launch
+    resolves `map_path` from the town (`$CARLA_MAPS/<town>`), and `up.sh` restarts a
+    running stack whose map is not the scenario's instead of only noting it.
+  - The protocol: `LoadWorldReply` and `StepReply` carry `episode_id`. `sim_time_ns` is
+    monotonic within an episode; across episodes it may start again. A server may keep
+    it running (Isaac's does) but nothing may depend on that.
+  - Deleted: `episode_clock`, `clock_store`, `epoch_marker` on both sides, acb's epoch
+    rule, its reconnect continuation and mid-session join path, the frame-count
+    arithmetic around `load_world`, acb's 60 s uptime gate, and roadmap 016's gap 12
+    (the two epochs differing after a double CARLA restart).
+  - Kept: a scenario never spans an episode change (the load happens at `Initialize`),
+    the pause between scenarios inside an episode, and `reset_settings = false` (the new
+    world stays synchronous).
 - **No shims**: every renamed package, launch argument, node and entry point is gone, not
   aliased. Old launch arguments that a wrapper used to accept are refused with a message
   naming the new one, as `SWB_RETIRED_ENV` does for environment variables.
@@ -140,11 +149,8 @@ What depends on what:
 4. **Workspace**: git submodules only. [decided 2026-10-23: every repository a direct
    submodule here; a component's own dependencies are submodules under its `deps/`,
    ignored by colcon in the superproject; no `.repos` files]
-5. **T, the clock**: change it in this phase, as written, or keep CARLA's epoch shape and
-   do the clock in a later phase. Doing it here puts timing that 015 and 016 settled into
-   the same landing as everything else. [proposed: in this phase, isolated as the last
-   commit series with its own checkpoint, so it can be dropped from the landing if its
-   runs fail]
+5. **The clock**: in this phase, as K4. [decided 2026-10-23: no epoch; an episode
+   change ends every vehicle stack, which restarts on the new episode]
 6. **`aib.ros`** (the rclpy vehicle interface and sensor publishers): it stays in aib.
    It moves when a second Python world server needs it. [proposed: as written]
 
@@ -186,11 +192,20 @@ it.
       K0's.
     - Every change in the suite is explained by the physics.
   - **K4. The clock** (decision 5).
-    - The epoch marker is gone and acb stamps with the world server's time.
-    - Checks: `town02_episode_change`; a vehicle side started mid-session (`/clock`
-      held, then joins at the world server's time within 1 s); a `swb_carla_world` restarted
-      under a running ego; CARLA restarted under both; acb's stamps against SSv2's time,
-      bit for bit; acb standalone through `demo_scenario.py`'s reloads.
+    - The epoch code is gone on both sides; time is `nanos(elapsed) + BASE_NS`
+      everywhere.
+    - Checks:
+      - `basic/` with the ego stack up through `town02_episode_change`: acb exits at the
+        load, the stack ends, the supervisor restarts it on Town01's map, and the next
+        Town01 scenario passes;
+      - a scenario on Town02 started against a Town01 ego stack: `up.sh` restarts it on
+        Town02's map;
+      - CARLA restarted under a running stack: the stack ends, never publishing a frame
+        of the new server;
+      - `swb_carla_world` and the bridge restarted under a running stack: nothing changes
+        for the stack, and SSv2's time agrees with acb's stamps, bit for bit;
+      - acb standalone (`just sim`, `demo_scenario.py`): the town is loaded before acb
+        attaches, and a later load ends the stack with the message.
   - **K5. No shims, the docs.**
     - Old names are refused. CLAUDE.md, the user guide, the READMEs and the design docs
       are updated.

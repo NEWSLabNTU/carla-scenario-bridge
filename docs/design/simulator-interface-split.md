@@ -220,6 +220,8 @@ The draft names a conformance kit but not what a port that lacks a feature shoul
 lifetime and needs neither. Mina must learn which of the two shapes to copy. With a world
 server, time is the server's and monotonic by construction, so the world-server path
 answers this for free; the draft does not say so.
+(Answered by roadmap 051: neither shape. Time is monotonic within an episode, and an
+episode change ends the vehicle stacks, so no port keeps time across a world load.)
 
 What did not hurt: the agent side. `swb_agent` and the relay need nothing from the
 simulator; a BeamNG ego driven by Autoware registers with the relay exactly as the CARLA and
@@ -358,7 +360,7 @@ details removed and the CARLA-only trait surface added, versioned on its own (M)
 | `LoadWorld` | a USD path, ground paths, the map's signals | the `world.yaml` contents as the server's own string plus `map_origin`; `step_time` and `realtime_factor` from `Initialize`; same signals |
 | `Spawn` / `SpawnReply` | kind, subtype, box, model, motion, pose | unchanged; `model` is the asset key after the adapter's asset map |
 | `Despawn` | | unchanged |
-| `Step` / `StepReply` | drives, substep count, render; states, contacts, time | the substep length sent, not a constant; `time` stays the server's, monotonic over its lifetime |
+| `Step` / `StepReply` | drives, substep count, render; states, contacts, time | the substep length sent, not a constant; `time` stays the server's, monotonic within an episode (051) |
 | `SetSignals` | per-signal colour | unchanged |
 | `SetGoal` | (none; `UpdateEntityGoal` is CARLA's Traffic Manager today) | new: entity, waypoints, clear, target speed; refused unless `AUTOPILOT` |
 | `SetWeather` / `GetWeather` | (none; CARLA's fourteen floats through ROS) | new: preset name plus `map<string, double>`; reply with what was applied |
@@ -368,8 +370,8 @@ What the protocol fixes, as the trait does today: entities by SSv2 name (the han
 server's), poses at the entity origin in the world frame (the adapter applies `map_origin`;
 a left-handed simulator flips inside its server), one `Step` per SSv2 frame carrying every
 entity's drive, every failure a reply with text and never a success the simulator did not
-deliver, time monotonic over the server's life (so episode continuity is the adapter's
-bookkeeping and no server needs an epoch marker), contacts per step from whatever the server
+deliver, time monotonic within an episode, with the episode's id beside it (roadmap 051:
+an episode change ends the vehicle stacks, so no one carries time across it), contacts per step from whatever the server
 senses, sensors never (the vehicle bridge owns them).
 
 With it, in the same package:
@@ -493,8 +495,9 @@ The vehicle bridges stay one per simulator. What moves to the adapter repository
   (`/sensing/*`, `/vehicle/status/*`, `/control/command/*`, `/clock`, the signal V2X
   table from `traffic_lights.yaml`), the frames, and the clock rule: one `/clock` per
   domain, carrying the world server's time, so that the vehicle bridge and the adapter
-  agree without an epoch marker (acb's epoch marker was the CARLA way of continuing time
-  across CARLA's reloads; `carla_world` keeps time monotonic itself and acb reads it).
+  agree without an epoch marker: time is the frame's time plus a constant, monotonic
+  within an episode, and an episode change ends the vehicle stack (roadmap 051,
+  time-and-ticking "Episodes and vehicle stacks").
 
 Later candidates, named so the next port can ask for them: aib's pure spec-to-description
 generator (`aib.gen`, `aib.spec`) and `aib.ros` (the rclpy vehicle interface and sensor

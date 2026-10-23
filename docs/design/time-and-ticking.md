@@ -5,6 +5,10 @@ Autoware bridge (acb) and SSv2. Authoritative for the clock and the tick; other 
 docs point here. History and measurements: roadmap
 [015](../roadmap/015-carla-as-time-and-signal-source.md).
 
+**Roadmap 051 changes the epoch.** It removes it: an episode becomes a vehicle stack's
+lifetime ("Episodes and vehicle stacks", below). Until 051 lands, the sections "One source
+of time" and "Episode change" describe the code as it is.
+
 ## One source of time
 
 Simulation time is CARLA's `WorldSnapshot.timestamp.elapsed_seconds` plus an **episode
@@ -162,6 +166,65 @@ acb has seen its frames and applies the episode rule to the last one, while swb 
 none and keeps its epoch: from then on the two differ by a constant (265.86 s measured).
 Both stay monotonic and scenarios pass; restarting the ego stack (acb) clears it. A swb
 restart is not affected: swb records its clock on tmpfs and resumes it.
+
+## Episodes and vehicle stacks (roadmap 051)
+
+The epoch exists so that a vehicle stack can live through a world load, and it costs two
+copies of one rule that must agree to the nanosecond (swb's and acb's), a frame count around
+`load_world`, a clock file that survives swb restarts, a marker actor for bridges that join
+late, and an accepted case where the two epochs still drift apart (gap 12 above). A stack
+almost never survives a load usefully anyway:
+
+- swb loads a world only when the town changes, and a stack started on one town's map
+  cannot drive another: an ego in the new town needs a restart with that map regardless.
+- A CARLA restart takes the ego's vehicle and its sensors with it; roadmap 015 already
+  requires a stack restart there.
+- SSv2's scenario stack is new for every scenario.
+
+What remains is a stack idling through another town's scenario and coming back
+(`town02_episode_change` in `basic/`, which has no ego). One restart of the stack, ~10 s
+to "Startup complete" (2026-10-23) plus localization, buys the deletion of all of the above.
+
+**The rule: an episode change ends every vehicle stack.**
+
+```
+sim_time_ns = nanos(elapsed_seconds) + BASE_NS      # BASE_NS: 1000 s, in swb_world_protocol
+```
+
+- **Time is a function of the frame.** acb, swb and SSv2 compute the same integer from the
+  frame they hold. Nothing is shared, stored or sent; a restarted swb, world server or
+  vehicle bridge needs no state to agree. `BASE_NS` keeps ROS time away from 0 (ROS's "no
+  clock yet") and from the small values for which `now() - duration` goes negative in tf2
+  and Autoware's monitors; acb's 60 s uptime gate goes with it.
+- **Monotonic within an episode, and only there.** An episode is one CARLA world (its world
+  id), from its load until the next load or the server's death. The pause between
+  scenarios stays as it is: inside one episode, nothing ticks.
+- **The vehicle bridge ends its stack before the stack can see time go back.** acb attaches
+  to the episode it first sees. When the world id changes, or its connection breaks and a
+  reconnect finds another episode, it exits with a message naming the episode change,
+  before publishing anything stamped in the new episode. `acb_bridge` is declared
+  `on_exit="shutdown"` and never respawned, so its exit takes the whole Autoware stack with
+  it. aib does the same on the Isaac world server's episode id; any future simulator's
+  bridge must too (part of the I5 contract, [vehicle-side](vehicle-side.md)).
+- **The stack comes back on the new episode** through roadmap 030's restart path:
+  `swb-agent supervise` restarts a group whose agent exited, and `run_suite`'s restart
+  ladder counts an episode change as a restart. The restarted stack takes the new town's
+  map (`map_path` resolved from the town), and a world server's `up.sh` restarts a running
+  stack whose map is not the scenario's.
+- **The protocol** carries `episode_id` in `LoadWorldReply` and `StepReply`. A server may
+  keep its time running across episodes (Isaac's world server does, over its lifetime), but
+  nothing may depend on that.
+- **A scenario never spans an episode change**: the load happens at `Initialize`, before
+  the scenario's first frame.
+
+Kept from the sections above: one ticker, the pause between scenarios, `reset_settings =
+false` on `load_world` (the new world stays synchronous, and loads stay fast). Deleted:
+`episode_clock`, `clock_store`, the epoch marker, acb's epoch rule with its reconnect
+continuation and mid-session join, and the frame count around `load_world`.
+
+Cost, accepted: one stack restart per town change, and the 015 acceptance line "the next
+scenario passes without restarting the ego stack" no longer holds across a town change. A
+recorder or RViz that outlives a load sees time start again; they are per-run tools.
 
 ## Requirements on the CARLA server
 

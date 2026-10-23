@@ -103,8 +103,10 @@ What a vehicle bridge provides on the ego's ROS domain, for any simulator:
   spec's physics, not passed through ideal.
 - **Time**: one `/clock` per domain. Every stamp above comes from it. A sensor sample
   carries the time of the frame it was taken in. With a world server, the clock is that
-  server's time. Standalone, it is the simulator's. (CARLA's episode epoch goes: 051,
-  decision 5.)
+  server's time. Standalone, it is the simulator's. Time is monotonic within an
+  episode only: an episode change (a world load, a simulator restart) ends the vehicle
+  stack, and the bridge exits before publishing a frame of the new episode
+  ([time-and-ticking](time-and-ticking.md), "Episodes and vehicle stacks").
 - **Frames**: `base_link` on the ground at the rear axle centre, x forward, z up; the
   sensor frames from the generated URDF. The bridge publishes no TF that the URDF owns.
 
