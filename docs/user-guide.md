@@ -82,7 +82,7 @@ Fresh-machine notes:
 - If `traffic_simulator` fails to find a dependency's headers after that dependency built,
   delete `build/traffic_simulator`: its CMake cache remembers the failed configure.
 - CARLA's default Town01 weather is overcast and raining; start the simulation side with
-  `weather:=ClearNoon` for a clear sky ([5. Configure the CARLA world](#5-configure-the-carla-world)).
+  `weather:=ClearNoon` for a clear sky ([5. Configure the world's weather](#5-configure-the-worlds-weather)).
 
 ## 2. Prepare a map directory
 
@@ -186,10 +186,21 @@ terminal that runs them.
 **Which town the vehicle side loads.** The vehicle side's `map_path` is fixed when it starts,
 and it must be the town the scenario drives in: every starter scenario with an ego, in
 `basic/`, `multi_av/` and `awf/`, is Town01, so start the vehicle side with
-`map_path:=$CARLA_MAPS/Town01`. `town02_episode_change` has no ego; it only makes CARLA load
-Town02, and the next Town01 scenario loads Town01 back. A scenario whose ego drives another
-town needs a vehicle side started with that town's map: with the wrong one, localization
-never converges and the scenario fails waiting for the ego (section 6).
+`map_path:=$CARLA_MAPS/Town01`. A scenario whose ego drives another town needs a vehicle
+side started with that town's map: with the wrong one, localization never converges and the
+scenario fails waiting for the ego (section 6). `just scenario` does this for you: it
+replaces a running ego stack whose map is not the scenario's.
+
+**A town change ends the vehicle side** (roadmap 051). Loading a world starts a new episode
+of the simulator, whose time starts again, and Autoware cannot follow time back. So on CARLA
+every vehicle side of the old episode ends at the load: `acb_bridge` exits (status 3,
+naming the change) and its launch takes the Autoware stack with it; a restarted CARLA does
+the same. The stack comes back when something restarts it: `just scenario` and `just e2e`
+start the ego stack under a supervisor (`swb-agent supervise`) that does, and the next
+scenario waits for its agent. `town02_episode_change` has no ego; it only makes CARLA load
+Town02, ending the ego stack, and the next Town01 scenario loads Town01 back, ending it once
+more. Each town change costs a stack start (about a minute here); keep a suite's scenarios on
+one town where you can.
 
 For your own:
 
@@ -249,20 +260,23 @@ in place of `ros2 launch`.
 
 **Two processes, two configurations** (roadmap 046). The simulation side runs the scenario
 bridge, which speaks SSv2's protocol and knows no simulator, and a world server per
-simulator, which drives the simulator over the world protocol (`proto/swb_world.proto`). On
-CARLA the world server (`carla_world`) runs inside the same launch as the bridge; on Isaac
-Sim it is its own long-lived launch (`just isaac-world`, then `isaac_simulation.launch.xml`
-for the simulation side). Each has its file, and each refuses the other's keys, naming
+simulator, which drives the simulator over the world protocol (`swb_world.proto`, in
+`swb_world_protocol`). On CARLA the world server (`swb_carla_world`) runs inside the same
+launch as the bridge; on Isaac Sim it is its own long-lived launch (`just isaac-world`, then
+`isaac_simulation.launch.xml` for the simulation side). Each has its file, and each refuses the other's keys, naming
 where they went:
 
 - The bridge's `bridge_config.yaml` (the world server's endpoint and timeouts, the asset map,
-  the agent relay, weather, `npc_motion`, gap traces and contact reports), chosen by the
+  the agent relay, `npc_motion`, gap traces and contact reports), chosen by the
   launch argument `config_file:=` (`just run config_file:=<dir>/bridge.yaml`), default the
   installed `share/scenario_world_bridge/config/bridge_config.yaml`.
-- The CARLA world server's `carla_world.yaml` (CARLA's host and port, blueprints and map
-  aliases, ticking, the Traffic Manager, the collision sensors, the sensor-release channel),
-  chosen by `carla_world_config:=`, default `share/carla_world/config/carla_world.yaml`;
-  `blueprint_boxes_<version>.yaml` is read beside it.
+- The CARLA world server's `swb_carla_world.yaml` (CARLA's host and port, blueprints and map
+  aliases, ticking, the Traffic Manager, the collision sensors, the sensor-release channel,
+  the weather preset), chosen by `swb_carla_world_config:=`, default
+  `share/swb_carla_world/config/swb_carla_world.yaml`; `blueprint_boxes_<version>.yaml` is
+  read beside it. Its ROS parameter `vehicle_physics` names the ego's physics (default the
+  installed `sim_vehicle_spec/generated/tesla_model3/carla_physics.yaml`; `none` keeps the
+  blueprint's).
 
 Both log the file they loaded. `ros2 param get /scenario_world_bridge config_file` names the
 bridge's. The older `CSB_CONFIG_DIR` variable is refused.
@@ -347,7 +361,9 @@ and the results directory holds:
 
 The exit status is 0 only if every testcase passed. Like a single scenario, a suite needs the
 simulation side and the vehicle side(s) already up; scenarios that load another town
-(`town02_episode_change`) make CARLA switch towns, and the next scenario switches back.
+(`town02_episode_change`) make CARLA switch towns, and the next scenario switches back. Each
+switch ends the vehicle sides (above): run them under `swb-agent supervise`, and run_suite
+waits for a supervised agent whose stack ended to register again before the next scenario.
 
 ### CARLA's contacts in the verdict: `--physical-verdict`
 
@@ -408,18 +424,26 @@ brake once the collision is seen, as `basic/town01_rear_contact.xosc` does.
 
 ### Your own Autoware
 
-`carla_simulator.launch.xml` is a CARLA profile around a stock `autoware.launch.xml` (yours,
-via `autoware_launch:=`). It selects `vehicle_model:=acb_vehicle` and
-`sensor_model:=acb_sensor_kit`, starts the vehicle interface (`acb_bridge`), and launches
-three components with CARLA settings. Turn any of those off to keep your own:
+Both vehicle sides launch the same **Autoware profile**, `autoware_sim_profile`'s
+`autoware.launch.xml` (in `autoware_sim_vehicle`), around a stock `autoware.launch.xml`
+(yours, via `autoware_launch:=`): acb's `carla_simulator.launch.xml` is the profile plus
+`acb_bridge`, aib's `isaac_simulator.launch.xml` the profile alone. It selects the car's
+generated packages, `vehicle_model:=tesla_model3` and `sensor_model:=tesla_model3_sensor_kit`,
+and launches components with simulation settings. Turn any of those off to keep your own:
 
-| Argument | CARLA setting it applies |
+| Argument | Simulation setting it applies |
 |---|---|
-| `carla_localization:=false` | CARLA-tuned NDT/EKF/pose-initializer parameters |
-| `carla_perception:=false` | selectable `lidar_detection_model` (default `clustering`, CPU; `centerpoint` is TensorRT), fusion-only traffic lights (signals arrive from CARLA over V2X) |
-| `carla_system:=false` | component-state topics, MRM parameters and diagnostic graph matching CARLA's sensors |
-| `carla_planning:=false` | `max_velocity:=<m/s>`, Autoware's `max_vel` (default 4.17, upstream's 15 km/h, at which planning is exactly upstream's); under `just ego-av`, `just ego-av max_velocity:=11.11` for 40 km/h |
+| `sim_localization:=false` | simulation-tuned NDT/EKF/pose-initializer parameters |
+| `sim_perception:=false` | selectable `lidar_detection_model` (default `clustering`, CPU; `centerpoint` is TensorRT), fusion-only traffic lights (signals arrive from the simulator over V2X) |
+| `sim_system:=false` | component-state topics, MRM parameters and diagnostic graph matching the simulated sensors |
+| `sim_control:=false` | upstream's MPC parameters (the profile turns off steering-offset learning) |
+| `sim_planning:=false` | `max_velocity:=<m/s>`, Autoware's `max_vel` (default 4.17, upstream's 15 km/h, at which planning is exactly upstream's); under `just ego-av`, `just ego-av max_velocity:=11.11` for 40 km/h |
+| `sim_clock_guard:=false` | the clock guard, which ends the stack when `/clock` goes back (a world load, a restarted simulator) |
 | `launch_deprecated_api:=false` | Autoware's deprecated API, which serves the velocity limit a scenario's absolute `SpeedAction` sets (the `awf/` use cases fail without it) |
+
+The arguments these replaced (`carla_localization`, `carla_control`, ...) and the old car
+(`vehicle_model:=acb_vehicle`) are refused by name by every `just` wrapper (the profile's
+`check_launch_args`); a plain `ros2 launch` would ignore them silently.
 
 The lidar detector defaults to `clustering` because it is the one that passes on CARLA: the
 `awf/` standing-pedestrian use case went 9/9 with it and 2/9 with `centerpoint`
@@ -453,16 +477,17 @@ agent.yaml`). Start one with `ros2 run swb_agent swb-agent new <name>` and test 
 
 ### Another simulator
 
-Every simulator is a world server behind the world protocol (`proto/swb_world.proto`;
+Every simulator is a world server behind the world protocol (`swb_world.proto` in
+`swb_world_protocol`;
 roadmap 046, [design](design/simulator-interface-split.md)); the bridge needs nothing new for
 one. A port is one process that owns the simulator and implements the protocol:
 
 - **Python**: subclass `swb_world_server.world.World` (`load`, `spawn`, `despawn`, `step`;
   `set_signals` and the rest with a capability), set `simulator_name`, `capabilities` and
   `max_physics_dt`, and serve it with `swb_world_server.server.bind` and `run`. The Isaac
-  world server (`src/isaac_world/isaac_world/world.py`) is the worked example.
+  world server (`swb_isaac_world/swb_isaac_world/world.py`) is the worked example.
 - **Rust**: implement `swb_core::world_server::World` and serve it with `world_server::bind`
-  and `serve`, as `src/carla_world` does for CARLA.
+  and `serve`, as `swb_carla_world` does for CARLA.
 - **Anything else**: answer the `.proto`'s `Request` with its `Reply` on a ZMQ REP socket.
 
 Declare only what the simulator does (`Capability`): the bridge never sends a request or a
@@ -501,31 +526,34 @@ initialize attempts 2 s apart, 30 s to converge on the teleported pose, 2 s for 
 take effect), the relay's 10 s command timeout and the bridge's 15 s read timeout on it, and
 the bridge's 120 s RPC timeout for a CARLA town load (measured 44-71 s).
 
-## 5. Configure the CARLA world
+## 5. Configure the world's weather
 
-The bridge owns the simulation side's CARLA connection, so world settings are ROS services
-on it, in the simulation side's domain (`swb_interfaces`):
+The weather is a world server's, set through ROS services on the bridge, in the simulation
+side's domain (`swb_interfaces`): a preset, or parameters by name, both in the world
+server's own names. On CARLA these are CARLA's presets and `WeatherParameters` fields
+(`swb_carla_world`'s README lists them); Isaac's world server offers no weather service (a
+scenario's own `Weather` reaches it through SSv2).
 
 ```bash
 ROS_DOMAIN_ID=9 ros2 service call /scenario_world_bridge/set_weather swb_interfaces/srv/SetWeather "{preset: ClearNoon}"
 ROS_DOMAIN_ID=9 ros2 service call /scenario_world_bridge/get_weather swb_interfaces/srv/GetWeather
 
-# explicit values instead of a preset (fields not given are 0; use_parameters guards an
-# empty request): cloudiness, precipitation, precipitation_deposits, wind_intensity,
-# fog_density, fog_distance, wetness, sun_azimuth_angle, sun_altitude_angle
+# parameters instead of a preset; those not named keep their current values
 ROS_DOMAIN_ID=9 ros2 service call /scenario_world_bridge/set_weather swb_interfaces/srv/SetWeather \
-    "{use_parameters: true, weather: {cloudiness: 30.0, sun_altitude_angle: 60.0, fog_distance: 0.75}}"
+    "{names: [cloudiness, sun_altitude_angle], values: [30.0, 60.0]}"
 ```
 
-Presets are CARLA's (`carla.WeatherParameters`): `ClearNoon`, `CloudyNoon`, `WetNoon`,
-`WetCloudyNoon`, `SoftRainNoon`, `MidRainyNoon`, `HardRainNoon`, the same for `Sunset`
-(`MidRainSunset`) and `Night` (`MidRainyNight`), and `DustStorm`; case is ignored. Both
-services answer with the resulting values and the preset they match.
+CARLA's presets: `ClearNoon`, `CloudyNoon`, `WetNoon`, `WetCloudyNoon`, `SoftRainNoon`,
+`MidRainyNoon`, `HardRainNoon`, the same for `Sunset` (`MidRainSunset`) and `Night`
+(`MidRainyNight`), and `DustStorm`; case is ignored. Both services answer with every
+parameter and the preset they match. An unknown preset or parameter is refused with the
+valid names, and an empty request is refused.
 
-Every map load resets CARLA's weather to the town's default. The bridge keeps the weather
-you asked for -- `weather:=` on `carla_simulation.launch.xml` (or `weather:` in `bridge.yaml`),
-then the last `set_weather` -- and applies it again after every map load and CARLA restart,
-so it holds across scenarios on different towns. Empty (the default) leaves CARLA's own.
+Every map load resets CARLA's weather to the town's default. The world server keeps the
+weather you asked for -- `weather:` in `swb_carla_world.yaml` (checked at start), or the
+bridge's `weather:=` on `carla_simulation.launch.xml`, then the last `set_weather` -- and
+applies it again after every map load and CARLA restart, so it holds across scenarios on
+different towns. Empty (the default) leaves CARLA's own.
 
 ## 6. When things go wrong
 

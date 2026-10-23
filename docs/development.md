@@ -22,11 +22,12 @@ recipes. The ones you will use most:
 |---|---|
 | `just build` | colcon build of everything under `src/` (both workspaces' packages, see below) |
 | `just check` | `cargo +nightly fmt --check` and clippy with `-D warnings` |
-| `just test` | Rust tests (cargo-nextest) and `run_suite`'s Python tests |
+| `just test` | Rust tests (cargo-nextest), the Python tests, the pin check (`scripts/check_pins.py`) and the time check (`scripts/test_sim_time.py`) |
 | `just ci` | build + check + test |
 | `just format` | format the Rust code |
 | `just carla-start` / `carla-status` / `carla-stop` / `carla-health` | CARLA as a background service, and whether it is fit to run a scenario |
-| `just run` | the simulation side (bridge + agent relay), play_launch, web UI on 8084 |
+| `just run` | the simulation side (CARLA world server + bridge + agent relay), play_launch, web UI on 8084 |
+| `just world-check` | the conformance check against the running world server (`sim:=isaac` for Isaac's) |
 | `just ego-av` | the vehicle side for the ego, web UI on 8082 (`just ego-av rviz:=true` for RViz; any acb_launch argument as `name:=value`) |
 | `just build-autoware-overlay` | Autoware fixes 1.5.0 lacks, built from a pinned fork commit into `third_party/autoware_overlay/`; `ego-av` / `bg-av` source it by default (`autoware_overlay:=false`: off; roadmap 042) |
 | `just setup-tensorrt` | the TensorRT 10.8.0 runtime Autoware 1.5.0 was compiled against, from NVIDIA's pip wheel into `AUTOWARE_TENSORRT_LIB` (default `third_party/tensorrt/lib`); `ego-av` / `ego-isaac` / `bg-av` put it first on `LD_LIBRARY_PATH`, so CenterPoint's engines survive a restart |
@@ -52,11 +53,11 @@ variables that used to carry a project setting is set, naming the argument that 
   checks for the setuptools that breaks editable Python installs.
 - **Stop every stack before building.** A running bridge or `acb_bridge` makes the install
   step fail with `Text file busy` -- after compiling everything.
-- **This repo's `install/` is the one that runs.** `just build` here compiles the
-  autoware_carla_bridge packages too (colcon's `--base-paths src`), and `just ego-av`
-  sources this workspace last, so the `acb_bridge` a stack executes is
-  `install/acb_bridge/...` in *this* repo. After an acb change, rebuild acb's workspace and
-  then this one; after `git pull` moves a submodule, rebuild both.
+- **Rebuild acb's workspace, then this one, from a clean environment.** Both hold an
+  `acb_bridge` (`just build` here compiles the acb packages too), and which one a stack
+  executes depends on the shell acb was built in: built with this repo's `install/` sourced,
+  acb's setup chains it as an underlay and acb's copy wins. Ask `ros2 pkg prefix acb_bridge`
+  rather than assume; after `git pull` moves a submodule, rebuild both.
 - **Build the Autoware overlay once** (`just build-autoware-overlay`, again when its pin in
   `scripts/autoware_overlay.bash` moves). Without it `just ego-av` warns and runs stock
   Autoware, whose `blind_spot` never yields on a right turn (autoware_universe#13509).
@@ -79,38 +80,47 @@ variables that used to carry a project setting is set, naming the argument that 
 
 ```
 src/
-  scenario_world_bridge/   Rust: the SSv2 backend (ZMQ server, coordinator, CARLA adapter)
-    src/main.rs              entry point, CARLA connection loop, shutdown
+  scenario_world_bridge/   Rust: the SSv2 backend; knows no simulator
+    src/main.rs              entry point, the world server connection, shutdown
     src/zmq_server.rs        ZMQ REP socket, protobuf dispatch
-    src/coordinator.rs       the SSv2 handlers -> CARLA API calls
-    src/entity_manager.rs    SSv2 entity name <-> CARLA actor
-    src/coordinate_conversion.rs  ROS (right-handed) <-> CARLA (left-handed) frames
-    src/traffic_light_mapper.rs   Lanelet2 signal <-> CARLA traffic light
-    src/blueprint_boxes.rs   CARLA bodies chosen by declared size (roadmap 022)
-    src/collision_monitor.rs, contact_report.rs  CARLA's contacts for the verdict (021)
-    src/npc_tracking.rs      tracked NPC motion law (023)
-    config/                  bridge_config.yaml, blueprint box tables
-  swb_launch/              launch files (simulation, scenario, background AV); run_suite,
+    src/coordinator.rs       the SSv2 handlers -> the SimBackend seam
+    src/backend/remote/      RemoteBackend: a world server over the world protocol; the
+                             ego's spawn and spec_hash checks (spec_check.rs)
+    src/world_services.rs    the ROS services (weather)
+    config/                  bridge_config.yaml
+  swb_world_protocol/      submodule: swb_world.proto and SSv2's protos, swb_core (world
+                           client and server shell, sim_time, config, NPC tracking, gap
+                           trace, contacts), swb_world_server (Python shell), swb_world_check
+  swb_carla_world/         submodule: the CARLA world server (carla-rust)
+  swb_isaac_world/         submodule: the Isaac world server (Isaac's Python)
+  sim_vehicle_spec/        submodule: the car's spec and what is generated from it
+  autoware_sim_vehicle/    submodule: the car for Autoware, the profile, vehicle_check
+  autoware_carla_bridge/   submodule: acb, the CARLA vehicle bridge
+  autoware_isaac_bridge/   submodule: aib, the Isaac vehicle library
+  scenario_simulator_v2/   submodule: our SSv2 fork
+  swb_launch/              launch files (simulation, scenario, ego, background AV); run_suite,
                            physical_verdict
   swb_examples/            starter scenarios: basic/, multi_av/, awf/ (installed)
-  swb_interfaces/          ROS messages and services (weather)
+  swb_interfaces/          ROS services (weather)
+  swb_agent/               the agent SDK, `swb-agent supervise`, the vehicle agent
   scenario_agent_relay/    the scenario's side of the vehicle agent protocol
-  autoware_carla_bridge/   submodule: the vehicle side (sensors, vehicle interface, agent)
-  scenario_simulator_v2/   submodule: our SSv2 fork
-proto/                     SSv2 protobuf definitions (kept equal to the fork's)
 scenarios/                 benchmark and gap reproducer scenarios
-scripts/                   measurement and media tools
+scripts/                   bring-up (carla_up.sh, isaac_up.sh), checks, measurement and media tools
 docs/                      user docs, design docs, roadmap
 ```
+
+Each submodule is a repository that builds and tests on its own against its `deps/`
+submodules (roadmap 051); `just test` here checks that their `deps/` pins match this
+workspace's.
 
 ## How a scenario runs
 
 SSv2's interpreter steps the scenario and, every frame, sends the simulator requests over
 ZMQ + Protobuf (`simulation_interface`): `Initialize`, spawns, `UpdateFrame`,
 `UpdateEntityStatus`, traffic light updates, despawns. `zmq_server.rs` decodes each and the
-`Coordinator` turns it into CARLA calls -- NPCs are moved to SSv2's poses, the ego is driven
-by CARLA's physics under Autoware's control, and CARLA advances one fixed step per frame in
-synchronous mode. The ego's goals reach Autoware through the agent relay, not ROS, so the two
+`Coordinator` turns it into world protocol requests to the world server, which makes the
+simulator calls -- NPCs are moved to SSv2's poses, the ego is driven by the simulator's
+physics under Autoware's control, and the simulator advances one fixed step per frame. The ego's goals reach Autoware through the agent relay, not ROS, so the two
 sides need no shared domain. Details: [architecture](design/architecture.md),
 [protocol](design/ssv2-protocol.md), [time and ticking](design/time-and-ticking.md).
 
@@ -131,9 +141,11 @@ sides need no shared domain. Details: [architecture](design/architecture.md),
 | Document | About |
 |---|---|
 | [Architecture](design/architecture.md) | design principles, the responsibility split, the main flows |
+| [Simulator interface](design/simulator-interface-split.md) | the world protocol, one world server per simulator |
+| [The vehicle side](design/vehicle-side.md) | one spec per car, the I5 contract, Autoware with or without SSv2 |
 | [SSv2 protocol](design/ssv2-protocol.md) | the ZMQ messages the bridge implements |
 | [SSv2 launch configuration](design/ssv2-launch-configuration.md) | how SSv2 is launched against CARLA |
-| [Time and ticking](design/time-and-ticking.md) | who ticks CARLA, `/clock`, synchronous mode |
+| [Time and ticking](design/time-and-ticking.md) | who ticks CARLA, `/clock`, episodes and vehicle stacks |
 | [Failure handling and the frame budget](design/failure-and-frame-budget.md) | what fails a frame, what retries |
 | [User workflow and the vehicle agent](design/user-workflow.md) | the two sides, the agent protocol |
 | [Writing scenarios](design/scenario-authoring.md) | what scenarios may use, and how |

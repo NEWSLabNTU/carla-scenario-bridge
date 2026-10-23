@@ -35,11 +35,12 @@ whole cycle hold:
   headless at Epic). `Initialize` probes the connection; if it is dead it retries the
   reconnect every 5 s up to `carla.reconnect_wait_seconds` (default 120) and only then
   fails. A scenario started while CARLA is still coming up waits instead of failing.
-- **Time continues.** A restarted CARLA starts `elapsed_seconds` at 0. swb treats the restart
-  as an episode change whose last old frame is the last frame swb observed:
-  `epoch += E_last + Δ_last` (`EpisodeClock::begin_episode`), so the first new frame is
-  reported one tick after the last old one. acb applies the same rule to the last frame it
-  received; both saw the frame swb last ticked, so their epochs agree unless acb missed it.
+- **Time starts again, and the vehicle stacks end** (roadmap 051). A restarted CARLA is a new
+  episode: `elapsed_seconds` starts at 0 and so does `nanos(elapsed) + BASE_NS`. acb sees the
+  new world id on reconnect and exits before publishing a frame of it, its launch ends the
+  Autoware stack, and the stack's supervisor brings it back in the new episode
+  ([time-and-ticking](time-and-ticking.md)). The CARLA world server exits 75 and its
+  play_launch restarts it; the bridge stays. Measured (051, K4): the next scenario passed.
 - **A restarted server holds none of swb's state**: not sync mode, not frozen lights, not the
   map. The next `Initialize` re-applies sync and loads the scenario's town as usual; entity
   mappings from before the crash are dropped (their actor IDs mean nothing to the new server).
@@ -95,13 +96,10 @@ whole cycle hold:
   `Initialize` with a map load and the CARLA wait) and throws on expiry, which the
   interpreter reports as a simulation error. The socket is recreated after a timeout, since a
   `REQ` socket that missed its reply cannot send again.
-- **Keep the epoch.** The episode epoch lived only in swb's memory, so a restarted swb
-  reported CARLA's raw elapsed time: SSv2's time went backwards (16825 s → 283 s, measured)
-  and stayed an epoch apart from acb's `/clock`. swb now records `(CARLA episode id, epoch,
-  last frame)` after every frame in `$XDG_RUNTIME_DIR/scenario-world-bridge/` (tmpfs: the
-  log disk can stall a writer, see CLAUDE.md), keyed by CARLA host and port. A new swb
-  restores it when the episode id matches; when it does not (CARLA also restarted while
-  swb was down), it applies the episode rule to the recorded last frame, as acb did.
+- **No state to keep.** Time is a function of the frame (`nanos(elapsed) + BASE_NS`), so a
+  restarted bridge or world server reports the same time acb publishes without recording
+  anything (roadmap 051 removed the epoch and its tmpfs record). Measured (051, K4): both
+  restarted under a running stack, every SSv2 stamp equal to a `/clock` value, bit for bit.
 - **Reap what the dead swb left.** `destroy_all_spawned` only knows this process's ledger.
   Vehicles with a configured `role_name` are already reaped at `Initialize`
   (`reap_orphaned_vehicles`). NPCs, walkers and props carried no mark, so a swb that died

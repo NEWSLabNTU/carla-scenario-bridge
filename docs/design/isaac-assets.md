@@ -17,7 +17,7 @@ recipes below. Either way it is one directory, the asset root, wherever you put 
 ├── MANIFEST.sha256                 every file's checksum (`just isaac-assets check`)
 ├── Town01/ Town02/ Town03/ Town05/ Town10HD/
 │   ├── <Town>.usd, Materials/, Props/, HDRi_Neutral.dds    the SimReady export
-│   ├── <Town>_physics.usda         the collider layer over it (isaac_world.physics_layer)
+│   ├── <Town>_physics.usda         the collider layer over it (swb_isaac_world.physics_layer)
 │   ├── main.xodr
 │   └── export.log
 └── vehicles/                       SWB_VEHICLE_USD
@@ -28,13 +28,13 @@ recipes below. Either way it is one directory, the asset root, wherever you put 
     ├── props/                      97 static.prop.*: <id>/<id>.usda (/Prop), props.json
     ├── walkers/                    52 walkers: <id>/<id>.usda (/Walker), walk.npz, idle.npz,
     │                               walkers.json (walker.pedestrian.NNNN -> blueprint is
-    │                               isaac_world/walker_blueprints.json, in the repo)
+    │                               swb_isaac_world/walker_blueprints.json, in the repo)
     └── riders/grip.npz             CARLA's bike-grip pose, for seated riders
 ```
 
 Every path inside the set is relative: USD layers reference their neighbours as `@./...@`,
 and `vehicles.json`, `props.json` and `walkers.json` name files relative to the index's own
-directory (`isaac_world.vehicle_assets` resolves them on load; an absolute path, as indexes
+directory (`swb_isaac_world.vehicle_assets` resolves them on load; an absolute path, as indexes
 written before 2026-10-23 have, is taken as it is). So the set works from any directory.
 
 ## Using a set
@@ -64,7 +64,7 @@ The world server and the bridge then find everything through `CARLA_USD` and
 |---|---|---|---|
 | a town | `just isaac-town <Town> [export:=true]` | 5-15 min each | 0.9-1.9 GB |
 | vehicles | `just isaac-vehicles` | 12 min | 2.6 GB |
-| vehicle physics | `src/isaac_world/scripts/dump_vehicle_physics.py --root "$SWB_VEHICLE_USD"`, with a CARLA 0.9.16 of its own up | 2 s | - |
+| vehicle physics | `src/swb_isaac_world/scripts/dump_vehicle_physics.py --root "$SWB_VEHICLE_USD"`, with a CARLA 0.9.16 of its own up | 2 s | - |
 | props | `just isaac-vehicles props:=true` | - | - |
 | walkers | `just isaac-vehicles walkers:=true` | 24 min for 49 | 14 GB |
 | rider pose | `just isaac-vehicles riders:=true` | - | - |

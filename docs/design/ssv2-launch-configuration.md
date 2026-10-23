@@ -39,8 +39,8 @@ play_launch launch --web-addr 0.0.0.0:8081 \
     launch_rviz:=false \
     record:=false \
     port:=5555 \
-    sensor_model:=acb_sensor_kit \
-    vehicle_model:=acb_vehicle
+    sensor_model:=tesla_model3_sensor_kit \
+    vehicle_model:=tesla_model3
 ```
 
 ### Parameter Reference
@@ -52,8 +52,8 @@ play_launch launch --web-addr 0.0.0.0:8081 \
 | `launch_autoware` | `false` | Don't fork Autoware; connect the concealer to the Autoware already in this ROS domain (`ego_av.launch.xml`). SSv2 still drives init/route/engage through it. |
 | `port` | `5555` (or `$SSV2_PORT`) | ZMQ port the adapter listens on. Must match adapter's `SSV2_PORT`. |
 | `architecture_type` | `awf/universe/20250130` | Must match Autoware version for topic naming and concealer behavior. |
-| `sensor_model` | `acb_sensor_kit` | Still required with `launch_autoware:=false`: `EgoEntity` reads it before it reaches the `launch_autoware` branch (`ego_entity.cpp:64-65`). |
-| `vehicle_model` | `acb_vehicle` | Same as `sensor_model` — read unconditionally (`ego_entity.cpp:64-65`). |
+| `sensor_model` | `tesla_model3_sensor_kit` | Still required with `launch_autoware:=false`: `EgoEntity` reads it before it reaches the `launch_autoware` branch (`ego_entity.cpp:64-65`). |
+| `vehicle_model` | `tesla_model3` | Same as `sensor_model` — read unconditionally (`ego_entity.cpp:64-65`). |
 | `launch_rviz` | `false` | SSv2's RViz not needed; use Autoware's own if visualization required. |
 | `record` | `false` | Disable rosbag recording for initial testing. |
 

@@ -12,12 +12,6 @@ It also runs Autoware on CARLA or Isaac Sim **without a scenario runner**: you s
 up in the simulator yourself and drive. Both uses share one Autoware setup and one
 description of the car.
 
-> **Status.** This README describes the target layout of
-> [roadmap 051](docs/roadmap/051-target-shape.md). Until it lands, some parts keep their
-> old names and places: the world servers are `src/carla_world` and `src/isaac_world` in
-> this repository, the vehicle packages are acb's `acb_vehicle` and aib's `aib_vehicle`,
-> and the car is described in aib's spec only.
-
 <p align="center">
   <img src="docs/media/showreel_pedestrian.gif" alt="Autoware in CARLA stops for a crossing pedestrian, then drives on" width="640"><br>
   <em>A starter scenario: the ego stops for a pedestrian crossing ahead and drives on (8x).</em>
@@ -98,6 +92,10 @@ per scenario for now ([roadmap 039](docs/roadmap/039-isaac-multi-autoware.md)).
 
 Loading another town, or restarting the simulator, ends the Autoware stack. Start it again
 with the new town's map.
+
+`just vehicle-check` in acb or aib checks the car itself on that simulator, with no Autoware:
+the topics, frames and stamps Autoware expects, then acceleration, braking and steering
+steps against the spec.
 
 ## One car, described once
 
@@ -195,7 +193,7 @@ administrator for (ROS and Autoware's own are normally present already; this wor
 `python3-pygame`, which `pip install pygame` also provides).
 
 Once per machine, give Autoware a writable data directory (TensorRT writes its engines
-there): `ros2 run acb_launch setup_autoware_data`.
+there): `ros2 run autoware_sim_profile setup_autoware_data`.
 
 ## Quick start
 

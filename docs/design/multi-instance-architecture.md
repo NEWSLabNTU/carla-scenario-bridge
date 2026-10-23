@@ -362,7 +362,7 @@ SSv2 UpdateTrafficLights
 ### Clock ownership
 
 Superseded by [time-and-ticking.md](time-and-ticking.md) (roadmap 015). In every domain
-`acb_bridge` publishes `/clock` from CARLA's frame time plus an episode epoch and stamps
+`acb_bridge` publishes `/clock` from CARLA's frame time plus `BASE_NS` (roadmap 051) and stamps
 everything it publishes with the frame's time; SSv2 takes the same time from swb and
 publishes no `/clock`.
 

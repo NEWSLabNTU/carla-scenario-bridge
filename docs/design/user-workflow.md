@@ -268,10 +268,12 @@ reset that fails or times out is the default trigger. *Implemented* (030 step 8)
   mode).
 - **acb_bridge** is the CARLA vehicle bridge (I5): sensors, vehicle interface, `/clock`,
   traffic signals for one CARLA vehicle, found by `role_name`.
-- Packages for Autoware users: `acb_launch` (`carla_simulator.launch.xml`, the CARLA profile
-  around the user's `autoware.launch.xml`; starts `acb_bridge` and `acb_agent`; CARLA
-  overrides switchable: `carla_localization`, `carla_perception`, `carla_system`),
-  `acb_sensor_kit_launch` / `_description`, `acb_vehicle_launch` / `_description`.
+- Packages for Autoware users: `acb_launch` (`carla_simulator.launch.xml`: the Autoware
+  profile from `autoware_sim_vehicle` -- `autoware_sim_profile`, around the user's
+  `autoware.launch.xml`, with the simulation overrides switchable: `sim_localization`,
+  `sim_perception`, `sim_system`, `sim_control`, `sim_planning`, `sim_clock_guard` -- plus
+  `acb_bridge`); the car's packages are `autoware_sim_vehicle`'s (`tesla_model3_description`,
+  `_launch`, `tesla_model3_sensor_kit_*`), generated from `sim_vehicle_spec`.
 
 ## Simulation side
 

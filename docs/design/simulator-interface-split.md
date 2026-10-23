@@ -14,6 +14,16 @@ Where the build departed from this design (two round trips per frame, who tracks
 back as capabilities, refusal rather than demotion, one config struct read from two files,
 the bridge surviving a world server restart), the phase doc's "As built" says why.
 
+**Completed** by [roadmap 051](../roadmap/051-target-shape.md) (2026-10-24), steps 7 and 8
+included, with the names this document proposed carrying an `swb_` prefix: the protocol and
+its shells are the repository `swb_world_protocol`; the world servers are `swb_carla_world`
+and `swb_isaac_world`, each a repository of its own; the bridge's tree holds no simulator and
+no simulator crate. Time is `nanos(elapsed) + BASE_NS` with no epoch, and an episode change
+ends every vehicle stack ([time-and-ticking](time-and-ticking.md)); weather is a preset or
+parameters by the server's names, CARLA's presets living in `swb_carla_world`. Read the
+module and path names below (`carla_world`, `isaac_world`, `episode_clock`, the epoch marker,
+`Weather.msg`) as the state this design started from.
+
 The first draft of this document described the split as a move of today's modules into
 three packages, with a Rust trait as the simulator interface. Walking a developer through
 porting a fourth simulator against that draft (section "A porting walkthrough") showed that

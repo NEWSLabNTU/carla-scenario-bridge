@@ -38,7 +38,7 @@ ego, by design.
 
 **Its box is the car's.** SSv2's vehicle origin is the rear axle on the ground. A `<Vehicle>`
 named by a CARLA blueprint (`vehicle.tesla.model3` for the ego) declares that blueprint's
-measured box and axles, from `src/carla_world/config/blueprint_boxes_<version>.yaml`
+measured box and axles, from `src/swb_carla_world/swb_carla_world/config/blueprint_boxes_<version>.yaml`
 (`scripts/measure_blueprint_boxes.py`): for the Model 3, `Center` (1.415, 0, 0.744),
 `Dimensions` 4.792 x 2.163 x 1.488, axles 3.004 m apart, track 1.667, wheel diameter 0.74.
 `scripts/scenario_vehicle.py <blueprint>` prints them, the generators use it, and

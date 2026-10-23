@@ -2,7 +2,7 @@
 
 **Superseded in its seam** by [simulator-interface-split.md](simulator-interface-split.md)
 and roadmap 046 (2026-10-22): every simulator is a world server behind the world protocol, the
-bridge has one backend (`RemoteBackend`), and CARLA runs in its own process (`carla_world`).
+bridge has one backend (`RemoteBackend`), and CARLA runs in its own process (`swb_carla_world`).
 The study notes and the Isaac stack below still hold.
 
 **Date**: 2026-10-16. **Status**: design; phases 036 (bring-up), 035 (the seam) and 037
@@ -97,7 +97,7 @@ same (roadmap 035, "As built").
 
 ### The Isaac world server (phase 037)
 
-A standalone Isaac Sim Python application (`isaac_world/world_server.py`, run under Isaac's
+A standalone Isaac Sim Python application (`swb_isaac_world/world_server.py`, run under Isaac's
 Python), not a GUI extension: it owns the simulation loop, so lockstep is natural. It waits
 for a request, applies it, steps and replies, as CARLA does in synchronous mode. It can run
 headless or on a VNC display for inspection. Phase 036 measured this loop: deterministic

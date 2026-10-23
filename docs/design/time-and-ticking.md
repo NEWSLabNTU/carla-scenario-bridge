@@ -5,31 +5,38 @@ Autoware bridge (acb) and SSv2. Authoritative for the clock and the tick; other 
 docs point here. History and measurements: roadmap
 [015](../roadmap/015-carla-as-time-and-signal-source.md).
 
-**Roadmap 051 changes the epoch.** It removes it: an episode becomes a vehicle stack's
-lifetime ("Episodes and vehicle stacks", below). Until 051 lands, the sections "One source
-of time" and "Episode change" describe the code as it is.
-
 ## One source of time
 
-Simulation time is CARLA's `WorldSnapshot.timestamp.elapsed_seconds` plus an **episode
-epoch**, in integer nanoseconds:
+Simulation time is CARLA's `WorldSnapshot.timestamp.elapsed_seconds` plus a constant, in
+integer nanoseconds (roadmap 051):
 
 ```
-sim_time_ns = nanos(elapsed_seconds) + epoch_ns
+sim_time_ns = nanos(elapsed_seconds) + BASE_NS     # BASE_NS = 1000 s
 nanos(s)    = round-half-away-from-zero(s * 1e9)
 ```
+
+`BASE_NS` and `nanos` are one definition per language -- `swb_core::sim_time` (Rust),
+`swb_world_server.protocol` (Python), acb's `clock.rs`, aib's `sim_time.py` -- and
+`scripts/test_sim_time.py` (in `just test`) checks that all four agree on the constant and on
+a table of rounding cases. `BASE_NS` keeps ROS time away from 0 (ROS's "no clock yet") and
+from the small values for which `now() - duration` goes negative in tf2 and Autoware's
+monitors.
 
 - **acb** publishes `/clock` from it in every ROS domain, and stamps every message it
   publishes (sensors, odometry, vehicle status, ground-truth objects, traffic signals) with
   the time of the CARLA frame the message was computed from. acb depends on CARLA and
   nothing else: no swb, no SSv2.
-- **swb** reports the same number to SSv2 as `simulation_time_ns` on every
-  `InitializeResponse` and `UpdateFrameResponse`.
+- **The world server** reports it in `LoadWorldReply.sim_time_ns` and `StepReply.sim_time`,
+  and **swb** passes it to SSv2 as `simulation_time_ns` on every `InitializeResponse` and
+  `UpdateFrameResponse`.
 - **SSv2** (fork, `clock_source:=simulator`) takes its ROS time from that field and
   publishes no `/clock`.
 
-Nothing learns an offset; every stamp is a CARLA frame time. The epoch exists only so that
-time never runs backwards when CARLA starts a new episode (below).
+Nothing learns an offset, and nothing is shared, stored or sent: every process computes the
+same integer from the frame it holds, so a restarted swb, world server or vehicle bridge needs
+no state to agree. Measured (roadmap 051, K4): with the world server and the bridge just
+restarted under a running stack, all 235 distinct stamps of SSv2's V2I signal message equal a
+`/clock` value acb published, bit for bit.
 
 ## One ticker
 
@@ -105,126 +112,54 @@ SSv2 frame   step_time = realtime_factor / global_frame_rate   (0.05 s at 20 Hz)
 - **Control** from Autoware is applied by acb when it arrives and takes effect at the next
   tick, so a command waits at most one CARLA tick (50 ms).
 
-## Episode change
+## Episodes and vehicle stacks
 
-CARLA restarts `elapsed_seconds` at 0 for every episode (`load_world`, `reload_world`). ROS
-has no general answer to a clock that goes backwards -- only rcl timers and tf2 handle the
-jump, and Autoware's EKF, NDT and planners keep their state -- so an episode change is a
-**pause**: the new episode's first frame lands one tick after the old episode's last.
+An **episode** is one simulator world: on CARLA, one world id, from its load until the next
+load or the server's death. CARLA restarts `elapsed_seconds` at 0 in every episode, so time
+is monotonic within an episode and only there. ROS has no general answer to a clock that goes
+back -- tf2 clears its buffers, Autoware's EKF, NDT and planners keep their state -- so
+**an episode change ends every vehicle stack**, and the stack comes back in the new episode.
 
-Rule, applied independently by every reader of the frame stream:
-
-```
-epoch += E_last + Δ_last     # E_last, Δ_last: the old episode's last frame
-```
-
-**acb** takes `E_last` from the last `on_tick` frame it received from the old episode.
-
-**swb**, the only process that loads maps, must arrive at the same frame without a channel
-to acb. It cannot simply read a snapshot before loading: CARLA's `LoadEpisode` sends its own
-tick cue while it waits, so the old episode advances after the snapshot (measured: exactly
-one frame per load). swb instead counts:
-
-```
-before:  sync mode on; snapshot → (F0, E0, Δ)
-load:    load_world(town, reset_settings = false)      # new world stays synchronous
-after:   snapshot → (F1, E1)
-n_new  = round(E1 / Δ)          # frames the new episode has had (it only advances by Δ)
-k_old  = (F1 − n_new) − F0      # old-episode frames after swb's snapshot
-E_last = E0, then + Δ, k_old times   # accumulated as CARLA accumulates, not multiplied
-```
-
-This needs two CARLA properties, both verified live on 0.9.16 (2026-10-05): the frame
-counter continues across episodes, and with `reset_settings = false` the new episode stays
-synchronous and starts at `elapsed = Δ` after one tick. Measured: `k_old = 1`, `n_new = 1`,
-`E1 = Δ`, both directions, loads of 2.3 s. With `reset_settings = true` (the default) the new
-world reverts to async and free-runs for several frames before anyone reads it, which both
-breaks the count and made loads slow (44 s, and one > 120 s).
-
-A **CARLA restart** is treated as an episode change whose last old frame is the last frame
-each bridge observed: acb continues from the last `/clock` it published plus one tick, and
-swb (roadmap 016) from the last frame it ticked plus one tick. Both saw the frame swb last
-ticked, so the epochs agree unless acb missed that frame. See
-[failure-and-frame-budget](failure-and-frame-budget.md).
-
-**A bridge that starts mid-session** has watched none of the earlier episode changes, and the
-rule alone would start it at epoch 0: a vehicle side restarted after a reload published a
-`/clock` 150 ms behind its peers for a whole session (2026-10-13). So the epoch is also kept
-in the world it belongs to. After every episode change (map load, CARLA restart) and at
-start-up, swb leaves one **epoch marker** in the world -- a `util.actor.empty` (no mesh,
-collision or physics) with `role_name = epoch_ns:<epoch>` -- once it can see the world's
-actors (it has ticked). `load_world` destroys it with the old world, so each episode carries
-its own. acb, on its first frame of an episode it did not watch begin, withholds `/clock`
-until it has read that episode's marker and adopts it; no marker means epoch 0, the
-behaviour without swb. A bridge that watched the change keeps its own epoch and only warns
-if the marker disagrees. Still CARLA and nothing else: no file, no channel between bridges.
-swb writes no marker for epoch 0. See roadmap 015, "Joining mid-session (step 8)".
-
-**Known limitation (accepted, roadmap 016 gap 12).** A restarted CARLA free-runs before
-swb's first `Initialize`. If that server dies again before swb has read a frame from it,
-acb has seen its frames and applies the episode rule to the last one, while swb has seen
-none and keeps its epoch: from then on the two differ by a constant (265.86 s measured).
-Both stay monotonic and scenarios pass; restarting the ego stack (acb) clears it. A swb
-restart is not affected: swb records its clock on tmpfs and resumes it.
-
-## Episodes and vehicle stacks (roadmap 051)
-
-The epoch exists so that a vehicle stack can live through a world load, and it costs two
-copies of one rule that must agree to the nanosecond (swb's and acb's), a frame count around
-`load_world`, a clock file that survives swb restarts, a marker actor for bridges that join
-late, and an accepted case where the two epochs still drift apart (gap 12 above). A stack
-almost never survives a load usefully anyway:
-
-- swb loads a world only when the town changes, and a stack started on one town's map
-  cannot drive another: an ego in the new town needs a restart with that map regardless.
-- A CARLA restart takes the ego's vehicle and its sensors with it; roadmap 015 already
-  requires a stack restart there.
-- SSv2's scenario stack is new for every scenario.
-
-What remains is a stack idling through another town's scenario and coming back
-(`town02_episode_change` in `basic/`, which has no ego). One restart of the stack, ~10 s
-to "Startup complete" (2026-10-23) plus localization, buys the deletion of all of the above.
-
-**The rule: an episode change ends every vehicle stack.**
-
-```
-sim_time_ns = nanos(elapsed_seconds) + BASE_NS      # BASE_NS: 1000 s, in swb_world_protocol
-```
-
-- **Time is a function of the frame.** acb, swb and SSv2 compute the same integer from the
-  frame they hold. Nothing is shared, stored or sent; a restarted swb, world server or
-  vehicle bridge needs no state to agree. `BASE_NS` keeps ROS time away from 0 (ROS's "no
-  clock yet") and from the small values for which `now() - duration` goes negative in tf2
-  and Autoware's monitors; acb's 60 s uptime gate goes with it.
-- **Monotonic within an episode, and only there.** An episode is one CARLA world (its world
-  id), from its load until the next load or the server's death. The pause between
-  scenarios stays as it is: inside one episode, nothing ticks.
 - **The vehicle bridge ends its stack before the stack can see time go back.** acb attaches
-  to the episode it first sees. When the world id changes, or its connection breaks and a
-  reconnect finds another episode, it exits with a message naming the episode change,
-  before publishing anything stamped in the new episode. `acb_bridge` is declared
-  `on_exit="shutdown"` and never respawned, so its exit takes the whole Autoware stack with
-  it. aib does the same on the Isaac world server's episode id; any future simulator's
-  bridge must too (part of the I5 contract, [vehicle-side](vehicle-side.md)).
-- **The stack comes back on the new episode** through roadmap 030's restart path:
-  `swb-agent supervise` restarts a group whose agent exited, and `run_suite`'s restart
-  ladder counts an episode change as a restart. The restarted stack takes the new town's
-  map (`map_path` resolved from the town), and a world server's `up.sh` restarts a running
-  stack whose map is not the scenario's.
-- **The protocol** carries `episode_id` in `LoadWorldReply` and `StepReply`. A server may
-  keep its time running across episodes (Isaac's world server does, over its lifetime), but
-  nothing may depend on that.
+  to the episode it first sees. When a frame or the hero belongs to another episode (a world
+  load, or a reconnect that finds a restarted CARLA), it logs the change naming both world
+  ids, flushes its log and exits with status 3, before publishing anything stamped in the
+  new episode. `acb_bridge` is declared `on_exit="shutdown"` and never respawned, so its exit
+  takes the whole Autoware stack with it. Any future simulator's bridge must do the same
+  (part of the I5 contract, [vehicle-side](vehicle-side.md)).
+- **The backstop is the profile's `clock_guard`**, a required node in every Autoware stack
+  (`sim_clock_guard:=true`): it ends the stack the moment `/clock` steps back, whichever
+  simulator published it.
+- **The stack comes back** through roadmap 030's restart path. `scripts/carla_up.sh` starts the
+  ego stack under `swb-agent supervise`, which starts it again (same map) when it ends; a stack
+  on another map than the scenario's is stopped through its supervisor and replaced by one on
+  the scenario's map. That one attaches to the old episode and ends once more at the
+  scenario's load, so a town change costs two stack starts. `run_suite` waits for a
+  supervised agent whose stack ended to register again before the next scenario.
+- **The protocol** carries `episode_id` in `LoadWorldReply` and `StepReply`; the bridge logs
+  when it changes. Loading the same world again keeps the episode (swb skips `load_world`
+  when the town matches), and the conformance check holds a server to that.
 - **A scenario never spans an episode change**: the load happens at `Initialize`, before
-  the scenario's first frame.
+  the scenario's first frame. Between scenarios inside one episode nothing ticks (the pause).
+- **acb stand-alone** (`just sim`) loads its town before it starts, so the demo scenario
+  finds it loaded and acb attaches to the episode that stays.
+- **Isaac, a deviation**: the Isaac world server's time is monotonic over its whole lifetime
+  and aib's `/clock` lives in that process, so an Isaac stack is not ended by a world load;
+  `isaac_up.sh` restarts a stack on another map, and `clock_guard` covers a restarted world
+  server, whose time starts again. Nothing may depend on a server keeping time across
+  episodes.
 
-Kept from the sections above: one ticker, the pause between scenarios, `reset_settings =
-false` on `load_world` (the new world stays synchronous, and loads stay fast). Deleted:
-`episode_clock`, `clock_store`, the epoch marker, acb's epoch rule with its reconnect
-continuation and mid-session join, and the frame count around `load_world`.
+`load_world` keeps `reset_settings = false`: the new world stays synchronous, and loads stay
+fast (2.3 s measured against 44 s and more with the default, which reverted the world to
+asynchronous and let it free-run).
 
-Cost, accepted: one stack restart per town change, and the 015 acceptance line "the next
-scenario passes without restarting the ego stack" no longer holds across a town change. A
-recorder or RViz that outlives a load sees time start again; they are per-run tools.
+Before roadmap 051 a stack lived through a world load: an episode epoch carried time across
+it, kept by two copies of one rule (swb's and acb's) that had to agree to the nanosecond, a
+frame count around `load_world`, a clock file for swb restarts and a marker actor for bridges
+joining late, with an accepted case where the two still drifted apart (roadmap 016, gap 12).
+All of it is gone; [roadmap 015](../roadmap/015-carla-as-time-and-signal-source.md) and
+[051](../roadmap/051-target-shape.md) have the history and the measurements. The cost is a
+stack restart per town change and per CARLA restart.
 
 ## Requirements on the CARLA server
 

@@ -25,7 +25,7 @@ Map size stops mattering because neither layer stores anything per square metre 
 
 ## What Isaac Sim 6.1 gives us, measured
 
-`src/isaac_world/spikes/terrain_hooks.py` drives aib's ego (`aib.isaac.vehicle.Vehicle`, the
+`src/swb_isaac_world/spikes/terrain_hooks.py` drives aib's ego (`aib.isaac.vehicle.Vehicle`, the
 Model 3, `ev`) over a flat asphalt strip into a mud strip, each a USD `PhysicsMaterial`, and
 pokes each hook while it runs (0.05 s frames of 3 physics steps, as aib's host steps it).
 
@@ -84,7 +84,7 @@ soil model must return to the wheel has a working channel.
   corner in the map frame. `just surfaces-check` refuses what the server would (unknown
   classes or labels, bad ids, self-crossing polygons, rasters without placement) and warns
   about zones that overlap while setting the same field, or lie off the Lanelet2 map;
-  `just surfaces-plot` draws the zones over the lanes (`isaac_world.surfaces`).
+  `just surfaces-plot` draws the zones over the lanes (`swb_isaac_world.surfaces`).
 - **The friction table holds the class's peak friction** (the survey's table: dry asphalt
   ~0.85, wet 0.5-0.7, gravel ~0.6, dry earth ~0.68, packed snow 0.2, ice 0.1; calibrate,
   do not copy). PhysX already does the per-wheel lookup, so mu-split (one side in a puddle)
@@ -118,8 +118,8 @@ soil model must return to the wheel has a working channel.
 
 ### Surface layer, measured on a pad (047 S1, 2026-10-23)
 
-`src/isaac_world/spikes/surface_drive.py`: aib's Model 3 (`ev`, ABS and traction control on)
-through `isaac_world.surface_layer` -- the world server's own code -- on one flat mesh labelled
+`src/swb_isaac_world/spikes/surface_drive.py`: aib's Model 3 (`ev`, ABS and traction control on)
+through `swb_isaac_world.surface_layer` -- the world server's own code -- on one flat mesh labelled
 Road, one lane per case, zones from x = 150; full braking demand from 20 m/s inside the zone.
 The class values are the shipped table's literature numbers, so these check directions and
 plumbing, not magnitudes.
@@ -143,7 +143,7 @@ steps); a frame of three steps 2.05 ms with it, 2.26 ms without (noise).
 
 ### Surface layer on Town01 (047 S1, 2026-10-23)
 
-`src/isaac_world/spikes/surface_town.py` drives the same cases on Town01's SimReady world
+`src/swb_isaac_world/spikes/surface_town.py` drives the same cases on Town01's SimReady world
 (`Town01_physics.usda`, loaded in 534 s on a loaded host) along lanelet 13397, the east road
 heading +y, zones on the lane from y = -160: every wheel's collider is a `Road` mesh
 (`.../Road_Road_Town01_455/St_Road_TileRoad_RoadR`) and resolves to `Road` -> asphalt. Every
@@ -701,7 +701,7 @@ value (a story event that only stops the rain leaves the fog); a `TimeOfDay` rep
    the local solar time), drops temperature and pressure (nothing renders them), and sends
    `SetEnvironment` (world protocol request 15, `CAPABILITY_ENVIRONMENT`). It checks the
    capabilities of the whole environment before sending any part.
-3. **Isaac** (`isaac_world.sky`, `IsaacWorld.set_environment`): a time of day or a placed sun
+3. **Isaac** (`swb_isaac_world.sky`, `IsaacWorld.set_environment`): a time of day or a placed sun
    (a placed one wins) takes over the world's sun: the town's own distant lights go off and
    ours, with their brightness, turns to where the sun stands over the map's latitude
    (`map_projector_info.yaml`; CARLA's towns: 0), full from 30 deg up, off below the horizon;
