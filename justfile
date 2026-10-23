@@ -228,7 +228,7 @@ test:
         cargo nextest run --no-tests pass --no-fail-fast)
     # The CARLA world server's crate, in its workspace; its wet-road test compares with Isaac's
     # surface classes
-    (cd src/swb_carla_world && SWB_ISAAC_SURFACE_CLASSES="$OLDPWD/src/isaac_world/config/surface_classes.yaml" \
+    (cd src/swb_carla_world && SWB_ISAAC_SURFACE_CLASSES="$OLDPWD/src/swb_isaac_world/config/surface_classes.yaml" \
         cargo nextest run --no-tests pass --no-fail-fast)
     # Every component's deps/ pins are this workspace's pins (roadmap 051)
     python3 scripts/check_pins.py
@@ -241,7 +241,7 @@ test:
     # The world server shell, on a fake world (roadmaps 037, 046; protobuf only), and the Isaac
     # world's pure modules
     python3 -m unittest discover -s src/swb_world_protocol/swb_world_server/test
-    python3 -m unittest discover -s src/isaac_world/test
+    python3 -m unittest discover -s src/swb_isaac_world/test
     # Every vehicle named by a CARLA blueprint declares that car's measured box and axles
     # (roadmap 050), and the module the generators take them from
     python3 -m pytest -q scripts/test_scenario_vehicle.py
@@ -656,10 +656,10 @@ isaac_display := env_var_or_default("ISAAC_DISPLAY", ":8")
 
 # Isaac Sim smoke test: version, start time, step time (headless; DISPLAY set = windowed)
 isaac-check:
-    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/isaac_world/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/swb_isaac_world/spikes/run_spike.sh" fastrtps {{isaac_root}}/logs/isaac-check.log "{{justfile_directory()}}/src/swb_isaac_world/spikes/smoke.py"; grep SMOKE {{isaac_root}}/logs/isaac-check.log
 
 # The Isaac Sim world server (roadmaps 037, 038, 046), supervised (043):
-# swb_launch isaac_world.launch.xml under play_launch (web SWB_WEB_PORT+5, logs in $SWB_LOG_ROOT/isaac/),
+# swb_isaac_world swb_isaac_world.launch.xml under play_launch (web SWB_WEB_PORT+5, logs in $SWB_LOG_ROOT/isaac/),
 # which respawns it when it dies. Long-lived: start it once, before `just run sim:=isaac`
 # and `just ego-isaac`; `just scenario ... sim:=isaac` starts it when it is not up.
 #
@@ -704,11 +704,11 @@ isaac-world *args:
     # The ego's ROS domain is the ego stack's (`just ego-isaac`), not aib's ego.yaml's.
     export ISAAC_ROOT={{isaac_root}} ISAAC_PORT={{isaac_port}} EGO_ROS_DOMAIN_ID={{ego_domain}}
     export CYCLONEDDS_URI="file://{{project}}/config/cyclonedds-localhost.xml"
-    # Built beside this checkout's isaac_world; a moved checkout points it here again.
-    export SWB_ISAAC_DIR="{{project}}/src/isaac_world"
+    # Built from this checkout's swb_isaac_world; a moved checkout points it here again.
+    export SWB_ISAAC_DIR="{{project}}/src/swb_isaac_world"
     log_dir=$(swb_log_dir "{{project}}" isaac)
     exec play_launch launch --web-addr 0.0.0.0:$((SWB_WEB_PORT + 5)) --log-dir "$log_dir" \
-        swb_launch isaac_world.launch.xml "${args[@]}"
+        swb_isaac_world swb_isaac_world.launch.xml "${args[@]}"
 
 # Is a world server up? One probe Hello (it changes nothing on the server): its simulator,
 # capabilities, owner and readiness. sim:=carla (default, WORLD_PORT) or sim:=isaac
@@ -761,7 +761,7 @@ world-check *args:
 
 # Build Autoware's message bindings for Isaac's Python (once per Isaac install; roadmap 038)
 isaac-msgs:
-    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/scripts/build_msgs.sh"
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/swb_isaac_world/scripts/build_msgs.sh"
 
 # <map>/isaac/world.yaml: from the map's point cloud as voxels (default), or usd:=<file> -- a
 # USD world in the map frame, e.g. CARLA's SimReady export with its physics layer, ground
@@ -774,17 +774,17 @@ isaac-msgs:
 # A CARLA town as an Isaac world (roadmap 043)
 [positional-arguments]
 isaac-town town *args:
-    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/scripts/isaac_town.sh" "$@"
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/swb_isaac_world/scripts/isaac_town.sh" "$@"
 
 # Usage: just isaac-vehicles [only:=<id>,<id>...] [export:=true] [props|walkers|riders:=true]
 #
 # SimReady export of each vehicle, render-only asset, vehicles.json, into SWB_VEHICLE_USD;
 # host paths from CARLA_SRC and SWB_VEHICLE_USD. Physics afterwards, with CARLA up:
-# src/isaac_world/scripts/dump_vehicle_physics.py --root "$SWB_VEHICLE_USD".
+# src/swb_isaac_world/scripts/dump_vehicle_physics.py --root "$SWB_VEHICLE_USD".
 # CARLA's vehicles as Isaac assets (roadmap 043)
 [positional-arguments]
 isaac-vehicles *args:
-    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/isaac_world/scripts/isaac_vehicles.sh" "$@"
+    ISAAC_ROOT={{isaac_root}} "{{justfile_directory()}}/src/swb_isaac_world/scripts/isaac_vehicles.sh" "$@"
 
 # Usage: just isaac-assets <check|manifest> [root:=<dir>]
 #
@@ -806,8 +806,8 @@ isaac-assets command *args:
             *) echo "isaac-assets: unknown argument '$a' (root:=)" >&2; exit 2 ;;
         esac
     done
-    cd "{{justfile_directory()}}/src/isaac_world"
-    python3 -m isaac_world.asset_set "$command" "$root"
+    cd "{{justfile_directory()}}/src/swb_isaac_world"
+    python3 -m swb_isaac_world.asset_set "$command" "$root"
 
 # Usage: just isaac-world-gen [map_path:=<dir>] [usd:=<file>]
 #
@@ -826,10 +826,10 @@ isaac-world-gen *args:
         esac
     done
     export ISAAC_ROOT={{isaac_root}}
-    source "{{justfile_directory()}}/src/isaac_world/scripts/isaac_env.sh"
-    cd "{{justfile_directory()}}/src/isaac_world"
-    if [ -n "$usd" ]; then python -m isaac_world.usd_world "$map_path" "$usd"
-    else python -m isaac_world.pcd_world "$map_path"; fi
+    source "{{justfile_directory()}}/src/swb_isaac_world/scripts/isaac_env.sh"
+    cd "{{justfile_directory()}}/src/swb_isaac_world"
+    if [ -n "$usd" ]; then python -m swb_isaac_world.usd_world "$map_path" "$usd"
+    else python -m swb_isaac_world.pcd_world "$map_path"; fi
 
 # Usage: just surfaces-check [map_path:=<dir>]
 #
@@ -864,8 +864,8 @@ _surfaces command *args:
             *) echo "surfaces-$command: unknown argument '$a' (map_path:=$([ "$command" = plot ] && echo ', out:='))" >&2; exit 2 ;;
         esac
     done
-    cd "{{justfile_directory()}}/src/isaac_world"
-    python3 -m isaac_world.surfaces "$command" "$map_path" "${out[@]}"
+    cd "{{justfile_directory()}}/src/swb_isaac_world"
+    python3 -m swb_isaac_world.surfaces "$command" "$map_path" "${out[@]}"
 
 # GNOME with 3 static workspaces (Ctrl+Alt+1/2/3), OpenGL on the NVIDIA GPU through
 # VirtualGL (-vgl; scripts/vnc_xstartup.sh). A GL app started from a terminal in the

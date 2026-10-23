@@ -2,7 +2,7 @@
 <!--
   The simulation side on Isaac Sim (roadmap 046): the scenario bridge driving the Isaac world
   server, and the agent relay. The world server is its own long-lived launch
-  (isaac_world.launch.xml, `just isaac-world`): its start preloads worlds for minutes, so it
+  (swb_isaac_world.launch.xml, `just isaac-world`): its start preloads worlds for minutes, so it
   is not restarted with the simulation side.
 
     play_launch launch FLAGS swb_launch isaac_simulation.launch.xml [isaac_port:=5590]

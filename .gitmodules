@@ -19,3 +19,7 @@
 	path = src/swb_carla_world
 	url = https://github.com/NEWSLabNTU/swb_carla_world.git
 	branch = target-shape
+[submodule "src/swb_isaac_world"]
+	path = src/swb_isaac_world
+	url = https://github.com/NEWSLabNTU/swb_isaac_world.git
+	branch = target-shape

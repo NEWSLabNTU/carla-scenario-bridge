@@ -1,6 +1,6 @@
 # The scenario bridge's configuration (roadmap 046): SSv2 on one side, one world server on
 # the other. What a simulator needs is its world server's: CARLA's is swb_carla_world.yaml
-# (package swb_carla_world), Isaac's takes its arguments from isaac_world.launch.xml.
+# (package swb_carla_world), Isaac's takes its arguments from swb_isaac_world.launch.xml.
 #
 # The bridge reads the file its ROS parameter `config_file` names (launch arg
 # `config_file:=`, default this installed copy). Precedence: ROS parameters > environment >
