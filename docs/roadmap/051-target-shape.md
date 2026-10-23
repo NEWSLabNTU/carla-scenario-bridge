@@ -34,11 +34,11 @@ Seven repositories:
 |---|---|---|
 | `autoware_sim_vehicle` (new; the vehicle layer) | vehicle specs (`vehicles/<car>.yaml`) and their generators; per-car Autoware packages (`<car>_description`, `<car>_launch`, `<car>_sensor_kit_description`, `<car>_sensor_kit_launch`, `individual_params`), generated; the Autoware profile (`autoware_sim_profile`); the I5 contract; `vehicle_check` (contract and dynamics) | Autoware only |
 | `swb_world_protocol` (new) | `swb_world.proto`; the Rust shell (`WorldServer` trait, loop, lease) and the world client; the Python shell (`World` base class, `main`); the conformance check | nothing simulator-side, nothing SSv2-side |
-| `carla_world` (new, from `src/carla_world`) | the CARLA world server; its config and blueprint tables; `carla-start` and the CARLA tooling; `up.sh`; CARLA's weather message and service | `swb_world_protocol`, the vehicle layer (spawn physics) |
-| `isaac_world` (new, from `src/isaac_world`) | the Isaac world server, the USD and vehicle tooling, `up.sh` | `swb_world_protocol`, aib |
+| `swb_carla_world` (new, from `src/carla_world`) | the CARLA world server; its config and blueprint tables; `carla-start` and the CARLA tooling; `up.sh`; CARLA's weather message and service | `swb_world_protocol`, the vehicle layer (spawn physics) |
+| `swb_isaac_world` (new, from `src/isaac_world`) | the Isaac world server, the USD and vehicle tooling, `up.sh` | `swb_world_protocol`, aib |
 | `autoware_carla_bridge` (acb) | the CARLA vehicle bridge, CARLA's standalone bring-up and demo (`demo_scenario.py`, `auto_drive`), the map tools | the vehicle layer |
 | `autoware_isaac_bridge` (aib) | the Isaac vehicle library and `aib.runner` | the vehicle layer |
-| `scenario-world-bridge` (this one; the adapter and the workspace) | `swb_sim_interface` (SSv2's protocol as a package, L0); the bridge; the relay; `swb_agent` with the vehicle agent; `swb_launch` (scenario, simulation, ego); the run tooling (`sim:=<name>` finds `<name>_world`'s `up.sh`); `swb_examples` with the generated vehicle catalog; the gap oracle | `swb_world_protocol`; pins every repository above, flat |
+| `scenario-world-bridge` (this one; the adapter and the workspace) | `swb_sim_interface` (SSv2's protocol as a package, L0); the bridge; the relay; `swb_agent` with the vehicle agent; `swb_launch` (scenario, simulation, ego); the run tooling (`sim:=<name>` finds `swb_<name>_world`'s `up.sh`); `swb_examples` with the generated vehicle catalog; the gap oracle | `swb_world_protocol`; pins every repository above, flat |
 
 What depends on what:
 
@@ -79,7 +79,7 @@ What depends on what:
 - **Per-car Autoware packages** replace `acb_vehicle`, `aib_vehicle` and their kits. The
   sensing pipeline is generated from the spec's sensor list.
 - **CARLA on the spec's physics**:
-  - Whoever spawns the car applies `carla_physics.yaml`: `carla_world` with SSv2,
+  - Whoever spawns the car applies `carla_physics.yaml`: `swb_carla_world` with SSv2,
     `demo_scenario.py` without it.
   - acb_bridge reads it back on attach and refuses a mismatch.
   - Road friction scales the spec's tire friction.
@@ -100,16 +100,16 @@ What depends on what:
   `swb_world_check conformance`.
 - **`swb_sim_interface`**: SSv2's `simulation_interface` protos (today copied into
   `proto/`) as a package, with a test that they are byte-identical to the SSv2 fork's.
-- **`carla_world` and `isaac_world`** leave for their own repositories with history
-  (`git filter-repo`), each with `<sim>_world.launch.xml`, `up.sh` (from `carla_up.sh` and
+- **`swb_carla_world` and `swb_isaac_world`** leave for their own repositories with history
+  (`git filter-repo`), each with `swb_<sim>_world.launch.xml`, `up.sh` (from `carla_up.sh` and
   `isaac_up.sh`) and its config. The bridge's tree no longer contains a simulator.
 - **Weather**: `swb_interfaces/msg/Weather.msg` is CARLA's fourteen floats. It moves to
-  `carla_world` with CARLA's service. The bridge's `set_weather` and `get_weather` take the
+  `swb_carla_world` with CARLA's service. The bridge's `set_weather` and `get_weather` take the
   protocol's generic form (a preset and named parameters).
 - **Time** (decision T): one `/clock` per domain, carrying the world server's time.
   `sim_ns = nanos(elapsed_seconds) + epoch_ns`, as today; what changes is who decides the
   epoch.
-  - `carla_world` alone decides it: the episode rule, `clock_store` across its restarts,
+  - `swb_carla_world` alone decides it: the episode rule, `clock_store` across its restarts,
     reconnects to a restarted CARLA. Nothing else computes an epoch.
   - It publishes `epoch <episode_id> <epoch_ns>` on the sensor-release PUB socket acb
     already subscribes to, at every episode change and once a second (a subscriber that
@@ -131,9 +131,9 @@ What depends on what:
 
 ## Decisions (for the user)
 
-1. **Repository names**: `autoware_sim_vehicle`, `swb_world_protocol`, `carla_world`,
-   `isaac_world`, all under NEWSLabNTU. [open: the first two are accepted;
-   `carla_world` and `isaac_world` are too general and get new names]
+1. **Repository names**: `autoware_sim_vehicle`, `swb_world_protocol`, `swb_carla_world`,
+   `swb_isaac_world`, all under NEWSLabNTU. [decided 2026-10-23; the world servers'
+   packages, binaries and launch files take the repository's name]
 2. **Per-car package names**: `tesla_model3_description` and the rest, as in the table.
    [decided 2026-10-23: as written]
 3. **The profile package**: `autoware_sim_profile`. [decided 2026-10-23]
@@ -188,7 +188,7 @@ it.
   - **K4. The clock** (decision 5).
     - The epoch marker is gone and acb stamps with the world server's time.
     - Checks: `town02_episode_change`; a vehicle side started mid-session (`/clock`
-      held, then joins at the world server's time within 1 s); a `carla_world` restarted
+      held, then joins at the world server's time within 1 s); a `swb_carla_world` restarted
       under a running ego; CARLA restarted under both; acb's stamps against SSv2's time,
       bit for bit; acb standalone through `demo_scenario.py`'s reloads.
   - **K5. No shims, the docs.**
