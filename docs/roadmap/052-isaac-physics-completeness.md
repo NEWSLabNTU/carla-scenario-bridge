@@ -251,3 +251,40 @@ past a tile (`soil_tiles`' rebuild margin, which keeps the plates the wheels sta
 changing under them), which is why the video watches them from the trackside camera and not
 from the wheel. The scene's exposure is high in every camera (the sky white, the mud a pale
 brown); not changed here.
+
+### Today's model at the grip limit on mud (2026-10-24)
+
+The proof run drove straight through the mud: the soil's drag was uneven (the right wheels
+0.6 m from the zone's edge, so half of it on them), about 290 N m of yaw toward the left, and
+Autoware held the lane with -0.1 to -0.22 deg of tire angle; with 0.6 m/s^2 asked and almost
+no turn it used about a fifth of the mud's grip. So, without Autoware, the car was taken to
+the limit: `spikes/limit_mud.py` on `spikes/limit_mud.yaml` (50 m of `mud_wet`, x 150-200,
+from the road's south edge to y -129.3), one ego, its command set directly, open-loop
+manoeuvres from 40 km/h after a run-up on asphalt, the same on the road's asphalt as the
+baseline. Frames in `play_log/limit_mud/2026-10-24_22-15-43/`; the process segfaults in
+`app.close()` after the last case is written.
+
+| case | asphalt | mud |
+|---|---|---|
+| straight full braking (8 m/s^2 asked) | 8.8 m, 7.1 m/s^2, ABS idle | 16.9 m, 3.55 m/s^2, ABS 92 % of the time, straight |
+| split-mu braking, left wheels in mud | | 11.4 m, 5.4 m/s^2; yaws 7.6 deg toward the asphalt side, 6.8 deg/s peak, 2.2 deg sideslip, 0.14 m sideways |
+| 5 deg tire-angle step, speed held, 1.2 s | yaw rate 18.3 deg/s (0.99 of the kinematic), 3.54 m/s^2 lateral, sideslip 1.6 deg | yaw rate 14.4 deg/s mean and still rising, lateral 1.25-1.35 m/s^2 (kinematic 3.27), sideslip 6.5 deg and growing |
+| 1.5 deg turn, then full braking | heading 9.4 deg at the stop, sideslip 0.5 deg | heading 22.9 deg, rear slip angle to 16 deg, yaw rate doubling to 10.8 deg/s as the car slows |
+
+Mud's braking is 3.55 m/s^2 against the 2.3 its friction alone gives (mu 0.23 of dry): the
+soil's resistance brakes too. Split-mu braking yaws the car toward the high-grip side, as it
+should. The step on mud is a power oversteer: the rear wheels carry the drive against the
+soil's drag (driven slip rising 0.02 to 0.15), so the rear axle's lateral share of the friction
+circle shrinks, its slip angle grows from 0.3 to 6.5 deg in 1.2 s and the yaw rate does not
+settle; the lateral acceleration stays near 0.13 g, about 57 % of mu g, which the rear axle's
+remaining lateral grip explains (an estimate, not measured per axle). Braking in a turn on
+mud spins the tail out at low speed, the brake-induced oversteer of a car without stability
+control.
+
+So today's model slides, in the right directions. What it does not have, for the next model
+step: no ESC (the real Model 3 has one, so the car here spins more readily); the tire keeps
+asphalt's lateral stiffness and slip curve on mud (PhysX fixes the friction-vs-slip graph once
+playing; only the friction value follows the ground), so the onset is sharp where a tire in
+soft soil builds its force over a larger slip angle; and the soil gives no lateral force of
+its own (no lateral shear, no sidewall bulldozing, no rut walls). None of it is checked
+against a measurement yet (053).
