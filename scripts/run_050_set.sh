@@ -29,11 +29,28 @@ stack_pid() {  # the play_launch serving web port $1
     return 1
 }
 
+supervisor_of() {  # the `swb-agent supervise` above pid $1, if any
+    local p=$1
+    while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+        p=$(ps -o ppid= "$p" 2>/dev/null | tr -d ' ')
+        [ -n "$p" ] && tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q "swb_agent supervise" \
+            && { echo "$p"; return 0; }
+    done
+    return 1
+}
+
 stop_stack() {  # $1 web port
-    local pid
+    local pid sup
     pid=$(stack_pid "$1") || return 0
-    say "stopping the stack on web $1 (pid $pid)"
-    kill -TERM -"$(ps -o pgid= "$pid" | tr -d ' ')" 2>/dev/null || kill -TERM "$pid"
+    # A stack carla_up.sh started (the bench's) is supervised: killing it only restarts it,
+    # and the restarted one attached to the next hero on this CARLA. Stop the supervisor.
+    if sup=$(supervisor_of "$pid"); then
+        say "stopping the stack on web $1 (pid $pid) through its supervisor (pid $sup)"
+        kill -TERM "$sup"
+    else
+        say "stopping the stack on web $1 (pid $pid)"
+        kill -TERM -"$(ps -o pgid= "$pid" | tr -d ' ')" 2>/dev/null || kill -TERM "$pid"
+    fi
     for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || return 0; sleep 2; done
     kill -KILL -"$(ps -o pgid= "$pid" | tr -d ' ')" 2>/dev/null || kill -KILL "$pid"
 }
