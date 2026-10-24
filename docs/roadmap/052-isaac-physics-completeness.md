@@ -240,8 +240,9 @@ hundred runs: about 0.5 GB) and not traced.
 a still camera past the mud zone looking back along the ego's line, a camera at the rear-left
 wheel, and every frame's state and per-wheel ground. `scripts/record_video.py` makes the
 video: dash and trackside side by side, the wheel inset, speed, sinkage and soil resistance
-below. On the mud the wheels sink 2.9 cm (front) and 3.9-4.8 cm (rear) and the four meet
-600-1000 N; Autoware asks for 0.4-0.6 m/s^2 to hold 13 km/h, the car gets about 0.
+below. With all four wheels on the mud they sink 2.9 cm (front) and 3.9-4.7 cm (rear) and
+meet 937 N together (median; 421-1102); the speed stays at 13-14 km/h while Autoware's request
+rises from 0.08 to 0.61 m/s^2 against the drag.
 
 Two things the recording found: the soil zones rendered white (RTX ignores a mesh's
 `displayColor` when it has no material), so each zone now gets a material of its class's
