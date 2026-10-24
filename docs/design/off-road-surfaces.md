@@ -241,12 +241,12 @@ On the pad (`soil_drive.py`, `SOIL_SPIKE_ONLY=mud`, warp kernel):
 | coast in at 15 m/s, 3 s: deceleration | 0.00 m/s^2 | 0.67 (3.4 cm, 1195 N, friction 0.17) |
 | hold 10 m/s for 80 m: speed, acceleration demand | 10.0, 0.00 | 9.53, 0.70 (1265 N) |
 | the same line again (ruts) | | 9.87, 0.19 (4.3 cm, 351 N) |
-| full throttle from rest, 3 s | 10.84 m/s | 0.02 m/s: stuck, dug in to 5.7 cm, 1941 N |
+| full throttle from rest, 3 s | 10.84 m/s | 0.07 m/s: stuck, dug in to 5.5 cm, 2875 N (issue 004's fix; 0.02 m/s, 1941 N before) |
 | full braking from 15 m/s (ABS) | 14.3 m | 30.8 m |
 
 The rear-driven Model 3 cannot pull away from rest in mud: the spinning rear wheels dig in
-(slip sinkage) until the resistance, 1.9 kN, exceeds what friction 0.19 on the rear axle
-gives. That is plausible for a road car on road tyres, but it comes from a stand-in, which is
+(slip sinkage) until the resistance, 2.9 kN, exceeds what friction 0.2 on the rear axle
+gives (about 1.8 kN). That is plausible for a road car on road tyres, but it comes from a stand-in, which is
 why the map has to ask for it.
 
 ### Soil layer on a pad (047 S3, 2026-10-23)

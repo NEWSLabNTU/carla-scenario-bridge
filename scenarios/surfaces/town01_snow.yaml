@@ -1,0 +1,12 @@
+# Roadmap 052 step 3: town01_snow.xosc's ground. town01_ego_drive's route crosses 12.8 m of
+# loose snow, a soil zone on the grid with its own ground, where town01_mud.yaml has its mud.
+# Snow's soil row is Wong's (US snow) but nothing has checked it against a tire on snow yet
+# (053), so the map opts in by name. Copy to data/carla-autoware-bridge/Town01/surfaces.yaml.
+allow_unvalidated: [snow_loose]
+defaults: {Road: asphalt, RoadLine: asphalt, SideWalk: concrete, Terrain: grass, Ground: dirt}
+zones:
+  - id: snow_road
+    class: snow_loose
+    soil: grid
+    ground_z: 0.0
+    polygon: [[145.6, -134.4], [158.4, -134.4], [158.4, -128.0], [145.6, -128.0]]
