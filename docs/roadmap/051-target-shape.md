@@ -244,32 +244,34 @@ it.
 
 ## Acceptance
 
-- [ ] **Shape**: the bridge's repository has no simulator package and no simulator crate
+- [x] **Shape**: the bridge's repository has no simulator package and no simulator crate
   in its graph. acb and aib depend on the two vehicle repositories only, and the world
   servers on `sim_vehicle_spec`, not on Autoware. The pin check passes. Each
   repository builds and tests on its own from a fresh clone with its `deps/` submodules.
-- [ ] **One source**: changing one spec value without regenerating fails `check-generated`
+- [x] **One source**: changing one spec value without regenerating fails `check-generated`
   in every repository holding an output, and fails the catalog lint.
-- [ ] **Spawn**: an ego more than 2 cm from the catalog is refused with both boxes in the
+- [x] **Spawn**: an ego more than 2 cm from the catalog is refused with both boxes in the
   message. On CARLA, acb's physics read-back matches.
-- [ ] **Start**: a vehicle side built from a different spec commit than the world server
+- [x] **Start**: a vehicle side built from a different spec commit than the world server
   is refused before the scenario starts, with both hashes and who loaded them.
-- [ ] **The same car**: `vehicle_check`'s dynamics run passes on CARLA and on Isaac without
+- [x] **The same car**: `vehicle_check`'s dynamics run passes on CARLA and on Isaac without
   SSv2, within the spec's limits and acceptance.py's 0.35 m/s². The CARLA and Isaac table
   is in the results, with CARLA's remaining gap named (ABS, regen).
 - [ ] **Without SSv2**: from acb's own workspace, `just sim` and `auto_drive` drive Town01
   to arrival. From aib's, `just isaac-ego` and `just autoware` do the same.
-- [ ] **The manual scene**: CARLA asynchronous with no swb process; a Model 3 spawned as
+  (K5: acb's half is done; aib's is open for newslab-server139, see K5.)
+- [x] **The manual scene** (run synchronous, see K5): CARLA asynchronous with no swb process; a Model 3 spawned as
   `hero` from a plain CARLA Python client; traffic from CARLA's `generate_traffic.py`;
   acb's `just autoware map:=Town01`. acb applies and verifies the spec's physics, Autoware
   localizes, takes a goal from RViz and arrives, stopping at CARLA's own cycling lights.
   A hero of another blueprint is refused with both names.
 - [ ] **With SSv2**: `just e2e sim:=carla` and `just e2e sim:=isaac` PASS. The CARLA suite
   and the gap set have every difference from K0 explained by K3's physics or K4's clock.
-- [ ] **A future simulator**: a fake vehicle side passes `vehicle_check`. A fake world
+  (K5: CARLA's half is done; `e2e sim:=isaac` is open for newslab-server139, see K5.)
+- [x] **A future simulator**: a fake vehicle side passes `vehicle_check`. A fake world
   server (Python, on the shell) passes conformance. Both are built from the repositories'
   docs alone, as the check that the contracts are enough.
-- [ ] `just test` and `just check` pass in every repository.
+- [x] `just test` and `just check` pass in every repository.
 
 Isaac's runs need a host that renders Town01: newslab-server139, with its `.env` moved
 from `CSB_*` to `SWB_*` first.
@@ -568,3 +570,147 @@ point in rclcpp::Time" in some stack starts (ego logs since 2026-10-22, K0's tim
 included). It is a diagnostic node, and the stack runs on without it. acb's `just sim`
 never reports "Startup complete" here: rviz2 crash-loops without a display, and play_launch
 waits on 8 perception composables. The bridge and the drive are unaffected.
+
+### K5. No shims, the docs, acceptance (2026-10-24, `target-shape`)
+
+- **No shims.** Renamed arguments are refused by name, never aliased. The Autoware
+  profile's `check_launch_args` (autoware_sim_vehicle) refuses the `carla_*` switches, naming
+  each one's `sim_*` replacement, and the old `acb_vehicle` / `aib_vehicle` / sensor-kit
+  values, naming the car's packages. Every entry point runs it: swb's `ego-av`, `ego-isaac`
+  and `bg-av` (`swb_reject_args`), acb's `just sim` / `just autoware` (which accept only
+  `map:=`, `auto_drive:=` and `spawn_index:=`), and aib's `just autoware`. Removed outright:
+  acb's `urdf_parser.rs`, the legacy `CarlaConfig` / `SensorTypeDefaults` / `SensorParams`,
+  its urdf-rs dependency, `config/bridge.yaml` and the second copy of `demo_scenario.py`
+  (now a symlink), and swb's `scripts/carla_step_response.py` (vehicle_check replaces it).
+  A `map_origin` key in acb's sensor config is refused.
+- **Weather is the world server's, by name** (a deviation: there is no typed CARLA weather
+  service). `swb_core::weather` carries a preset or named parameters, in the server's own
+  names. CARLA's presets and 14 fields live in `swb_carla_world/src/backend/carla/weather.rs`
+  and its README, and the Python shell has `World.set_weather` / `get_weather`. The bridge's
+  `SetWeather` / `GetWeather` (`swb_interfaces`) take `{preset, names[], values[]}`, and
+  `Weather.msg` is gone. The conformance check's weather test is simulator-neutral: it
+  changes the first parameter and reads it back.
+- **The docs.**
+  - CLAUDE.md now lists the eight repositories, supervised ego stacks, and which
+    `acb_bridge` an overlay runs (corrected, see K3).
+  - The README, `docs/user-guide.md` (the `sim_*` table, the refused arguments, generic
+    weather, a town change ending the vehicle side, the signal-link repair for every town)
+    and `docs/development.md` are updated.
+  - Design docs: `time-and-ticking.md` is rewritten, `failure-and-frame-budget.md` is
+    updated, `simulator-interface-split.md` and `vehicle-side.md` carry status notes, and
+    the paths are renamed elsewhere.
+  - Each component has its own README. The protocol has `docs/world-protocol.md` and
+    `docs/world-server.md`, autoware_sim_vehicle has `docs/vehicle-contract.md`, and acb's
+    CLAUDE.md is rewritten.
+- **Every repository** has `just test` and `just check`, and all 16 pass
+  (sim_vehicle_spec gained `check`, autoware_sim_vehicle `test`, swb_isaac_world `check`).
+  The catalog lint, `check_scenario_vehicles.py`, now also fails a catalog entry whose
+  `swb.spec_hash` is not its spec's.
+
+Acceptance (`play_log/051/k5/`, CARLA 0.9.16 on newslab-118-server, port 2010):
+
+- **Shape**: no simulator package or crate is in this repository's graph, and the pin check
+  finds 9 dependencies and 0 mismatches. Fresh clones of all seven components, with their
+  `deps/`, build and test on their own.
+- **One source** (`one_source.txt`): one spec value changed without regenerating fails
+  `check-generated` in sim_vehicle_spec (carla_sensors, carla_physics, the catalog),
+  autoware_sim_vehicle (8 files, and the pedal maps' `physics_hash`) and aib, and it fails
+  the catalog lint.
+- **Spawn** (`spawn_refusal`): an ego box off the catalog is refused with every field and
+  both values: "box centre x declared 1.450, body 1.479; length declared 4.860, body 4.792;
+  front axle x declared 3.005, body 3.068; rear axle x declared 0.000, body 0.064". acb's
+  read-back matches on every K3-K5 run ("The hero runs the vehicle spec's physics").
+- **Start** (`start_refusal`): a vehicle side with another `spec_hash` is refused before
+  the scenario starts, naming all three parts: "the world server (carla) 862c2168f77e, the
+  vehicle agent 41, the catalog 862c2168f77e". The test's hash was all digits
+  (`0…051`), and YAML read it as the octal integer 41. A real hash is hex, quoted or not, so
+  this is cosmetic.
+- **The same car**: vehicle_check passes on CARLA (`vc_carla2`) and on Isaac (`vc_isaac2`).
+  The table and CARLA's remaining gap are in K3: the regen fade and ABS are not modelled, and
+  Isaac's -4 m/s^2 brake is 0.30 short, inside 0.35.
+- **Without SSv2**: from acb's workspace, `just sim spawn_index:=74 auto_drive:=true`
+  arrives at the traffic-light goal (84.6 s). Spawn point 0 is held at its first corner by
+  a street lamp (acb issue 029), so `spawn_index:=` was added. Bugs found and fixed on the
+  way:
+  - the demo ticked 2.7x real time (now paced);
+  - the perception composables never loaded (isolated containers);
+  - every light was held at 99999 s by swb_carla_world saving an already-held light's
+    timings (now a held light gets CARLA's default phases);
+  - `just autoware` connected to CARLA on 2000, not `CARLA_PORT`;
+  - a second SIGTERM cut the demo's cleanup short, leaving CARLA synchronous with heroes in
+    it.
+
+  From aib's workspace (`just isaac-ego` and `just autoware` to arrival on Town01): **not
+  run**. It needs Isaac to render Town01, and this host cannot (see "With SSv2" below). It
+  stays open for newslab-server139, with the Isaac e2e. On a flat world here, aib's
+  `just vehicle-check` passes.
+- **The manual scene** (`manual_scene*`): CARLA is **synchronous** at 0.05 s, ticked in real
+  time by a plain client, with no swb process. This deviates from the line above, which
+  said asynchronous: the project runs CARLA synchronous for reproducibility, and an
+  asynchronous scene's lidar arrives in slices that Autoware's pipeline does not gather.
+  A Model 3 is spawned as `hero` at spawn point 74 from a plain client, with 30 vehicles and
+  20 walkers from `generate_traffic.py`, acb's `just autoware map:=Town01`, and
+  `auto_drive` to `scenarios/ego_poses.yaml` (in place of RViz's goal tool, same service).
+  An observer logs the light state and each crossing of CARLA's stop waypoints.
+  - Runs 1-2: arrived in 85.6 s and 96.5 s, but the ego crossed light 644's stop line
+    **on red at 4.17 m/s**. Its approach lanelet referenced no light: the TUM map pack links
+    most Town01 lights to a stop line on the next lane or at another junction (acb issue
+    030). This is roadmap 031's defect 8, which had only been repaired on Town05; 28 of 36
+    approaches had no link in their own direction. `scripts/repair_lanelet_signal_links.py
+    Town01` relinks them.
+  - The repair had two bugs of its own (`fe33862`):
+    - its heading test was unsigned, so on a waypoint lying on the line two opposite lanes
+      share it linked light 373 to the oncoming lane;
+    - its stop line only spanned CARLA's lane, which missed Autoware's path by 0.2 m where
+      the map's lanes sit 2.2 m off.
+
+    With the first repair, the ego drove through SSv2's red in `town01_i3_red_light`; the
+    K5 suite (`051_k5`) passed anyway, because i3 forces green after a while. After the
+    fix, all 36 approaches are linked in their direction, and each stop line crosses its
+    lane's centre. The map lives in `data/`, which git ignores, so the user guide and acb's
+    README now say to run the repair for every town and restart the vehicle stack (a stack
+    started before the repair kept the old map once).
+  - On the final map (`manual_scene`): arrived in 99.7 s. The ego stopped 12 s for light
+    644's red with its front at CARLA's line, and crossed both lines on green. Earlier runs
+    on the first repair: 77.2 s (both lights turned yellow 2.7 m before the line and were
+    passed, as Autoware should) and 94.3 s (an 11.5 s stop at 644's red). acb applied and
+    verified the spec's physics each time.
+  - A hero of another blueprint (`refuse_blueprint`, a Lincoln MKZ) is refused with both
+    names: "the hero is a vehicle.lincoln.mkz_2020, but the vehicle spec's car is a
+    vehicle.tesla.model3 (carla_physics 862c2168f77e): refusing it". No sensor is
+    spawned.
+  - The scene's own driver had a bug: a background job of a script starts with SIGINT
+    ignored, so `generate_traffic.py` never ran its cleanup and left 28 vehicles behind. It
+    now gets its KeyboardInterrupt back, and the world is left empty.
+- **A future simulator**: a fake world server built from `world-server.md` and
+  `world-protocol.md` alone passes conformance 25/25. A fake vehicle side built from
+  `vehicle-contract.md` alone passes vehicle_check. CARLA's world server passes conformance
+  25/25 (`conf_carla`), with the weather services live.
+- **With SSv2**: `just e2e sim:=carla` PASS. `just e2e sim:=isaac` **could not run here**. On
+  newslab-118-server the Isaac world server dies on loading Town01: an `omni.rtx` GPU page
+  fault while it renders the landscape, about 34 s in, exit 139. That happened on all 36
+  respawns in the 1800 s `isaac_up.sh` waits (`play_log/051/k5_e2e_isaac.log`, NVIDIA
+  driver 615.71.09). This is the host's known Town01 render crash, not 051's code: Isaac's
+  vehicle_check on a flat world passes here (K3), and its time and ego paths are unchanged
+  since K4. The Isaac e2e stays open for newslab-server139, the host that renders Town01.
+  - The CARLA suite on the final map (`run_050_set.sh 051_k5b`, report
+    `play_log/051/k5b_report.md`, against K3's `051_k3b`) has the same verdicts in every
+    scenario: 15 pass, truck_pass fails and the bench is "missing", as in K2, K3 and 050.
+  - The numbers agree with K3 within run-to-run noise. `town01_i3_red_light` takes 86.8 s
+    (K3: 86.9 s). The ego stops for SSv2's red 2.8 m before CARLA's line, centre of the car,
+    where K3 stopped about 6 m past it on the pack's stop line. `town01_traffic_light` stops
+    2.6 m before.
+  - The two fixed-time gap reproducers drove 11.9 m and 18.0 m (K3: 10.7 m and 14.6 m; the
+    first K5 suite 10.3 m and 14.8 m). That is engagement timing inside a fixed time. SSv2
+    and CARLA still agree within 5 cm.
+  - The first K5 suite (`051_k5`, on the first repair) had one more difference. A Town01
+    plastic chair (a 0.5 kg dynamic prop) that earlier runs' traffic had knocked about
+    touched the ego in the tour, with an impulse of 49 N·s. A world that is never reloaded
+    keeps such props where they were knocked. Its i3 ran in 66 s because its ego never
+    stopped (above).
+  - On the default clustering stack (not the suite's tour stack, which runs the incidents
+    on CenterPoint), i3 is held after its light at Town01's south-east corner by the street
+    lamp of acb issue 029, 2 of 2 times.
+  - `run_050_set.sh` left the bench's supervised ego running after each suite (K4 made
+    `carla_up.sh` supervise it, and `stop_stack` only killed the play_launch). That
+    stack would take the next hero on the port. It now stops the supervisor (`59521ef`).

@@ -157,9 +157,10 @@ scenario): `scripts/repair_lanelet_signal_links.py <Town>` links every signalise
 lanelet to the regulatory element of the light CARLA controls it by (from each light's stop
 waypoints and the signal table) and gives that element a stop line at the stop waypoints. On
 the pack's Town05 most approach lanelets referenced no light or a neighbouring approach's, so
-Autoware crossed signalised junctions as unsignalised; on its Town01, 34 of the 36 lights had
-their stop line on the next lane or at another junction, and the ego drove through a red at
-4 m/s (roadmap 051). Run it for every town you drive, and restart the vehicle sides after it.
+Autoware crossed signalised junctions as unsignalised; on its Town01, 28 of the 36 approaches
+had no link to their light in their own direction, and the ego drove through a red at 4 m/s
+(roadmap 051). Run it (at `fe33862` or later) for every town you drive, and restart the vehicle
+sides after it: a stack started before keeps the old map.
 Keep the towns side by side in one directory --
 the scenarios below find them as `$(env CARLA_MAPS)/<Town>`:
 
