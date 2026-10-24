@@ -25,7 +25,7 @@ The server already holds ~17.5 GB with Town01, and the OOM killer has picked it 
 
 ## Where it goes
 
-`src/isaac_world/spikes/reload_memory.py` runs the world server's own `IsaacWorld` with
+`src/swb_isaac_world/spikes/reload_memory.py` runs the world server's own `IsaacWorld` with
 Town01 preloaded. In each phase it repeats one part of what a scenario does six to eight
 times and reads the resident memory after each (MB per cycle, after the first):
 

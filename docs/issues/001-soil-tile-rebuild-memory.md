@@ -22,7 +22,7 @@ server already holds ~17.5 GB with Town01, and the OOM killer has picked it befo
 
 ## How it was confirmed
 
-`src/isaac_world/spikes/soil_drive.py` (`SOIL_SPIKE_ONLY=rut`), pad, aib's Model 3 at 8 m/s
+`src/swb_isaac_world/spikes/soil_drive.py` (`SOIL_SPIKE_ONLY=rut`), pad, aib's Model 3 at 8 m/s
 through a 60 m sand zone with tiles, two passes:
 
 | pass | tiles rebuilt | RSS growth |
