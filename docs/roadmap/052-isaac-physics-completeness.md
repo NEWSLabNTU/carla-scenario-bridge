@@ -7,7 +7,7 @@ ego's own dynamics measured the way CARLA's already are. Calibration against pub
 measurements is [053](053-terramechanics-calibration.md); this phase changes no soil
 parameter.
 
-**Status**: in progress, 2026-10-24: steps 1 and 2 done, 3 and 4 coded.
+**Status**: in progress, 2026-10-24: steps 1-4 done; step 5 (several egos on soil) open.
 
 **Source**: user direction 2026-10-24: "Focus on feature completeness first. Suggest the
 roadmap", then "do both phase 052 and dataset survey".
@@ -45,14 +45,15 @@ CARLA.
   bicycle model. Here: the same steps on sand and dirt (`spikes/step_response.py`, which
   takes a surface map and a start in a zone), the soil's resistance and traction limit on
   them, beside 051's flat numbers.
-- [ ] **3. Snow from end to end.** A soil zone of `snow_loose` on Town01
+- [x] **3. Snow from end to end.** A soil zone of `snow_loose` on Town01
   (`scenarios/surfaces/town01_snow.xosc` and its surface map), the ego driving through with
-  Autoware. Compare the pad numbers (sinkage, resistance, pull-away) with Wong's for that
-  row; mark the class `unvalidated:` like mud until 053 has a reference.
-- [ ] **4. NPCs on the soil.** A tracked or kinematic NPC vehicle on soil stands at the
+  Autoware; the class `unvalidated:` like mud until 053 has a reference. (Comparing its
+  pad numbers with a measured tire on snow is 053's: Wong's row has no tire data.)
+- [x] **4. NPCs on the soil.** A tracked or kinematic NPC vehicle on soil stands at the
   grid's sinkage under its wheels and follows existing ruts (its pose's z and pitch/roll
-  from the ruts under its four wheels), without plates of its own. Check with
-  `town01_soil.xosc`'s lead car seen from the ego's camera and lidar.
+  from the ruts under its four wheels), without plates of its own. Checked by the world
+  server's log on `town01_soil.xosc`'s lead car; not yet looked at in the ego's camera and
+  lidar.
 - [ ] **5. Several egos on soil.** Two and four egos (039's multi-ego setup) through one soil
   zone: frame time against one ego, ruts each ego leaves felt by the others, the world
   server's memory over a batch.
@@ -61,7 +62,7 @@ CARLA.
 
 - [x] No return from an earlier scenario's ego in a later scenario's lidar.
 - [x] Step responses on sand and dirt beside 051's flat ones.
-- [ ] `town01_snow.xosc`, `town01_soil.xosc` and `town01_mud.xosc` PASS on Isaac with
+- [x] `town01_snow.xosc`, `town01_soil.xosc` and `town01_mud.xosc` PASS on Isaac with
   Autoware, 0 MRM, 4 runs each.
 - [ ] A lead NPC on soil visibly sinks and rides in the ego's ruts.
 - [ ] Frame time with four egos on soil recorded; the world server's memory flat over a
@@ -153,3 +154,31 @@ motor's). A request below the drag only creeps: Autoware's controller closes the
 for more. Full throttle on sand does worse than 3 m/s^2: the spinning rear wheels dig in (slip
 sinkage), as 047 found for mud. Braking gains the drag at low requests and loses a little at
 the tires' limit. Whether these drags are right is 053's question (He 2020's SRTT on sand).
+
+### Steps 3 and 4: snow, and NPCs on the soil (2026-10-24)
+
+On Isaac with Autoware, a fresh world server each batch (newslab-server-241):
+
+| scenario | batch | result | longitudinal, m/s^2 | cross-track, m | MRM |
+|---|---|---|---|---|---|
+| `town01_snow.xosc` | `play_log/acceptance/2026-10-24_14-12-02` | 4/4 PASS | 0.121-0.126 | 0.04-0.05 | 0 |
+| `town01_soil.xosc` | `play_log/acceptance/2026-10-24_14-45-04` | 4/4 PASS | 0.196-0.296 | 0.03-0.05 | 0 |
+| `town01_mud.xosc` | `play_log/acceptance/2026-10-24_15-02-40` | 4/4 PASS | 0.080-0.084 | 0.04-0.05 | 0 |
+
+A first snow batch before 051's landing lost runs 2-4 to a render hang at the second ego's
+warm-up (`Waiting for frame submission semaphore timed out`, device 1); the batch above, on
+the rebuilt workspace, did not hang.
+
+In `town01_soil.xosc` the lead car's body stands 7.4 cm down at its deepest in every run
+("off the soil: its body was down 0.074 m at most"). The first version added the tilt op to
+the NPC's instanced body on its first frame on soil: a structural edit mid-run, and the world
+stood still for 2.4-3.1 s as the lead car reached and left the soil (one 3.1 s gap split a
+run in two for the bag scorer, which pairs driving stretches with runs in order, so a passing
+run was reported as "went nowhere"). Authored at spawn (`swb_isaac_world` `0976398`), the
+gaps in the status stream fell to 1.0-1.9 s. The same batch with the sinking switched off
+still had two of 1.1-1.2 s, in its first run; the batch of 2026-10-24 10:26, before 051's
+landing, had none over 1 s. That remaining stall is not the sinking's and is not explained.
+
+Also seen in every soil batch, before and after: at its start Autoware backs the ego up
+about 10 m at 1 m/s (`control_cmd` velocity -1.0) away from the lead car standing just ahead,
+then drives the route. It is Autoware's planner, not the vehicle; the scenarios pass.
