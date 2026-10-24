@@ -7,7 +7,7 @@ not been checked against anything. This phase takes the measurements from publis
 datasets, so it does not wait for the NTU field (040), whose cone index and drawbar test
 become the local check at the end.
 
-**Status**: planned, 2026-10-24. Step 1 (the survey) under way.
+**Status**: in progress, 2026-10-24. Step 1 (the survey) done.
 
 **Source**: user direction 2026-10-24: "Does soil calibration require real data? If yes, I
 prefer to find real dataset online. Same for mud and snow cases. We can do dataset survey and
@@ -19,7 +19,7 @@ keep them noted."
 
 ## Steps
 
-- [ ] **1. Survey.** [design/terramechanics-datasets.md](../design/terramechanics-datasets.md):
+- [x] **1. Survey.** [design/terramechanics-datasets.md](../design/terramechanics-datasets.md):
   for each class (dry sand, sandy loam, wet clay as mud, snow), the published measurements
   (bevameter, shear, cone index, single-wheel and vehicle tests of pneumatic tires: pull,
   resistance and sinkage against slip), with soil state, tire, load, format and access.
@@ -44,3 +44,24 @@ keep them noted."
 - [ ] The three soil scenarios PASS after the fit.
 
 ## Progress
+
+### Step 1: the survey (2026-10-24)
+
+[design/terramechanics-datasets.md](../design/terramechanics-datasets.md). Almost no open data
+measures a passenger tire on soft soil. The exception, and the primary reference for sand, is
+Virginia Tech's single-wheel rig with the Standard Reference Test Tire (P225/60R16) at 5 kN on
+dry loamy sand (He 2020, open on VTechWorks): a peak drawbar-pull coefficient of 0.12 at about
+12 % slip at 290 kPa, between treaded SCM's (about 0.3) and CRM's (below zero), which is the
+disagreement 047 S5 left open. The picks for step 2, as the survey makes them:
+
+| class | primary | access | what it lacks |
+|---|---|---|---|
+| sand | He 2020, SRTT on dry loamy sand | open | walking pace (6 cm/s), 1 % moisture |
+| dirt | NG-NRMM 2018 Keweenaw bevameter, cone index, moisture | public (Distribution A) | a 12 t truck's tire: soil parameters only |
+| mud | WES TR 3-666 (Wismer 1966), a 9.00-14 smooth tire on near-saturated fat clay | public domain | a tractor-size tire; stays `unvalidated:` |
+| snow (fresh) | Lee et al. 2012, J. Terramechanics 49(5) | paywalled | the tire unverified |
+| snow (packed), ice | CRREL 93-9 (Shoop 1993); Virginia Tech's ice data (Zenodo 1009017, CC BY 4.0) | public domain, open | |
+
+`snow_loose` is exactly Wong's US snow row in SI units; its Janosi K is not from the table.
+The survey's own unverified items (Wong's values from the literature, not the book; DTIC and
+ERDC reports from catalogue records; some papers' tires) are marked there.
