@@ -789,8 +789,10 @@ is needed. Every acceptance item is met.
 - The 20-NPC bench now has a verdict: issue 006. It starts no ego stack for an ego-less
   scenario and uses a 1200 s cap. The suite reports `town01_truck_pass` as `expected-fail`
   when SSv2's designed collision fails it.
-- On the default (clustering) stack, `town01_i3_red_light` is held by Town01's south-east
-  lamp: acb issue 029. The suite runs the incidents on CenterPoint.
+- On the default (clustering) stack, `town01_i3_red_light` was held by Town01's south-east
+  lamp: acb issue 029, fixed 2026-10-24. Detection's compare-map filter, loading the towns'
+  one-cell maps dynamically, passed nearly every map point to clustering; autoware_sim_vehicle
+  `25c4f29` loads the map statically for it, and i3 passes on clustering (2 of 2).
 - The map repairs (`repair_lanelet_signal_links.py`, and `generate_signal_groups.py` for
   aib) run once per host and town, because `data/` is git-ignored: acb issue 030 and
   `docs/user-guide.md`. Done on newslab-118-server for every town of the pack on 2026-10-24
