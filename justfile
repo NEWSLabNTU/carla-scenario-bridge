@@ -686,7 +686,7 @@ isaac-check:
 # Ready when it answers Hello: `just isaac-health`. Stop it by its play_launch's pid
 # (SIGTERM); swb only empties its world.
 #
-# Usage: [DISPLAY=:8] just isaac-world [ego:=<yaml>] [follow:=true] [world:=<w>,...] [render:=...]
+# Usage: [DISPLAY=:8] just isaac-world [ego:=<yaml>] [follow:=true] [world:=<w>,...] [render:=...] [record:=<dir>]
 [positional-arguments]
 isaac-world *args:
     #!/usr/bin/env bash
@@ -697,8 +697,8 @@ isaac-world *args:
         case "$a" in
             ego:=) args+=("ego:=none") ;;
             world:=) ;;
-            ego:=*|world:=*|follow:=*|render:=*) args+=("$a") ;;
-            *) echo "isaac-world: unknown argument '$a' (ego:=, world:=, follow:=, render:=; the port and display are ISAAC_PORT and DISPLAY)" >&2; exit 2 ;;
+            ego:=*|world:=*|follow:=*|render:=*|record:=*) args+=("$a") ;;
+            *) echo "isaac-world: unknown argument '$a' (ego:=, world:=, follow:=, render:=, record:=; the port and display are ISAAC_PORT and DISPLAY)" >&2; exit 2 ;;
         esac
     done
     source /opt/ros/humble/setup.bash

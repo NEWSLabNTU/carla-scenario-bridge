@@ -232,3 +232,21 @@ Memory over a batch: four egos spawned, driven 10 s and despawned, the soil made
 (+4.8 MB per cycle, steady), GPU 11265 MB throughout (11260 at the end). The ego slots are
 reused (`_ego_path`), so the lidars cost nothing more (issue 003). The RSS creep is small (a
 hundred runs: about 0.5 GB) and not traced.
+
+### A proof run on mud, recorded (2026-10-24)
+
+`town01_mud.xosc` on Isaac with Autoware, PASS, recorded with the world server's `record:=`
+(`swb_isaac_world` `recorder.py`, off by default): the dash camera (the rig's `camera6` pose),
+a still camera past the mud zone looking back along the ego's line, a camera at the rear-left
+wheel, and every frame's state and per-wheel ground. `scripts/record_video.py` makes the
+video: dash and trackside side by side, the wheel inset, speed, sinkage and soil resistance
+below. On the mud the wheels sink 2.9 cm (front) and 3.9-4.8 cm (rear) and the four meet
+600-1000 N; Autoware asks for 0.4-0.6 m/s^2 to hold 13 km/h, the car gets about 0.
+
+Two things the recording found: the soil zones rendered white (RTX ignores a mesh's
+`displayColor` when it has no material), so each zone now gets a material of its class's
+colour (`soil_tiles.LOOKS`); and the ruts appear in the render only once the wheels are 3 m
+past a tile (`soil_tiles`' rebuild margin, which keeps the plates the wheels stand on from
+changing under them), which is why the video watches them from the trackside camera and not
+from the wheel. The scene's exposure is high in every camera (the sky white, the mud a pale
+brown); not changed here.
