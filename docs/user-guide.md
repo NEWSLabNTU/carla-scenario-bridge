@@ -105,8 +105,14 @@ One directory per CARLA town, in Autoware's map layout plus one CARLA file:
 per map, with CARLA running:
 
 ```bash
-ros2 run scenario_world_bridge scenario_world_bridge --generate-signal-table <map dir>
+ros2 run swb_carla_world swb_carla_world --generate-signal-table <map dir> \
+    --ros-args -p carla_port:=<CARLA port> -p port:=<a free world port>
 ```
+
+It loads the town in CARLA, writes `<map dir>/traffic_lights.yaml` (and `carla/traffic_lights.yaml`,
+a link to it, for acb) and puts CARLA back to asynchronous; no other CARLA world server may
+hold that CARLA meanwhile (the lock). CARLA names Town10 `Town10HD`: the Python repairs below
+take that name with `--map <dir>/Town10`.
 
 The bridge checks it at every scenario start and refuses to run with a table that no longer
 matches CARLA. The map directory is read-only at run time.

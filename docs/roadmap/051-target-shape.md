@@ -793,4 +793,8 @@ is needed. Every acceptance item is met.
   lamp: acb issue 029. The suite runs the incidents on CenterPoint.
 - The map repairs (`repair_lanelet_signal_links.py`, and `generate_signal_groups.py` for
   aib) run once per host and town, because `data/` is git-ignored: acb issue 030 and
-  `docs/user-guide.md`.
+  `docs/user-guide.md`. Done on newslab-118-server for every town of the pack on 2026-10-24
+  (signal table, links, groups): Town02 24 lights in 8 groups, Town03 38 in 11, Town05 54 in
+  15, Town10 15 in 5; each table regenerated identical after the repair. Town10's Lanelet2
+  map has two lights CARLA lacks (elements 37055, 37058): unmapped, and no lanelet keeps a
+  link to them.

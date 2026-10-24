@@ -15,7 +15,8 @@ CARLA knows the truth: `TrafficLight.get_stop_waypoints()` gives, per light, the
 point of each lane it governs. For each light this script
 
 - finds the light's regulatory element through the resolved signal table
-  (`<map dir>/carla/traffic_lights.yaml`, opendrive_id -> regulatory_element_ids);
+  (`<map dir>/traffic_lights.yaml`, or `carla/` in an older map dir; opendrive_id ->
+  regulatory_element_ids);
 - finds the road lanelet containing each stop waypoint (heading within 37 degrees);
 - gives the element a new stop line (`ref_line`) across those lanes at the stop
   waypoints, and makes those lanelets reference it.
@@ -147,7 +148,13 @@ def main():
     a = ap.parse_args()
     mdir = Path(a.map or f"data/carla-autoware-bridge/{a.town}")
     osm = mdir / "lanelet2_map.osm"
-    table = yaml.safe_load((mdir / "carla" / "traffic_lights.yaml").read_text())
+    # The table is `<map dir>/traffic_lights.yaml` since roadmap 046; older map dirs keep it
+    # under `carla/`.
+    tables = [p for p in (mdir / "traffic_lights.yaml", mdir / "carla" / "traffic_lights.yaml")
+              if p.exists()]
+    if not tables:
+        sys.exit(f"no signal table in {mdir}: swb_carla_world --generate-signal-table {mdir}")
+    table = yaml.safe_load(tables[0].read_text())
     od_elements = {}
     for s in table["signals"]:
         od_elements.setdefault(str(s["opendrive_id"]), []).extend(
