@@ -1738,13 +1738,11 @@ impl SimBackend for RemoteBackend {
                 }),
                 box_declared: declared,
             }),
-            // An ego brings its vehicle and sensors: the world server warms the sensors up
-            // before it answers, seconds on a loaded host.
-            if entity_type == EntityType::Ego {
-                self.load_timeout
-            } else {
-                self.request_timeout
-            },
+            // An ego brings its vehicle and sensors, which the world server warms up before
+            // it answers; any entity may wear a body whose materials the server compiles on
+            // its first render (Isaac: 40 s for a MetaHuman walker, roadmap 044). Spawn
+            // takes that, so Step stays within the request timeout.
+            self.load_timeout,
         )?;
         let (handle, body) = match reply.reply {
             Some(wire::reply::Reply::Spawn(s)) if s.handle != 0 => (s.handle, s.body),

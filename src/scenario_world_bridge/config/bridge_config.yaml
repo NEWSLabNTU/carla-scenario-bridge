@@ -12,7 +12,8 @@
 # world_request_timeout_seconds and world_load_timeout_seconds override these. A request the
 # server does not answer within its timeout ends the bridge for a fresh one (034); the CARLA
 # launch raises both timeouts above CARLA's own watchdogs. load_timeout_seconds covers
-# LoadWorld, an ego's Spawn (an Isaac ego waits for its sensors, 038) and the weather.
+# LoadWorld, every Spawn (an Isaac ego waits for its sensors, 038; a body's first render
+# compiles its materials, 044) and the weather.
 # render: ask the server to render each frame (Isaac: off unless you watch it; a render
 # costs 3-5 ms of every frame).
 world:

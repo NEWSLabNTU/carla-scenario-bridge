@@ -697,6 +697,24 @@ fn a_server_that_does_not_answer_wedges_the_bridge() {
 }
 
 #[test]
+fn an_npc_spawn_may_take_longer_than_a_step() {
+    // A body's first render compiles its materials (044): the spawn waits on the load
+    // timeout, not the request timeout (1 s here).
+    let mut inner = honest();
+    let endpoint = server(Box::new(move |req| {
+        if matches!(req.request, Some(wire::request::Request::Spawn(_))) {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+        inner(req)
+    }));
+    let mut b = backend(&endpoint);
+    b.initialize(&episode()).unwrap();
+    b.spawn(&vehicle("npc", Driver::Scenario, 0.0)).unwrap();
+    assert!(b.wedged().is_none());
+    b.update_frame(0.05).unwrap();
+}
+
+#[test]
 fn a_fatal_reply_wedges_the_bridge_at_once() {
     let mut inner = honest();
     let endpoint = server(Box::new(move |req| {

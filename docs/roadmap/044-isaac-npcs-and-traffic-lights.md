@@ -711,6 +711,20 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
      compiled, passed: SSv2 PASS, judge PASS (the ego stood 7.5 s, pedestrian 4.49 m away),
      G4 agree, 0 contacts (`runs/w-i2-1`, `w-i2-2`). **Open**: a first spawn of a model whose
      materials this world server has not compiled can stall Step past the timeout.
+     **Fix (2026-10-24, design):** the compile moves into `Spawn`, which the bridge now waits
+     on for `load_timeout_seconds` (120 s) for every entity, not only an ego. The world
+     server renders once (`world.render()`, no physics step, as `preload` does for a
+     town) after it puts on a catalogue body (vehicle, prop or walker) it has not rendered
+     before in this process, and logs how long it took; a body it has rendered answers as
+     before. So a Step stays bounded by the 10 s `request_timeout_seconds` and a real hang
+     is still caught there. Compiled materials are not kept between world-server starts
+     (Isaac's cache holds 2.4 MB), so warming the whole catalogue at preload would cost
+     every start, including the respawn after an OOM kill, for models most scenarios never
+     use; it was not taken. SSv2 bounds each request at `SIMULATOR_RESPONSE_TIMEOUT` (90 s),
+     so a body that compiles longer than that still ends the scenario, from SSv2's side.
+     Simulated time does not move while a spawn compiles; whether the ego stack's
+     wall-clock timers notice the pause is checked by the first run with a body this world
+     server has not rendered.
 3. **`walker.pedestrian.NNNN` -> blueprint** (step 6 found it unreadable from the editor:
    WalkerFactory builds it in its Blueprint graph, so `csb_isaac.walkers.pick` chose by the
    id's number). **Read from the package instead (2026-10-22).** The graph compiles each
