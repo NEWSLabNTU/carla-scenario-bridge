@@ -257,24 +257,26 @@ it.
 - [x] **The same car**: `vehicle_check`'s dynamics run passes on CARLA and on Isaac without
   SSv2, within the spec's limits and acceptance.py's 0.35 m/s². The CARLA and Isaac table
   is in the results, with CARLA's remaining gap named (ABS, regen).
-- [ ] **Without SSv2**: from acb's own workspace, `just sim` and `auto_drive` drive Town01
+- [x] **Without SSv2**: from acb's own workspace, `just sim` and `auto_drive` drive Town01
   to arrival. From aib's, `just isaac-ego` and `just autoware` do the same.
-  (K5: acb's half is done; aib's is open for newslab-server139, see K5.)
+  (Done: aib arrives on Isaac's point-cloud Town01 world, to a goal short of the first
+  light; stand-alone aib has no signal source yet. See "Proof runs on main".)
 - [x] **The manual scene** (run synchronous, see K5): CARLA asynchronous with no swb process; a Model 3 spawned as
   `hero` from a plain CARLA Python client; traffic from CARLA's `generate_traffic.py`;
   acb's `just autoware map:=Town01`. acb applies and verifies the spec's physics, Autoware
   localizes, takes a goal from RViz and arrives, stopping at CARLA's own cycling lights.
   A hero of another blueprint is refused with both names.
-- [ ] **With SSv2**: `just e2e sim:=carla` and `just e2e sim:=isaac` PASS. The CARLA suite
+- [x] **With SSv2**: `just e2e sim:=carla` and `just e2e sim:=isaac` PASS. The CARLA suite
   and the gap set have every difference from K0 explained by K3's physics or K4's clock.
-  (K5: CARLA's half is done; `e2e sim:=isaac` is open for newslab-server139, see K5.)
+  (Done: `e2e sim:=isaac` passes here on Isaac's point-cloud Town01 world. See "Proof runs
+  on main".)
 - [x] **A future simulator**: a fake vehicle side passes `vehicle_check`. A fake world
   server (Python, on the shell) passes conformance. Both are built from the repositories'
   docs alone, as the check that the contracts are enough.
 - [x] `just test` and `just check` pass in every repository.
 
-Isaac's runs need a host that renders Town01: newslab-server139, with its `.env` moved
-from `CSB_*` to `SWB_*` first.
+Isaac's runs need a Town01 world the host can render. newslab-118-server cannot render the
+SimReady one, so it runs the point-cloud world (roadmap 038's `pcd_world`).
 
 Not in this phase: upstreaming the SSv2 patches; a second car; NPC and background-AV
 physics from specs; `aib.ros` as a shared library.
@@ -641,9 +643,8 @@ Acceptance (`play_log/051/k5/`, CARLA 0.9.16 on newslab-118-server, port 2010):
     it.
 
   From aib's workspace (`just isaac-ego` and `just autoware` to arrival on Town01): **not
-  run**. It needs Isaac to render Town01, and this host cannot (see "With SSv2" below). It
-  stays open for newslab-server139, with the Isaac e2e. On a flat world here, aib's
-  `just vehicle-check` passes.
+  run** in K5. This host cannot render the SimReady Town01 (see "With SSv2" below). It ran
+  after the landing, on the point-cloud world: see "Proof runs on main".
 - **The manual scene** (`manual_scene*`): CARLA is **synchronous** at 0.05 s, ticked in real
   time by a plain client, with no swb process. This deviates from the line above, which
   said asynchronous: the project runs CARLA synchronous for reproducibility, and an
@@ -692,7 +693,8 @@ Acceptance (`play_log/051/k5/`, CARLA 0.9.16 on newslab-118-server, port 2010):
   respawns in the 1800 s `isaac_up.sh` waits (`play_log/051/k5_e2e_isaac.log`, NVIDIA
   driver 615.71.09). This is the host's known Town01 render crash, not 051's code: Isaac's
   vehicle_check on a flat world passes here (K3), and its time and ego paths are unchanged
-  since K4. The Isaac e2e stays open for newslab-server139, the host that renders Town01.
+  since K4. The Isaac e2e passed after the landing, on the point-cloud world: see "Proof
+  runs on main".
   - The CARLA suite on the final map (`run_050_set.sh 051_k5b`, report
     `play_log/051/k5b_report.md`, against K3's `051_k3b`) has the same verdicts in every
     scenario: 15 pass, truck_pass fails and the bench is "missing", as in K2, K3 and 050.
@@ -767,5 +769,6 @@ mismatches.
   - Gap: aib needs a signal source of its own, as acb's `traffic_light_publisher` is for
     CARLA, before a stand-alone Isaac drive can cross Town01's lights.
 
-Still open for newslab-server139: the Isaac e2e on the SimReady Town01 world (13.2 GB of GPU
-memory free there on 2026-10-24, under the 16 GB that host's rule requires).
+Isaac's e2e and aib's stand-alone drive run on this host's point-cloud world; no other host
+is needed. Every acceptance item is met. aib's missing signal source (above) is the one gap
+left over from 051.
