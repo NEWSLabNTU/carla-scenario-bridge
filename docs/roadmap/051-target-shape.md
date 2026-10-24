@@ -714,3 +714,24 @@ Acceptance (`play_log/051/k5/`, CARLA 0.9.16 on newslab-118-server, port 2010):
   - `run_050_set.sh` left the bench's supervised ego running after each suite (K4 made
     `carla_up.sh` supervise it, and `stop_stack` only killed the play_launch). That
     stack would take the next hero on the port. It now stops the supervisor (`59521ef`).
+
+### Landed (2026-10-24, main `04dbb83`)
+
+Every repository's `target-shape` fast-forwarded its `main`, the submodules first. Five of
+them got their `main` here (sim_vehicle_spec, autoware_sim_vehicle, swb_world_protocol,
+swb_carla_world, swb_isaac_world), and GitHub's default branch for each is now `main`.
+`.gitmodules` tracks `main` everywhere.
+
+`main` had moved during 051:
+
+- aib's `a6cd07d` (one lidar per vehicle path): aib was rebased onto it.
+- Roadmap 047's `6f6bce3` and `8ec533a`, which changed `src/isaac_world` here: ported to
+  swb_isaac_world as `9a19062`.
+- The docs of 044, 052 and 053: rebased over.
+
+After the landing, both workspaces were rebuilt from a clean environment. `just test` and
+`just check` pass in all eight repositories, and the pin check finds 9 dependencies and 0
+mismatches.
+
+Still open, both for newslab-server139: `just e2e sim:=isaac`, and aib's stand-alone drive
+on Town01.
