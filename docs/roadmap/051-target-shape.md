@@ -733,5 +733,24 @@ After the landing, both workspaces were rebuilt from a clean environment. `just 
 `just check` pass in all eight repositories, and the pin check finds 9 dependencies and 0
 mismatches.
 
-Still open, both for newslab-server139: `just e2e sim:=isaac`, and aib's stand-alone drive
-on Town01.
+### Proof runs on main (2026-10-24, `8b026b1`, newslab-118-server)
+
+- **CARLA**: `just e2e sim:=carla` PASS (`play_log/e2e/2026-10-24_11-54-53`). acb verified
+  the spec's physics on the hero.
+- **Isaac Sim**: `just e2e sim:=isaac` PASS (`play_log/e2e/2026-10-24_11-59-51`).
+  - It ran on Town01's point-cloud world (roadmap 038's `swb_isaac_world.pcd_world`:
+    815 086 voxels of 0.4 m and a flat ground, built from the map's own
+    `pointcloud_map.pcd`). The SimReady USD world can't be used here: this host's driver
+    loses the GPU rendering it (K5).
+  - The world was kept apart from the real data: a maps directory
+    (`/mnt/renegade/aeon/swb-proof-maps/Town01`) symlinks Town01's lanelet map, point
+    cloud and signal table and holds its own `isaac/world.yaml`, and the run used
+    `CARLA_MAPS=<that dir>`.
+  - The start check named one spec on all three sides (`862c2168f77e`).
+  - The first try failed at the first step with `No module named
+    'autoware_perception_msgs'`. This host's Isaac install had only the vehicle and
+    control messages built. `src/aib/scripts/build_msgs.sh autoware_perception_msgs`
+    (what `just msgs` builds by default) fixed it.
+
+Still open for newslab-server139: the Isaac e2e on the SimReady Town01 world, and aib's
+stand-alone drive on Town01.
