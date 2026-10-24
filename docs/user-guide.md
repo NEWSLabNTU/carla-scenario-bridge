@@ -160,7 +160,10 @@ the pack's Town05 most approach lanelets referenced no light or a neighbouring a
 Autoware crossed signalised junctions as unsignalised; on its Town01, 28 of the 36 approaches
 had no link to their light in their own direction, and the ego drove through a red at 4 m/s
 (roadmap 051). Run it (at `fe33862` or later) for every town you drive, and restart the vehicle
-sides after it: a stack started before keeps the old map.
+sides after it: a stack started before keeps the old map. In the same session, for a town
+aib will drive on its own (no SSv2 to command the lights), `scripts/generate_signal_groups.py
+<Town> --port <CARLA port>` writes CARLA's light groups to `<map dir>/carla/signal_groups.yaml`,
+which aib's `just isaac-ego signals:=<map dir>` cycles as CARLA does.
 Keep the towns side by side in one directory --
 the scenarios below find them as `$(env CARLA_MAPS)/<Town>`:
 

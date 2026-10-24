@@ -1332,7 +1332,8 @@ scenario scenario_file *args:
     for w in "${entries[@]}"; do
         case "$w" in */*) resolved+=("$w") ;; *) resolved+=("$CARLA_MAPS/$w") ;; esac
     done
-    CARLA_PORT={{carla_port}} WORLD_PORT={{world_port}} ISAAC_PORT={{isaac_port}} \
+    SIM_UP_EGO=$(just _scenario-has-ego "{{scenario_file}}") \
+        CARLA_PORT={{carla_port}} WORLD_PORT={{world_port}} ISAAC_PORT={{isaac_port}} \
         SSV2_PORT={{ssv2_port}} AGENT_PORT={{agent_port}} \
         "$up" "$map_dir" "$(IFS=,; echo "${resolved[*]}")"
     just _clear-stale-scenario
@@ -1366,6 +1367,11 @@ _scenario-map scenario_file:
         | sed -E 's/^LogicFile filepath="//; s/"$//; s/^filepath: *//')
     f="${f//\$(env CARLA_MAPS)/$maps}"
     echo "${f:-$maps/{{default_map}}}"
+
+# 1 when the scenario has an ego (SSv2's test: a Controller named Autoware or with the property
+# isEgo true), else 0: the bring-up skips the ego stack for a scenario without one (the benches).
+_scenario-has-ego scenario_file:
+    @grep -qE '<Controller +name="Autoware"|name="isEgo" +value="(true|True|1)"' "{{scenario_file}}" && echo 1 || echo 0
 
 # Run the full stack and one scenario, then take down what it started: the stacks
 # `just scenario sim:=<sim>` brings up (scripts/<sim>_up.sh; those already running are reused
@@ -1415,7 +1421,8 @@ e2e *args:
         rm -f "$started"
     }
     trap teardown EXIT
-    SIM_UP_STARTED="$started" CARLA_PORT={{carla_port}} WORLD_PORT={{world_port}} \
+    SIM_UP_STARTED="$started" SIM_UP_EGO=$(just _scenario-has-ego "$scenario") \
+        CARLA_PORT={{carla_port}} WORLD_PORT={{world_port}} \
         ISAAC_PORT={{isaac_port}} SSV2_PORT={{ssv2_port}} AGENT_PORT={{agent_port}} \
         "$up" "$CARLA_MAPS/$map" "$CARLA_MAPS/$map"
     just scenario "$scenario" sim:="$sim" output_directory:="$out" "${extra[@]}" || true

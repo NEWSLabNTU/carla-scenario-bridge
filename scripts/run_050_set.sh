@@ -93,6 +93,11 @@ weather() {
         | tee -a "$out/driver.log"
 }
 
+# Scenarios SSv2 fails by design, by the condition their failure must name: town01_truck_pass
+# is the gap oracle's positive control (its xosc), an SSv2 collision CARLA never has. Its
+# verdict is `expected-fail` when the failure is that one; any other failure stays `fail`.
+declare -A EXPECT_FAIL=([gap_town01_truck_pass]=ssv2_collision_held)
+
 run() {  # name xosc [scenario args...]
     local name=$1 xosc=$2; shift 2
     local dir="$out/$name" start end code verdict
@@ -106,6 +111,10 @@ run() {  # name xosc [scenario args...]
     if [ -f "$dir/scenario_test_runner/result.junit.xml" ]; then
         grep -q 'failures="0" errors="0"' "$dir/scenario_test_runner/result.junit.xml" \
             && verdict=pass || verdict=fail
+        local expect=${EXPECT_FAIL[${name%_[0-9]}]:-}
+        [ "$verdict" = fail ] && [ -n "$expect" ] \
+            && grep -q "named &quot;$expect&quot;" "$dir/scenario_test_runner/result.junit.xml" \
+            && verdict=expected-fail
     fi
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$start" "$end" "$code" "$verdict" >> "$out/runs.tsv"
     say "$name: exit $code, $verdict"
@@ -166,7 +175,9 @@ for g in "${groups[@]}"; do
             ;;
         bench)
             stop_stack $((web + 2))
-            run bench_town01_npc_20 scenarios/bench/town01_npc_20.xosc
+            # No ego: `just scenario` starts no ego stack for it. SSv2 alone takes ~370 ms a
+            # frame with 20 NPCs here, so 60 s of simulation is ~7.5 min: past the 400 s cap.
+            run bench_town01_npc_20 scenarios/bench/town01_npc_20.xosc global_timeout:=1200
             ;;
         *) say "unknown group $g"; exit 2 ;;
     esac

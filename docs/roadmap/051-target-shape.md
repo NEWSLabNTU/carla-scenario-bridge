@@ -768,9 +768,29 @@ mismatches.
     (`aib_standalone.signalstop`).
   - Run settings: the Isaac ego and Autoware ran in their own domain (27); aib's
     `ego.yaml` defaults to domain 1, so the ego took a copy set to 27.
-  - Gap: aib needs a signal source of its own, as acb's `traffic_light_publisher` is for
-    CARLA, before a stand-alone Isaac drive can cross Town01's lights.
+  - Gap, closed after landing (aib `900505b`): `just isaac-ego signals:=<map dir>` cycles
+    the lights as CARLA does. A junction is CARLA's light group, read from
+    `carla/signal_groups.yaml`, which `scripts/generate_signal_groups.py` writes from
+    CARLA. Its lights turn green one at a time, the rest red, and the states reach
+    Autoware over V2X every frame. On the usual goal (`scenarios/ego_poses.yaml`, past
+    light 644 and the junction at x 92), the drive ARRIVED in 74.5 s at the default 10 s
+    green, meeting both lights green (`play_log/051/proof/aib_signals`). With
+    `green_s:=20` it held on red at light 43860's stop line (x 180.7) until the light went
+    green at 1138.0 s, left at 1138.9, then did the same at 43856. It ARRIVED in 102.7 s
+    (`aib_signals_g20`).
 
 Isaac's e2e and aib's stand-alone drive run on this host's point-cloud world; no other host
-is needed. Every acceptance item is met. aib's missing signal source (above) is the one gap
-left over from 051.
+is needed. Every acceptance item is met.
+
+### After 051: what is left, and where it is written down
+
+- The SimReady Town01 world cannot render on this host: issue 005 (the driver; needs root).
+  swb_isaac_world's `spikes/render_probe.py` checks a driver change.
+- The 20-NPC bench now has a verdict: issue 006. It starts no ego stack for an ego-less
+  scenario and uses a 1200 s cap. The suite reports `town01_truck_pass` as `expected-fail`
+  when SSv2's designed collision fails it.
+- On the default (clustering) stack, `town01_i3_red_light` is held by Town01's south-east
+  lamp: acb issue 029. The suite runs the incidents on CenterPoint.
+- The map repairs (`repair_lanelet_signal_links.py`, and `generate_signal_groups.py` for
+  aib) run once per host and town, because `data/` is git-ignored: acb issue 030 and
+  `docs/user-guide.md`.

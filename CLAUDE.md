@@ -392,7 +392,8 @@ just world-health                           # its simulator, owner, readiness
 `just run sim:=isaac` is the bridge and the relay driving it (`isaac_simulation.launch.xml`).
 `just scenario|acceptance|e2e <xosc> sim:=isaac` starts the world server, the simulation
 side on Isaac and `just ego-isaac` when they are absent (`scripts/isaac_up.sh`; CARLA's is
-`scripts/carla_up.sh`, which starts CARLA itself too) and leaves them up (`e2e` stops what it
+`scripts/carla_up.sh`, which starts CARLA itself too; neither starts an ego stack for a scenario
+without an ego, `_scenario-has-ego`) and leaves them up (`e2e` stops what it
 started); it refuses a CARLA simulation side on 8084 or a `just ego-av` on 8082 rather than
 replace them. `just world-health sim:=isaac` is the Hello probe. The world server holds
 ~17.5 GB of RAM with Town01's SimReady world: on a host whose memory other work has taken,

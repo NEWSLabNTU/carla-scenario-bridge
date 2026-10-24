@@ -132,6 +132,14 @@ until listening "$ssv2_port" && listening "$agent_port"; do
     sleep 2
 done
 
+# A scenario with no ego (the NPC benches) needs no ego stack: with SIM_UP_EGO=0, which `just
+# scenario` and `just e2e` set from the scenario (`_scenario-has-ego`), this step is skipped and
+# an ego stack already up is left alone.
+if [ "${SIM_UP_EGO:-1}" = 0 ]; then
+    say "ready: world server, simulation side (isaac) (the scenario has no ego: no ego stack)"
+    exit 0
+fi
+
 # 3. The ego's Autoware on Isaac: ready when its play_launch reports startup complete and
 #    the ADAPI answers (`_require-ego-stack`), then its agent registered with the relay.
 if pid=$(stack_on_port "$web_ego"); then
