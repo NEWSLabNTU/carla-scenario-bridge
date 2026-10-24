@@ -30,7 +30,8 @@ swb_isaac_world's `spikes/render_probe.py`. None of these made a difference:
 - the ego's lidar on or off;
 - GPU 0 or GPU 1, an otherwise idle GPU, PhysX CUDA on the other GPU;
 - synchronous material loads, PathTracing or RaytracedLighting;
-- DLSS off; reflections, GI, shadows and AO off.
+- DLSS off; reflections, GI, shadows and AO off;
+- multi-GPU rendering off at 640 x 360 (2026-10-24, `PROBE_KIT_ARGS`): device lost by frame 6.
 
 A 50-cube stage rendered 20000 frames clean. Town01 subsets were mixed:
 
