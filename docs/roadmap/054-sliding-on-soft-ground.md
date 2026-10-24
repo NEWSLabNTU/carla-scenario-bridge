@@ -7,7 +7,7 @@ lets go sharply where a tire in soft ground builds its force slowly, the soil pu
 sideways, and the car has no stability control. This phase adds those in tiers, cheapest
 first, each measured for what it changes and what it costs.
 
-**Status**: in progress, 2026-10-24: step 1 done.
+**Status**: in progress, 2026-10-24: steps 1-3 done (ESC in aib, off unless a rig enables it).
 
 **Source**: user direction 2026-10-24: "I expect that the muddy road would tilt the steering",
 then "I'm looking for proper physics modeling and see if we can simulate the effect in a
@@ -95,12 +95,12 @@ mud effect for about a tenth of the grid's cost.
   running vehicle (lateral stiffness graph, longitudinal stiffness, friction-vs-slip graph,
   camber stiffness) and reading the effect back in a step steer. If the lateral stiffness
   takes, T1 can soften the tire on mud by itself; write down which do and which do not.
-- [ ] **2. A limit-test suite.** `spikes/limit_mud.py` grown into the standard open-loop
+- [x] **2. A limit-test suite.** `spikes/limit_mud.py` grown into the standard open-loop
   manoeuvres on asphalt, wet asphalt and mud, every frame kept: step steer (ISO 7401),
   steady-state circle (ISO 4138), double lane change (ISO 3888), split-mu braking (ISO 14512),
   braking in a turn (ISO 7975), sine with dwell (FMVSS 126). Today's numbers are the baseline
   every later step is compared with.
-- [ ] **3. ESC in aib.** Beside ABS and traction control in `aib.powertrain`: a yaw-rate
+- [x] **3. ESC in aib.** Beside ABS and traction control in `aib.powertrain`: a yaw-rate
   target from the bicycle model capped at mu g / v, braking one wheel against the error; rig
   parameters with `esc_enabled`, so it can be compared off and on. Checked with sine with
   dwell on dry asphalt against FMVSS 126's criteria (yaw rate at most 35 % of its peak 1 s
@@ -133,7 +133,7 @@ mud effect for about a tenth of the grid's cost.
 - [x] Which tire attributes PhysX accepts while playing, written down (step 1).
 - [ ] The manoeuvre suite runs from one command on asphalt, wet asphalt and mud, and its
   results for today's model, T1 and T2 sit side by side here.
-- [ ] ESC meets FMVSS 126's sine-with-dwell criteria on dry asphalt, and off it is today's car.
+- [x] ESC meets FMVSS 126's sine-with-dwell criteria on dry asphalt, and off it is today's car.
 - [ ] On mud, the step steer's lateral force builds over a larger slip angle than on asphalt
   (the slide no longer snaps), and a car crossing ruts at a shallow angle feels a lateral force
   from them.
@@ -160,6 +160,59 @@ Frames in `play_log/tire_runtime/2026-10-24_22-39-11/`.
 So T1 can soften a tire on mud directly: the cornering and longitudinal stiffness per wheel,
 written like the friction value when its ground changes. The curve's shape over slip (the drop
 from peak to sliding) still has to come through the friction value, from the wheel's slip.
+
+### Step 2: the manoeuvre suite, today's car (2026-10-24)
+
+`spikes/manoeuvres.py` on a flat proving ground it makes at its first run (one 660 x 560 m mesh
+labelled Road) with `spikes/proving_ground.yaml`'s pads: dry asphalt, wet asphalt
+(`wetWithPuddles`, friction 0.75), wet mud (`mud_wet`, the soil grid with no `ground_z`, so the
+wheels stay on the flat ground and there are no render tiles) and a split pad (the left wheels
+in mud). One command runs it all (`PADS=`, `MANOEUVRES=` narrow it; `RIG=` overrides the rig's
+vehicle fields); frames and `summary.json` under `play_log/manoeuvres/<time>/`. The driver
+and inputs are fixed: the numbers compare models with each other, not with a real Model 3.
+
+The mud pad first used the closed-form wheel, to spare the grid's memory: it meets fresh soil
+under every wheel at every step, and held the car to 26 km/h at 3 m/s^2 asked (braking read
+6.5 m/s^2 against the grid's 3.5). On the grid the pad agrees with Town01's mud: straight
+braking 16.1 m and 3.52 m/s^2 (Town01 16.9 m, 3.55), split-mu braking yaws 7.65 deg (7.6).
+
+### Step 3: ESC (2026-10-24)
+
+`aib.esc` (aib `1d49569`): the bicycle model's yaw rate at the present speed and tire angle,
+capped at 0.85 mu g / v, against the measured one, with a dead band of 0.035 rad/s plus 10 % of
+the target; a sideslip past 0.07 rad counts as oversteer whatever the yaw rate. Oversteer
+brakes the outer front wheel and cuts the motor; understeer brakes the inner rear. The yaw
+moment (12000 N m per rad/s of error, 30000 per rad of sideslip) becomes one wheel's brake
+torque (at most 2000 N m) through the hydraulics' lag, added ahead of ABS, so ABS still keeps
+the wheel turning. The friction is the one the host writes under the wheels: an idealised ESC,
+where a real one estimates it. A rig's `esc_*` fields, from a spec's `brakes.esc`; off by
+default, and the shipped Model 3 spec has none yet. Unit tests in `test/test_esc.py`.
+
+The suite without and with it (`RIG='{"esc_enabled": true}'`; `play_log/manoeuvres/
+2026-10-24_22-44-02` dry and wet, `2026-10-24_22-50-32` mud and split, `2026-10-24_22-55-47-esc`):
+
+| case | without ESC | with ESC |
+|---|---|---|
+| dry sine with dwell, 80 km/h (6.67 deg) | yaw rate 43 % of its peak 1 s after the steering ends, 0.7 % at 1.75 s: **fails** FMVSS 126 (35 %, 20 %); heading 51 deg, sideslip 13 deg; 2.77 m lateral at 1.07 s | 0 % and 0 %: **passes**; heading 15 deg, sideslip 6.2 deg; 2.69 m (at least 1.83) |
+| wet sine with dwell, 80 km/h | 92 % and 88 %: a spin, heading 82 deg, sideslip 34 deg | 0 % and 0 %; heading 12.6 deg, sideslip 5.3 deg; 2.32 m |
+| dry / wet double lane change, 80 km/h | path error 0.77 / 0.86 m | 0.66 / 0.71 m, 78 km/h at the end |
+| mud step steer, 40 km/h | sideslip 10.8 deg and growing, yaw rate 1.15 of the kinematic | sideslip 2.6 deg, yaw rate 0.67 of the kinematic (held to what the mud carries) |
+| mud double lane change, 40 km/h | spins: sideslip 42 deg, path error 3.5 m | path error 0.19 m, 31 km/h at the end |
+| dry / wet / mud circle, 40 m | the most lateral acceleration held 8.41 / 7.35 / 1.7 m/s^2 | 7.26 / 6.49 / 1.51: ESC steps in at 0.85 mu g |
+| straight braking, steps on dry and wet | | unchanged (to the centimetre) |
+| mud braking in a turn | heading 18.3 deg, sideslip 5.4 deg | 18.8, 5.7: unchanged |
+| split-mu braking | yaws 7.65 deg | 7.66: unchanged |
+
+Two things it does not do. On split-mu braking it asks for a moment against the yaw by braking
+the front wheel on the mud side, where ABS already holds the brake at the mud's limit, so
+nothing changes; a real ESC (with ABS's yaw-moment limitation) lowers the brake on the
+high-grip side instead. And braking in a turn on mud is unchanged for the same reason: every
+wheel is at ABS's limit. Both are for a later step (taking brake off rather than adding it);
+neither matters with ESC off, which stays the default until it is decided for the shipped car.
+
+The circle also shows the car steering neutrally: an understeer gradient of 0.06 deg/g on dry
+asphalt and -0.04 on wet (the yaw rate 0.99 of the kinematic in the step). A road car
+understeers; this is the rig's tires (equal stiffness per load front and rear), for T1.
 
 ## Open questions
 
