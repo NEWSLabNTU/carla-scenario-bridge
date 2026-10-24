@@ -384,9 +384,11 @@ Every step and acceptance item above is done. What stays open is tracked elsewhe
 - [Issue 003](../issues/003-world-reload-memory.md), fixed: the world server grew ~130-150 MB
   per scenario. It was the ego's RTX lidar, not the world load: the lidar is now made once per
   ego slot and kept (about 4 MB a run now).
-- Calibration against the ground itself: cone index and a drawbar test of a real road tire on
-  sand and on dirt, which is what settles CRM's and Bekker's disagreement on traction (design
-  doc, "Still to measure"). Waits for the field (040).
+- Calibration against the ground itself, which is what settles CRM's and Bekker's
+  disagreement on traction (design doc, "Still to measure"): moved to
+  [053](053-terramechanics-calibration.md), against published measurements first and the
+  field (040) last.
 - Mud runs on Wong's clay row unchecked against the book (`unvalidated:`, D6), opted into per
-  map; snow has no soil row and no reference at all.
+  map. Snow: `snow_loose` carries Wong's US snow row, but no zone or scenario uses it and
+  nothing checks it ([052](052-isaac-physics-completeness.md) step 3, then 053).
 
