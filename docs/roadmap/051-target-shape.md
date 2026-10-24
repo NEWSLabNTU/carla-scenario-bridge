@@ -739,7 +739,9 @@ mismatches.
 
 - **CARLA**: `just e2e sim:=carla` PASS (`play_log/e2e/2026-10-24_11-54-53`). acb verified
   the spec's physics on the hero.
-- **Isaac Sim**: `just e2e sim:=isaac` PASS (`play_log/e2e/2026-10-24_11-59-51`).
+- **Isaac Sim**: `just e2e sim:=isaac` PASS (`play_log/e2e/2026-10-24_11-59-51`). It passed
+  again on `31fb89d`, after 044's `c72ee37` made every Spawn wait on the load timeout
+  (`play_log/e2e/2026-10-24_13-30-33`).
   - It ran on Town01's point-cloud world (roadmap 038's `swb_isaac_world.pcd_world`:
     815 086 voxels of 0.4 m and a flat ground, built from the map's own
     `pointcloud_map.pcd`). The SimReady USD world can't be used here: this host's driver
