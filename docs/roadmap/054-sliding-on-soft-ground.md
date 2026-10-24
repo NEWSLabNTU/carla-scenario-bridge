@@ -7,7 +7,7 @@ lets go sharply where a tire in soft ground builds its force slowly, the soil pu
 sideways, and the car has no stability control. This phase adds those in tiers, cheapest
 first, each measured for what it changes and what it costs.
 
-**Status**: planned, 2026-10-24.
+**Status**: in progress, 2026-10-24: step 1 done.
 
 **Source**: user direction 2026-10-24: "I expect that the muddy road would tilt the steering",
 then "I'm looking for proper physics modeling and see if we can simulate the effect in a
@@ -91,7 +91,7 @@ mud effect for about a tenth of the grid's cost.
 
 ## Steps
 
-- [ ] **1. What PhysX lets us change while playing.** A spike setting each tire attribute on a
+- [x] **1. What PhysX lets us change while playing.** A spike setting each tire attribute on a
   running vehicle (lateral stiffness graph, longitudinal stiffness, friction-vs-slip graph,
   camber stiffness) and reading the effect back in a step steer. If the lateral stiffness
   takes, T1 can soften the tire on mud by itself; write down which do and which do not.
@@ -130,7 +130,7 @@ mud effect for about a tenth of the grid's cost.
 
 ## Acceptance
 
-- [ ] Which tire attributes PhysX accepts while playing, written down (step 1).
+- [x] Which tire attributes PhysX accepts while playing, written down (step 1).
 - [ ] The manoeuvre suite runs from one command on asphalt, wet asphalt and mud, and its
   results for today's model, T1 and T2 sit side by side here.
 - [ ] ESC meets FMVSS 126's sine-with-dwell criteria on dry asphalt, and off it is today's car.
@@ -140,6 +140,26 @@ mud effect for about a tenth of the grid's cost.
 - [ ] No oscillation below 3 m/s on soil, at zone edges or at the hand-back (step 6).
 - [ ] Four egos on soil with T2 within 10 % of 052 step 5's frame time.
 - [ ] Step 8's scenarios pass on Isaac with Autoware, or their failures are explained.
+
+## Progress
+
+### Step 1: what PhysX accepts while playing (2026-10-24)
+
+`spikes/tire_runtime.py`: one ego without Autoware on Town01's asphalt at 40 km/h, each case
+a fresh vehicle with one attribute of every wheel's `PhysxVehicleTireAPI` edited on the
+playing stage before the manoeuvre (and once during the run-up), against the unedited car.
+Frames in `play_log/tire_runtime/2026-10-24_22-39-11/`.
+
+| attribute | edit | effect | verdict |
+|---|---|---|---|
+| `lateralStiffnessGraph` | value x 0.25 (68976 to 17244 N/rad) | 5 deg step: slip angles 1.6 to 4.1 (rear) and 4.7 deg (front), yaw rate at 0.3 s 15.9 to 8.2 deg/s, steady 18.3 to 16.0 deg/s, lateral 3.55 to 2.21 m/s^2; the same when edited mid run-up | **takes**, any time |
+| `longitudinalStiffness` | x 0.25 (45249 to 11312) | braking at 4 m/s^2 asked: mean wheel slip 0.043 to 0.173, deceleration unchanged (3.87, 3.96) | **takes** |
+| `frictionVsSlipGraph` | values halved | full braking: 7.95 m/s^2 either way; PhysX logs `Attribute "physxVehicleTire:frictionVsSlipGraph": modification not allowed once the simulation has been started. Changes will be ignored.` | **refused** (as 047 found) |
+| `camberStiffness` | 0 to 1000 | none (the car has no camber), no complaint | accepted, untestable here |
+
+So T1 can soften a tire on mud directly: the cornering and longitudinal stiffness per wheel,
+written like the friction value when its ground changes. The curve's shape over slip (the drop
+from peak to sliding) still has to come through the friction value, from the wheel's slip.
 
 ## Open questions
 
