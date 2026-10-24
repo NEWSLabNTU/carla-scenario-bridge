@@ -702,6 +702,15 @@ loaded`. Cross-track on CARLA is 0.09-0.15 m against Isaac's 0.01-0.04, inside a
      (the ego stood 1.4 s and yielded, no contact, cyclist 0.17 m at the closest), gap oracle
      G1-G3 0, G4 agree, 1071 frames; the ego stack as the tour runs it, the world server
      sharing the GPU with other work (`/mnt/wd/aeon/csb-044/runs/w-i6-1`).
+   - **Incident 2 on Isaac with walkers (2026-10-24): first run FAIL, rerun PASS.** The
+     first run ended at frame 309: the van, the parked car and the pedestrian spawned, and the
+     next Step took over 40 s while Isaac compiled their MDL materials for the first time
+     (the pedestrian, `i2_ped` with no model, wears `bp_walker_maleamer_cop`: MetaHuman eyes,
+     tear film, ...), past the bridge's 10 s `request_timeout_seconds`; the bridge exited 75
+     and SSv2 ended the scenario. The rerun on the same world server, the materials now
+     compiled, passed: SSv2 PASS, judge PASS (the ego stood 7.5 s, pedestrian 4.49 m away),
+     G4 agree, 0 contacts (`runs/w-i2-1`, `w-i2-2`). **Open**: a first spawn of a model whose
+     materials this world server has not compiled can stall Step past the timeout.
 3. **`walker.pedestrian.NNNN` -> blueprint** (step 6 found it unreadable from the editor:
    WalkerFactory builds it in its Blueprint graph, so `csb_isaac.walkers.pick` chose by the
    id's number). **Read from the package instead (2026-10-22).** The graph compiles each
