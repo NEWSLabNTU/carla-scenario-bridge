@@ -4,9 +4,12 @@ What scenario_simulator_v2 (SSv2) can ask of a simulator backend, what this brid
 where the gaps are, and which mechanisms from TIER IV's `carla-autoware-native` fork transfer
 to a client-API-only design.
 
-**Status**: audit, 2026-09-25. Nothing here is implemented; the ranked gap list at the end is
-input to the next roadmap entry. Line numbers refer to `src/scenario_world_bridge/src/coordinator.rs`
-(`C:`), SSv2 `463c02946` and acb `7e899ab` unless stated.
+**Status**: audit 2026-09-25, refreshed 2026-10-24. The audit's ranked list became
+[roadmap 014](../roadmap/014-feature-completeness.md) and the gap phases 021-024; what is
+left is in [Open gaps](#open-gaps-2026-10-24). The bridge is simulator-free since 046, so
+the tables name what the bridge does and, where it differs, what each world server does
+(`swb_carla_world`, `swb_isaac_world`). Code is cited by file, not line: the 2026-09-25 line
+numbers referred to a bridge that no longer exists.
 
 ## Method
 
@@ -33,44 +36,45 @@ change, routing, FollowTrajectory, AcquirePosition, behaviour trees, every Condi
 resolved inside `traffic_simulator` and reaches the backend only as a finished pose plus
 `action_status` (twist, accel, jerk, `current_action` string).
 
-| Request | Field | Bridge | Stock backend | Gap |
+| Request | Field | Bridge (2026-10-24) | Stock backend | Gap |
 |---|---|---|---|---|
-| Initialize | `step_time`, `lanelet2_map_path` | honored (C:1171, C:1230) | stored / activates map | – |
-| | `realtime_factor`, `initialize_time`, `initialize_ros_time` | ignored | stored; ROS time stamps sensors | harmless: bridge publishes no stamped topics |
-| UpdateFrame | `current_simulation_time` | ignored | drives sensor timing | no drift check against CARLA elapsed time |
-| UpdateStepTime | `simulation_step_time` | **partial** | stored | **bug**: sync-mode branch sets `fixed_delta_seconds = step_time` (C:1504); `enable_sync_mode` uses `step_time / substeps` (C:1417). With `substeps: 2` a mid-run change runs CARLA 2× fast. Latent: SSv2 sends it once before sync mode (`api.cpp:47`), so the async branch stores it |
+| Initialize | `step_time`, `lanelet2_map_path` | honored | stored / activates map | – |
+| | `realtime_factor`, `initialize_time`, `initialize_ros_time` | `realtime_factor` passed to the world server; times ignored | stored; ROS time stamps sensors | harmless: the vehicle bridges stamp from the simulator's frame time |
+| UpdateFrame | `current_simulation_time` | sent with every `Step`, recorded in the gap trace (024) | drives sensor timing | – |
+| UpdateStepTime | `simulation_step_time` | honored; ticks per frame from `carla_tick_seconds`, substeps applied (014, `ddf64d7`) | stored | – |
 | Spawn* | `name`, `asset_key`, `pose`, `is_ego` | honored | | – |
-| | `bounding_box` | **ignored** (no reads in bridge) | carried into per-frame status | see §2 pose offset |
-| | `VehicleParameters.performance/axles` | ignored | feeds ego vehicle model | CARLA blueprint physics instead; acceptable |
-| | second `is_ego` | accepted | rejected | should reject |
-| UpdateEntityStatus | `status[].pose` (non-ego) | `set_transform`, physics off | stored | – |
-| | `status[].action_status` (twist/accel) | ignored, echoed back | stored | CARLA actor velocity stays 0: radar Doppler, wheel spin, walker animation all dead |
-| | `npc_logic_started` | ignored | ego model frozen until true | ego under PhysX from spawn (handbrake-parked) |
-| | `overwrite_ego_status` | honored (C:1943) | honored, **and** when ControlModeReport is MANUAL | MANUAL fallback missing |
-| | unknown entity name | echoed back (C:1911-1939) | throws | weaker than stock |
-| | ego reply | pose, twist, median-smoothed accel, differenced jerk (C:2286-2385) | model state | angular accel always 0; `current_action` empty |
-| UpdateTrafficLights | `id`, `color` | honored via lanelet→OpenDRIVE map, 36/36 on Town01 | passed to pseudo detector | unmapped ids warned once, then silent |
-| | `shape` (arrows), `status` FLASHING, `relation_ids`, `confidence` | flattened / lit / ignored / ignored | full | protected turns and flashing lost |
-| Attach{Lidar,Detection,OccupancyGrid,Imu,PseudoTrafficLightDetector} | all fields | **rejected**, `Success=false` (C:2005-2048) | publishes the topic | interpreter ignores the bool (`simulator_core.hpp:365-443`), so safe. Consequences in §3 |
+| | `bounding_box` | origin offset (rear axle, 014); body chosen to fit it, residual reported (022) | carried into per-frame status | – |
+| | `VehicleParameters.performance/axles` | NPCs: tracking limits; ego: the spec's physics (`sim_vehicle_spec`), checked against the catalog (2 cm) | feeds ego vehicle model | – |
+| | second `is_ego` | rejected (one ego per scenario) | rejected | – (several Autoware egos are background AVs, or 039 on Isaac) |
+| UpdateEntityStatus | `status[].pose`, `action_status` (non-ego) | tracked physics toward pose and twist (023), teleport under `npc_motion: kinematic` | stored | – |
+| | `npc_logic_started` | honored: NPCs held still until true | ego model frozen until true | – |
+| | `overwrite_ego_status` | honored | honored, **and** when ControlModeReport is MANUAL | MANUAL fallback dropped: the bridge has no ROS node (014) |
+| | unknown entity name | rejected | throws | – |
+| | ego reply | CARLA: the server's read-back with acceleration and jerk (`READS_BACK`); Isaac: the bridge differences velocity | model state | Isaac: jerk and angular acceleration 0; `current_action` empty on both |
+| UpdateTrafficLights | `id`, `color` | honored via lanelet→OpenDRIVE (`<map>/carla/traffic_lights.yaml`), both simulators; freeze plus long phase times on CARLA | passed to pseudo detector | – |
+| | `shape` (arrows), `status` FLASHING, `relation_ids`, `confidence` | flattened / lit / ignored / ignored | full | CARLA has no arrow bulbs; protected turns and flashing lost |
+| Attach{Lidar,Detection,OccupancyGrid,Imu,PseudoTrafficLightDetector} | all fields | **rejected**, `Success=false` | publishes the topic | by design: the vehicle bridges publish real sensors. Detection knobs: §3 |
+| UpdateEnvironment (fork, 047) | weather, time of day, road condition | honored on both simulators | – (not upstream) | `DomeImage` not sent |
 
 ## 2. OpenSCENARIO features
 
-| Feature | SSv2 | Reaches backend? | Bridge | CARLA 0.9.16 via carla-rust |
-|---|---|---|---|---|
-| Entity motion (all actions) | yes/partial | pose per frame | tracked physics toward the pose (default, 023); teleport under `npc_motion: kinematic` | `set_target_velocity`, `set_target_angular_velocity`, `apply_control`; `set_transform` |
-| TeleportAction, AcquirePosition, LaneChange, FollowTrajectory | yes/partial | pose per frame | teleport | – |
-| Vehicle spawn `model3d` | yes | `asset_key` | `blueprint_map` has only `sample_vehicle`; else `vehicle.tesla.model3` (C:98, C:1559-1568) | blueprint library, `Vehicle::bounding_box` |
-| EntitySubtype (TRUCK, BUS, BICYCLE…) | yes | only in EntityStatus | ignored | could select blueprint |
-| Pedestrian | partial | pose per frame | `walker.pedestrian.0001`, physics on, `WalkerControl` toward SSv2's pose (default, 023; walk cycle animates); kinematic under `npc_motion: kinematic` | `WalkerControl`, `set_bones`, AI controller |
-| MiscObject | partial | `asset_key`, bbox | `static.prop.streetbarrier` default (C:102) | `static.prop.*` |
-| TrafficSignalStateAction / Controller | 1.3 | UpdateTrafficLights | partial (§1) | `TrafficLight::set_state`, freeze |
-| Environment / Weather / Fog / Sun / TimeOfDay / RoadCondition | listed "1.3"; parse-only no-op upstream. Fork (047): all three sent as `UpdateEnvironment`; `DomeImage` not | `UpdateEnvironment` (fork, oneof 17) | road friction and wetness on both simulators, zones on Isaac; weather and time of day on both (Isaac: sun, fog for cameras, rain for the lidar, no snow; CARLA: all but snow, cameras only) (`off-road-surfaces.md`) | `World::set_weather`, `tire_friction` |
-| LightStateAction / VehicleLight | unimplemented | no | – | `Vehicle::set_light_state` |
-| AnimationAction / Appearance / Visibility | unimplemented | no | – | walker bones |
-| Override*Action, ActivateController | unimplemented | no | n/a (ego is Autoware) | `apply_control` |
-| Trailer | unimplemented | TRAILER subtype only | – | trailer blueprints |
-| CollisionCondition | partial | **no**: SSv2 does its own 2D bbox check (`api.cpp:345`) | not reported | `sensor.other.collision` |
-| Sensors | yes | Attach* | rejected | acb owns real sensors |
+| Feature | SSv2 | Reaches backend? | Bridge / world servers (2026-10-24) |
+|---|---|---|---|
+| Entity motion (all actions) | yes/partial | pose per frame | tracked physics toward the pose (023): CARLA tracks on the server (`TRACKS_TARGETS`), Isaac from the bridge's velocity (`TRACKED_MOTION`); teleport under `npc_motion: kinematic` |
+| Vehicle `model3d`, EntitySubtype (TRUCK, BUS, BICYCLE…) | yes | `asset_key`, subtype, bbox | catalogue body by `model3d`, else subtype and size (022); Isaac from the exported CARLA set |
+| Pedestrian | partial | pose per frame | CARLA: `WalkerControl`, walk cycle; Isaac: 52 exported walkers, gait from speed (044; not all seen rendered) |
+| MiscObject | partial | `asset_key`, bbox | `static.prop.*` by size (022) |
+| TrafficSignalStateAction / Controller | 1.3 | UpdateTrafficLights | §1; Autoware gets the state from the vehicle bridge (015) |
+| Environment / Weather / Fog / Sun / TimeOfDay / RoadCondition | parse-only upstream; fork (047) sends `UpdateEnvironment` | yes (fork) | road friction and wetness on both, zones on Isaac; weather and time of day on both (Isaac: sun, fog for cameras, rain for the lidar, snow on soil (052); CARLA: all but snow, cameras only) (`off-road-surfaces.md`) |
+| LightStateAction / VehicleLight | unimplemented in SSv2 | no | – (CARLA `set_light_state` exists) |
+| AnimationAction / Appearance / Visibility | unimplemented in SSv2 | no | – |
+| Override*Action, ActivateController | unimplemented in SSv2 | no | n/a: the ego is Autoware; a takeover is acb's `allow_manual` |
+| Trailer | unimplemented in SSv2 | TRAILER subtype only | – |
+| CollisionCondition | partial | no: SSv2 checks its own boxes | world servers report contacts (`CONTACTS`); `physical_verdict` joins them to SSv2's verdict (021) and the gap oracle compares the two (024) |
+| Sensors | yes | Attach* | rejected; acb / aib own the sensors |
+
+Each unimplemented row is SSv2's gap, not the backend's: making one reach a simulator
+needs a fork protocol slot, as `UpdateEnvironment` was for weather (047).
 
 **Two computations run twice, unreconciled:**
 
@@ -78,7 +82,9 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
   resolves the PhysX ego against the NPCs' bodies (tracked physics by default since 023;
   kinematic colliders under `npc_motion: kinematic`, where `set_simulate_physics(false)` keeps
   colliders active). The ego can be shoved by an NPC that SSv2 never registers as a
-  collision, or SSv2 can report one that CARLA never rendered. Nothing compares the two.
+  collision, or SSv2 can report one that CARLA never rendered. **Since 021/024** the world
+  servers report contacts, `physical_verdict` joins them to SSv2's verdict, and the gap
+  oracle's G1-G4 compare the two geometries on every traced run.
 - **Pose reference point.** Scenario vehicles declare `BoundingBox/Center x="1.5"` (e.g.
   `src/swb_examples/scenarios/multi_av/town01_two_av.xosc:13`): the SSv2 entity origin is the rear axle. A CARLA vehicle's
   origin is near its bbox centre. `ros_pose_to_carla_transform` (C:2399) and
@@ -93,6 +99,7 @@ resolved inside `traffic_simulator` and reaches the backend only as a finished p
   rear axle. Decision 2026-09-25: rear axle everywhere ([roadmap 014](../roadmap/014-feature-completeness.md)).
 - **Lane position.** SSv2 re-canonicalises the ego pose from CARLA onto lanelet2; CARLA works
   in OpenDRIVE. Any misregistration between the two maps appears as lane-matching failures.
+  **Still unmeasured** (2026-10-24).
 
 ## 3. Ego / Autoware contract
 
@@ -101,24 +108,23 @@ RTC, velocity limit, emergency and MRM monitoring) is now served by `scenario_ag
 in SSv2's domain and carried out by the ego's vehicle agent in its own; the ego data path
 below is unchanged. `managed_ego:=false` is retired.
 
-| SSv2 / Autoware expects | Provider today | Gap |
+| SSv2 / Autoware expects | Provider (2026-10-24) | Gap |
 |---|---|---|
-| `/vehicle/status/{velocity,steering,gear,control_mode,turn_indicators,hazard_lights}` | acb `vehicle_control.rs:382-399`, ~20 Hz; measured single publisher | control_mode hard-coded AUTONOMOUS |
-| `/control/control_mode_request` service (stock `autoware_universe.cpp:52`) | **nobody** | manual↔autonomous transitions untestable |
-| `control_cmd`, `gear_cmd`, `turn_indicators_cmd`, `hazard_lights_cmd`, `emergency_cmd` | acb applies all | – |
-| `/localization/kinematic_state` | GNSS→NDT→EKF by default; direct publish behind `publish_direct_localization` | – |
-| `/localization/acceleration` | EKF only | – |
-| `/clock` | acb, from CARLA's frame time, in every vehicle domain (015) | – |
-| Traffic-light recognition topic (`/perception/traffic_light_recognition/external/traffic_signals`) | acb, from CARLA's lights via the map dir's `carla/traffic_lights.yaml` (015, 017); camera recognition off (`fusion_only`) | – |
-| Detection-sensor scenario knobs (`isClairvoyant`, `detectedObject*Delay/StdDev/MissingProbability`, `randomSeed`) | dead: Attach rejected, acb ground-truth objects optional and un-noised | scenarios that tune perception faults have no effect |
-| Ego velocity limit (`/api/autoware/set/velocity_limit`) | relay → agent → Autoware (017) | – |
-| Emergency / MRM / `/autoware/state` monitoring | agent `fault` → relay → concealer (017) | – |
+| `/vehicle/status/{velocity,steering,gear,control_mode,turn_indicators,hazard_lights}` | acb / aib; `control_mode` reports the real mode | – |
+| `/control/control_mode_request` service | acb: AUTONOMOUS succeeds; MANUAL fails as stock, or with `allow_manual:=true` succeeds and the driver takes over until AUTONOMOUS | – |
+| `control_cmd`, `gear_cmd`, `turn_indicators_cmd`, `hazard_lights_cmd`, `emergency_cmd` | acb / aib apply all | – |
+| `/localization/kinematic_state`, `/localization/acceleration` | GNSS→NDT→EKF by default | – |
+| `/clock` | the vehicle bridge, from the simulator's frame time, in every vehicle domain (015) | – |
+| Traffic-light recognition topic | the vehicle bridge, from the simulator's lights (015, 017) | – |
+| Detection-sensor scenario knobs (`isClairvoyant`, `detectedObject*Delay/StdDev/MissingProbability`, `randomSeed`) | **unsupported by decision** (014): Attach rejected, perception runs on real sensors | scenarios that tune perception faults have no effect |
+| Ego velocity limit, emergency / MRM / `/autoware/state` monitoring | relay ↔ agent (017) | – |
 
 ## 4. Lessons from `tier4/carla-autoware-native`
 
 Their design compiles the adapter into the engine; the mechanisms below are the ones that
 survive translation to the client API. Sources: `autoware-support` branch and feature branches;
 SSv2 #1848/#1849; autoware_universe #13276, #13286, #13305, #13406, #13408, #13410, #13319.
+The "Transfer" column is the 2026-09-25 assessment; every "Yes" was carried out in 014.
 
 | Mechanism | Their finding | Transfer |
 |---|---|---|
@@ -137,32 +143,47 @@ SSv2 #1848/#1849; autoware_universe #13276, #13286, #13305, #13406, #13408, #134
 | **gRPC scenario handshake** (#13319) | Two RPCs: `GetMission` (pose+goal, pulled), `ReportReadiness` | Analogous to our pilot; nothing to borrow |
 | **CycloneDDS, ros-domain-id** | engine-side DDS backend selection; topic names sanitised | Not applicable: acb is a plain rclrs node, RMW and domain are ROS config |
 
-## Ranked gaps
+## Ranked gaps (2026-09-25), and where they went
 
-Ordered by effect on scenario verdicts, then by cost.
+| # | Gap | Outcome |
+|---|---|---|
+| 1 | Traffic-light state never reaches Autoware | done: the vehicle bridge publishes it from the simulator (015); SSv2 fork publishes conventional signals |
+| 2 | Pose reference point | done: rear axle everywhere (014) |
+| 3 | Collision truth split | done: contacts and the physical verdict (021), compared by the oracle (024) |
+| 4 | `UpdateStepTime` ignores substeps | done (014) |
+| 5 | NPC actors carry zero velocity | done: tracked physics (023) |
+| 6 | `max_substep_delta_time` unset | done (014) |
+| 7 | acb a `wait_for_tick` follower | done: tick-driven (014) |
+| 8 | Steering curve, input shaping | done: curve compensated, rate/lag limits optional (014) |
+| 9 | Blueprint mapping thin | done: by `model3d`, subtype and size; props (022) |
+| 10 | Pedestrian z | done (014) |
+| 11 | Detection-sensor knobs | unsupported by decision (014) |
+| 12 | `control_mode_request` absent | done, plus `allow_manual` takeovers |
+| 13 | Protocol strictness | done, except the MANUAL overwrite (no ROS node in the bridge) |
+| 14 | Arrows, flashing, `relation_ids` | open: CARLA has no arrow bulbs |
+| 15 | Weather / TimeOfDay / RoadCondition | done in the fork (047) |
+| 16 | Traffic-light freeze hole | done (014) |
 
-| # | Gap | Effect | Fix sketch | Cost |
-|---|---|---|---|---|
-| 1 | Traffic-light state never reaches Autoware | every signal scenario fails or passes by accident | implement the 009 decision: bridge publishes `TrafficLightGroupArray` from `UpdateTrafficLights`, keyed by lanelet ID, flag default off | M |
-| 2 | Pose reference-point offset (rear axle vs centre) | all distance conditions off by ~1.5 m, both directions | measure first (spawn NPC at known pose, read CARLA transform); then apply `bounding_box.center` offset in both conversions | S measure, S fix |
-| 3 | Collision truth split | ego shoved by NPC colliders; SSv2 collision ≠ CARLA collision | attach `sensor.other.collision` to ego, log mismatches; decide policy (disable NPC↔ego collision, or report to SSv2 via CollisionCondition) | M |
-| 4 | `UpdateStepTime` ignores `substeps` (C:1504) | latent 2× time-rate bug | use `substep_delta()` | XS |
-| 5 | NPC actors carry zero velocity | dead radar Doppler, wheels, walker animation; acb ground-truth velocity wrong if read from CARLA | `set_target_velocity` from `action_status.twist`; `WalkerControl` speed for walkers | S |
-| 6 | `max_substep_delta_time` unset | phantom yaw rate, accel jitter | set 0.002 s and `max_substeps` in world settings | XS |
-| 7 | acb is a `wait_for_tick` follower | frame loss under load (10 Hz LiDAR at two stacks) | `on_tick` queue, drain to newest, warn on skips | S |
-| 8 | Steering curve not flattened; no input shaping | lateral tracking error; unmeasured | measure, flatten `steering_curve`, add rate/lag limits in acb config | S |
-| 9 | Blueprint mapping thin; bbox ignored | wrong vehicle size for perception; trucks become Teslas | map by EntitySubtype or bbox dimensions; MiscObject props | S |
-| 10 | Pedestrian z after first update | walkers may sink (capsule origin ~0.9 m) | verify; apply walker origin offset per frame | XS |
-| 11 | Detection-sensor knobs dead | perception-fault scenarios inert | either accept `AttachDetectionSensor` and forward noise/delay params to acb ground-truth publisher, or document as unsupported | M |
-| 12 | `/control/control_mode_request` absent | manual-override tests impossible | small service in acb | XS |
-| 13 | `npc_logic_started`, MANUAL overwrite, second ego, unknown entity | protocol strictness | reject/handle per stock semantics | XS each |
-| 14 | Arrows, flashing, `relation_ids` | protected-turn scenarios wrong | CARLA has no arrow bulbs; document; publish full state on the V2X path from #1 | – |
-| 15 | Weather / TimeOfDay / RoadCondition | done in the fork (047): `UpdateEnvironment` | -- | done |
-| 16 | Traffic-light freeze hole | lights may resume cycling | set long phase times as backup | XS |
+## Open gaps (2026-10-24)
 
-Items 4, 6, 10, 12, 13, 16 are small enough to batch into one hardening entry. Items 1–3 each
-need a measurement before a fix and should be their own roadmap entries. Item 15 is a protocol
-gap on SSv2's side; it belongs in the upstreaming discussion (roadmap 005), not in code first.
+**SSv2-side** (each needs SSv2 or a fork slot first; no backend can fix them alone):
+LightStateAction, AnimationAction / Appearance / Visibility, Override* / ActivateController,
+Trailer; detection-sensor knobs (unsupported by decision); `DomeImage` (fork does not send it).
+
+**Backend, CARLA**: arrows / flashing / `relation_ids` (CARLA limit); lanelet2 vs OpenDRIVE
+registration unmeasured; `current_action` empty in replies; CARLA free-runs at ~79 % GPU
+while idle (044 open item 5).
+
+**Backend, Isaac against CARLA**: no `AUTOPILOT` (simulator traffic; `town01_simulator_autopilot`
+deferred), no `AGENT_VEHICLES` (background AVs), no `READS_BACK` (jerk and angular
+acceleration 0 in the ego reply), no `WEATHER` presets; several Autoware egos (039); a lead
+NPC on soil sinking and riding in ruts (052); first-render material compile moved into
+`Spawn` (044, unverified live); the 52 walkers not all seen rendered.
+
+**Both**: CenterPoint labels the crossing walker `unknown`, and `town01_pedestrian` passes in
+SSv2 while the ego touches the walker (044 open item 4); unknown disagreements are the gap
+campaign's search ([025](../roadmap/025-adaptive-generator-and-exploit-pipeline.md)), and
+SSv2's `random_test_runner` on this backend is its step 2.
 
 ## What not to borrow
 
