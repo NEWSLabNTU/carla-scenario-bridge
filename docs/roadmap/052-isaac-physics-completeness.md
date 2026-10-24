@@ -7,7 +7,9 @@ ego's own dynamics measured the way CARLA's already are. Calibration against pub
 measurements is [053](053-terramechanics-calibration.md); this phase changes no soil
 parameter.
 
-**Status**: in progress, 2026-10-24: steps 1-4 done; step 5 (several egos on soil) open.
+**Status**: in progress, 2026-10-24: steps 1-5 done, step 5 with physics egos only (several
+Autoware egos on Isaac are 039's: a world server has one ego ROS domain today). Open: the
+lead NPC's sinking seen in the ego's camera and lidar.
 
 **Source**: user direction 2026-10-24: "Focus on feature completeness first. Suggest the
 roadmap", then "do both phase 052 and dataset survey".
@@ -54,9 +56,11 @@ CARLA.
   from the ruts under its four wheels), without plates of its own. Checked by the world
   server's log on `town01_soil.xosc`'s lead car; not yet looked at in the ego's camera and
   lidar.
-- [ ] **5. Several egos on soil.** Two and four egos (039's multi-ego setup) through one soil
-  zone: frame time against one ego, ruts each ego leaves felt by the others, the world
-  server's memory over a batch.
+- [x] **5. Several egos on soil.** Two and four egos through one soil zone: frame time
+  against one ego, ruts each ego leaves felt by the others, the world server's memory over a
+  batch. Done with aib egos in one world server without Autoware (`spikes/multi_ego_soil.py`):
+  039's multi-ego setup does not exist on Isaac yet, so the egos share one ROS domain and each
+  gets its own command from a speed loop.
 
 ## Acceptance
 
@@ -65,8 +69,8 @@ CARLA.
 - [x] `town01_snow.xosc`, `town01_soil.xosc` and `town01_mud.xosc` PASS on Isaac with
   Autoware, 0 MRM, 4 runs each.
 - [ ] A lead NPC on soil visibly sinks and rides in the ego's ruts.
-- [ ] Frame time with four egos on soil recorded; the world server's memory flat over a
-  batch, as issue 003 left it.
+- [x] Frame time with four egos on soil recorded; the world server's memory flat over a
+  batch, as issue 003 left it (GPU flat; RSS +38 MB over 8 cycles of four egos).
 
 ## Progress
 
@@ -182,3 +186,49 @@ landing, had none over 1 s. That remaining stall is not the sinking's and is not
 Also seen in every soil batch, before and after: at its start Autoware backs the ego up
 about 10 m at 1 m/s (`control_cmd` velocity -1.0) away from the lead car standing just ahead,
 then drives the route. It is Autoware's planner, not the vehicle; the scenarios pass.
+
+### Step 5: several egos on soil (2026-10-24)
+
+`spikes/multi_ego_soil.py` on `spikes/soil_steps_dirt.yaml` (88 m of dirt, two lanes at
+y -129.6 and -132.6, egos heading -x from x 322), every rig sensor on, each ego held to 4 m/s
+by a speed loop (it settles at 3.6 on fresh dirt, 3.8-3.9 in ruts: a proportional loop
+against the drag). One world server process, newslab-server-241's RTX 5090. Frame time is the
+world server's frame (3 substeps of 1/60 s, 50 ms of simulated time, a render on the last);
+the soil share is `SurfaceLayer`'s update, place, begin_step and flush.
+
+| egos | frame p50 / p95, ms | soil p50 / p95, ms | the rest, p50 |
+|---|---|---|---|
+| 1 | 29.2 / 35.1 | 6.2 / 7.2 | 23.0 |
+| 2 (one lane) | 45.5 / 56.0 | 11.5 / 13.3 | 34.0 |
+| 2 (side by side) | 45.2 / 53.0 | 11.3 / 12.8 | 33.9 |
+| 4 | 77.4 / 93.3 | 21.4 / 24.1 | 56.1 |
+
+The soil grid costs about 5.5 ms per ego per frame (0.45 ms per wheel and substep, Python),
+linear in the egos; the rest (physics, four sensor sets' render and publishing) about 16 ms
+per extra ego. Two egos keep real time at p50 and miss it at p95; four run at 0.65 of real
+time, and would not keep it without the soil either (56 ms). The world server is lockstep,
+so a slow frame slows the scenario's clock, it does not drop frames; but for four Autoware
+egos at real time the soil grid's per-wheel step would have to leave Python (vectorised over
+wheels, or native), and the sensor sets be reduced as 039 plans.
+
+Ruts felt by the others, over x 255-300 (sinkage below the undisturbed surface, the four
+wheels' mean; resistance the four wheels' sum; the speed loop's mean request):
+
+| case | ego | sinkage, cm | resistance, N | request, m/s^2 |
+|---|---|---|---|---|
+| 1 | alone | 3.09 | 1149 | 0.62 |
+| 2, one lane | first (x 310) | 3.09 | 1147 | 0.60 |
+| | second, 12 m behind in its ruts | 3.86 | 437 | 0.22 |
+| 2, side by side | each | 3.08-3.09 | 1148-1150 | 0.62-0.63 |
+| 4, two lanes | first of each lane | 3.08-3.09 | 1146-1148 | 0.60-0.62 |
+| | second of each lane | 3.82-3.88 | 323-524 | 0.18-0.26 |
+
+An ego in another's ruts rides 0.8 cm deeper (the rut plus its own further sinkage) and meets
+a third to a half of the resistance on compacted soil, as the grid's repeated loading should
+give; egos side by side do not affect each other.
+
+Memory over a batch: four egos spawned, driven 10 s and despawned, the soil made fresh,
+8 times, after the cases above: RSS 17590 MB after the cases, 17628 MB after the eighth cycle
+(+4.8 MB per cycle, steady), GPU 11265 MB throughout (11260 at the end). The ego slots are
+reused (`_ego_path`), so the lidars cost nothing more (issue 003). The RSS creep is small (a
+hundred runs: about 0.5 GB) and not traced.
