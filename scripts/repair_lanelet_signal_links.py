@@ -109,16 +109,27 @@ def parse(path):
 
 
 def lanelet_at(lanelets, p, f):
-    """The road lanelet containing p whose bounds run along f (unit, map frame)."""
+    """The road lanelet containing p whose direction is f (unit, map frame).
+
+    The direction is taken from which side the left bound is on, not from the bounds' node
+    order: two opposite lanelets share their middle line, so its order is one lanelet's
+    and backwards for the other. A stop waypoint on that shared line is inside both, and
+    an unsigned heading test then took the oncoming lanelet about half the time (Town01's
+    light 643, roadmap 051).
+    """
     best = None
     for lid, (left, right, _) in lanelets.items():
-        dl, ql, sl = poly_near(p, left)
-        dr, qr, sr = poly_near(p, right)
+        dl, ql, _ = poly_near(p, left)
+        dr, qr, _ = poly_near(p, right)
         width = math.hypot(ql[0] - qr[0], ql[1] - qr[1])
-        if width < 1.5 or dl + dr > width + 0.4:
+        # 1 m of slack: where the map's lanes sit half a lane off CARLA's, the stop waypoint
+        # lies on a bound or just past it (Town01's lights 366 and 373, 0.2 m outside). The
+        # direction test below keeps that from reaching the oncoming lanelet.
+        if width < 1.5 or dl + dr > width + 1.0:
             continue
-        n = math.hypot(*sl) or 1.0
-        if abs(sl[0] * f[0] + sl[1] * f[1]) / n < HEADING_COS:
+        # Right to left, turned a quarter clockwise: the way the lanelet runs.
+        d = (ql[1] - qr[1], -(ql[0] - qr[0]))
+        if (d[0] * f[0] + d[1] * f[1]) / width < HEADING_COS:
             continue
         slack = dl + dr - width
         if best is None or slack < best[0]:
@@ -185,6 +196,12 @@ def main():
             s = p[0] * r[0] + p[1] * r[1]
             pts.append((s - half, p, wp.transform.location.z))
             pts.append((s + half, p, wp.transform.location.z))
+            # And across the lanelet's own bounds there: where the map's lane sits off
+            # CARLA's, a line only as wide as CARLA's lane misses Autoware's path (Town01's
+            # light 373, 2.2 m off: the ego drove through SSv2's red, roadmap 051).
+            for bound in lanelets[lid][:2]:
+                q = poly_near(p, bound)[1]
+                pts.append((q[0] * r[0] + q[1] * r[1], p, wp.transform.location.z))
         if not lids:
             continue
         lo, hi = min(pts), max(pts)
