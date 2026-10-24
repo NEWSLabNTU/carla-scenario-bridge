@@ -752,5 +752,20 @@ mismatches.
     control messages built. `src/aib/scripts/build_msgs.sh autoware_perception_msgs`
     (what `just msgs` builds by default) fixed it.
 
-Still open for newslab-server139: the Isaac e2e on the SimReady Town01 world, and aib's
-stand-alone drive on Town01.
+- **aib stand-alone** (no swb, no SSv2): ARRIVED in 37.2 s, about 122 m on Town01
+  (`play_log/051/proof/aib_standalone`).
+  - Setup: aib's `just isaac-ego` on the same point-cloud world from spawn point 74
+    (`pose:=322.1,-55.15,0.10,3.14159`), aib's `just autoware map_path:=<that map dir>`,
+    and `auto_drive` to a goal on the same road, 19 m short of light 644.
+  - The goal stops short of the light because stand-alone Isaac has nothing that reports
+    signal states. There is no V2X publisher like acb's, and the voxel world has no lights
+    for the camera. Autoware treats an unknown signal as red: with the usual Town01 goal
+    the ego drove off at 4.17 m/s and then held at light 644's stop line for good
+    (`aib_standalone.signalstop`).
+  - Run settings: the Isaac ego and Autoware ran in their own domain (27); aib's
+    `ego.yaml` defaults to domain 1, so the ego took a copy set to 27.
+  - Gap: aib needs a signal source of its own, as acb's `traffic_light_publisher` is for
+    CARLA, before a stand-alone Isaac drive can cross Town01's lights.
+
+Still open for newslab-server139: the Isaac e2e on the SimReady Town01 world (13.2 GB of GPU
+memory free there on 2026-10-24, under the 16 GB that host's rule requires).
