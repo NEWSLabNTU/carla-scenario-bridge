@@ -798,5 +798,7 @@ is needed. Every acceptance item is met.
   `docs/user-guide.md`. Done on newslab-118-server for every town of the pack on 2026-10-24
   (signal table, links, groups): Town02 24 lights in 8 groups, Town03 38 in 11, Town05 54 in
   15, Town10 15 in 5; each table regenerated identical after the repair. Town10's Lanelet2
-  map has two lights CARLA lacks (elements 37055, 37058): unmapped, and no lanelet keeps a
-  link to them.
+  map has two light ways no CARLA light matches (37055, 37058, both at map (-57.3, -135.1),
+  the nearest CARLA lights 11 and 12 m away). Their regulatory elements (37148, 37150) are on
+  no lanelet, in the converted map as it came, so Autoware never reads them: the table lists
+  them as unmapped and nothing else needs doing.

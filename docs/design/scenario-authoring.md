@@ -199,8 +199,8 @@ the next command or the next `Initialize`.
 
 - To stop the ego at an intersection, command that signal. Do not rely on the state a previous
   run or CARLA's own cycle left a light in; it is reset to GREEN.
-- "Mapped" means listed in the map dir's `carla/traffic_lights.yaml`, generated once per
-  map (`scenario_world_bridge --generate-signal-table <map dir>`) and checked against CARLA
+- "Mapped" means listed in the map dir's `traffic_lights.yaml`, generated once per
+  map (`swb_carla_world --generate-signal-table <map dir>`) and checked against CARLA
   at every `Initialize`: Lanelet2 traffic light ways matched to a CARLA light by position,
   plus `config/traffic_lights_<town>.yaml`. CARLA
   lights the Lanelet2 map does not reference keep their frozen state; Autoware cannot see them.

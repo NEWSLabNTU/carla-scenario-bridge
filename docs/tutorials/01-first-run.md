@@ -29,8 +29,9 @@ ls $CARLA_MAPS/Town01/carla
 # traffic_lights.yaml
 ```
 
-If `carla/traffic_lights.yaml` is missing, generate it once with CARLA running (step 1):
-`ros2 run scenario_world_bridge scenario_world_bridge --generate-signal-table $CARLA_MAPS/Town01`.
+If `traffic_lights.yaml` is missing, generate it once with CARLA running (step 1):
+`ros2 run swb_carla_world swb_carla_world --generate-signal-table $CARLA_MAPS/Town01 --ros-args -p carla_port:=$CARLA_PORT`
+(details: the user guide, "2. Prepare a map directory").
 
 ## 1. CARLA
 
