@@ -46,7 +46,7 @@ borrowed from greybox fuzzing.
 - [022: Entity Geometry Parity](022-entity-geometry-parity.md) — **done 2026-10-12** — blueprint chosen by subtype and declared size from a measured box table (ego and pedestrians excluded); residual reported at spawn and in the JUnit
 - [023: NPC Motion Parity](023-npc-motion-parity.md) — NPCs as tracked physics bodies with real velocity and walk cycles, within a 0.2 m pose budget; spike-gated, kinematic stays as fallback — **done 2026-10-13**, `tracked` is the default
 - [024: Gap Trace and Oracle](024-gap-trace-and-oracle.md) — the bridge records SSv2's and CARLA's view of every entity per frame; an offline oracle judges each frame in both geometries and classifies the run against its verdict; baselined on the starter scenarios and the 021-023 reproducers
-- 025: Adaptive Generator and Exploit Pipeline — scenario genomes, seed/operator bandits, MAP-Elites archive, annealed energy; confirm, boundary bisection, metamorphic root-cause probes, shrink (phase doc after 024)
+- [025: Adaptive Generator and Exploit Pipeline](025-adaptive-generator-and-exploit-pipeline.md) — six template families as genomes over 033's authoring rules; corpus by gap signature, MAP-Elites archive, Exp3 seeds, Thompson operators, annealed energy; confirm (2 of 3), boundary bisection, metamorphic root-cause probes, shrink; CARLA first, then Isaac; carries 024's `random_test_runner` spike
 - 026: Parallel Isolated Pipelines — N complete CARLA+bridge+ego pipelines on one host (phase doc after 025)
 
 ## User documentation (027-)

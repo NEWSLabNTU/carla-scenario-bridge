@@ -146,7 +146,8 @@ Written before the known gaps were fixed; four corrections from what those phase
 7. [x] **Baseline.** All nine starter scenarios (`basic/` 7, one UC-ACC and one UC-AEB
    variant) plus the reproducers of 021-023, with the trace on; every finding triaged here
    as real gap, oracle bug, or tolerance to tune. That table is the hand-off to 025.
-8. [ ] **Spike: SSv2's `random_test_runner` on CARLA** (added 2026-10-13, user). SSv2 ships
+8. [ ] **Spike: SSv2's `random_test_runner` on CARLA** (added 2026-10-13, user; carried to
+   [025](025-adaptive-generator-and-exploit-pipeline.md) step 2 on 2026-10-24). SSv2 ships
    a random tester (`test_runner/random_test_runner`: random ego goals, NPC count / distance
    / speed; stuck, timeout and collision reported to JUnit). It drives `traffic_simulator`
    directly, not OpenSCENARIO, over the same simulation interface the bridge serves, so
