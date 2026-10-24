@@ -608,6 +608,8 @@ class IsaacWorld(WorldBase):
 
     def _spawn(self, handle, name, kind, subtype, center, dims, pose, model, motion):
         path = f"{ENTITIES}/e{handle}"
+        if kind == "EGO" and self.ego_config is not None:
+            path = self._ego_path()
         if path in self.buried:  # a handle used again before its old body's last step
             self.tracked_view = None
             self.stage.RemovePrim(path)
@@ -898,6 +900,16 @@ class IsaacWorld(WorldBase):
         self.tracked_view = None
         if not quiet:
             log.info("%s: tracked body handed to kinematic (swb's fallback)", path)
+
+    def _ego_path(self):
+        """The lowest ego slot no ego holds: the same prim paths for every scenario's ego.
+        An RTX lidar at a path it has not been at before costs ~105 MB that its removal
+        never gives back (docs/issues/003); one made again at a path it has been at, nothing."""
+        held = {ego.path for ego in self.egos.values()}
+        n = 0
+        while f"{ENTITIES}/ego{n}" in held:
+            n += 1
+        return f"{ENTITIES}/ego{n}"
 
     def despawn(self, handle):
         path, translate, _ = self.entities.pop(handle)

@@ -50,6 +50,10 @@ FOOTPRINT = tuple(g.ravel() for g in np.meshgrid(FOOTPRINT_ALONG, FOOTPRINT_ACRO
                                                  indexing="ij"))  # (along m, across share)
 # The vehicles' suspension rays query as this group (aib.isaac.vehicle.ensure_vehicle_scene).
 GROUND_QUERY = f"{AIB_GROUPS}/groundQuery"
+# The zones' flat ground's group, filtering GROUND_QUERY: one for every zone of every world,
+# never removed (PhysX: "Removing a CollisionGroup while the simulation is running results in
+# undefined behavior"); a zone's box joins it and leaves it with the zone.
+FLAT_GROUP = f"{ROOT}_flatGroup"
 # The ruts the tiles show thin to nothing over this much of the zone's edge, m (047 S6): the
 # soft layer feathers out against the rigid ground beside it, as the soil's forces fade in over
 # 1.5 wheel diameters (~1.1 m), instead of ending in a rut-deep wall loose soil cannot hold
@@ -287,8 +291,10 @@ class SoilTiles:
 
     def _flat_ground(self):
         """The zone's ground for everything but the suspension rays: a box over the tiles."""
-        group = UsdPhysics.CollisionGroup.Define(self.stage, f"{self.root}/flatGroup")
-        group.CreateFilteredGroupsRel().AddTarget(GROUND_QUERY)
+        group = UsdPhysics.CollisionGroup(self.stage.GetPrimAtPath(FLAT_GROUP))
+        if not group:
+            group = UsdPhysics.CollisionGroup.Define(self.stage, FLAT_GROUP)
+            group.CreateFilteredGroupsRel().AddTarget(GROUND_QUERY)
         x0, x1, y0, y1 = self.box
         cube = UsdGeom.Cube.Define(self.stage, f"{self.root}/flat")
         cube.CreateSizeAttr(1.0)
@@ -456,6 +462,9 @@ class SoilTiles:
 
     def remove(self):
         """The tiles off the stage and the map's ground back under them."""
+        group = UsdPhysics.CollisionGroup(self.stage.GetPrimAtPath(FLAT_GROUP))
+        if group:
+            group.GetCollidersCollectionAPI().GetIncludesRel().RemoveTarget(f"{self.root}/flat")
         self.stage.RemovePrim(self.root)
         self.plates = {}
         uncut(self.cut)

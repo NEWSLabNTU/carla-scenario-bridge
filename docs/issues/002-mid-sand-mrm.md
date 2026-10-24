@@ -1,8 +1,8 @@
 # 002: A 0.4 s emergency stop in the middle of the sand on town01_soil
 
-**Severity**: low (the run passes in SSv2; acceptance's MRM count fails it). **Status**: open:
-the trigger is known (one NDT scan at its iteration limit), its cause in the original run is
-not.
+**Severity**: low (the run passes in SSv2; acceptance's MRM count fails it). **Status**: fixed
+(2026-10-24): NDT's solver cycled between two points until its iteration limit; the fix rides
+in the Autoware overlay (`NEWSLabNTU/autoware_core`, branch `csb/ndt-step-reversal-1.5.0`).
 **Found**: 2026-10-23, roadmap 047 S6.
 
 ## What is wrong
@@ -79,20 +79,76 @@ that needs 60 iterations is an emergency stop. That is the warning `diagnostics.
 0.19 s before the original MRM, so it was very likely this trigger too.
 
 NDT otherwise converges in 2-5 iterations everywhere on the route, soil or road, with the same
-score (NVTL ~3.0, `scripts/acceptance_diag.py ndt`); the 60s are single-scan outliers. In the
-seven reruns on the cooked tiles there were none (none above 9). Those two at the dirt exit had
-a cause: the plates left a wheel with no ground for one substep at a zone's edge (fixed, issue
-001), and the next batch (`..._22-35-55`) had 4/4 PASS and 0 MRM. That batch still had one
-60-iteration scan, at x 172 (the sand zone's exit), which this time did not reach the
-availability.
+score (NVTL ~3.0, `scripts/acceptance_diag.py ndt`); the 60s are single-scan outliers. The
+plates' first batch had a cause of its own for two of them: a wheel with no ground for one
+substep at a zone's edge (fixed, issue 001). The next batch (`..._22-35-55`) had 4/4 PASS and 0
+MRM, and still one 60-iteration scan at x 172 that this time did not reach the availability.
 
-## Next
+## The cause: NDT's two-point cycle (2026-10-24)
 
-- What still makes a lone scan need 60 iterations near a zone's edge, on either build.
-  Candidates: the car pitching where it climbs out of a rut (the ruts feather out over 1 m),
-  the cut road's seam in the lidar's view.
-- Whether Autoware should stop on one such scan is Autoware's configuration
-  (`/autoware/localization` in the graph); changing it would hide the symptom, not the
-  cause, so it stays.
+An earlier reading here said the seven reruns on the cooked tiles had no scan above 9
+iterations. That was wrong. `scripts/acceptance_diag.py ndt` counts every scan, and every
+batch, on either build, has at least one at 60. Each of them has the same signature:
+
+| batch | build | 60-iteration scans (ego x) | oscillation num | NVTL | initial to result |
+|---|---|---|---|---|---|
+| `21-38-14` | cooked tiles | 147.6 | 58 | 3.01 | 7.8 cm |
+| `21-52-08` | cooked tiles | 147.4 | 58 | 2.97 | 8.9 cm |
+| `22-19-35` | plates, no margin | 144.0, 147.7, 177.9 | 56-58 | 2.82-2.96 | 3.5-5.7 cm |
+| `22-35-55` | plates | 172.9 | 57 | 2.85 | 1.1 cm |
+
+`local_optimal_solution_oscillation_num` is NDT's count of consecutive steps that reverse
+direction. At 56-58 of 60, the solver spent the whole scan jumping between two poses. The
+result is good: NVTL 2.8-3.0 against a ~3.0 norm, 1-9 cm from the initial guess. NDT
+publishes it, because Autoware counts an oscillation as converged
+(`is_converged = (is_ok_iteration_num || is_local_optimal_solution_oscillation) && is_ok_score`).
+But the same scan raises two WARNs, the iteration limit and the oscillation, and in Autoware
+1.5's graph that WARN is the emergency stop above.
+
+The solver is autoware_core's `multigrid_ndt_omp` (1.5.0, and unchanged up to 1.9.0). Line
+search is off (`use_line_search = false`, "not tested well"). So every Newton step is
+`min(|newton|, step_size)` along its direction, and the bound never shrinks. Near an optimum
+where the Newton step is longer than `step_size` on both sides, as with a flat or non-smooth
+score from a noise-free lidar on a 2 m voxel map, the solution jumps `step_size` one way, then
+`step_size` back, until `max_iterations`. acb met the same cycle on CARLA in roadmap 014. Its
+NDT parameters (`step_size` 0.05 with 60 iterations, where upstream has 0.1 with 30) made the
+cycle rarer, not impossible.
+
+Here it comes where the ego pitches. On the cooked tiles both were at x 147.5, near the end of
+the dirt zone (it ends at 145.6). On the plates there were also some in the sand. In the 4 m bins where they fall, the EKF's pitch spans 0.3-1.1 degrees, against 0.02
+on the road. That is the ruts, as they should be: the soil is not the bug.
+
+## Fix
+
+In the solver: halve the step bound each time the step direction reverses (cosine below
+-0.9, the threshold `count_oscillation` uses). A two-point cycle then settles in about four
+more iterations: 0.05, 0.025, 0.0125, then 0.006, which is below `trans_epsilon` (0.01). A
+search that never reverses takes exactly the steps it took before. The patch
+(`multigrid_ndt_omp_impl.hpp`, 17 lines) is commit `fe45f96` on `csb/ndt-step-reversal-1.5.0`
+of `NEWSLabNTU/autoware_core`, a fork made for it: since Autoware 1.5 the package lives in
+autoware_core, not autoware_universe. `scripts/autoware_overlay.bash` now takes one source per
+fork, and `just build-autoware-overlay` builds it beside the blind_spot fix. `just ego-isaac`,
+`ego-av` and `bg-av` source the overlay, so the CARLA ego gets the fix too.
+
+Not changed: the diagnostic graph. A scan that really fails still makes autonomous
+unavailable, as it should. acb's NDT parameters (`step_size` 0.05, 60 iterations, tuned
+around the cycle in roadmap 014) are not changed either. With the fix, upstream's 0.1 and 30
+may do as well; that is for acb to measure on CARLA.
+
+## Validation (2026-10-24)
+
+`town01_soil.xosc` x8 on Isaac with the overlay's NDT (`play_log/acceptance/2026-10-24_10-26-28`;
+the ego stack's `ndt_scan_matcher` loaded `third_party/autoware_overlay/.../libmultigrid_ndt_omp.so`):
+8/8 PASS, 0 MRM, longitudinal 0.18-0.29 m/s^2, localization gap 0.97-1.10 m (it was
+1.03-1.10).
+
+| bags | scans | at 60 | oscillation num above 10 | most iterations while driving |
+|---|---|---|---|---|
+| four batches before the fix (14 runs that drove) | 3513 | 6 | 6 (56-58) | 60 |
+| `2026-10-24_10-26-28`, 8 runs | 2213 | 0 | 0 (most: 4) | 10 |
+
+Every availability drop in the new bag (7) is at a run's end, standing at x 124 while the
+world resets. An earlier batch on the same build (`2026-10-24_09-25-29`, 3 runs before
+issue 003's first fix hung the world server) had none above 25 either.
 
 The recording stays on in every acceptance bag.

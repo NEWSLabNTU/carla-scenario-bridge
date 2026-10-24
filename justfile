@@ -165,13 +165,13 @@ build: _check-setuptools
         fi
     fi
 
-# Fetch the Autoware fixes 1.5.0 lacks (the fork commit pinned in
+# Fetch the Autoware fixes 1.5.0 lacks (the fork commits pinned in
 # scripts/autoware_overlay.bash, only the packages listed there) and build them into
 # third_party/autoware_overlay against Autoware alone (roadmap 042). `just ego-av`, `just
 # bg-av` and the scenario precheck source the result after Autoware (AUTOWARE_OVERLAY=0: off).
 # Stop the ego stack first if it runs: it has the old libraries loaded.
 #
-# Build the Autoware fix overlay (blind_spot, autoware_universe#13509)
+# Build the Autoware fix overlay (blind_spot, autoware_universe#13509; NDT's step, issue 002)
 build-autoware-overlay:
     #!/usr/bin/env bash
     set -e

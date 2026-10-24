@@ -475,7 +475,9 @@ above.) What the runs show:
   is operated", and a /diagnostics listener on the ego's domain received nothing. Runs on
   packed ruts (R, 2/2) or beside them (2/2) had none. Seven reruns of the same set later
   that evening had none either; the acceptance bag now records the diagnostic graph for the
-  next one ([issue 002](../issues/002-mid-sand-mrm.md)).
+  next one. It was NDT, not the soil: its solver cycles between two poses to its iteration
+  limit, more often where the ego pitches in the ruts, and that WARN is an emergency stop in
+  Autoware 1.5's graph; fixed in the Autoware overlay ([issue 002](../issues/002-mid-sand-mrm.md)).
 - The world server's step time in the zones, whole stack: p50 39-85 ms, p95 95-408 ms, the
   high ones with host load at 100-175 (every part of the step slowed, commands too).
 

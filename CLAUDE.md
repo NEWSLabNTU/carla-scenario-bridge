@@ -154,15 +154,21 @@ tr '\0' '\n' < /proc/$(pgrep -f 'acb_bridge/acb_bridge' | head -1)/cmdline | hea
 ### Autoware fixes ride in an overlay
 
 Autoware 1.5.0 is a binary install we do not rebuild. Fixes it lacks are carried per package
-(roadmap 042): `just build-autoware-overlay` fetches the NEWSLabNTU `autoware_universe` fork
-at the commit pinned in `scripts/autoware_overlay.bash` (sparse: only the listed package
-dirs), builds them against `/opt/autoware/1.5.0` into `third_party/autoware_overlay/`
-(git-ignored), and `just ego-av` / `bg-av` / the scenario precheck source it right after
-Autoware. On by default when built; `autoware_overlay:=false` runs stock. Today it holds one
-package, `blind_spot`, with the right-turn ego passage fix (autoware_universe#13509, branch
-`csb/blind-spot-right-turn-0.48.0` = tag 0.48.0 + the fix). To carry another fix: commit on
-a `csb/*` branch of the fork from the release tag, push, move the pin, add the dir, rebuild.
-Check what a stack loaded: `grep blind_spot /proc/<behavior_velocity_planner pid>/maps`.
+(roadmap 042): `just build-autoware-overlay` fetches each NEWSLabNTU fork listed in
+`scripts/autoware_overlay.bash` at its pinned commit (sparse: only the listed package dirs),
+builds them against `/opt/autoware/1.5.0` into `third_party/autoware_overlay/`
+(git-ignored), and `just ego-av` / `ego-isaac` / `bg-av` / the scenario precheck source it
+right after Autoware. On by default when built; `autoware_overlay:=false` runs stock. Today
+it holds two packages. `blind_spot` (fork `autoware_universe`, branch
+`csb/blind-spot-right-turn-0.48.0` = tag 0.48.0 + autoware_universe#13509) has the right-turn
+ego passage fix. `ndt_scan_matcher` (fork `autoware_core`, branch
+`csb/ndt-step-reversal-1.5.0` = tag 1.5.0 + the fix) halves NDT's step bound when the step
+reverses, so a two-point cycle no longer runs to the iteration limit, whose WARN is an
+emergency stop (docs/issues/002). Since Autoware 1.5 the localization packages live in
+autoware_core. To carry another fix: commit on a `csb/*` branch of the fork from the release
+tag, push, move that source's pin, add the dir (a new fork: a new source), rebuild. Check
+what a stack loaded: `grep blind_spot /proc/<behavior_velocity_planner pid>/maps`,
+`grep multigrid_ndt_omp /proc/<ndt_scan_matcher container pid>/maps`.
 
 ### Autoware's TensorRT is 10.8.0, not the host's
 
